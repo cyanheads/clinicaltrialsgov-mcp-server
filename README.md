@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/cyanheads-clinicaltrialsgov-mcp-server-badge.png)](https://mseep.ai/app/cyanheads-clinicaltrialsgov-mcp-server)
+
 # ClinicalTrials.gov MCP Server
 
 [![TypeScript](https://img.shields.io/badge/TypeScript-^5.8.3-blue.svg)](https://www.typescriptlang.org/)

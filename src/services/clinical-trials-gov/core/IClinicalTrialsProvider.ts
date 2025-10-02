@@ -6,7 +6,7 @@
  */
 
 import type { RequestContext } from '@/utils/index.js';
-import type { Study, PagedStudies, StudyMetadata } from '../types.js';
+import type { PagedStudies, Study, StudyMetadata } from '../types.js';
 
 /**
  * Query parameters for listing clinical trials.
@@ -37,6 +37,27 @@ export interface ListStudiesParams {
    * Sort order specification.
    */
   sort?: string;
+
+  /**
+   * Specific fields to return (reduces payload size).
+   * Example: ['NCTId', 'BriefTitle', 'OverallStatus']
+   */
+  fields?: string[];
+
+  /**
+   * Filter by country.
+   */
+  country?: string;
+
+  /**
+   * Filter by state/province.
+   */
+  state?: string;
+
+  /**
+   * Filter by city.
+   */
+  city?: string;
 }
 
 /**

@@ -6,6 +6,7 @@
  */
 
 import { analyzeTrendsTool } from './clinicaltrials-analyze-trends.tool.js';
+import { compareStudiesTool } from './clinicaltrials-compare-studies.tool.js';
 import { getStudyTool } from './clinicaltrials-get-study.tool.js';
 import { searchStudiesTool } from './clinicaltrials-search-studies.tool.js';
 
@@ -15,6 +16,7 @@ import { searchStudiesTool } from './clinicaltrials-search-studies.tool.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const allToolDefinitions: any[] = [
   analyzeTrendsTool,
+  compareStudiesTool,
   getStudyTool,
   searchStudiesTool,
 ];

@@ -34,7 +34,7 @@ const TOOL_TITLE = 'Analyze Clinical Trial Trends';
  * LLM-facing description of the tool.
  */
 const TOOL_DESCRIPTION =
-  'Performs statistical analysis on clinical trial studies matching search criteria. Aggregates data by status, country, sponsor type, or phase. May fetch up to 5000 studies.';
+  'Performs statistical analysis on clinical trial studies matching search criteria. Aggregates data by status, country, sponsor type, phase, year, or month. May fetch up to 5000 studies.';
 /** --------------------------------------------------------- */
 
 /** UI/behavior hints for clients. */
@@ -65,6 +65,8 @@ const AnalysisTypeSchema = z.enum([
   'countByCountry',
   'countBySponsorType',
   'countByPhase',
+  'countByYear',
+  'countByMonth',
 ]);
 
 const InputSchema = z
@@ -90,7 +92,7 @@ const InputSchema = z
           .describe('An array of analysis types to perform.'),
       ])
       .describe(
-        'Specify one or more analysis types: countByStatus, countByCountry, countBySponsorType, or countByPhase.',
+        'Specify one or more analysis types: countByStatus, countByCountry, countBySponsorType, countByPhase, countByYear, or countByMonth.',
       ),
   })
   .describe('Input parameters for analyzing clinical trial trends.');
@@ -267,6 +269,30 @@ async function analyzeTrendsLogic(
             const phaseKey = phase ?? 'Unknown';
             results[phaseKey] = (results[phaseKey] ?? 0) + 1;
           });
+          continue;
+        }
+
+        case 'countByYear': {
+          const startDate =
+            study.protocolSection?.statusModule?.startDateStruct?.date;
+          if (startDate) {
+            const year = startDate.substring(0, 4); // Extract YYYY from date
+            results[year] = (results[year] ?? 0) + 1;
+          } else {
+            results['Unknown'] = (results['Unknown'] ?? 0) + 1;
+          }
+          continue;
+        }
+
+        case 'countByMonth': {
+          const startDate =
+            study.protocolSection?.statusModule?.startDateStruct?.date;
+          if (startDate && startDate.length >= 7) {
+            const yearMonth = startDate.substring(0, 7); // Extract YYYY-MM from date
+            results[yearMonth] = (results[yearMonth] ?? 0) + 1;
+          } else {
+            results['Unknown'] = (results['Unknown'] ?? 0) + 1;
+          }
           continue;
         }
       }

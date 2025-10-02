@@ -75,9 +75,32 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
     if (params.query) {
       queryParams.set('query.term', params.query);
     }
-    if (params.filter) {
-      queryParams.set('filter.advanced', params.filter);
+
+    // Construct geographic filters
+    const geoFilters: string[] = [];
+    if (params.country) {
+      geoFilters.push(`AREA[LocationCountry]${params.country}`);
     }
+    if (params.state) {
+      geoFilters.push(`AREA[LocationState]${params.state}`);
+    }
+    if (params.city) {
+      geoFilters.push(`AREA[LocationCity]${params.city}`);
+    }
+
+    // Combine user filter with geographic filters
+    let combinedFilter = params.filter || '';
+    if (geoFilters.length > 0) {
+      const geoFilterExpression = geoFilters.join(' AND ');
+      combinedFilter = combinedFilter
+        ? `(${combinedFilter}) AND (${geoFilterExpression})`
+        : geoFilterExpression;
+    }
+
+    if (combinedFilter) {
+      queryParams.set('filter.advanced', combinedFilter);
+    }
+
     if (params.pageSize) {
       queryParams.set('pageSize', String(params.pageSize));
     }
@@ -86,6 +109,11 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
     }
     if (params.sort) {
       queryParams.set('sort', params.sort);
+    }
+
+    // Field selection for payload optimization
+    if (params.fields && params.fields.length > 0) {
+      queryParams.set('fields', params.fields.join(','));
     }
 
     // Always count total for better pagination

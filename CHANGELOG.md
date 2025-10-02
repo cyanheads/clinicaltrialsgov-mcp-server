@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2025-10-02
+
+### Added
+
+- **`clinicaltrials_compare_studies` Tool**: Introduced a new tool for detailed side-by-side comparison of 2-5 clinical trial studies. It analyzes and contrasts key aspects like eligibility, design, interventions, and outcomes.
+- **Time-Series Analysis**: The `clinicaltrials_analyze_trends` tool now supports `countByYear` and `countByMonth` to enable time-based trend analysis of clinical trials.
+- **Geographic and Field Selection Filters**: The `clinicaltrials_search_studies` tool and the underlying `IClinicalTrialsProvider`'s `listStudies` method now support granular filtering by `country`, `state`, and `city`, as well as `fields` selection to optimize the response payload.
+- **`AGENTS.md` Enhancements**: Added an "Recent Updates" section and a "Response Formatter Best Practices" guide to `AGENTS.md` to improve clarity for developers and AI agents.
+
+### Changed
+
+- **Dependencies**: Updated `husky` to be called with `bunx` in the `prepare` script for better compatibility.
+- **Versioning**: Incremented the project version to `1.3.0` in `package.json` and `server.json`.
+
 ## [1.2.2] - 2025-10-02
 
 ### Added
@@ -14,8 +28,8 @@ All notable changes to this project will be documented in this file.
 
 - **Docker & Build Overhaul**: Completely refactored the `Dockerfile` to use a multi-stage build with `oven/bun:1-slim`, significantly reducing the final image size and improving security by using a non-root user. The build process is now more efficient and produces a minimal, production-ready image.
 - **Configuration**:
-    - The default HTTP port has been changed from `3010` to `3017` across all relevant configuration files (`src/config/index.ts`, `smithery.yaml`, `README.md`).
-    - The `.dockerignore` and `.prettierignore` files were significantly expanded to provide more comprehensive and robust ignore patterns.
+  - The default HTTP port has been changed from `3010` to `3017` across all relevant configuration files (`src/config/index.ts`, `smithery.yaml`, `README.md`).
+  - The `.dockerignore` and `.prettierignore` files were significantly expanded to provide more comprehensive and robust ignore patterns.
 - **Dependencies**: Updated `package.json` to version `1.2.2` and added the `prepare` script for Husky.
 
 ### Fixed

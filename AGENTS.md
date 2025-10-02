@@ -1,9 +1,19 @@
 # Agent Protocol & Architectural Mandate
 
-**Version:** 1.2.1
+**Version:** 1.3.0
 **Target Project:** clinicaltrialsgov-mcp-server
+**Last Updated:** 2025-10-02
 
 This document defines the operational rules for contributing to this codebase. Follow it exactly.
+
+## Recent Updates (v1.3.0)
+
+- **Enhanced `IClinicalTrialsProvider`**: Added field selection (`fields`) and geographic filters (`country`, `state`, `city`) to `listStudies()`
+- **Response Formatter Guidance**: Added critical best practices section emphasizing that LLMs receive formatted output only
+- **Tool Enhancements**:
+  - `clinicaltrials_search_studies`: Now supports field selection and geographic filtering
+  - `clinicaltrials_analyze_trends`: Added time-series analysis (`countByYear`, `countByMonth`)
+  - `clinicaltrials_compare_studies`: New tool for side-by-side study comparison
 
 > **Note on File Synchronization**: This file (`AGENTS.md`), along with `CLAUDE.md` and `.clinerules/AGENTS.md`, are hard-linked on the filesystem for tool compatibility (e.g., Cline does not work with symlinks). **Edit only the root `AGENTS.md`** – changes will automatically propagate to the other copies. DO NOT TOUCH THE OTHER TWO AGENTS.md & CLAUDE.md FILES.
 
@@ -104,7 +114,7 @@ Export a single `const` named `[toolName]Tool` of type `ToolDefinition` with:
 - `outputSchema`: A `z.object({ ... })` describing the successful output structure.
 - `logic`: `async (input, appContext, sdkContext) => { ... }` pure business logic. No `try/catch` here. Throw `McpError` on failure.
 - `annotations` (optional): UI/behavior hints such as `readOnlyHint`, `openWorldHint`, and others (flexible dictionary).
-- `responseFormatter` (optional): Map successful output to `ContentBlock[]` for a UI-friendly representation. If omitted, a default JSON string is used.
+- `responseFormatter` (optional): Map successful output to `ContentBlock[]` for the LLM to consume. **CRITICAL**: The LLM receives this formatted output, not the raw result. Include all data the LLM needs to answer questions. Balance human-readable summaries with complete structured data. If omitted, a default JSON string is used.
 
 **Tool Naming Convention (Recommended):**
 
@@ -136,6 +146,57 @@ Export a single `const` named `[toolName]Tool` of type `ToolDefinition` with:
 - Add your tool to `src/mcp-server/tools/definitions/index.ts` in `allToolDefinitions`.
 - The DI container discovers and registers all tools from that array. No further registration is necessary.
 
+---
+
+### Response Formatter Best Practices
+
+The `responseFormatter` function determines what the LLM receives. Follow these guidelines:
+
+**❌ DO NOT:**
+
+- Return only a summary with "Full details in structured output" (there is no separate structured output for the LLM)
+- Omit critical data that the LLM needs to answer follow-up questions
+- Assume the LLM can access the raw result object
+
+**✅ DO:**
+
+- Include both human-readable summaries AND complete data
+- Structure output hierarchically (summary → details)
+- Truncate extremely long fields (eligibility criteria, descriptions) but include key information
+- For comparisons, show both commonalities/differences AND detailed breakdowns
+- Use markdown formatting for clarity (headings, lists, code blocks)
+
+**Examples:**
+
+```typescript
+// BAD: Summary only
+function badFormatter(result: Output): ContentBlock[] {
+  return [
+    {
+      type: 'text',
+      text: 'Comparison complete. See structured output for details.',
+    },
+  ];
+}
+
+// GOOD: Summary + Details
+function goodFormatter(result: Output): ContentBlock[] {
+  const summary = `# Comparison of ${result.studies.length} Studies\n\n`;
+  const commonalities = result.commonalities.map((c) => `- ${c}`).join('\n');
+  const details = result.studies
+    .map(
+      (study) =>
+        `### ${study.nctId}\n` +
+        `**Status:** ${study.status}\n` +
+        `**Design:** ${study.design.type} | ${study.design.phases.join(', ')}\n` +
+        `**Interventions:** ${study.interventions.map((i) => i.name).join(', ')}`,
+    )
+    .join('\n\n');
+
+  return [{ type: 'text', text: `${summary}${commonalities}\n\n${details}` }];
+}
+```
+
 #### Example Tool Structure:
 
 ```ts
@@ -148,18 +209,31 @@ import { container } from 'tsyringe';
 import { z } from 'zod';
 
 import { ClinicalTrialsProvider } from '@/container/tokens.js';
-import type { SdkContext, ToolDefinition } from '@/mcp-server/tools/utils/toolDefinition.js';
+import type {
+  SdkContext,
+  ToolDefinition,
+} from '@/mcp-server/tools/utils/toolDefinition.js';
 import { withToolAuth } from '@/mcp-server/transports/auth/lib/withAuth.js';
 import type { IClinicalTrialsProvider } from '@/services/clinical-trials-gov/core/IClinicalTrialsProvider.js';
 import { logger, type RequestContext } from '@/utils/index.js';
 
 const TOOL_NAME = 'clinicaltrials_search_studies';
-const TOOL_DESCRIPTION = 'Searches for clinical trial studies from ClinicalTrials.gov using queries and filters.';
+const TOOL_DESCRIPTION =
+  'Searches for clinical trial studies from ClinicalTrials.gov using queries and filters.';
 
 const InputSchema = z.object({
-  query: z.string().optional().describe('Search query for conditions, interventions, etc.'),
+  query: z
+    .string()
+    .optional()
+    .describe('Search query for conditions, interventions, etc.'),
   filter: z.string().optional().describe('Advanced filter expression.'),
-  pageSize: z.number().int().min(1).max(200).default(10).describe('Results per page.'),
+  pageSize: z
+    .number()
+    .int()
+    .min(1)
+    .max(200)
+    .default(10)
+    .describe('Results per page.'),
   // ... more fields
 });
 
@@ -172,19 +246,37 @@ async function searchStudiesLogic(
   appContext: RequestContext,
   _sdkContext: SdkContext,
 ): Promise<z.infer<typeof OutputSchema>> {
-  logger.debug('Executing searchStudiesLogic', { ...appContext, toolInput: input });
+  logger.debug('Executing searchStudiesLogic', {
+    ...appContext,
+    toolInput: input,
+  });
 
-  const provider = container.resolve<IClinicalTrialsProvider>(ClinicalTrialsProvider);
+  const provider = container.resolve<IClinicalTrialsProvider>(
+    ClinicalTrialsProvider,
+  );
   const result = await provider.listStudies(input, appContext);
 
-  return { /* formatted result */ };
+  return {
+    /* formatted result */
+  };
 }
 
-function responseFormatter(result: z.infer<typeof OutputSchema>): ContentBlock[] {
-  return [{ type: 'text', text: /* formatted summary */ }];
+function responseFormatter(
+  result: z.infer<typeof OutputSchema>,
+): ContentBlock[] {
+  // CRITICAL: The LLM receives THIS output, not the raw result
+  // Include both summary analysis AND detailed data the LLM needs
+  const summary = `Found ${result.totalCount} studies matching your criteria...`;
+  const details = result.studies
+    .map((s) => `- ${s.nctId}: ${s.title}`)
+    .join('\n');
+  return [{ type: 'text', text: `${summary}\n\n${details}` }];
 }
 
-export const searchStudiesTool: ToolDefinition<typeof InputSchema, typeof OutputSchema> = {
+export const searchStudiesTool: ToolDefinition<
+  typeof InputSchema,
+  typeof OutputSchema
+> = {
   name: TOOL_NAME,
   description: TOOL_DESCRIPTION,
   inputSchema: InputSchema,
@@ -313,7 +405,17 @@ If your service uses a **single provider pattern**, skip the service class and i
 - **`IClinicalTrialsProvider`**
   - **Token:** `ClinicalTrialsProvider`
   - **Usage:** `@inject(ClinicalTrialsProvider) private provider: IClinicalTrialsProvider`
-  - **Methods:** `fetchStudy()`, `listStudies()`, `getStudyMetadata()`, `getApiStats()`
+  - **Methods:**
+    - `fetchStudy(nctId, context)` - Fetches a single study by NCT ID
+    - `listStudies(params, context)` - Searches studies with pagination, filtering, field selection, and geographic filters
+    - `getStudyMetadata(nctId, context)` - Retrieves lightweight metadata for a study
+    - `getApiStats(context)` - Fetches API statistics (total studies, version)
+  - **ListStudiesParams** supports:
+    - `query` - Free-text search
+    - `filter` - Advanced filter expressions
+    - `pageSize`, `pageToken`, `sort` - Pagination and sorting
+    - `fields` - Field selection to reduce payload size (e.g., `['NCTId', 'BriefTitle', 'OverallStatus']`)
+    - `country`, `state`, `city` - Geographic filters (automatically combined with advanced filters)
 - **`ILlmProvider`**
   - **Token:** `LlmProvider`
   - **Usage:** `@inject(LlmProvider) private llmProvider: ILlmProvider`

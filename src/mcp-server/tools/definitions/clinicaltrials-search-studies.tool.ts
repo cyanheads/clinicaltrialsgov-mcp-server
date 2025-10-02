@@ -81,6 +81,26 @@ const InputSchema = z
       .describe(
         'Sort order specification (e.g., "LastUpdateDate:desc", "EnrollmentCount").',
       ),
+    fields: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Specific fields to return (reduces payload size). Example: ["NCTId", "BriefTitle", "OverallStatus"].',
+      ),
+    country: z
+      .string()
+      .optional()
+      .describe('Filter studies by country (e.g., "United States", "Canada").'),
+    state: z
+      .string()
+      .optional()
+      .describe(
+        'Filter studies by state or province (e.g., "California", "Ontario").',
+      ),
+    city: z
+      .string()
+      .optional()
+      .describe('Filter studies by city (e.g., "New York", "Toronto").'),
   })
   .describe('Input parameters for searching clinical trial studies.');
 
@@ -120,6 +140,10 @@ async function searchStudiesLogic(
       pageSize: input.pageSize,
       ...(input.pageToken && { pageToken: input.pageToken }),
       ...(input.sort && { sort: input.sort }),
+      ...(input.fields && { fields: input.fields }),
+      ...(input.country && { country: input.country }),
+      ...(input.state && { state: input.state }),
+      ...(input.city && { city: input.city }),
     },
     appContext,
   );

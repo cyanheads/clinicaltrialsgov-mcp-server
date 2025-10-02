@@ -1,6 +1,6 @@
 {
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "1.2.2",
+  "version": "1.3.0",
   "mcpName": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
   "description": "ClinicalTrials.gov Model Context Protocol (MCP) Server that provides a suite of tools for interacting with the official ClinicalTrials.gov v2 API. Enables AI agents and LLMs to programmatically search, retrieve, and analyze clinical trial data.",
   "main": "dist/index.js",
@@ -50,7 +50,7 @@
     "tree": "bun run scripts/tree.ts",
     "fetch-spec": "bun run scripts/fetch-openapi-spec.ts",
     "format": "bun run prettier --write \"**/*.{ts,js,json,md,html,css}\"",
-    "prepare": "husky",
+    "prepare": "bunx husky",
     "inspector": "bunx mcp-inspector --config mcp.json --server clinicaltrialsgov-mcp-server",
     "db:duckdb-example": "MCP_LOG_LEVEL=debug tsc && node dist/storage/duckdbExample.js",
     "test": "bun test --config vitest.config.ts",

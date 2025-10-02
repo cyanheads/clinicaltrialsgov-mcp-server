@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2025-10-02 07:51:57
+Generated on: 2025-10-02 08:40:16
 
 ```
 clinicaltrialsgov-mcp-server
@@ -18,7 +18,8 @@ clinicaltrialsgov-mcp-server
 ├── examples
 │   ├── clinicaltrials_analyze_trends.md
 │   ├── clinicaltrials_get_study.md
-│   └── clinicaltrials_search_studies.md
+│   ├── clinicaltrials_search_studies.md
+│   └── clinicaltrials-compare-studies.md
 ├── scripts
 │   ├── clean.ts
 │   ├── devcheck.ts

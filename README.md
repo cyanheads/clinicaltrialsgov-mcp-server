@@ -5,7 +5,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-1.3.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--06--18-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-06-18/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.18.2-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.2.23-blueviolet.svg?style=flat-square)](https://bun.sh/) [![Code Coverage](https://img.shields.io/badge/Coverage-92.46%25-brightgreen.svg?style=flat-square)](./vitest.config.ts)
+[![Version](https://img.shields.io/badge/Version-1.3.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--06--18-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-06-18/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.18.2-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.2.23-blueviolet.svg?style=flat-square)](https://bun.sh/) [![Code Coverage](https://img.shields.io/badge/Coverage-92.46%25-brightgreen.svg?style=flat-square)](./vitest.config.ts)
 
 </div>
 
@@ -15,12 +15,12 @@
 
 This server provides four powerful tools for accessing and analyzing clinical trial data from ClinicalTrials.gov:
 
-| Tool Name                       | Description                                                                                                                                  |
-| :------------------------------ | :------------------------------------------------------------------------------------------------------------------------------------------- |
-| `clinicaltrials_search_studies` | Searches for clinical studies using query terms, filters, pagination, and sorting. Now includes geographic filtering.                        |
-| `clinicaltrials_get_study`      | Fetches one or more clinical studies by their NCT IDs, returning either full data or concise summaries.                                        |
-| `clinicaltrials_analyze_trends` | Performs statistical analysis on up to 5000 studies, with new time-series analysis by year and month.                                        |
-| `clinicaltrials_compare_studies`| Performs a detailed side-by-side comparison of 2-5 clinical studies, highlighting commonalities and differences.                              |
+| Tool Name                        | Description                                                                                                           |
+| :------------------------------- | :-------------------------------------------------------------------------------------------------------------------- |
+| `clinicaltrials_search_studies`  | Searches for clinical studies using query terms, filters, pagination, and sorting. Now includes geographic filtering. |
+| `clinicaltrials_get_study`       | Fetches one or more clinical studies by their NCT IDs, returning either full data or concise summaries.               |
+| `clinicaltrials_analyze_trends`  | Performs statistical analysis on up to 5000 studies, with new time-series analysis by year and month.                 |
+| `clinicaltrials_compare_studies` | Performs a detailed side-by-side comparison of 2-5 clinical studies, highlighting commonalities and differences.      |
 
 ### `clinicaltrials_search_studies`
 

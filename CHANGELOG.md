@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1] - 2025-10-02
+
+### Changed
+
+- **Dependencies**: Moved `pino-pretty` from `devDependencies` to `dependencies` to ensure it is available in production for log formatting.
+- **Configuration**: Updated the default HTTP port in `server.json` to `3017`.
+- **Versioning**: Incremented the project version to `1.3.1` in `package.json`, `server.json`, and `README.md`.
+- **Documentation**: Updated `docs/tree.md` and fixed minor formatting in `examples/clinicaltrials-compare-studies.md`.
+
+### Removed
+
+- **`publish-mcp` script**: Removed the `publish-mcp` script from `package.json` as it is no longer needed.
+
 ## [1.3.0] - 2025-10-02
 
 ### Added

@@ -9,8 +9,10 @@
  * during application startup.
  * @module src/utils/security/idGenerator
  */
-import { randomUUID as cryptoRandomUUID, randomBytes } from "crypto";
-import { BaseErrorCode, McpError } from "../../types-global/errors.js";
+import { randomUUID as cryptoRandomUUID, randomBytes } from 'crypto';
+
+import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
+
 // Removed: import { logger, requestContextService } from "../index.js";
 
 /**
@@ -39,12 +41,12 @@ export class IdGenerator {
    * Default character set for the random part of the ID.
    * @private
    */
-  private static DEFAULT_CHARSET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  private static DEFAULT_CHARSET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   /**
    * Default separator character between prefix and random part.
    * @private
    */
-  private static DEFAULT_SEPARATOR = "_";
+  private static DEFAULT_SEPARATOR = '_';
   /**
    * Default length for the random part of the ID.
    * @private
@@ -106,7 +108,7 @@ export class IdGenerator {
     length: number = IdGenerator.DEFAULT_LENGTH,
     charset: string = IdGenerator.DEFAULT_CHARSET,
   ): string {
-    let result = "";
+    let result = '';
     // Determine the largest multiple of charset.length that is less than or equal to 256
     // This is the threshold for rejection sampling to avoid bias.
     const maxValidByteValue = Math.floor(256 / charset.length) * charset.length;
@@ -163,7 +165,7 @@ export class IdGenerator {
     const prefix = this.entityPrefixes[entityType];
     if (!prefix) {
       throw new McpError(
-        BaseErrorCode.VALIDATION_ERROR,
+        JsonRpcErrorCode.ValidationError,
         `Unknown entity type: ${entityType}. No prefix registered.`,
       );
     }
@@ -196,7 +198,7 @@ export class IdGenerator {
 
     // Build regex character class from the charset
     // Escape characters that have special meaning inside a regex character class `[]`
-    const escapedCharsetForClass = charset.replace(/[[\]\\^-]/g, "\\$&");
+    const escapedCharsetForClass = charset.replace(/[[\]\\^-]/g, '\\$&');
     const charsetRegexPart = `[${escapedCharsetForClass}]`;
 
     const pattern = new RegExp(
@@ -212,7 +214,7 @@ export class IdGenerator {
    * @private
    */
   private escapeRegex(str: string): string {
-    return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   }
 
   /**
@@ -243,7 +245,7 @@ export class IdGenerator {
     const parts = id.split(separator);
     if (parts.length < 2 || !parts[0]) {
       throw new McpError(
-        BaseErrorCode.VALIDATION_ERROR,
+        JsonRpcErrorCode.ValidationError,
         `Invalid ID format: ${id}. Expected format like: PREFIX${separator}RANDOMLPART`,
       );
     }
@@ -253,7 +255,7 @@ export class IdGenerator {
 
     if (!entityType) {
       throw new McpError(
-        BaseErrorCode.VALIDATION_ERROR,
+        JsonRpcErrorCode.ValidationError,
         `Unknown entity type for prefix: ${prefix}`,
       );
     }
@@ -293,10 +295,50 @@ export const idGenerator = new IdGenerator();
 
 /**
  * Generates a standard Version 4 UUID (Universally Unique Identifier).
- * Uses the Node.js `crypto` module. This function is independent of the IdGenerator instance
- * to prevent circular dependencies when used by other utilities like requestContextService.
+ * Uses the Node.js `crypto` module.
  * @returns A new UUID string.
  */
 export const generateUUID = (): string => {
   return cryptoRandomUUID();
+};
+
+/**
+ * Generates a unique 10-character alphanumeric ID with a hyphen in the middle (e.g., `ABCDE-FGHIJ`).
+ * This function is specifically for request contexts to provide a shorter, more readable ID.
+ * It contains its own random string generation logic to remain self-contained and avoid circular dependencies.
+ * @returns A new unique ID string.
+ */
+export const generateRequestContextId = (): string => {
+  /**
+   * Generates a cryptographically secure random string of a given length from a given charset.
+   * @param length The desired length of the string.
+   * @param charset The characters to use for generation.
+   * @returns The generated random string.
+   */
+  const generateSecureRandomString = (
+    length: number,
+    charset: string,
+  ): string => {
+    let result = '';
+    const maxValidByteValue = Math.floor(256 / charset.length) * charset.length;
+
+    while (result.length < length) {
+      const byteBuffer = randomBytes(1);
+      const byte = byteBuffer[0];
+
+      if (byte !== undefined && byte < maxValidByteValue) {
+        const charIndex = byte % charset.length;
+        const char = charset[charIndex];
+        if (char) {
+          result += char;
+        }
+      }
+    }
+    return result;
+  };
+
+  const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  const part1 = generateSecureRandomString(5, charset);
+  const part2 = generateSecureRandomString(5, charset);
+  return `${part1}-${part2}`;
 };

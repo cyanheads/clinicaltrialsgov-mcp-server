@@ -1,191 +1,205 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { RateLimiter } from "../../../src/utils/security/rateLimiter";
-import { McpError, BaseErrorCode } from "../../../src/types-global/errors";
+/**
+ * @fileoverview Unit tests for the RateLimiter utility.
+ * @module tests/utils/security/rateLimiter.test
+ */
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from 'vitest';
+import { trace } from '@opentelemetry/api';
+import type { z } from 'zod';
 
-describe("RateLimiter", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
+import { JsonRpcErrorCode } from '../../../src/types-global/errors.js';
+import { logger } from '../../../src/utils/internal/logger.js';
+import type { ConfigSchema } from '../../../src/config/index.js';
+import type { RateLimiter as RateLimiterType } from '../../../src/utils/security/rateLimiter.js';
+
+describe('RateLimiter', () => {
+  let rateLimiter: RateLimiterType;
+  let config: z.infer<typeof ConfigSchema>;
+  let RateLimiter: typeof RateLimiterType;
+  let debugSpy: MockInstance;
+  let getActiveSpanSpy: MockInstance;
+  const spanMock = {
+    setAttribute: vi.fn(),
+    setAttributes: vi.fn(),
+    addEvent: vi.fn(),
+  };
+
+  const originalEnv = { ...process.env };
+
+  const createLimiter = () => {
+    rateLimiter = new RateLimiter(config, logger as never);
+    const timer = (
+      rateLimiter as unknown as { cleanupTimer: NodeJS.Timeout | null }
+    ).cleanupTimer;
+    if (timer) {
+      clearInterval(timer);
+      (
+        rateLimiter as unknown as { cleanupTimer: NodeJS.Timeout | null }
+      ).cleanupTimer = null;
+    }
+    rateLimiter.configure({ cleanupInterval: 0 });
+  };
+
+  beforeEach(async () => {
+    process.env = { ...originalEnv };
+    vi.clearAllMocks();
+    process.env.NODE_ENV = 'production';
+
+    const configModule = await import('../../../src/config/index.js');
+    const rateLimiterModule = await import(
+      '../../../src/utils/security/rateLimiter.js'
+    );
+    config = configModule.config;
+    RateLimiter = rateLimiterModule.RateLimiter;
+
+    debugSpy = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+    getActiveSpanSpy = vi
+      .spyOn(trace, 'getActiveSpan')
+      .mockReturnValue(spanMock as never);
+    createLimiter();
   });
 
   afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("should allow requests under the configured limit", () => {
-    const rateLimiter = new RateLimiter({ windowMs: 1000, maxRequests: 2 });
-    const key = "test-user";
-
-    expect(() => rateLimiter.check(key)).not.toThrow();
-    expect(() => rateLimiter.check(key)).not.toThrow();
-  });
-
-  it("should throw an McpError when the rate limit is exceeded", () => {
-    const rateLimiter = new RateLimiter({ windowMs: 1000, maxRequests: 2 });
-    const key = "test-user";
-
-    rateLimiter.check(key); // 1st request
-    rateLimiter.check(key); // 2nd request
-
-    expect(() => {
-      rateLimiter.check(key); // 3rd request, should fail
-    }).toThrow(McpError);
-
-    expect(() => {
-      rateLimiter.check(key);
-    }).toThrow(expect.objectContaining({ code: BaseErrorCode.RATE_LIMITED }));
-  });
-
-  it("should reset the limit after the time window passes", () => {
-    const rateLimiter = new RateLimiter({ windowMs: 1000, maxRequests: 1 });
-    const key = "test-user";
-
-    rateLimiter.check(key); // This one passes
-
-    // This one should fail
-    expect(() => rateLimiter.check(key)).toThrow(McpError);
-
-    // Advance time past the window
-    vi.advanceTimersByTime(1001);
-
-    // Now it should pass again
-    expect(() => {
-      rateLimiter.check(key);
-    }).not.toThrow();
-  });
-
-  it("should format the error message with the correct wait time", () => {
-    const rateLimiter = new RateLimiter({ windowMs: 5000, maxRequests: 1 });
-    const key = "test-user";
-
-    rateLimiter.check(key);
-
-    try {
-      rateLimiter.check(key);
-    } catch (error) {
-      if (error instanceof McpError) {
-        expect(error.message).toContain("Please try again in 5 seconds");
-      }
+    const timer = (
+      rateLimiter as unknown as { cleanupTimer: NodeJS.Timeout | null }
+    ).cleanupTimer;
+    if (timer) {
+      clearInterval(timer);
     }
+    process.env = originalEnv;
+    debugSpy.mockRestore();
+    getActiveSpanSpy.mockRestore();
   });
 
-  it("should correctly reset all limits when reset() is called", () => {
-    const rateLimiter = new RateLimiter({ windowMs: 1000, maxRequests: 1 });
-    const key = "test-user";
+  it('increments counts and throws an McpError after exceeding the limit', () => {
+    const context = { requestId: 'req-1', timestamp: new Date().toISOString() };
+    rateLimiter.configure({ windowMs: 1000, maxRequests: 1 });
 
-    rateLimiter.check(key);
-    expect(() => rateLimiter.check(key)).toThrow(McpError);
+    rateLimiter.check('user:1', context);
+    expect(rateLimiter.getStatus('user:1')).toMatchObject({
+      current: 1,
+      remaining: 0,
+    });
 
-    rateLimiter.reset();
+    let thrown: unknown;
+    try {
+      rateLimiter.check('user:1', context);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeDefined();
+    expect(thrown as object).toMatchObject({
+      code: JsonRpcErrorCode.RateLimited,
+    });
 
-    expect(() => rateLimiter.check(key)).not.toThrow();
+    const status = rateLimiter.getStatus('user:1');
+    expect(status).toMatchObject({ current: 2, limit: 1, remaining: 0 });
+    expect(spanMock.addEvent).toHaveBeenCalledWith('rate_limit_exceeded', {
+      'mcp.rate_limit.wait_time_seconds': expect.any(Number),
+    });
   });
 
-  it("should skip rate limiting in development if configured", async () => {
-    const originalNodeEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = "development";
-
-    // We need to re-import the module to get the updated environment
-    vi.resetModules();
-    const { RateLimiter: TestRateLimiter } = await import(
-      "../../../src/utils/security/rateLimiter"
+  it('skips rate limiting in development when configured to do so', async () => {
+    process.env.NODE_ENV = 'development';
+    // Re-import modules to get the updated config
+    const configModule = await import('../../../src/config/index.js');
+    const rateLimiterModule = await import(
+      '../../../src/utils/security/rateLimiter.js'
     );
+    config = configModule.parseConfig(); // Use parseConfig to get a fresh config
+    RateLimiter = rateLimiterModule.RateLimiter;
 
-    const rateLimiter = new TestRateLimiter({
+    // Create a new limiter with the development config
+    const devRateLimiter = new RateLimiter(config, logger as never);
+    devRateLimiter.configure({
       windowMs: 1000,
       maxRequests: 1,
       skipInDevelopment: true,
     });
-    const key = "dev-user";
 
-    rateLimiter.check(key);
-    expect(() => rateLimiter.check(key)).not.toThrow();
+    const context = {
+      requestId: 'dev-req',
+      timestamp: new Date().toISOString(),
+    };
 
-    process.env.NODE_ENV = originalNodeEnv;
-    vi.resetModules();
+    expect(() => {
+      devRateLimiter.check('dev:key', context);
+      devRateLimiter.check('dev:key', context);
+    }).not.toThrow();
+
+    expect(spanMock.setAttribute).toHaveBeenCalledWith(
+      'mcp.rate_limit.skipped',
+      'development',
+    );
   });
 
-  it("should use a custom key generator if provided", () => {
-    const keyGenerator = vi.fn((identifier: string) => `custom-${identifier}`);
-    const rateLimiter = new RateLimiter({
-      windowMs: 1000,
-      maxRequests: 1,
-      keyGenerator,
-    });
-    const key = "test-key";
-
-    rateLimiter.check(key);
-    expect(keyGenerator).toHaveBeenCalledWith(key, undefined);
-    expect(() => rateLimiter.check("another-key")).not.toThrow();
-    expect(() => rateLimiter.check(key)).toThrow(McpError);
-  });
-
-  it("should clean up expired entries automatically", () => {
-    const rateLimiter = new RateLimiter({
-      windowMs: 1000,
-      maxRequests: 1,
-      cleanupInterval: 500,
-    });
-    const key = "cleanup-user";
-
-    rateLimiter.check(key);
-    expect(rateLimiter.getStatus(key)).not.toBeNull();
-
-    vi.advanceTimersByTime(1001); // Advance past window
-    vi.advanceTimersByTime(500); // Advance past cleanup interval
-
-    expect(rateLimiter.getStatus(key)).toBeNull();
-    rateLimiter.dispose();
-  });
-
-  it("should allow re-configuration", () => {
-    const rateLimiter = new RateLimiter({ windowMs: 1000, maxRequests: 1 });
-    rateLimiter.configure({ maxRequests: 2 });
-
-    const config = rateLimiter.getConfig();
-    expect(config.maxRequests).toBe(2);
-
-    const key = "reconfig-user";
-    rateLimiter.check(key);
-    expect(() => rateLimiter.check(key)).not.toThrow();
-    expect(() => rateLimiter.check(key)).toThrow(McpError);
-  });
-
-  it("should return the correct status", () => {
-    const rateLimiter = new RateLimiter({ windowMs: 1000, maxRequests: 5 });
-    const key = "status-user";
-
-    rateLimiter.check(key);
-    rateLimiter.check(key);
-
-    const status = rateLimiter.getStatus(key);
-    expect(status).toEqual({
-      current: 2,
-      limit: 5,
-      remaining: 3,
-      resetTime: expect.any(Number),
+  it('resets internal state and logs the action', () => {
+    rateLimiter.configure({ windowMs: 1000, maxRequests: 1 });
+    rateLimiter.check('to-reset', {
+      requestId: 'reset-req',
+      timestamp: new Date().toISOString(),
     });
 
-    expect(rateLimiter.getStatus("non-existent-key")).toBeNull();
+    rateLimiter.reset();
+
+    expect(rateLimiter.getStatus('to-reset')).toBeNull();
+    expect(debugSpy).toHaveBeenCalledWith(
+      'Rate limiter reset, all limits cleared',
+      expect.objectContaining({ operation: 'RateLimiter.reset' }),
+    );
   });
 
-  it("should dispose of the timer and clear limits", () => {
-    const rateLimiter = new RateLimiter({
-      windowMs: 1000,
-      maxRequests: 1,
-      cleanupInterval: 500,
-    });
-    const key = "dispose-user";
-    rateLimiter.check(key);
+  it('cleans up expired entries when the cleanup timer runs', () => {
+    const now = Date.now();
+    const entryKey = 'expired';
+    (
+      rateLimiter as unknown as {
+        limits: Map<string, { count: number; resetTime: number }>;
+      }
+    ).limits.set(entryKey, { count: 1, resetTime: now - 1000 });
 
-    rateLimiter.dispose();
+    (
+      rateLimiter as unknown as { cleanupExpiredEntries: () => void }
+    ).cleanupExpiredEntries();
 
-    expect(rateLimiter.getStatus(key)).toBeNull();
-    // Check if timer is cleared (indirectly)
-    const newLimiter = new RateLimiter({ windowMs: 1000, maxRequests: 1 });
-    newLimiter.check("new-key");
-    vi.advanceTimersByTime(1500);
-    // if dispose worked, the old timer shouldn't have cleaned the new key
-    expect(newLimiter.getStatus("new-key")).not.toBeNull();
-    newLimiter.dispose();
+    expect(rateLimiter.getStatus(entryKey)).toBeNull();
+    expect(debugSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Cleaned up 1 expired rate limit entries'),
+      expect.objectContaining({
+        operation: 'RateLimiter.cleanupExpiredEntries',
+      }),
+    );
+  });
+
+  it('should return null status for a key that has not been checked', () => {
+    const status = rateLimiter.getStatus('never-checked');
+    expect(status).toBeNull();
+  });
+
+  it('should allow configuring the rate limiter and return config', () => {
+    rateLimiter.configure({ windowMs: 5000, maxRequests: 10 });
+    const conf = rateLimiter.getConfig();
+    expect(conf.windowMs).toBe(5000);
+    expect(conf.maxRequests).toBe(10);
+  });
+
+  it('should start cleanup timer when cleanup interval is set', () => {
+    rateLimiter.configure({ cleanupInterval: 1000 });
+    const timer = (
+      rateLimiter as unknown as { cleanupTimer: NodeJS.Timeout | null }
+    ).cleanupTimer;
+    expect(timer).not.toBeNull();
+
+    // Clean up timer
+    if (timer) {
+      clearInterval(timer);
+    }
   });
 });

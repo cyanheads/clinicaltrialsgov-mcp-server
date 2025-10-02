@@ -49,14 +49,15 @@ Researchers will compare patients receiving two escalating doses of psilocybin (
 
 Participants will:
 
-* Attend three preparation sessions with psychotherapists (1-2 hours each)
-* Undergo two supervised psilocybin dosing sessions (6-8 hours each)
-* Complete five integration therapy sessions following the dosing sessions
-* Participate in follow-up assessments at 6 weeks, 3 months, and 6 months
-* Have access to a digital care platform and peer support groups during the 6-month follow-up period
-* Optional: Control group participants may receive one high-dose psilocybin session (25mg) after the initial study period
-- **Interventions:** Psilocybin therapy
-- **Sponsor:** University Medical Center Groningen
+- Attend three preparation sessions with psychotherapists (1-2 hours each)
+- Undergo two supervised psilocybin dosing sessions (6-8 hours each)
+- Complete five integration therapy sessions following the dosing sessions
+- Participate in follow-up assessments at 6 weeks, 3 months, and 6 months
+- Have access to a digital care platform and peer support groups during the 6-month follow-up period
+- Optional: Control group participants may receive one high-dose psilocybin session (25mg) after the initial study period
+
+* **Interventions:** Psilocybin therapy
+* **Sponsor:** University Medical Center Groningen
 
 ---
 
@@ -161,8 +162,10 @@ Participants will:
 - **Summary:** The primary objectives of this clinical investigation are to (1) determine the acceptability and feasibility of joining psilocybin-assisted therapy with cognitive-behavioral therapy (PA-CBT) for patients with depression, (2) optimize CBT to most effectively integrate the psilocybin experience with psychotherapy and (3) examine the clinical benefit of psilocybin as an adjunct to cognitive-behavioral therapy (CBT) for major depressive disorder.
 
 This study has two phases. Phase I will involve an open trial of PA-CBT where participants will receive two doses of psilocybin (10mg and then 25mg, separated by one month) plus 12 sessions of cognitive behavioral therapy. Phase II will be a randomized, two-arm, fixed dose trial that will test the feasibility, acceptability, and participant and therapist adherence to PA-CBT. Both treatment arms will receive two doses of psilocybin (10mg and then 25mg, separated by one month). In Phase II, participants will be randomized (1:1) to either a 12-session PA-CBT or a 6-session standard psilocybin-assisted therapy (PAT) condition (3 hours of preparation plus 3 hours of supportive therapy integration following the psilocybin experiences).
+
 - **Interventions:** Psilocybin, Cognitive behavioral therapy, Minimal therapeutic support
 - **Sponsor:** University of California, Los Angeles
 
 Next Page Token: NF0g5JeOmvUtww
 Total Count: 89
+```

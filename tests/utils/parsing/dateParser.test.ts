@@ -1,102 +1,93 @@
 /**
- * @fileoverview Tests for the dateParser utility.
+ * @fileoverview Unit tests for the date parsing utilities powered by chrono-node.
  * @module tests/utils/parsing/dateParser.test
  */
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import * as chrono from "chrono-node";
-import { dateParser } from "../../../src/utils/parsing/dateParser";
-import { requestContextService } from "../../../src/utils";
-import { McpError, BaseErrorCode } from "../../../src/types-global/errors";
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import * as chrono from 'chrono-node';
 
-vi.mock("chrono-node");
+import { JsonRpcErrorCode } from '../../../src/types-global/errors.js';
+import {
+  parseDateString,
+  parseDateStringDetailed,
+} from '../../../src/utils/parsing/dateParser.js';
 
-describe("dateParser", () => {
-  const context = requestContextService.createRequestContext({
-    toolName: "test-date-parser",
-  });
-  const refDate = new Date("2025-01-01T12:00:00.000Z");
+const context = {
+  requestId: 'date-parser-test',
+  timestamp: new Date().toISOString(),
+};
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+const chronoMock = chrono as unknown as {
+  parseDate: ReturnType<typeof vi.fn>;
+  parse: ReturnType<typeof vi.fn>;
+};
 
-  describe("parseDate", () => {
-    it("should parse a valid date string and return a Date object", async () => {
-      const expectedDate = new Date("2025-01-02T12:00:00.000Z");
-      vi.spyOn(chrono, "parseDate").mockReturnValue(expectedDate);
+beforeEach(() => {
+  chronoMock.parseDate.mockReset();
+  chronoMock.parse.mockReset();
+  chronoMock.parseDate.mockReturnValue(null);
+  chronoMock.parse.mockReturnValue([]);
+});
 
-      const result = await dateParser.parseDate("tomorrow", context, refDate);
-      expect(result).toEqual(expectedDate);
-      expect(chrono.parseDate).toHaveBeenCalledWith("tomorrow", refDate, {
-        forwardDate: true,
-      });
-    });
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
-    it("should return null for an unparsable date string", async () => {
-      vi.spyOn(chrono, "parseDate").mockReturnValue(null);
+describe('parseDateString', () => {
+  it('converts natural language text into a Date instance when chrono parses successfully', async () => {
+    const expectedDate = new Date('2030-12-25T10:00:00.000Z');
+    chronoMock.parseDate.mockReturnValue(expectedDate);
 
-      const result = await dateParser.parseDate("not a date", context, refDate);
-      expect(result).toBeNull();
-    });
+    const result = await parseDateString('December 25, 2030 10:00', context);
 
-    it("should throw an McpError if chrono-node throws an unexpected error", async () => {
-      const testError = new Error("Chrono blew up");
-      vi.spyOn(chrono, "parseDate").mockImplementation(() => {
-        throw testError;
-      });
-
-      await expect(
-        dateParser.parseDate("any date", context, refDate),
-      ).rejects.toThrow(McpError);
-
-      try {
-        await dateParser.parseDate("any date", context, refDate);
-      } catch (error) {
-        const mcpError = error as McpError;
-        expect(mcpError.code).toBe(BaseErrorCode.PARSING_ERROR);
-        expect(mcpError.message).toContain("Chrono blew up");
-      }
-    });
+    expect(result).toEqual(expectedDate);
+    expect(chronoMock.parseDate).toHaveBeenCalledWith(
+      'December 25, 2030 10:00',
+      undefined,
+      { forwardDate: true },
+    );
   });
 
-  describe("parse", () => {
-    it("should return detailed parsing results for a valid date string", async () => {
-      const mockParsedResult = [
-        { start: { date: () => new Date() }, text: "tomorrow" },
-      ] as chrono.ParsedResult[];
-      vi.spyOn(chrono, "parse").mockReturnValue(mockParsedResult);
+  it('returns null when the text cannot be parsed', async () => {
+    chronoMock.parseDate.mockReturnValue(null);
 
-      const result = await dateParser.parse("tomorrow", context, refDate);
-      expect(result).toEqual(mockParsedResult);
-      expect(chrono.parse).toHaveBeenCalledWith("tomorrow", refDate, {
-        forwardDate: true,
-      });
+    const result = await parseDateString('definitely not a date', context);
+    expect(result).toBeNull();
+  });
+});
+
+describe('parseDateStringDetailed', () => {
+  it('returns the detailed chrono parse results', async () => {
+    const parsedResults = [
+      {
+        text: '2024-11-05',
+        start: { date: () => new Date('2024-11-05T12:00:00.000Z') },
+      },
+    ];
+    chronoMock.parse.mockReturnValue(parsedResults as never);
+
+    const results = await parseDateStringDetailed(
+      'The meeting is on 2024-11-05 at noon',
+      context,
+    );
+
+    expect(results).toBe(parsedResults);
+    expect(chronoMock.parse).toHaveBeenCalledWith(
+      'The meeting is on 2024-11-05 at noon',
+      undefined,
+      { forwardDate: true },
+    );
+  });
+
+  it('wraps unexpected errors in an McpError', async () => {
+    chronoMock.parse.mockImplementation(() => {
+      throw new Error('chrono blew up');
     });
 
-    it("should return an empty array if no dates are found", async () => {
-      vi.spyOn(chrono, "parse").mockReturnValue([]);
-
-      const result = await dateParser.parse("no dates here", context, refDate);
-      expect(result).toEqual([]);
-    });
-
-    it("should throw an McpError if chrono-node throws an unexpected error", async () => {
-      const testError = new Error("Chrono blew up again");
-      vi.spyOn(chrono, "parse").mockImplementation(() => {
-        throw testError;
-      });
-
-      await expect(
-        dateParser.parse("any date", context, refDate),
-      ).rejects.toThrow(McpError);
-
-      try {
-        await dateParser.parse("any date", context, refDate);
-      } catch (error) {
-        const mcpError = error as McpError;
-        expect(mcpError.code).toBe(BaseErrorCode.PARSING_ERROR);
-        expect(mcpError.message).toContain("Chrono blew up again");
-      }
+    await expect(
+      parseDateStringDetailed('tomorrow at 9', context),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ParseError,
+      message: expect.stringContaining('parseDateStringDetailed'),
     });
   });
 });

@@ -24,9 +24,9 @@ export class McpError extends Error {
 }
 
 // Example usage in a logic file:
-throw new McpError(BaseErrorCode.VALIDATION_ERROR, "Invalid input provided.", {
+throw new McpError(BaseErrorCode.VALIDATION_ERROR, 'Invalid input provided.', {
   ...context,
-  invalidField: "some_field",
+  invalidField: 'some_field',
 });
 ```
 
@@ -72,13 +72,13 @@ server.tool(
 
       // 2. Format the success response inside the handler.
       return {
-        content: [{ type: "text", text: result.content }],
+        content: [{ type: 'text', text: result.content }],
         isError: false,
       };
     } catch (error) {
       // 3. Catch any error from the logic and process it.
       const handledError = ErrorHandler.handleError(error, {
-        operation: "fetchPubMedContentToolHandler",
+        operation: 'fetchPubMedContentToolHandler',
         context: richContext,
         input,
         rethrow: false, // Prevent re-throwing as we are formatting the final response.
@@ -92,7 +92,7 @@ server.tool(
       return {
         content: [
           {
-            type: "text",
+            type: 'text',
             text: JSON.stringify({
               error: {
                 code: mcpError.code,

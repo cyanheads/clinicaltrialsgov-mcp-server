@@ -3,9 +3,17 @@
  * It supports configurable time windows, request limits, and automatic cleanup of expired entries.
  * @module src/utils/security/rateLimiter
  */
-import { environment } from "../../config/index.js";
-import { BaseErrorCode, McpError } from "../../types-global/errors.js";
-import { logger, RequestContext, requestContextService } from "../index.js";
+import { trace } from '@opentelemetry/api';
+import { inject, injectable } from 'tsyringe';
+
+import { config as ConfigType } from '@/config/index.js';
+import { AppConfig, Logger } from '@/container/tokens.js';
+import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
+import {
+  type RequestContext,
+  logger as LoggerType,
+  requestContextService,
+} from '@/utils/index.js';
 
 /**
  * Defines configuration options for the {@link RateLimiter}.
@@ -35,176 +43,147 @@ export interface RateLimitEntry {
   resetTime: number;
 }
 
-/**
- * A generic rate limiter class using an in-memory store.
- * Controls frequency of operations based on unique keys.
- */
+@injectable()
 export class RateLimiter {
-  /**
-   * Stores current request counts and reset times for each key.
-   * @private
-   */
-  private limits: Map<string, RateLimitEntry>;
-  /**
-   * Timer ID for periodic cleanup.
-   * @private
-   */
+  private readonly limits: Map<string, RateLimitEntry>;
   private cleanupTimer: NodeJS.Timeout | null = null;
+  private readonly effectiveConfig: RateLimitConfig;
 
-  /**
-   * Default configuration values.
-   * @private
-   */
-  private static DEFAULT_CONFIG: RateLimitConfig = {
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    maxRequests: 100,
-    errorMessage:
-      "Rate limit exceeded. Please try again in {waitTime} seconds.",
-    skipInDevelopment: false,
-    cleanupInterval: 5 * 60 * 1000, // 5 minutes
-  };
-
-  /**
-   * Creates a new `RateLimiter` instance.
-   * @param config - Configuration options, merged with defaults.
-   */
-  constructor(private config: RateLimitConfig) {
-    this.config = { ...RateLimiter.DEFAULT_CONFIG, ...config };
+  constructor(
+    @inject(AppConfig) private config: typeof ConfigType,
+    @inject(Logger) private logger: typeof LoggerType,
+  ) {
+    const defaultConfig: RateLimitConfig = {
+      windowMs: 15 * 60 * 1000,
+      maxRequests: 100,
+      errorMessage:
+        'Rate limit exceeded. Please try again in {waitTime} seconds.',
+      skipInDevelopment: false,
+      cleanupInterval: 5 * 60 * 1000,
+    };
+    this.effectiveConfig = { ...defaultConfig };
     this.limits = new Map();
     this.startCleanupTimer();
   }
 
-  /**
-   * Starts the periodic timer to clean up expired rate limit entries.
-   * @private
-   */
   private startCleanupTimer(): void {
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
     }
-
-    const interval =
-      this.config.cleanupInterval ?? RateLimiter.DEFAULT_CONFIG.cleanupInterval;
-
+    const interval = this.effectiveConfig.cleanupInterval;
     if (interval && interval > 0) {
       this.cleanupTimer = setInterval(() => {
         this.cleanupExpiredEntries();
       }, interval);
-
       if (this.cleanupTimer.unref) {
-        this.cleanupTimer.unref(); // Allow Node.js process to exit if only timer active
+        this.cleanupTimer.unref();
       }
     }
   }
 
-  /**
-   * Removes expired rate limit entries from the store.
-   * @private
-   */
   private cleanupExpiredEntries(): void {
     const now = Date.now();
     let expiredCount = 0;
-
     for (const [key, entry] of this.limits.entries()) {
       if (now >= entry.resetTime) {
         this.limits.delete(key);
         expiredCount++;
       }
     }
-
     if (expiredCount > 0) {
       const logContext = requestContextService.createRequestContext({
-        operation: "RateLimiter.cleanupExpiredEntries",
-        cleanedCount: expiredCount,
-        totalRemainingAfterClean: this.limits.size,
+        operation: 'RateLimiter.cleanupExpiredEntries',
+        additionalContext: {
+          cleanedCount: expiredCount,
+          totalRemainingAfterClean: this.limits.size,
+        },
       });
-      logger.debug(
+      this.logger.debug(
         `Cleaned up ${expiredCount} expired rate limit entries`,
         logContext,
       );
     }
   }
 
-  /**
-   * Updates the configuration of the rate limiter instance.
-   * @param config - New configuration options to merge.
-   */
   public configure(config: Partial<RateLimitConfig>): void {
-    this.config = { ...this.config, ...config };
+    Object.assign(this.effectiveConfig, config);
     if (config.cleanupInterval !== undefined) {
       this.startCleanupTimer();
     }
   }
 
-  /**
-   * Retrieves a copy of the current rate limiter configuration.
-   * @returns The current configuration.
-   */
   public getConfig(): RateLimitConfig {
-    return { ...this.config };
+    return { ...this.effectiveConfig };
   }
 
-  /**
-   * Resets all rate limits by clearing the internal store.
-   */
   public reset(): void {
     this.limits.clear();
     const logContext = requestContextService.createRequestContext({
-      operation: "RateLimiter.reset",
+      operation: 'RateLimiter.reset',
     });
-    logger.debug("Rate limiter reset, all limits cleared", logContext);
+    this.logger.debug('Rate limiter reset, all limits cleared', logContext);
   }
 
-  /**
-   * Checks if a request exceeds the configured rate limit.
-   * Throws an `McpError` if the limit is exceeded.
-   *
-   * @param key - A unique identifier for the request source.
-   * @param context - Optional request context for custom key generation.
-   * @throws {McpError} If the rate limit is exceeded.
-   */
   public check(key: string, context?: RequestContext): void {
-    if (this.config.skipInDevelopment && environment === "development") {
+    const activeSpan = trace.getActiveSpan();
+    activeSpan?.setAttribute('mcp.rate_limit.checked', true);
+
+    if (
+      this.effectiveConfig.skipInDevelopment &&
+      this.config.environment === 'development'
+    ) {
+      activeSpan?.setAttribute('mcp.rate_limit.skipped', 'development');
       return;
     }
 
-    const limitKey = this.config.keyGenerator
-      ? this.config.keyGenerator(key, context)
+    const limitKey = this.effectiveConfig.keyGenerator
+      ? this.effectiveConfig.keyGenerator(key, context)
       : key;
+    activeSpan?.setAttribute('mcp.rate_limit.key', limitKey);
 
     const now = Date.now();
-    const entry = this.limits.get(limitKey);
+    let entry = this.limits.get(limitKey);
 
     if (!entry || now >= entry.resetTime) {
-      this.limits.set(limitKey, {
+      entry = {
         count: 1,
-        resetTime: now + this.config.windowMs,
-      });
-      return;
+        resetTime: now + this.effectiveConfig.windowMs,
+      };
+      this.limits.set(limitKey, entry);
+    } else {
+      entry.count++;
     }
 
-    if (entry.count >= this.config.maxRequests) {
+    const remaining = Math.max(
+      0,
+      this.effectiveConfig.maxRequests - entry.count,
+    );
+    activeSpan?.setAttributes({
+      'mcp.rate_limit.limit': this.effectiveConfig.maxRequests,
+      'mcp.rate_limit.count': entry.count,
+      'mcp.rate_limit.remaining': remaining,
+    });
+
+    if (entry.count > this.effectiveConfig.maxRequests) {
       const waitTime = Math.ceil((entry.resetTime - now) / 1000);
       const errorMessage = (
-        this.config.errorMessage || RateLimiter.DEFAULT_CONFIG.errorMessage!
-      ).replace("{waitTime}", waitTime.toString());
+        this.effectiveConfig.errorMessage ||
+        'Rate limit exceeded. Please try again in {waitTime} seconds.'
+      ).replace('{waitTime}', waitTime.toString());
 
-      throw new McpError(BaseErrorCode.RATE_LIMITED, errorMessage, {
+      activeSpan?.addEvent('rate_limit_exceeded', {
+        'mcp.rate_limit.wait_time_seconds': waitTime,
+      });
+
+      throw new McpError(JsonRpcErrorCode.RateLimited, errorMessage, {
         waitTimeSeconds: waitTime,
         key: limitKey,
-        limit: this.config.maxRequests,
-        windowMs: this.config.windowMs,
+        limit: this.effectiveConfig.maxRequests,
+        windowMs: this.effectiveConfig.windowMs,
       });
     }
-
-    entry.count++;
   }
 
-  /**
-   * Retrieves the current rate limit status for a specific key.
-   * @param key - The rate limit key.
-   * @returns Status object or `null` if no entry exists.
-   */
   public getStatus(key: string): {
     current: number;
     limit: number;
@@ -212,21 +191,15 @@ export class RateLimiter {
     resetTime: number;
   } | null {
     const entry = this.limits.get(key);
-    if (!entry) {
-      return null;
-    }
+    if (!entry) return null;
     return {
       current: entry.count,
-      limit: this.config.maxRequests,
-      remaining: Math.max(0, this.config.maxRequests - entry.count),
+      limit: this.effectiveConfig.maxRequests,
+      remaining: Math.max(0, this.effectiveConfig.maxRequests - entry.count),
       resetTime: entry.resetTime,
     };
   }
 
-  /**
-   * Stops the cleanup timer and clears all rate limit entries.
-   * Call when the rate limiter is no longer needed.
-   */
   public dispose(): void {
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
@@ -235,12 +208,3 @@ export class RateLimiter {
     this.limits.clear();
   }
 }
-
-/**
- * Default singleton instance of the `RateLimiter`.
- * Initialized with default configuration. Use `rateLimiter.configure({})` to customize.
- */
-export const rateLimiter = new RateLimiter({
-  windowMs: 15 * 60 * 1000, // Default: 15 minutes
-  maxRequests: 100, // Default: 100 requests per window
-});

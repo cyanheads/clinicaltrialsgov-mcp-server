@@ -4,11 +4,18 @@
  * authentication strategy, promoting loose coupling and easy extensibility.
  * @module src/mcp-server/transports/auth/authFactory
  */
-import { config } from "../../../config/index.js";
-import { logger, requestContextService } from "../../../utils/index.js";
-import { AuthStrategy } from "./strategies/authStrategy.js";
-import { JwtStrategy } from "./strategies/jwtStrategy.js";
-import { OauthStrategy } from "./strategies/oauthStrategy.js";
+import { container } from 'tsyringe';
+
+import { config } from '@/config/index.js';
+import { logger, requestContextService } from '@/utils/index.js';
+import type { AuthStrategy } from '@/mcp-server/transports/auth/strategies/authStrategy.js';
+import { JwtStrategy } from '@/mcp-server/transports/auth/strategies/jwtStrategy.js';
+import { OauthStrategy } from '@/mcp-server/transports/auth/strategies/oauthStrategy.js';
+
+// Register strategies in the container.
+// The container will manage their lifecycle and dependencies.
+container.register(JwtStrategy, { useClass: JwtStrategy });
+container.register(OauthStrategy, { useClass: OauthStrategy });
 
 /**
  * Creates and returns an authentication strategy instance based on the
@@ -20,28 +27,30 @@ import { OauthStrategy } from "./strategies/oauthStrategy.js";
  */
 export function createAuthStrategy(): AuthStrategy | null {
   const context = requestContextService.createRequestContext({
-    operation: "createAuthStrategy",
+    operation: 'createAuthStrategy',
     authMode: config.mcpAuthMode,
   });
-  logger.info("Creating authentication strategy...", context);
+  logger.info('Creating authentication strategy...', context);
 
   switch (config.mcpAuthMode) {
-    case "jwt":
-      logger.debug("Instantiating JWT authentication strategy.", context);
-      return new JwtStrategy();
-    case "oauth":
-      logger.debug("Instantiating OAuth authentication strategy.", context);
-      return new OauthStrategy();
-    case "none":
+    case 'jwt':
+      logger.debug('Resolving JWT strategy from container.', context);
+      return container.resolve(JwtStrategy);
+    case 'oauth':
+      logger.debug('Resolving OAuth strategy from container.', context);
+      return container.resolve(OauthStrategy);
+    case 'none':
       logger.info("Authentication is disabled ('none' mode).", context);
       return null; // No authentication
     default:
       // This ensures that if a new auth mode is added to the config type
       // but not to this factory, we get a compile-time or runtime error.
       logger.error(
-        `Unknown authentication mode: ${config.mcpAuthMode}`,
+        `Unknown authentication mode: ${String(config.mcpAuthMode)}`,
         context,
       );
-      throw new Error(`Unknown authentication mode: ${config.mcpAuthMode}`);
+      throw new Error(
+        `Unknown authentication mode: ${String(config.mcpAuthMode)}`,
+      );
   }
 }

@@ -8,60 +8,79 @@
  * 4. Handles top-level error management during startup.
  *
  * MCP Specification References:
- * - Lifecycle: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-03-26/basic/lifecycle.mdx
- * - Overview (Capabilities): https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-03-26/basic/index.mdx
- * - Transports: https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-03-26/basic/transports.mdx
+ * - Lifecycle: https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle
+ * - Overview (Capabilities): https://modelcontextprotocol.io/specification/2025-06-18/basic/index
+ * - Transports: https://modelcontextprotocol.io/specification/2025-06-18/basic/transports
  * @module src/mcp-server/server
  */
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { container } from 'tsyringe';
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import http from "http";
-import { config, environment } from "../config/index.js";
-import { ErrorHandler, logger, requestContextService } from "../utils/index.js";
-import { registerGetStudyTool } from "./tools/getStudy/index.js";
-import { registerSearchStudiesTool } from "./tools/searchStudies/index.js";
-import { registerAnalyzeTrendsTool } from "./tools/analyzeTrends/index.js";
-import { startHttpTransport } from "./transports/http/index.js";
-import { startStdioTransport } from "./transports/stdio/index.js";
+import { config } from '@/config/index.js';
+import { PromptRegistry } from '@/mcp-server/prompts/prompt-registration.js';
+import { ResourceRegistry } from '@/mcp-server/resources/resource-registration.js';
+import { RootsRegistry } from '@/mcp-server/roots/roots-registration.js';
+import { ToolRegistry } from '@/mcp-server/tools/tool-registration.js';
+import { logger, requestContextService } from '@/utils/index.js';
 
 /**
  * Creates and configures a new instance of the `McpServer`.
+ * This function now resolves tool and resource definitions from the DI container.
  *
  * @returns A promise resolving with the configured `McpServer` instance.
  * @throws {McpError} If any resource or tool registration fails.
  * @private
  */
-async function createMcpServerInstance(): Promise<McpServer> {
+export async function createMcpServerInstance(): Promise<McpServer> {
   const context = requestContextService.createRequestContext({
-    operation: "createMcpServerInstance",
+    operation: 'createMcpServerInstance',
   });
-  logger.info("Initializing MCP server instance", context);
+  logger.info('Initializing MCP server instance', context);
 
   requestContextService.configure({
     appName: config.mcpServerName,
     appVersion: config.mcpServerVersion,
-    environment,
+    environment: config.environment,
   });
 
   const server = new McpServer(
-    { name: config.mcpServerName, version: config.mcpServerVersion },
+    {
+      name: config.mcpServerName,
+      version: config.mcpServerVersion,
+      description: config.mcpServerDescription,
+    },
     {
       capabilities: {
         logging: {},
         resources: { listChanged: true },
         tools: { listChanged: true },
+        elicitation: {},
+        sampling: {}, // MCP 2025-06-18: Allow tools to request LLM completions from clients
+        prompts: { listChanged: true }, // MCP 2025-06-18: Provide structured message templates
+        roots: { listChanged: true }, // MCP 2025-06-18: Workspace/filesystem context awareness
       },
     },
   );
 
   try {
-    logger.debug("Registering resources and tools...", context);
-    await registerGetStudyTool(server);
-    await registerSearchStudiesTool(server);
-    await registerAnalyzeTrendsTool(server);
-    logger.info("Resources and tools registered successfully", context);
+    logger.debug('Registering all MCP capabilities via registries...', context);
+
+    // Resolve and use registry services
+    const toolRegistry = container.resolve(ToolRegistry);
+    await toolRegistry.registerAll(server);
+
+    const resourceRegistry = container.resolve(ResourceRegistry);
+    await resourceRegistry.registerAll(server);
+
+    const promptRegistry = container.resolve(PromptRegistry);
+    promptRegistry.registerAll(server);
+
+    const rootsRegistry = container.resolve(RootsRegistry);
+    void rootsRegistry.registerAll(server);
+
+    logger.info('All MCP capabilities registered successfully', context);
   } catch (err) {
-    logger.error("Failed to register resources/tools", {
+    logger.error('Failed to register MCP capabilities', {
       ...context,
       error: err instanceof Error ? err.message : String(err),
       stack: err instanceof Error ? err.stack : undefined,
@@ -70,62 +89,4 @@ async function createMcpServerInstance(): Promise<McpServer> {
   }
 
   return server;
-}
-
-/**
- * Selects, sets up, and starts the appropriate MCP transport layer based on configuration.
- *
- * @returns Resolves with `McpServer` for 'stdio' or `http.Server` for 'http'.
- * @throws {Error} If transport type is unsupported or setup fails.
- * @private
- */
-async function startTransport(): Promise<McpServer | http.Server> {
-  const transportType = config.mcpTransportType;
-  const context = requestContextService.createRequestContext({
-    operation: "startTransport",
-    transport: transportType,
-  });
-  logger.info(`Starting transport: ${transportType}`, context);
-
-  if (transportType === "http") {
-    const { server } = await startHttpTransport(createMcpServerInstance, context);
-    return server as http.Server;
-  }
-
-  if (transportType === "stdio") {
-    const server = await createMcpServerInstance();
-    await startStdioTransport(server, context);
-    return server;
-  }
-
-  logger.crit(`Unsupported transport type configured: ${transportType}`, context);
-  throw new Error(`Unsupported transport type: ${transportType}. Must be 'stdio' or 'http'.`);
-}
-
-/**
- * Main application entry point. Initializes and starts the MCP server.
- */
-export async function initializeAndStartServer(): Promise<McpServer | http.Server> {
-  const context = requestContextService.createRequestContext({
-    operation: "initializeAndStartServer",
-  });
-  logger.info("MCP Server initialization sequence started.", context);
-  try {
-    const result = await startTransport();
-    logger.info("MCP Server initialization sequence completed successfully.", context);
-    return result;
-  } catch (err) {
-    logger.crit("Critical error during MCP server initialization.", {
-      ...context,
-      error: err instanceof Error ? err.message : String(err),
-      stack: err instanceof Error ? err.stack : undefined,
-    });
-    ErrorHandler.handleError(err, {
-      ...context,
-      operation: "initializeAndStartServer_Catch",
-      critical: true,
-    });
-    logger.info("Exiting process due to critical initialization error.", context);
-    process.exit(1);
-  }
 }

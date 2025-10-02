@@ -1,26 +1,31 @@
 /**
  * @fileoverview Handles the setup and connection for the Stdio MCP transport.
- * Implements the MCP Specification 2025-03-26 for stdio transport.
+ * Implements the MCP Specification 2025-06-18 for stdio transport.
  * This transport communicates directly over standard input (stdin) and
  * standard output (stdout), typically used when the MCP server is launched
  * as a child process by a host application.
  *
  * Specification Reference:
- * https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-03-26/basic/transports.mdx#stdio
+ * https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#stdio
  *
  * --- Authentication Note ---
- * As per the MCP Authorization Specification (2025-03-26, Section 1.2),
+ * As per the MCP Authorization Specification (2025-06-18, Section 1.2),
  * STDIO transports SHOULD NOT implement HTTP-based authentication flows.
  * Authorization is typically handled implicitly by the host application
  * controlling the server process. This implementation follows that guideline.
  *
- * @see {@link https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-03-26/basic/authorization.mdx | MCP Authorization Specification}
+ * @see {@link https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization | MCP Authorization Specification}
  * @module src/mcp-server/transports/stdioTransport
  */
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { ErrorHandler, logger, RequestContext } from "../../../utils/index.js";
+import {
+  ErrorHandler,
+  type RequestContext,
+  logger,
+  logStartupBanner,
+} from '@/utils/index.js';
 
 /**
  * Connects a given `McpServer` instance to the Stdio transport.
@@ -45,40 +50,55 @@ import { ErrorHandler, logger, RequestContext } from "../../../utils/index.js";
 export async function startStdioTransport(
   server: McpServer,
   parentContext: RequestContext,
-): Promise<void> {
+): Promise<McpServer> {
   const operationContext = {
     ...parentContext,
-    operation: "connectStdioTransport",
-    transportType: "Stdio",
+    operation: 'connectStdioTransport',
+    transportType: 'Stdio',
   };
-  logger.info("Attempting to connect stdio transport...", operationContext);
+  logger.info('Attempting to connect stdio transport...', operationContext);
 
   try {
-    logger.debug("Creating StdioServerTransport instance...", operationContext);
+    logger.debug('Creating StdioServerTransport instance...', operationContext);
     const transport = new StdioServerTransport();
 
     logger.debug(
-      "Connecting McpServer instance to StdioServerTransport...",
+      'Connecting McpServer instance to StdioServerTransport...',
       operationContext,
     );
     await server.connect(transport);
 
     logger.info(
-      "MCP Server connected and listening via stdio transport.",
+      'MCP Server connected and listening via stdio transport.',
       operationContext,
     );
-    if (process.stdout.isTTY) {
-      console.log(
-        `\n🚀 MCP Server running in STDIO mode.\n   (MCP Spec: 2025-03-26 Stdio Transport)\n`,
-      );
-    }
+    logStartupBanner(
+      `\n🚀 MCP Server running in STDIO mode.\n   (MCP Spec: 2025-06-18 Stdio Transport)\n`,
+    );
+    return server;
   } catch (err) {
     // Let the ErrorHandler log the error with all context, then rethrow.
     throw ErrorHandler.handleError(err, {
-      operation: "connectStdioTransport",
+      operation: 'connectStdioTransport',
       context: operationContext,
       critical: true,
       rethrow: true,
     });
+  }
+}
+
+export async function stopStdioTransport(
+  server: McpServer,
+  parentContext: RequestContext,
+): Promise<void> {
+  const operationContext = {
+    ...parentContext,
+    operation: 'stopStdioTransport',
+    transportType: 'Stdio',
+  };
+  logger.info('Attempting to stop stdio transport...', operationContext);
+  if (server) {
+    await server.close();
+    logger.info('Stdio transport stopped successfully.', operationContext);
   }
 }

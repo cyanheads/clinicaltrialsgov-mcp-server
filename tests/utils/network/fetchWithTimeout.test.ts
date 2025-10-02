@@ -1,107 +1,126 @@
 /**
- * @fileoverview Tests for the fetchWithTimeout utility using real HTTP endpoints.
+ * @fileoverview Unit tests for the fetchWithTimeout utility.
  * @module tests/utils/network/fetchWithTimeout.test
  */
-import { describe, it, expect, beforeAll, afterEach, afterAll } from "vitest";
-import { fetchWithTimeout } from "../../../src/utils/network/fetchWithTimeout";
-import { requestContextService } from "../../../src/utils";
-import { McpError, BaseErrorCode } from "../../../src/types-global/errors";
-import { server } from "../../mocks/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type MockInstance,
+} from 'vitest';
 
-// Using httpbin.org for real HTTP testing
-const HTTPBIN_BASE = "https://httpbin.org";
+import { JsonRpcErrorCode } from '../../../src/types-global/errors.js';
+import { fetchWithTimeout } from '../../../src/utils/network/fetchWithTimeout.js';
+import { logger } from '../../../src/utils/internal/logger.js';
 
-describe("fetchWithTimeout", () => {
-  beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
-  afterEach(() => server.resetHandlers());
-  afterAll(() => server.close());
-  const parentRequestContext = requestContextService.createRequestContext({
-    toolName: "test-parent",
+describe('fetchWithTimeout', () => {
+  const context = {
+    requestId: 'ctx-1',
+    timestamp: new Date().toISOString(),
+  };
+  let debugSpy: MockInstance;
+  let errorSpy: MockInstance;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    debugSpy = vi.spyOn(logger, 'debug').mockImplementation(() => {});
+    errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => {});
   });
 
-  it("should successfully fetch data within the timeout", async () => {
-    const response = await fetchWithTimeout(
-      `${HTTPBIN_BASE}/json`,
-      10000,
-      parentRequestContext,
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('resolves with the response when fetch succeeds', async () => {
+    const response = new Response('ok', { status: 200 });
+    const fetchMock = vi
+      .spyOn(globalThis, 'fetch')
+      .mockResolvedValue(response as Response);
+
+    const result = await fetchWithTimeout('https://example.com', 1000, context);
+
+    expect(result).toBe(response);
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://example.com',
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
-    const data = await response.json();
-
-    expect(response.ok).toBe(true);
-    expect(data).toHaveProperty("slideshow");
+    expect(debugSpy).toHaveBeenCalledWith(
+      'Successfully fetched https://example.com. Status: 200',
+      context,
+    );
   });
 
-  it("should throw a timeout error if the request takes too long", async () => {
-    // httpbin.org/delay/2 takes 2 seconds, but we'll timeout after 1 second
+  it('throws an McpError when the response is not ok', async () => {
+    const response = new Response('nope', {
+      status: 503,
+      statusText: 'Service Unavailable',
+    });
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(response as Response);
+
     await expect(
-      fetchWithTimeout(`${HTTPBIN_BASE}/delay/2`, 1000, parentRequestContext),
-    ).rejects.toThrow(McpError);
+      fetchWithTimeout('https://example.com', 1000, context),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      message: expect.stringContaining('Status: 503'),
+    });
 
-    try {
-      await fetchWithTimeout(
-        `${HTTPBIN_BASE}/delay/2`,
-        1000,
-        parentRequestContext,
-      );
-    } catch (error) {
-      const mcpError = error as McpError;
-      expect(mcpError.code).toBe(BaseErrorCode.TIMEOUT);
-      expect(mcpError.message).toContain("timed out");
-    }
-  });
-
-  it("should handle HTTP error status codes gracefully", async () => {
-    const response = await fetchWithTimeout(
-      `${HTTPBIN_BASE}/status/500`,
-      5000,
-      parentRequestContext,
+    expect(errorSpy).toHaveBeenCalledWith(
+      'Fetch failed for https://example.com with status 503.',
+      expect.objectContaining({
+        errorSource: 'FetchHttpError',
+        statusCode: 503,
+      }),
     );
-    expect(response.ok).toBe(false);
-    // httpbin.org can be flaky and sometimes returns 502 for this endpoint
-    expect([500, 502]).toContain(response.status);
   });
 
-  it("should throw an McpError for network errors", async () => {
-    // Use an invalid URL to trigger a network error
+  it('throws a timeout McpError when the request exceeds the allotted time', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation((_url, init) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const abortError = new Error('Aborted');
+          abortError.name = 'AbortError';
+          reject(abortError);
+        });
+      });
+    });
+
     await expect(
-      fetchWithTimeout(
-        "https://invalid-domain-that-does-not-exist.com",
-        5000,
-        parentRequestContext,
-      ),
-    ).rejects.toThrow(McpError);
+      fetchWithTimeout('https://slow.example.com', 5, context),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.Timeout,
+      data: expect.objectContaining({ errorSource: 'FetchTimeout' }),
+    });
 
-    try {
-      await fetchWithTimeout(
-        "https://invalid-domain-that-does-not-exist.com",
-        5000,
-        parentRequestContext,
-      );
-    } catch (error) {
-      const mcpError = error as McpError;
-      expect(mcpError.code).toBe(BaseErrorCode.SERVICE_UNAVAILABLE);
-      expect(mcpError.message).toContain("Network error");
-    }
+    expect(errorSpy).toHaveBeenCalledWith(
+      'fetch GET https://slow.example.com timed out after 5ms.',
+      expect.objectContaining({ errorSource: 'FetchTimeout' }),
+    );
   });
 
-  it("should handle POST requests correctly", async () => {
-    const requestBody = { key: "value", test: true };
-
-    const response = await fetchWithTimeout(
-      `${HTTPBIN_BASE}/post`,
-      10000,
-      parentRequestContext,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(requestBody),
-      },
+  it('wraps unknown fetch errors into an McpError', async () => {
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(
+      new Error('connection reset'),
     );
 
-    const responseData = await response.json();
+    await expect(
+      fetchWithTimeout('https://error.example.com', 1000, context),
+    ).rejects.toMatchObject({
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      data: expect.objectContaining({
+        errorSource: 'FetchNetworkErrorWrapper',
+        originalErrorName: 'Error',
+      }),
+    });
 
-    expect(response.ok).toBe(true);
-    expect(responseData.json).toEqual(requestBody);
-    expect(responseData.headers["Content-Type"]).toBe("application/json");
+    expect(errorSpy).toHaveBeenCalledWith(
+      'Network error during fetch GET https://error.example.com: connection reset',
+      expect.objectContaining({
+        errorSource: 'FetchNetworkError',
+        originalErrorName: 'Error',
+      }),
+    );
   });
 });

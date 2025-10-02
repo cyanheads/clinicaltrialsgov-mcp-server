@@ -1,24 +1,33 @@
-import tsconfigPaths from "vite-tsconfig-paths";
-import { defineConfig } from "vitest/config";
+import { defineConfig } from 'vitest/config';
+import tsconfigPaths from 'vite-tsconfig-paths';
 
 export default defineConfig({
-  plugins: [tsconfigPaths({ projects: ["./tsconfig.vitest.json"] })],
+  plugins: [tsconfigPaths()],
   test: {
     globals: true,
-    environment: "node",
-    setupFiles: ["./tests/setup.ts"],
-    testTimeout: 15000,
+    environment: 'node',
+    setupFiles: ['./tests/setup.ts'],
     coverage: {
-      provider: "v8",
-      reporter: ["text", "json", "html"],
-      include: ["src/**/*.ts"],
+      provider: 'v8',
+      reporter: ['text', 'json', 'html'],
+      include: ['src/**/*.ts'],
       exclude: [
-        "src/index.ts",
-        "src/types-global/**",
-        "**/*.d.ts",
-        "**/index.ts"
+        'src/**/*.d.ts',
+        'src/**/index.ts',
+        '!src/index.ts',
+        '!src/config/index.ts',
       ],
     },
-    dir: "tests",
+    fakeTimers: {
+      toFake: [
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+        'setImmediate',
+        'clearImmediate',
+        'Date',
+      ],
+    },
   },
 });

@@ -1,16 +1,67 @@
 {
   "compilerOptions": {
-    "target": "ES2020",
-    "module": "ESNext",
-    "moduleResolution": "node",
-    "esModuleInterop": true,
+    // Target modern JavaScript
+    "target": "ES2022",
+
+    // Use modern Node.js module system
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+
+    // Enable all strict type checking
     "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "verbatimModuleSyntax": true,
+    "moduleDetection": "force",
+
+    // Module interop for CommonJS compatibility
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+
+    // Output configuration
     "outDir": "./dist",
-    "rootDir": "./src",
     "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+
+    // Import helpers to reduce bundle size
+    "importHelpers": true,
+
+    // Skip type checking of declaration files
     "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true
+
+    // Ensure consistent file naming
+    "forceConsistentCasingInFileNames": true,
+
+    // Enable experimental decorators if needed
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+
+    // Node.js specific
+    "lib": ["ES2022"],
+    "types": ["bun-types", "node", "reflect-metadata"],
+
+    // Error on unused locals and parameters
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+
+    // Ensure void returns are handled
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+
+    // Modern resolution features
+    "resolveJsonModule": true,
+    "allowJs": false,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "tests/*": ["tests/*"]
+    }
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "include": ["src/**/*", "tests/**/*"],
+  "exclude": ["node_modules", "dist", "**/*.spec.ts"],
+  "ts-node": {
+    "esm": true,
+    "experimentalSpecifierResolution": "node"
+  }
 }

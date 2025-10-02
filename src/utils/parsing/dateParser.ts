@@ -3,9 +3,10 @@
  * into Date objects or detailed parsing results using the `chrono-node` library.
  * @module src/utils/parsing/dateParser
  */
-import * as chrono from "chrono-node";
-import { BaseErrorCode } from "../../types-global/errors.js";
-import { ErrorHandler, logger, RequestContext } from "../index.js";
+import * as chrono from 'chrono-node';
+
+import { JsonRpcErrorCode } from '@/types-global/errors.js';
+import { ErrorHandler, type RequestContext, logger } from '@/utils/index.js';
 
 /**
  * Parses a natural language date string into a JavaScript Date object.
@@ -23,12 +24,12 @@ export async function parseDateString(
   context: RequestContext,
   refDate?: Date,
 ): Promise<Date | null> {
-  const operation = "parseDateString";
+  const operation = 'parseDateString';
   const logContext = { ...context, operation, inputText: text, refDate };
   logger.debug(`Attempting to parse date string: "${text}"`, logContext);
 
   return await ErrorHandler.tryCatch(
-    async () => {
+    () => {
       const parsedDate = chrono.parseDate(text, refDate, { forwardDate: true });
       if (parsedDate) {
         logger.debug(
@@ -45,7 +46,7 @@ export async function parseDateString(
       operation,
       context: logContext,
       input: { text, refDate },
-      errorCode: BaseErrorCode.PARSING_ERROR,
+      errorCode: JsonRpcErrorCode.ParseError,
     },
   );
 }
@@ -66,7 +67,7 @@ export async function parseDateStringDetailed(
   context: RequestContext,
   refDate?: Date,
 ): Promise<chrono.ParsedResult[]> {
-  const operation = "parseDateStringDetailed";
+  const operation = 'parseDateStringDetailed';
   const logContext = { ...context, operation, inputText: text, refDate };
   logger.debug(
     `Attempting detailed parse of date string: "${text}"`,
@@ -74,7 +75,7 @@ export async function parseDateStringDetailed(
   );
 
   return await ErrorHandler.tryCatch(
-    async () => {
+    () => {
       const results = chrono.parse(text, refDate, { forwardDate: true });
       logger.debug(
         `Detailed parse of "${text}" resulted in ${results.length} result(s)`,
@@ -86,7 +87,7 @@ export async function parseDateStringDetailed(
       operation,
       context: logContext,
       input: { text, refDate },
-      errorCode: BaseErrorCode.PARSING_ERROR,
+      errorCode: JsonRpcErrorCode.ParseError,
     },
   );
 }

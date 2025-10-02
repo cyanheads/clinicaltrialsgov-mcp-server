@@ -1,13 +1,28 @@
 /**
  * @fileoverview Utilities for creating and managing request contexts.
  * A request context is an object carrying a unique ID, timestamp, and other
- * relevant data for logging, tracing, and processing. It also defines
- * configuration and operational context structures.
+ * relevant data for logging, tracing, and processing. It supports context
+ * propagation for distributed tracing.
  * @module src/utils/internal/requestContext
  */
+import { trace } from '@opentelemetry/api';
 
-import { generateUUID } from "../index.js";
-import { logger } from "./logger.js";
+import { authContext as alsAuthContext } from '@/mcp-server/transports/auth/lib/authContext.js';
+import { generateRequestContextId } from '@/utils/index.js';
+import { logger } from '@/utils/internal/logger.js';
+
+/**
+ * Defines the structure of the authentication-related context, typically
+ * decoded from a JWT.
+ */
+export interface AuthContext {
+  /** The subject (user) identifier. */
+  sub: string;
+  /** An array of granted permissions (scopes). */
+  scopes: string[];
+  /** Other properties from the token payload. */
+  [key: string]: unknown;
+}
 
 /**
  * Defines the core structure for context information associated with a request or operation.
@@ -24,6 +39,17 @@ export interface RequestContext {
    * ISO 8601 timestamp indicating when the context was created.
    */
   timestamp: string;
+
+  /**
+   * The unique identifier for the tenant making the request.
+   * This is essential for multi-tenancy and data isolation.
+   */
+  tenantId?: string;
+
+  /**
+   * Optional authentication context, present if the request was authenticated.
+   */
+  auth?: AuthContext;
 
   /**
    * Allows arbitrary key-value pairs for specific context needs.
@@ -56,6 +82,29 @@ export interface OperationContext {
 }
 
 /**
+ * Parameters for creating a new request context.
+ */
+export interface CreateRequestContextParams {
+  /**
+   * An optional parent context to inherit properties from, such as `requestId`.
+   * This is key for propagating context in distributed systems.
+   */
+  parentContext?: Record<string, unknown> | RequestContext;
+
+  /**
+   * An optional record of key-value pairs to be merged into the new context.
+   * These will override any properties inherited from the parent context.
+   */
+  additionalContext?: Record<string, unknown>;
+
+  /**
+   * A descriptive name for the operation creating this context.
+   * Useful for debugging and tracing.
+   */
+  operation?: string;
+}
+
+/**
  * Singleton-like service object for managing request context operations.
  * @private
  */
@@ -78,10 +127,10 @@ const requestContextServiceInstance = {
       ...config,
     };
     const logContext = this.createRequestContext({
-      operation: "RequestContextService.configure",
-      newConfigState: { ...this.config },
+      operation: 'RequestContextService.configure',
+      additionalContext: { newConfigState: { ...this.config } },
     });
-    logger.debug("RequestContextService configuration updated", logContext);
+    logger.debug('RequestContextService configuration updated', logContext);
     return { ...this.config };
   },
 
@@ -96,25 +145,91 @@ const requestContextServiceInstance = {
   },
 
   /**
-   * Creates a new {@link RequestContext} instance.
-   * Each context is assigned a unique `requestId` (UUID) and a current `timestamp` (ISO 8601).
-   * Additional custom properties can be merged into the context.
+   * Creates a new {@link RequestContext} instance, supporting context propagation.
+   * This function robustly handles two calling patterns:
+   * 1. Passing a `CreateRequestContextParams` object: `createRequestContext({ parentContext: ..., additionalContext: ... })`
+   * 2. Passing a plain object to be used as the context: `createRequestContext({ userId: '123', operation: '...' })`
    *
-   * @param additionalContext - An optional record of key-value pairs to be
-   *   included in the created request context.
+   * OpenTelemetry trace and span IDs are automatically injected if an active span exists.
+   *
+   * @param params - Parameters for creating the context.
    * @returns A new `RequestContext` object.
    */
   createRequestContext(
-    additionalContext: Record<string, unknown> = {},
+    params: CreateRequestContextParams | Record<string, unknown> = {},
   ): RequestContext {
-    const requestId = generateUUID();
+    // Destructure known CreateRequestContextParams keys and capture the rest.
+    // The 'rest' object will contain all properties that are NOT the special keys,
+    // effectively capturing the direct context object when passed.
+    const { parentContext, additionalContext, operation, ...rest } =
+      params as CreateRequestContextParams;
+
+    const inheritedContext =
+      parentContext && typeof parentContext === 'object'
+        ? { ...parentContext }
+        : {};
+
+    let inheritedTenantId: string | undefined;
+    if (
+      inheritedContext &&
+      typeof inheritedContext === 'object' &&
+      'tenantId' in inheritedContext &&
+      typeof (inheritedContext as { tenantId?: unknown }).tenantId === 'string'
+    ) {
+      inheritedTenantId = (inheritedContext as { tenantId: string }).tenantId;
+    }
+
+    const authStore = alsAuthContext.getStore();
+    const tenantIdFromAuth = authStore?.authInfo?.tenantId;
+
+    const requestId =
+      typeof inheritedContext.requestId === 'string' &&
+      inheritedContext.requestId
+        ? inheritedContext.requestId
+        : generateRequestContextId();
     const timestamp = new Date().toISOString();
 
+    const restTenantId =
+      typeof (rest as { tenantId?: unknown }).tenantId === 'string'
+        ? (rest as { tenantId: string }).tenantId
+        : undefined;
+
+    const additionalTenantId =
+      additionalContext &&
+      typeof additionalContext === 'object' &&
+      typeof (additionalContext as { tenantId?: unknown }).tenantId === 'string'
+        ? (additionalContext as { tenantId: string }).tenantId
+        : undefined;
+
+    const resolvedTenantId =
+      additionalTenantId ??
+      restTenantId ??
+      inheritedTenantId ??
+      tenantIdFromAuth;
+
     const context: RequestContext = {
+      ...inheritedContext,
+      ...rest, // Spread any other properties from the params object
       requestId,
       timestamp,
-      ...additionalContext,
+      ...(resolvedTenantId ? { tenantId: resolvedTenantId } : {}),
+      ...(additionalContext && typeof additionalContext === 'object'
+        ? additionalContext
+        : {}),
+      ...(operation && typeof operation === 'string' ? { operation } : {}),
     };
+
+    // --- OpenTelemetry Integration ---
+    const activeSpan = trace.getActiveSpan();
+    if (activeSpan && typeof activeSpan.spanContext === 'function') {
+      const spanContext = activeSpan.spanContext();
+      if (spanContext) {
+        context.traceId = spanContext.traceId;
+        context.spanId = spanContext.spanId;
+      }
+    }
+    // --- End OpenTelemetry Integration ---
+
     return context;
   },
 };

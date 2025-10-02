@@ -4,5 +4,4 @@
     "rootDir": "."
   },
   "include": ["src/**/*", "scripts/**/*.ts"]
-  // The 'exclude' is also inherited.
 }

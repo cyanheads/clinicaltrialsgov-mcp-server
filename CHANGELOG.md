@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2025-10-01
+
+### Alignment with `cyanheads/mcp-ts-template@v2.3.1`
+
+This release represents a comprehensive architectural overhaul to align with the `cyanheads/mcp-ts-template@v2.3.1`. The project has been migrated to a more modern, modular, and extensible structure, designed to support serverless deployments (Cloudflare Workers), enhanced observability (OpenTelemetry), and improved developer experience.
+
+### Added
+
+- **Build System**: Migrated from `npm` and `ts-node` to **Bun** for dependency management, script execution, and bundling.
+- **Dependency Injection**: Integrated **`tsyringe`** for Inversion of Control. Core services like configuration, logger, and providers are now managed by a central DI container.
+- **Serverless Support**: Added a `src/worker.ts` entry point for deploying the MCP server on **Cloudflare Workers**, including support for bindings (KV, R2, AI).
+- **Storage Abstraction**: Introduced a new storage service layer (`src/storage`) with an `IStorageProvider` interface. Implementations include `in-memory`, `filesystem`, and providers for **Cloudflare R2** and **Cloudflare KV**.
+- **Observability**: Integrated **OpenTelemetry** for tracing and metrics. Added a `telemetry` utility module and semantic convention constants.
+- **Speech Services**: Added a new speech service (`src/services/speech`) with providers for **ElevenLabs (TTS)** and **OpenAI Whisper (STT)**.
+- **Declarative Components**: Extended the declarative pattern to all MCP components:
+  - **Tools**: `ToolDefinition` with a `toolHandlerFactory`.
+  - **Resources**: `ResourceDefinition` with a `resourceHandlerFactory`.
+  - **Prompts**: `PromptDefinition` for generating structured LLM inputs.
+- **Developer Tooling**:
+  - `devcheck.ts`: A script for running lint, type checks, security audits, and more.
+  - `devdocs.ts`: A script for generating comprehensive AI-readable context files.
+  - `validate-mcp-publish-schema.ts`: A script for validating and publishing the server to the MCP registry.
+
+### Changed
+
+- **Project Structure**: Completely reorganized the `src/` directory into a domain-driven structure (`container`, `services`, `storage`, `utils`, etc.).
+- **Error Handling**: `ErrorHandler` is now more robust, integrates with OpenTelemetry, and uses standardized `JsonRpcErrorCode`s.
+- **Configuration**: `src/config/index.ts` is now environment-agnostic and loads configuration for all new services.
+- **HTTP Transport**: The Hono-based HTTP transport was refactored for better integration with the new DI system and to support serverless environments.
+- **Tool & Resource Registration**: All tools and resources are now registered through dedicated `ToolRegistry` and `ResourceRegistry` services, which are resolved from the DI container.
+
+### Removed
+
+- Deleted dozens of legacy files related to the old architecture, including the previous transport managers, old tool registration patterns, and outdated utility files.
+
 ## [1.1.11] - 2025-08-06
 
 ### Changed

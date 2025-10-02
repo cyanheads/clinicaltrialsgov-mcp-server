@@ -4,10 +4,10 @@
 
 **Empower your AI agents with direct access to the ClinicalTrials.gov database!**
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-^5.8.3-blue.svg?style=flat-square)](https://www.typescriptlang.org/)
-[![Model Context Protocol](https://img.shields.io/badge/MCP%20SDK-^1.17.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/Version-1.1.11-blue.svg?style=flat-square)](./CHANGELOG.md)
-[![Coverage](https://img.shields.io/badge/Coverage-59.31%25-yellow?style=flat-square)](./vitest.config.ts)
+[![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.2-blue.svg?style=flat-square)](https://www.typescriptlang.org/)
+[![Model Context Protocol](https://img.shields.io/badge/MCP%20SDK-^1.18.2-green.svg?style=flat-square)](https://modelcontextprotocol.io/)
+[![Version](https://img.shields.io/badge/Version-1.2.0-blue.svg?style=flat-square)](./CHANGELOG.md)
+[![Coverage](https://img.shields.io/badge/Coverage-92.46%25-brightgreen?style=flat-square)](./vitest.config.ts)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](https://opensource.org/licenses/Apache-2.0)
 [![Status](https://img.shields.io/badge/Status-stable-green.svg?style=flat-square)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues)
 [![GitHub](https://img.shields.io/github/stars/cyanheads/clinicaltrialsgov-mcp-server?style=social)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server)
@@ -16,7 +16,7 @@
 
 Model Context Protocol (MCP) Server providing a robust, developer-friendly interface to the official [ClinicalTrials.gov v2 API](https://clinicaltrials.gov/data-api/api). Enables LLMs and AI agents to search, retrieve, and analyze clinical study data programmatically.
 
-Built on the [`cyanheads/mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template), this server follows a modular architecture with robust error handling, logging, and security features.
+Built on the [`cyanheads/mcp-ts-template@v2.3.1`](https://github.com/cyanheads/mcp-ts-template), this server is designed for performance, portability, and developer experience. It can run as a standard Node.js process or be deployed as a serverless function on **Cloudflare Workers**.
 
 ## 🚀 Core Capabilities: ClinicalTrials.gov Tools 🛠️
 
@@ -32,9 +32,10 @@ This server equips your AI with specialized tools to interact with the ClinicalT
 
 ## Table of Contents
 
-| [Overview](#overview) | [Features](#features) | [Installation](#installation)
-| [Configuration](#configuration) | [Project Structure](#project-structure)
-| [Tools](#tools) | [Development & Testing](#development--testing) | [License](#license)
+| [Overview](#overview) | [Features](#features) | [Installation](#installation) |
+| :--- | :--- | :--- |
+| [Configuration](#configuration) | [Project Structure](#project-structure) | [Tools](#tools) |
+| [Serverless Deployment](#serverless-deployment) | [Development & Testing](#development--testing) | [License](#license) |
 
 ## Overview
 
@@ -63,9 +64,14 @@ Leverages the robust utilities provided by the `mcp-ts-template`:
 - **Input Validation/Sanitization**: Uses `zod` for schema validation and custom sanitization logic.
 - **Request Context**: Tracking and correlation of operations via unique request IDs using `AsyncLocalStorage`.
 - **Type Safety**: Strong typing enforced by TypeScript and Zod schemas.
-- **HTTP Transport**: High-performance HTTP server using **Hono**, featuring session management and authentication support.
+- **HTTP Transport**: High-performance HTTP server using **Hono** for routing and middleware.
 - **Authentication**: Robust authentication layer supporting JWT and OAuth 2.1, with fine-grained scope enforcement.
-- **Deployment**: Multi-stage `Dockerfile` for creating small, secure production images with native dependency support.
+- **Serverless & Edge Ready**: Includes a `src/worker.ts` entry point for seamless deployment to **Cloudflare Workers**.
+- **Containerization**: Multi-stage `Dockerfile` for creating small, secure production images.
+- **Dependency Injection**: Powered by `tsyringe` for a clean, decoupled architecture.
+- **Observability**: Integrated with **OpenTelemetry** for tracing and metrics.
+- **Advanced Storage**: Abstracted storage layer with providers for `in-memory`, `filesystem`, **Supabase**, and Cloudflare **R2** & **KV**.
+- **Speech Services**: Built-in support for Text-to-Speech (ElevenLabs) and Speech-to-Text (Whisper).
 
 ### ClinicalTrials.gov Integration
 
@@ -81,8 +87,7 @@ Leverages the robust utilities provided by the `mcp-ts-template`:
 
 ### Prerequisites
 
-- [Node.js (>=18.0.0)](https://nodejs.org/)
-- [npm](https://www.npmjs.com/) (comes with Node.js)
+- [Bun (>=1.0.0)](https://bun.sh/)
 
 ### MCP Client Settings
 
@@ -102,15 +107,7 @@ Add the following to your MCP client's configuration file (e.g., `cline_mcp_sett
 }
 ```
 
-### If running manually (not via MCP client for development or testing)
-
-#### Install via npm
-
-```bash
-npm install clinicaltrialsgov-mcp-server
-```
-
-#### Alternatively Install from Source
+### If running manually (for development or testing)
 
 1.  Clone the repository:
     ```bash
@@ -119,11 +116,11 @@ npm install clinicaltrialsgov-mcp-server
     ```
 2.  Install dependencies:
     ```bash
-    npm install
+    bun install
     ```
 3.  Build the project:
     ```bash
-    npm run build
+    bun run build
     ```
 
 ## Configuration
@@ -143,7 +140,10 @@ Configure the server using environment variables. For local development, these c
 | `MCP_AUTH_SECRET_KEY`      | **Required for `jwt` auth.** Minimum 32-character secret key for JWT authentication.     | (none)        |
 | `CLINICALTRIALS_DATA_PATH` | Directory for caching ClinicalTrials.gov API data.                                       | `data/`       |
 | `LOGS_DIR`                 | Directory for log file storage.                                                          | `logs/`       |
-| `NODE_ENV`                 | Runtime environment (`development`, `production`).                                       | `development` |
+| `NODE_ENV`                 | Runtime environment (`development`, `production`, `testing`).                            | `development` |
+>>>>>>> Stashed changes
+| `STORAGE_PROVIDER_TYPE`    | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-r2`, `cloudflare-kv`. | `in-memory`   |
+| `OTEL_ENABLED`             | Set to `true` to enable OpenTelemetry tracing and metrics.                               | `false`       |
 
 ## Project Structure
 
@@ -151,20 +151,22 @@ The codebase follows a modular structure within the `src/` directory:
 
 ```
 src/
-├── index.ts              # Entry point: Initializes and starts the server
-├── config/               # Configuration loading (env vars, package info)
-│   └── index.ts
-├── mcp-server/           # Core MCP server logic and capability registration
-│   ├── server.ts         # Server setup, capability registration
-│   ├── transports/       # Transport handling (stdio, http)
-│   └── tools/            # MCP Tool implementations (subdirs per tool)
-├── services/             # External service integrations
-│   └── clinical-trials-gov/ # ClinicalTrials.gov API client and types
-├── types-global/         # Shared TypeScript type definitions
-└── utils/                # Common utility functions (logger, error handler, etc.)
+├── index.ts                # Main entry point for Node.js environment
+├── worker.ts               # Entry point for Cloudflare Workers (serverless)
+├── config/                 # Application configuration (Zod schema, env loading)
+├── container/              # Dependency Injection (tsyringe) setup and tokens
+├── mcp-server/             # Core MCP server logic
+│   ├── prompts/            # Declarative prompt definitions
+│   ├── resources/          # Declarative resource definitions
+│   ├── tools/              # Declarative tool definitions
+│   └── transports/         # HTTP and STDIO transport layers
+├── services/               # External service integrations (ClinicalTrials.gov, LLMs, Speech)
+├── storage/                # Storage abstraction layer and providers
+├── types-global/           # App-wide TypeScript types (e.g., errors)
+└── utils/                  # Common utilities (logger, error handling, etc.)
 ```
 
-For a detailed file tree, run `npm run tree` or see [docs/tree.md](docs/tree.md).
+For a detailed file tree, run `bun run tree` or see [docs/tree.md](docs/tree.md).
 
 ## Tools
 
@@ -186,58 +188,65 @@ Comprehensive usage examples for each tool are available in the [`examples/`](ex
 - **`clinicaltrials_get_study`**: [View Example](./examples/clinicaltrials_get_study.md)
 - **`clinicaltrials_analyze_trends`**: [View Example](./examples/clinicaltrials_analyze_trends.md)
 
+## Serverless Deployment
+
+This server is optimized for serverless environments, particularly **Cloudflare Workers**.
+
+- The `src/worker.ts` file is the entry point for serverless deployments.
+- It leverages Cloudflare Bindings to securely access services like KV, R2, and environment variables.
+- The storage layer can be configured to use `cloudflare-r2` or `cloudflare-kv` for persistent, globally distributed storage.
+
+To deploy, configure your `wrangler.toml` file and run `bunx wrangler deploy`.
+
 ## Development & Testing
 
 ### Development Scripts
 
 ```bash
-# Build the project (compile TS to JS in dist/ and make executable)
-npm run build
+# Start the server in watch mode (restarts on file changes)
+bun run dev
 
-# Clean build artifacts
-npm run clean
+# Run all quality checks (lint, types, formatting, security, etc.)
+bun run devcheck
 
-# Clean build artifacts and then rebuild the project
-npm run rebuild
+# Generate comprehensive AI-readable context for documentation
+bun run devdocs
+
+# Build the project for production
+bun run build
 
 # Format code with Prettier
-npm run format
+bun run format
 
 # Generate a file tree representation for documentation
-npm run tree
+bun run tree
 ```
 
 ### Testing
 
-This project uses [Vitest](https://vitest.dev/) for unit and integration testing.
+This project uses **Bun's built-in test runner**, which is compatible with the Vitest API.
 
 ```bash
 # Run all tests once
-npm test
+bun test
 
-# Run tests in watch mode
-npm run test:watch
-
-# Run tests and generate a coverage report
-npm run test:coverage
+# Run tests and generate a code coverage report
+bun test --coverage
 ```
 
 ### Running the Server
 
 ```bash
 # Start the server using stdio (default)
-npm start
+bun start
 # Or explicitly:
-npm run start:stdio
+bun run start:stdio
 
 # Start the server using HTTP transport
-npm run start:http
+bun run start:http
 
-# Test the server locally using the MCP inspector tool (stdio transport)
-npm run inspector
-
-# Test the server locally using the MCP inspector tool (http transport)
-npm run inspector:http
+# Test the server locally using the MCP inspector tool
+bun run inspector
 ```
 
 ## License

@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.1] - 2025-10-02
+
+### Changed
+- **Observability**: Refactored the `IClinicalTrialsProvider` interface and its implementation to accept a `RequestContext` in every method (`fetchStudy`, `listStudies`, `getStudyMetadata`, `getApiStats`). This ensures that the tracing context is propagated through the entire call stack, enabling full-stack observability.
+- **Tool Logic**: Updated all tool definitions (`clinicaltrials-get-study`, `clinicaltrials-search-studies`, `clinicaltrials-analyze-trends`) to pass the `appContext` to the provider, ensuring that all API calls are part of the same trace.
+- **README Overhaul**: Completely rewrote the `README.md` to be more tool-centric. It now includes a clear overview of each tool, its key features, example use cases, and links to detailed examples.
+- **Examples Update**: Updated all tool examples in the `examples/` directory to reflect the latest response formats and provide more comprehensive usage scenarios, including error handling.
+- **Dependencies**: Updated `dotenv`, `typescript`, `@faker-js/faker` and other minor dependencies to their latest versions.
+- **Server Manifest**: Added `server.json` to define the server and its packages for the MCP registry.
+
+### Removed
+- **Prompts & Roots**: Removed the `prompts` and `roots` capabilities from the MCP server as they were unused and added unnecessary complexity. This includes deleting the corresponding directories and registration logic.
+
 ## [1.2.0] - 2025-10-01
 
 ### Alignment with `cyanheads/mcp-ts-template@v2.3.1`

@@ -1,9 +1,11 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2025-10-02 05:01:16
+Generated on: 2025-10-02 06:35:38
 
 ```
 clinicaltrialsgov-mcp-server
+├── .clinerules
+│   └── AGENTS.md
 ├── .github
 │   ├── workflows
 │   │   └── publish.yml
@@ -33,13 +35,6 @@ clinicaltrialsgov-mcp-server
 │   │   ├── index.ts
 │   │   └── tokens.ts
 │   ├── mcp-server
-│   │   ├── prompts
-│   │   │   ├── definitions
-│   │   │   │   ├── code-review.prompt.ts
-│   │   │   │   └── index.ts
-│   │   │   ├── utils
-│   │   │   │   └── promptDefinition.ts
-│   │   │   └── prompt-registration.ts
 │   │   ├── resources
 │   │   │   ├── definitions
 │   │   │   │   ├── echo.resource.ts
@@ -48,8 +43,6 @@ clinicaltrialsgov-mcp-server
 │   │   │   │   ├── resourceDefinition.ts
 │   │   │   │   └── resourceHandlerFactory.ts
 │   │   │   └── resource-registration.ts
-│   │   ├── roots
-│   │   │   └── roots-registration.ts
 │   │   ├── tools
 │   │   │   ├── definitions
 │   │   │   │   ├── clinicaltrials-analyze-trends.tool.ts
@@ -226,12 +219,11 @@ clinicaltrialsgov-mcp-server
 │   │       ├── rateLimiter.test.ts
 │   │       └── sanitization.test.ts
 │   └── setup.ts
-├── .clinerules
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore
-├── .ncurc.json
 ├── .prettierrc.json
+├── AGENTS.md
 ├── bun.lock
 ├── bunfig.toml
 ├── CHANGELOG.md
@@ -243,6 +235,7 @@ clinicaltrialsgov-mcp-server
 ├── package.json
 ├── README.md
 ├── repomix.config.json
+├── server.json
 ├── smithery.yaml
 ├── tsconfig.json
 ├── tsconfig.typedoc.json

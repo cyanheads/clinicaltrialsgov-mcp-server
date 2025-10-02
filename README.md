@@ -1,103 +1,119 @@
 <div align="center">
+  <h1>clinicaltrialsgov-mcp-server</h1>
+  <p><b>A production-grade, multi-tenant MCP server with tools to access the ClinicalTrials.gov v2 API. Built for performance and scalability, with native support for serverless deployment (Cloudflare Workers).</b></p>
+</div>
 
-# clinicaltrialsgov-mcp-server
+<div align="center">
 
-**Empower your AI agents with direct access to the ClinicalTrials.gov database!**
-
-[![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.2-blue.svg?style=flat-square)](https://www.typescriptlang.org/)
-[![Model Context Protocol](https://img.shields.io/badge/MCP%20SDK-^1.18.2-green.svg?style=flat-square)](https://modelcontextprotocol.io/)
-[![Version](https://img.shields.io/badge/Version-1.2.0-blue.svg?style=flat-square)](./CHANGELOG.md)
-[![Coverage](https://img.shields.io/badge/Coverage-92.46%25-brightgreen?style=flat-square)](./vitest.config.ts)
-[![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg?style=flat-square)](https://opensource.org/licenses/Apache-2.0)
-[![Status](https://img.shields.io/badge/Status-stable-green.svg?style=flat-square)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues)
-[![GitHub](https://img.shields.io/github/stars/cyanheads/clinicaltrialsgov-mcp-server?style=social)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server)
+[![Version](https://img.shields.io/badge/Version-2.3.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--06--18-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-06-18/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.18.2-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.2.23-blueviolet.svg?style=flat-square)](https://bun.sh/) [![Code Coverage](https://img.shields.io/badge/Coverage-92.46%25-brightgreen.svg?style=flat-square)](./vitest.config.ts)
 
 </div>
 
-Model Context Protocol (MCP) Server providing a robust, developer-friendly interface to the official [ClinicalTrials.gov v2 API](https://clinicaltrials.gov/data-api/api). Enables LLMs and AI agents to search, retrieve, and analyze clinical study data programmatically.
+---
 
-Built on the [`cyanheads/mcp-ts-template@v2.3.1`](https://github.com/cyanheads/mcp-ts-template), this server is designed for performance, portability, and developer experience. It can run as a standard Node.js process or be deployed as a serverless function on **Cloudflare Workers**.
+## 🛠️ Tools Overview
 
-## 🚀 Core Capabilities: ClinicalTrials.gov Tools 🛠️
+This server provides three powerful tools for accessing and analyzing clinical trial data from ClinicalTrials.gov:
 
-This server equips your AI with specialized tools to interact with the ClinicalTrials.gov database:
+| Tool Name                       | Description                                                                                                                                |
+| :------------------------------ | :----------------------------------------------------------------------------------------------------------------------------------------- |
+| `clinicaltrials_search_studies` | Searches for clinical studies using a combination of query terms and filters. Supports pagination, sorting, and geographic filtering.      |
+| `clinicaltrials_get_study`      | Fetches one or more clinical studies by their NCT IDs. Returns either complete study data or concise summaries for each.                   |
+| `clinicaltrials_analyze_trends` | Performs statistical analysis on studies, aggregating data by status, country, sponsor, or phase. Handles up to 5000 studies per analysis. |
 
-| Tool Name                                                                | Description                                                                                                                                                                                                                                                                     | Example                                                     |
-| :----------------------------------------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | :---------------------------------------------------------- |
-| [`clinicaltrials_search_studies`](./src/mcp-server/tools/searchStudies/) | Searches for clinical studies using a combination of query terms and filters. Supports pagination, sorting, and geographic filtering.                                                                                                                                           | [View Example](./examples/clinicaltrials_search_studies.md) |
-| [`clinicaltrials_get_study`](./src/mcp-server/tools/getStudy/)           | Fetches one or more clinical studies from ClinicalTrials.gov by their NCT IDs. Returns either complete study data or concise summaries for each.                                                                                                                                | [View Example](./examples/clinicaltrials_get_study.md)      |
-| [`clinicaltrials_analyze_trends`](./src/mcp-server/tools/analyzeTrends/) | Performs a statistical analysis on a set of clinical trials, aggregating data by status, country, sponsor, or phase. Use specific query parameters to refine the analysis and filter the studies included in the analysis. The tool can handle up to 5000 studies per analysis. | [View Example](./examples/clinicaltrials_analyze_trends.md) |
+### `clinicaltrials_search_studies`
+
+**Search and discover clinical trials** using free-text queries and advanced filters.
+
+**Key Features:**
+
+- Free-text search across all study fields (conditions, interventions, sponsors, titles)
+- Advanced filtering with ClinicalTrials.gov's official filter syntax
+- Pagination support for large result sets (up to 200 studies per page)
+- Sorting by enrollment count, update date, or other fields
+- Returns concise summaries with NCT IDs, titles, and recruitment status
+
+**Example Use Cases:**
+
+- "Find all Phase 3 diabetes studies currently recruiting"
+- "Show me cancer immunotherapy trials in the United States"
+- "List studies by pharmaceutical companies sorted by size"
+
+📖 **[View detailed examples →](./examples/clinicaltrials_search_studies.md)**
 
 ---
 
-## Table of Contents
+### `clinicaltrials_get_study`
 
-| [Overview](#overview) | [Features](#features) | [Installation](#installation) |
-| :--- | :--- | :--- |
-| [Configuration](#configuration) | [Project Structure](#project-structure) | [Tools](#tools) |
-| [Serverless Deployment](#serverless-deployment) | [Development & Testing](#development--testing) | [License](#license) |
+**Retrieve detailed information** for specific clinical trials by their NCT ID.
 
-## Overview
+**Key Features:**
 
-The ClinicalTrials.gov MCP Server acts as a bridge, allowing applications (MCP Clients) that understand the Model Context Protocol (MCP) – like advanced AI assistants (LLMs), IDE extensions, or custom research tools – to interact directly and efficiently with the official ClinicalTrials.gov database.
+- Fetch single or multiple studies (up to 5 at once)
+- Choice between full data (complete protocol, results, documents) or concise summaries
+- Full study data includes: protocol sections, results, adverse events, outcome measures, eligibility criteria, locations, and more
+- Automatic error handling for invalid or non-existent NCT IDs
+- Partial success reporting when fetching multiple studies
 
-Instead of complex API integration or manual searches, your tools can leverage this server to:
+**Example Use Cases:**
 
-- **Automate clinical research workflows**: Search for clinical trials, fetch detailed study metadata, and analyze trial characteristics programmatically.
-- **Gain research insights**: Access comprehensive trial data including study protocols, eligibility criteria, outcomes, sponsors, and locations without leaving the host application.
-- **Integrate clinical trial data into AI-driven research**: Enable LLMs to conduct clinical trial reviews, analyze research trends, and support evidence-based decision making.
-- **Support regulatory and compliance workflows**: Retrieve structured data for regulatory submissions, competitive intelligence, and market research.
+- "Get the full details for study NCT03372603"
+- "Show me a summary of these three studies: NCT12345678, NCT87654321, NCT11223344"
+- "What were the results and adverse events for NCT04280783?"
 
-Built on the robust `mcp-ts-template`, this server provides a standardized, secure, and efficient way to expose ClinicalTrials.gov functionality via the MCP standard. It achieves this by integrating with the official ClinicalTrials.gov v2 API, ensuring compliance with rate limits and providing comprehensive error handling.
+📖 **[View detailed examples →](./examples/clinicaltrials_get_study.md)**
 
-> **Developer Note**: This repository includes a [.clinerules](.clinerules) file that serves as a developer cheat sheet for your LLM coding agent with quick reference for the codebase patterns, file locations, and code snippets.
+---
 
-## Features
+### `clinicaltrials_analyze_trends`
 
-### Core Utilities
+**Perform statistical analysis** across thousands of clinical trials.
 
-Leverages the robust utilities provided by the `mcp-ts-template`:
+**Key Features:**
 
-- **Logging**: Structured, configurable logging (file rotation, stdout JSON, MCP notifications) with sensitive data redaction.
-- **Error Handling**: Centralized error processing, standardized error types (`McpError`), and automatic logging.
-- **Configuration**: Environment variable loading (`dotenv`) with comprehensive validation using Zod.
-- **Input Validation/Sanitization**: Uses `zod` for schema validation and custom sanitization logic.
-- **Request Context**: Tracking and correlation of operations via unique request IDs using `AsyncLocalStorage`.
-- **Type Safety**: Strong typing enforced by TypeScript and Zod schemas.
-- **HTTP Transport**: High-performance HTTP server using **Hono** for routing and middleware.
-- **Authentication**: Robust authentication layer supporting JWT and OAuth 2.1, with fine-grained scope enforcement.
-- **Serverless & Edge Ready**: Includes a `src/worker.ts` entry point for seamless deployment to **Cloudflare Workers**.
-- **Containerization**: Multi-stage `Dockerfile` for creating small, secure production images.
-- **Dependency Injection**: Powered by `tsyringe` for a clean, decoupled architecture.
-- **Observability**: Integrated with **OpenTelemetry** for tracing and metrics.
-- **Advanced Storage**: Abstracted storage layer with providers for `in-memory`, `filesystem`, **Supabase**, and Cloudflare **R2** & **KV**.
-- **Speech Services**: Built-in support for Text-to-Speech (ElevenLabs) and Speech-to-Text (Whisper).
+- Aggregate up to 5,000 studies per analysis
+- Multiple analysis types: status distribution, geographic spread, sponsor types, trial phases
+- Combine multiple analysis types in a single request
+- Advanced filtering to focus analysis on specific subsets
+- Returns counts, percentages, and top categories
 
-### ClinicalTrials.gov Integration
+**Example Use Cases:**
 
-- **Official API Integration**: Comprehensive access to ClinicalTrials.gov v2 API endpoints with automatic JSON parsing.
-- **Advanced Search Capabilities**: Complex query construction with filters for study status, geographic location, conditions, interventions, and sponsors.
-- **Full Study Metadata**: Retrieve complete trial data including protocols, eligibility criteria, study design, outcomes, sponsors, and contact information.
-- **Flexible Field Selection**: Choose specific data fields to retrieve for efficient API usage and reduced response sizes.
-- **Pagination Support**: Handle large result sets with built-in pagination using `pageSize` and `pageToken` parameters.
-- **Data Cleaning**: Automatically cleans and simplifies redundant information from API responses for easier consumption.
-- **Rate Limiting Compliance**: Built-in request throttling to comply with ClinicalTrials.gov API guidelines.
+- "What's the status breakdown of all COVID-19 vaccine Phase 3 trials?"
+- "Which countries have the most Alzheimer's research studies?"
+- "Show me the phase distribution and sponsor types for cancer immunotherapy trials"
 
-## Installation
+📖 **[View detailed examples →](./examples/clinicaltrials_analyze_trends.md)**
 
-### Prerequisites
+## ✨ Features
 
-- [Bun (>=1.0.0)](https://bun.sh/)
+This server is built on the [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template) and inherits its rich feature set:
 
-### MCP Client Settings
+- **Declarative Tools**: Define agent capabilities in single, self-contained files. The framework handles registration, validation, and execution.
+- **Robust Error Handling**: A unified `McpError` system ensures consistent, structured error responses.
+- **Pluggable Authentication**: Secure your server with zero-fuss support for `none`, `jwt`, or `oauth` modes.
+- **Abstracted Storage**: Swap storage backends (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2`) without changing business logic.
+- **Full-Stack Observability**: Deep insights with structured logging (Pino) and optional, auto-instrumented OpenTelemetry for traces and metrics.
+- **Dependency Injection**: Built with `tsyringe` for a clean, decoupled, and testable architecture.
+- **Edge-Ready**: Write code once and run it seamlessly on your local machine or at the edge on Cloudflare Workers.
 
-Add the following to your MCP client's configuration file (e.g., `cline_mcp_settings.json`). This configuration uses `npx` to run the server, which will automatically install the package if not already present:
+Plus, specialized features for **ClinicalTrials.gov**:
+
+- **Official API Integration**: Type-safe, comprehensive access to the ClinicalTrials.gov v2 API.
+- **Advanced Search & Analysis**: Tools for complex queries, filtering, and statistical aggregation of trial data.
+- **Optimized Data Handling**: Automatic cleaning and simplification of API responses for efficient agent consumption.
+
+## 🚀 Getting Started
+
+### MCP Client Settings/Configuration
+
+Add the following to your MCP Client configuration file (e.g., `cline_mcp_settings.json`).
 
 ```json
 {
   "mcpServers": {
     "clinicaltrialsgov-mcp-server": {
-      "command": "npx",
+      "command": "bunx",
       "args": ["clinicaltrialsgov-mcp-server"],
       "env": {
         "MCP_LOG_LEVEL": "info"
@@ -107,154 +123,121 @@ Add the following to your MCP client's configuration file (e.g., `cline_mcp_sett
 }
 ```
 
-### If running manually (for development or testing)
+### Prerequisites
 
-1.  Clone the repository:
-    ```bash
-    git clone https://github.com/cyanheads/clinicaltrialsgov-mcp-server.git
-    cd clinicaltrialsgov-mcp-server
-    ```
-2.  Install dependencies:
-    ```bash
-    bun install
-    ```
-3.  Build the project:
-    ```bash
-    bun run build
-    ```
+- [Bun v1.2.0](https://bun.sh/) or higher.
 
-## Configuration
+### Installation
 
-### Environment Variables
+1.  **Clone the repository:**
 
-Configure the server using environment variables. For local development, these can be set in a `.env` file at the project root or directly in your environment. Otherwise, you can set them in your MCP client configuration as shown above.
-
-| Variable                   | Description                                                                              | Default       |
-| :------------------------- | :--------------------------------------------------------------------------------------- | :------------ |
-| `MCP_TRANSPORT_TYPE`       | Transport mechanism: `stdio` or `http`.                                                  | `stdio`       |
-| `MCP_HTTP_PORT`            | Port for the HTTP server (if `MCP_TRANSPORT_TYPE=http`).                                 | `3010`        |
-| `MCP_HTTP_HOST`            | Host address for the HTTP server (if `MCP_TRANSPORT_TYPE=http`).                         | `127.0.0.1`   |
-| `MCP_ALLOWED_ORIGINS`      | Comma-separated list of allowed origins for CORS (if `MCP_TRANSPORT_TYPE=http`).         | (none)        |
-| `MCP_LOG_LEVEL`            | Logging level (`debug`, `info`, `notice`, `warning`, `error`, `crit`, `alert`, `emerg`). | `debug`       |
-| `MCP_AUTH_MODE`            | Authentication mode for HTTP: `jwt` or `oauth`.                                          | `jwt`         |
-| `MCP_AUTH_SECRET_KEY`      | **Required for `jwt` auth.** Minimum 32-character secret key for JWT authentication.     | (none)        |
-| `CLINICALTRIALS_DATA_PATH` | Directory for caching ClinicalTrials.gov API data.                                       | `data/`       |
-| `LOGS_DIR`                 | Directory for log file storage.                                                          | `logs/`       |
-| `NODE_ENV`                 | Runtime environment (`development`, `production`, `testing`).                            | `development` |
->>>>>>> Stashed changes
-| `STORAGE_PROVIDER_TYPE`    | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-r2`, `cloudflare-kv`. | `in-memory`   |
-| `OTEL_ENABLED`             | Set to `true` to enable OpenTelemetry tracing and metrics.                               | `false`       |
-
-## Project Structure
-
-The codebase follows a modular structure within the `src/` directory:
-
-```
-src/
-├── index.ts                # Main entry point for Node.js environment
-├── worker.ts               # Entry point for Cloudflare Workers (serverless)
-├── config/                 # Application configuration (Zod schema, env loading)
-├── container/              # Dependency Injection (tsyringe) setup and tokens
-├── mcp-server/             # Core MCP server logic
-│   ├── prompts/            # Declarative prompt definitions
-│   ├── resources/          # Declarative resource definitions
-│   ├── tools/              # Declarative tool definitions
-│   └── transports/         # HTTP and STDIO transport layers
-├── services/               # External service integrations (ClinicalTrials.gov, LLMs, Speech)
-├── storage/                # Storage abstraction layer and providers
-├── types-global/           # App-wide TypeScript types (e.g., errors)
-└── utils/                  # Common utilities (logger, error handling, etc.)
+```sh
+git clone https://github.com/cyanheads/clinicaltrialsgov-mcp-server.git
 ```
 
-For a detailed file tree, run `bun run tree` or see [docs/tree.md](docs/tree.md).
+2.  **Navigate into the directory:**
 
-## Tools
+```sh
+cd clinicaltrialsgov-mcp-server
+```
 
-The ClinicalTrials.gov MCP Server provides a comprehensive suite of tools for clinical trial research, callable via the Model Context Protocol.
+3.  **Install dependencies:**
 
-| Tool Name                       | Description                                                           | Key Arguments                                                                     |
-| :------------------------------ | :-------------------------------------------------------------------- | :-------------------------------------------------------------------------------- |
-| `clinicaltrials_search_studies` | Searches for clinical studies using queries, filters, and pagination. | `query?`, `filter?`, `fields?`, `sort?`, `pageSize?`, `pageToken?`, `countTotal?` |
-| `clinicaltrials_get_study`      | Fetches detailed information for one or more studies by NCT ID.       | `nctIds`, `summaryOnly?`, `markupFormat?`, `fields?`                              |
-| `clinicaltrials_analyze_trends` | Performs statistical analysis on a set of studies.                    | `analysisType`, `query?`, `filter?`                                               |
+```sh
+bun install
+```
 
-_Note: All tools support comprehensive error handling and return structured JSON responses._
+## 🛠️ Core Capabilities: ClinicalTrials.gov Tools
 
-## Examples
+This server equips AI agents with specialized tools to interact with the ClinicalTrials.gov database.
 
-Comprehensive usage examples for each tool are available in the [`examples/`](examples/) directory.
+## ⚙️ Configuration
 
-- **`clinicaltrials_search_studies`**: [View Example](./examples/clinicaltrials_search_studies.md)
-- **`clinicaltrials_get_study`**: [View Example](./examples/clinicaltrials_get_study.md)
-- **`clinicaltrials_analyze_trends`**: [View Example](./examples/clinicaltrials_analyze_trends.md)
+All configuration is centralized and validated at startup in `src/config/index.ts`. Key environment variables in your `.env` file include:
 
-## Serverless Deployment
+| Variable                | Description                                                                    | Default     |
+| :---------------------- | :----------------------------------------------------------------------------- | :---------- |
+| `MCP_TRANSPORT_TYPE`    | The transport to use: `stdio` or `http`.                                       | `http`      |
+| `MCP_HTTP_PORT`         | The port for the HTTP server.                                                  | `3010`      |
+| `MCP_AUTH_MODE`         | Authentication mode: `none`, `jwt`, or `oauth`.                                | `none`      |
+| `STORAGE_PROVIDER_TYPE` | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv`, `r2`. | `in-memory` |
+| `OTEL_ENABLED`          | Set to `true` to enable OpenTelemetry.                                         | `false`     |
+| `LOG_LEVEL`             | The minimum level for logging (`debug`, `info`, `warn`, `error`).              | `info`      |
+| `MCP_AUTH_SECRET_KEY`   | **Required for `jwt` auth.** A 32+ character secret key.                       | `(none)`    |
+| `OAUTH_ISSUER_URL`      | **Required for `oauth` auth.** URL of the OIDC provider.                       | `(none)`    |
 
-This server is optimized for serverless environments, particularly **Cloudflare Workers**.
+## ▶️ Running the Server
 
-- The `src/worker.ts` file is the entry point for serverless deployments.
-- It leverages Cloudflare Bindings to securely access services like KV, R2, and environment variables.
-- The storage layer can be configured to use `cloudflare-r2` or `cloudflare-kv` for persistent, globally distributed storage.
+### Local Development
 
-To deploy, configure your `wrangler.toml` file and run `bunx wrangler deploy`.
+- **Build and run the production version**:
 
-## Development & Testing
+  ```sh
+  # One-time build
+  bun rebuild
 
-### Development Scripts
+  # Run the built server
+  bun start:http
+  # or
+  bun start:stdio
+  ```
 
-```bash
-# Start the server in watch mode (restarts on file changes)
-bun run dev
+- **Run checks and tests**:
+  ```sh
+  bun devcheck # Lints, formats, type-checks, and more
+  bun test # Runs the test suite
+  ```
 
-# Run all quality checks (lint, types, formatting, security, etc.)
+### Cloudflare Workers
+
+1.  **Build the Worker bundle**:
+
+```sh
+bun build:worker
+```
+
+2.  **Run locally with Wrangler**:
+
+```sh
+bun deploy:dev
+```
+
+3.  **Deploy to Cloudflare**:
+    ```sh
+    bun deploy:prod
+    ```
+
+## 📂 Project Structure
+
+| Directory                   | Purpose & Contents                                                               |
+| :-------------------------- | :------------------------------------------------------------------------------- |
+| `src/mcp-server/tools`      | Your tool definitions (`*.tool.ts`). This is where you add new capabilities.     |
+| `src/mcp-server/resources`  | Your resource definitions (`*.resource.ts`). This is where you add data sources. |
+| `src/mcp-server/transports` | Implementations for HTTP and STDIO transports, including auth middleware.        |
+| `src/storage`               | `StorageService` abstraction and all storage provider implementations.           |
+| `src/services`              | Integrations with external services (ClinicalTrials.gov, LLMs, Speech).          |
+| `src/container`             | Dependency injection container registrations and tokens.                         |
+| `src/utils`                 | Core utilities for logging, error handling, performance, and security.           |
+| `src/config`                | Environment variable parsing and validation with Zod.                            |
+| `tests/`                    | Unit and integration tests, mirroring the `src/` directory structure.            |
+
+## 🧑‍💻 Agent Development Guide
+
+For strict rules when using this server with an AI agent, refer to the **`.clinerules`** file in this repository. Key principles include:
+
+- **Logic Throws, Handlers Catch**: Never use `try/catch` in your tool `logic`. Throw an `McpError` instead.
+- **Pass the Context**: Always pass the `RequestContext` object through your call stack for logging and tracing.
+- **Use the Barrel Exports**: Register new tools and resources only in the `index.ts` barrel files within their respective `definitions` directories.
+
+## 🤝 Contributing
+
+Issues and pull requests are welcome! If you plan to contribute, please run the local checks and tests before submitting your PR.
+
+```sh
 bun run devcheck
-
-# Generate comprehensive AI-readable context for documentation
-bun run devdocs
-
-# Build the project for production
-bun run build
-
-# Format code with Prettier
-bun run format
-
-# Generate a file tree representation for documentation
-bun run tree
-```
-
-### Testing
-
-This project uses **Bun's built-in test runner**, which is compatible with the Vitest API.
-
-```bash
-# Run all tests once
 bun test
-
-# Run tests and generate a code coverage report
-bun test --coverage
 ```
 
-### Running the Server
+## 📜 License
 
-```bash
-# Start the server using stdio (default)
-bun start
-# Or explicitly:
-bun run start:stdio
-
-# Start the server using HTTP transport
-bun run start:http
-
-# Test the server locally using the MCP inspector tool
-bun run inspector
-```
-
-## License
-
-This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENSE) file for details.
-
----
-
-<div align="center">
-Built with the <a href="https://modelcontextprotocol.io/">Model Context Protocol</a>
-</div>
+This project is licensed under the Apache 2.0 License. See the [LICENSE](./LICENSE) file for details.

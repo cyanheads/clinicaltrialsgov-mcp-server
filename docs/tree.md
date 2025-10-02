@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2025-10-02 08:40:16
+Generated on: 2025-10-02 09:47:04
 
 ```
 clinicaltrialsgov-mcp-server
@@ -19,7 +19,8 @@ clinicaltrialsgov-mcp-server
 │   ├── clinicaltrials_analyze_trends.md
 │   ├── clinicaltrials_get_study.md
 │   ├── clinicaltrials_search_studies.md
-│   └── clinicaltrials-compare-studies.md
+│   ├── clinicaltrials-compare-studies.md
+│   └── clinicaltrials-find-eligible-studies.md
 ├── scripts
 │   ├── clean.ts
 │   ├── devcheck.ts
@@ -50,10 +51,16 @@ clinicaltrialsgov-mcp-server
 │   │   │   ├── definitions
 │   │   │   │   ├── clinicaltrials-analyze-trends.tool.ts
 │   │   │   │   ├── clinicaltrials-compare-studies.tool.ts
+│   │   │   │   ├── clinicaltrials-find-eligible-studies.tool.ts
 │   │   │   │   ├── clinicaltrials-get-study.tool.ts
 │   │   │   │   ├── clinicaltrials-search-studies.tool.ts
 │   │   │   │   └── index.ts
 │   │   │   ├── utils
+│   │   │   │   ├── ageParser.ts
+│   │   │   │   ├── eligibilityCheckers.ts
+│   │   │   │   ├── index.ts
+│   │   │   │   ├── studyExtractors.ts
+│   │   │   │   ├── studyRanking.ts
 │   │   │   │   ├── toolDefinition.ts
 │   │   │   │   └── toolHandlerFactory.ts
 │   │   │   └── tool-registration.ts

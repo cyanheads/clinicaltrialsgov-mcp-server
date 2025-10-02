@@ -1,8 +1,8 @@
 {
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "mcpName": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
-  "description": "ClinicalTrials.gov Model Context Protocol (MCP) Server that provides a suite of tools for interacting with the official ClinicalTrials.gov v2 API. Enables AI agents and LLMs to programmatically search, retrieve, and analyze clinical trial data.",
+  "description": "ClinicalTrials.gov Model Context Protocol (MCP) Server that provides a suite of tools for interacting with the official ClinicalTrials.gov v2 API. Enables AI agents and LLMs to programmatically search, retrieve, compare, analyze, and find eligible clinical trials.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [
@@ -111,6 +111,9 @@
     "typescript",
     "clinical-trials",
     "clinicaltrials.gov",
+    "patient-matching",
+    "eligibility-criteria",
+    "trial-finder",
     "api-client",
     "research-tools",
     "bioinformatics",

@@ -6,15 +6,6 @@
 
 This document defines the operational rules for contributing to this codebase. Follow it exactly.
 
-## Recent Updates (v1.3.0)
-
-- **Enhanced `IClinicalTrialsProvider`**: Added field selection (`fields`) and geographic filters (`country`, `state`, `city`) to `listStudies()`
-- **Response Formatter Guidance**: Added critical best practices section emphasizing that LLMs receive formatted output only
-- **Tool Enhancements**:
-  - `clinicaltrials_search_studies`: Now supports field selection and geographic filtering
-  - `clinicaltrials_analyze_trends`: Added time-series analysis (`countByYear`, `countByMonth`)
-  - `clinicaltrials_compare_studies`: New tool for side-by-side study comparison
-
 > **Note on File Synchronization**: This file (`AGENTS.md`), along with `CLAUDE.md` and `.clinerules/AGENTS.md`, are hard-linked on the filesystem for tool compatibility (e.g., Cline does not work with symlinks). **Edit only the root `AGENTS.md`** – changes will automatically propagate to the other copies. DO NOT TOUCH THE OTHER TWO AGENTS.md & CLAUDE.md FILES.
 
 ---

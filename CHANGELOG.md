@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.4.0] - 2025-10-02
+
+### Added
+
+- **`clinicaltrials_find_eligible_studies` Tool**: A powerful new tool that matches patient demographics and medical profiles to eligible clinical trials. It filters by age, sex, conditions, location, and healthy volunteer status, returning a ranked list of relevant studies.
+- **Eligibility Utilities**: Added a suite of new utilities to support the eligibility tool, including:
+  - `ageParser.ts`: For parsing and comparing age strings from the API.
+  - `eligibilityCheckers.ts`: For validating patient sex and healthy volunteer status.
+  - `studyExtractors.ts`: For pulling out locations, contact info, and other key details.
+  - `studyRanking.ts`: For scoring and ranking studies based on relevance.
+- **Example**: Added `examples/clinicaltrials-find-eligible-studies.md` to demonstrate the new tool's usage.
+
+### Changed
+
+- **Dependencies**: Updated `package.json` and `server.json` to version `1.4.0`.
+- **README**: Updated the `README.md` to recommend using `clinicaltrialsgov-mcp-server@latest`.
+- **Documentation**: Regenerated `docs/tree.md` to include all new files.
+- **Refactoring**: Removed unused geographic filtering logic from `clinicaltrials-gov.provider.ts` as this is now handled by the new eligibility tool.
+- **Tool Registration**: Added the new `findEligibleStudiesTool` to the `allToolDefinitions` array in `src/mcp-server/tools/definitions/index.ts`.
+
 ## [1.3.1] - 2025-10-02
 
 ### Changed

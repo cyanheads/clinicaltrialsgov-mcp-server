@@ -76,26 +76,8 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
       queryParams.set('query.term', params.query);
     }
 
-    // Construct geographic filters
-    const geoFilters: string[] = [];
-    if (params.country) {
-      geoFilters.push(`AREA[LocationCountry]${params.country}`);
-    }
-    if (params.state) {
-      geoFilters.push(`AREA[LocationState]${params.state}`);
-    }
-    if (params.city) {
-      geoFilters.push(`AREA[LocationCity]${params.city}`);
-    }
-
     // Combine user filter with geographic filters
-    let combinedFilter = params.filter || '';
-    if (geoFilters.length > 0) {
-      const geoFilterExpression = geoFilters.join(' AND ');
-      combinedFilter = combinedFilter
-        ? `(${combinedFilter}) AND (${geoFilterExpression})`
-        : geoFilterExpression;
-    }
+    const combinedFilter = params.filter || '';
 
     if (combinedFilter) {
       queryParams.set('filter.advanced', combinedFilter);

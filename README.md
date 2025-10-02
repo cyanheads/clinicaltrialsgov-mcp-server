@@ -1,11 +1,11 @@
 <div align="center">
   <h1>clinicaltrialsgov-mcp-server</h1>
-  <p><b>A production-grade, multi-tenant MCP server with tools to access the ClinicalTrials.gov v2 API. Built for performance and scalability, with native support for serverless deployment (Cloudflare Workers).</b></p>
+  <p><b>ClinicalTrials.gov Model Context Protocol (MCP) Server with tools to programmatically search, retrieve, compare, analyze, and find eligible clinical trials. Built for performance and scalability, with native support for serverless deployment (Cloudflare Workers).</b></p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-1.3.1-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--06--18-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-06-18/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.18.2-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.2.23-blueviolet.svg?style=flat-square)](https://bun.sh/) [![Code Coverage](https://img.shields.io/badge/Coverage-92.46%25-brightgreen.svg?style=flat-square)](./vitest.config.ts)
+[![Version](https://img.shields.io/badge/Version-1.4.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--06--18-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-06-18/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.18.2-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.2.23-blueviolet.svg?style=flat-square)](https://bun.sh/) [![Code Coverage](https://img.shields.io/badge/Coverage-92.46%25-brightgreen.svg?style=flat-square)](./vitest.config.ts)
 
 </div>
 
@@ -13,7 +13,7 @@
 
 ## 🛠️ Tools Overview
 
-This server provides four powerful tools for accessing and analyzing clinical trial data from ClinicalTrials.gov:
+This server provides five powerful tools for accessing and analyzing clinical trial data from ClinicalTrials.gov:
 
 | Tool Name                        | Description                                                                                                           |
 | :------------------------------- | :-------------------------------------------------------------------------------------------------------------------- |
@@ -21,6 +21,7 @@ This server provides four powerful tools for accessing and analyzing clinical tr
 | `clinicaltrials_get_study`       | Fetches one or more clinical studies by their NCT IDs, returning either full data or concise summaries.               |
 | `clinicaltrials_analyze_trends`  | Performs statistical analysis on up to 5000 studies, with new time-series analysis by year and month.                 |
 | `clinicaltrials_compare_studies` | Performs a detailed side-by-side comparison of 2-5 clinical studies, highlighting commonalities and differences.      |
+| `clinicaltrials_find_eligible_studies` | Matches patient profiles to eligible clinical trials, filtering by age, sex, conditions, and location.             |
 
 ### `clinicaltrials_search_studies`
 
@@ -106,7 +107,28 @@ This server provides four powerful tools for accessing and analyzing clinical tr
 - "What are the main differences in interventions and outcomes between these three leading Alzheimer's trials?"
 - "Show me a side-by-side of sponsor and location data for these competitor studies"
 
-📖 **[View detailed examples →](./examples/clinicaltrials_compare_studies.md)**
+📖 **[View detailed examples →](./examples/clinicaltrials-compare-studies.md)**
+
+---
+
+### `clinicaltrials_find_eligible_studies`
+
+**Find relevant clinical trials** based on a patient's specific medical profile and demographics.
+
+**Key Features:**
+
+- Matches patients using age, sex, and a list of medical conditions
+- Filters studies by location (country, state, city) to find nearby trials
+- Ranks results by a relevance score based on how well the patient matches the study's criteria
+- Provides a clear summary of why a patient is a potential match for a study
+
+**Example Use Cases:**
+
+- "Find recruiting migraine studies in Canada for a 35-year-old female"
+- "Are there any local clinical trials for a 68-year-old male with Type 2 Diabetes and Hypertension?"
+- "Search for healthy volunteer studies for a 25-year-old in California"
+
+📖 **[View detailed examples →](./examples/clinicaltrials-find-eligible-studies.md)**
 
 ## ✨ Features
 
@@ -137,7 +159,7 @@ Add the following to your MCP Client configuration file (e.g., `cline_mcp_settin
   "mcpServers": {
     "clinicaltrialsgov-mcp-server": {
       "command": "bunx",
-      "args": ["clinicaltrialsgov-mcp-server"],
+      "args": ["clinicaltrialsgov-mcp-server@latest"],
       "env": {
         "MCP_LOG_LEVEL": "info"
       }

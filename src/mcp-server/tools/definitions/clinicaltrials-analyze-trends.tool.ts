@@ -150,11 +150,14 @@ async function fetchAllStudies(
   logger.debug('Fetching all studies for analysis...', { ...appContext });
 
   // First, make one call to check the total number of studies
-  const initialResponse = await provider.listStudies({
-    ...(query && { query }),
-    ...(filter && { filter }),
-    pageSize: 1,
-  });
+  const initialResponse = await provider.listStudies(
+    {
+      ...(query && { query }),
+      ...(filter && { filter }),
+      pageSize: 1,
+    },
+    appContext,
+  );
 
   const totalStudies = initialResponse.totalCount ?? 0;
 
@@ -176,12 +179,15 @@ async function fetchAllStudies(
   let hasMore = true;
 
   while (hasMore) {
-    const pagedStudies = await provider.listStudies({
-      ...(query && { query }),
-      ...(filter && { filter }),
-      ...(pageToken && { pageToken }),
-      pageSize: 1000,
-    });
+    const pagedStudies = await provider.listStudies(
+      {
+        ...(query && { query }),
+        ...(filter && { filter }),
+        ...(pageToken && { pageToken }),
+        pageSize: 1000,
+      },
+      appContext,
+    );
 
     if (pagedStudies.studies) {
       allStudies = allStudies.concat(pagedStudies.studies);

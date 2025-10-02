@@ -5,6 +5,7 @@
  * @module src/services/clinical-trials-gov/core/IClinicalTrialsProvider
  */
 
+import type { RequestContext } from '@/utils/index.js';
 import type { Study, PagedStudies, StudyMetadata } from '../types.js';
 
 /**
@@ -50,7 +51,7 @@ export interface IClinicalTrialsProvider {
    * @returns The full study record
    * @throws {McpError} If the study is not found or API request fails
    */
-  fetchStudy(nctId: string): Promise<Study>;
+  fetchStudy(nctId: string, context: RequestContext): Promise<Study>;
 
   /**
    * Lists studies matching the provided query parameters.
@@ -59,7 +60,10 @@ export interface IClinicalTrialsProvider {
    * @returns Paginated list of studies with metadata
    * @throws {McpError} If the API request fails
    */
-  listStudies(params: ListStudiesParams): Promise<PagedStudies>;
+  listStudies(
+    params: ListStudiesParams,
+    context: RequestContext,
+  ): Promise<PagedStudies>;
 
   /**
    * Retrieves metadata for a specific study without full details.
@@ -68,15 +72,19 @@ export interface IClinicalTrialsProvider {
    * @returns Study metadata (title, status, dates)
    * @throws {McpError} If the study is not found or API request fails
    */
-  getStudyMetadata(nctId: string): Promise<StudyMetadata>;
+  getStudyMetadata(
+    nctId: string,
+    context: RequestContext,
+  ): Promise<StudyMetadata>;
 
   /**
-   * Fetches current API statistics and health status.
+   * Fetches current API statistics from the /stats/size endpoint.
+   * Returns total study count, current timestamp, and API version.
    *
-   * @returns API statistics object
+   * @returns API statistics object with totalStudies (from API), lastUpdated (current timestamp), and version ('v2')
    * @throws {McpError} If the API request fails
    */
-  getApiStats(): Promise<{
+  getApiStats(context: RequestContext): Promise<{
     totalStudies: number;
     lastUpdated: string;
     version: string;

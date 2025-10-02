@@ -7,7 +7,7 @@
 
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { inject, injectable } from 'tsyringe';
+import { injectable } from 'tsyringe';
 
 import { config } from '../../../config/index.js';
 import { JsonRpcErrorCode, McpError } from '../../../types-global/errors.js';
@@ -33,25 +33,23 @@ const BASE_URL = 'https://clinicaltrials.gov/api/v2';
  */
 @injectable()
 export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
-  constructor(
-    @inject('RequestContext') private readonly context: RequestContext,
-  ) {}
+  constructor() {}
 
   /**
    * @inheritdoc
    */
-  async fetchStudy(nctId: string): Promise<Study> {
+  async fetchStudy(nctId: string, context: RequestContext): Promise<Study> {
     const url = `${BASE_URL}/studies/${nctId}`;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const fileName = `study_${nctId}_${timestamp}.json`;
 
-    const data = await this.fetchAndBackup<unknown>(url, fileName);
+    const data = await this.fetchAndBackup<unknown>(url, fileName, context);
 
     // Validate response with Zod
     const result = StudySchema.safeParse(data);
     if (!result.success) {
       logger.error('[API] Study validation failed', {
-        ...this.context,
+        ...context,
         nctId,
         errors: result.error.errors,
       });
@@ -68,7 +66,10 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
   /**
    * @inheritdoc
    */
-  async listStudies(params: ListStudiesParams): Promise<PagedStudies> {
+  async listStudies(
+    params: ListStudiesParams,
+    context: RequestContext,
+  ): Promise<PagedStudies> {
     const queryParams = new URLSearchParams();
 
     if (params.query) {
@@ -94,13 +95,13 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const fileName = `studies_${timestamp}.json`;
 
-    const data = await this.fetchAndBackup<unknown>(url, fileName);
+    const data = await this.fetchAndBackup<unknown>(url, fileName, context);
 
     // Validate response with Zod
     const result = PagedStudiesSchema.safeParse(data);
     if (!result.success) {
       logger.error('[API] Studies list validation failed', {
-        ...this.context,
+        ...context,
         errors: result.error.errors,
       });
       throw new McpError(
@@ -116,14 +117,18 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
   /**
    * @inheritdoc
    */
-  async getStudyMetadata(nctId: string): Promise<StudyMetadata> {
-    const url = `${BASE_URL}/studies/${nctId}?fields=NCTId,BriefTitle,OverallStatus,StartDate,CompletionDate,LastUpdatePostDate`;
+  async getStudyMetadata(
+    nctId: string,
+    context: RequestContext,
+  ): Promise<StudyMetadata> {
+    // Fields parameter uses Pascal case format
+    const url = `${BASE_URL}/studies/${nctId}?fields=NCTId,BriefTitle,OfficialTitle,OverallStatus,StartDateStruct,CompletionDateStruct,LastUpdatePostDateStruct`;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const fileName = `metadata_${nctId}_${timestamp}.json`;
 
-    const data = await this.fetchAndBackup<Study>(url, fileName);
+    const data = await this.fetchAndBackup<Study>(url, fileName, context);
 
-    // Extract metadata from full study
+    // Extract metadata from filtered study response
     const metadata: StudyMetadata = {
       nctId: data.protocolSection?.identificationModule?.nctId ?? nctId,
       title:
@@ -133,7 +138,8 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
       startDate: data.protocolSection?.statusModule?.startDateStruct?.date,
       completionDate:
         data.protocolSection?.statusModule?.completionDateStruct?.date,
-      lastUpdateDate: data.protocolSection?.statusModule?.lastKnownStatus,
+      lastUpdateDate:
+        data.protocolSection?.statusModule?.lastUpdatePostDateStruct?.date,
     };
 
     return metadata;
@@ -142,7 +148,7 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
   /**
    * @inheritdoc
    */
-  async getApiStats(): Promise<{
+  async getApiStats(context: RequestContext): Promise<{
     totalStudies: number;
     lastUpdated: string;
     version: string;
@@ -152,15 +158,17 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
     const fileName = `stats_${timestamp}.json`;
 
     const data = await this.fetchAndBackup<{
-      totalCount?: number;
-      lastIndexed?: string;
-      apiVersion?: string;
-    }>(url, fileName);
+      totalStudies?: number;
+      averageSizeBytes?: number;
+      percentiles?: Record<string, number>;
+      ranges?: Array<{ sizeRange: string; studiesCount: number }>;
+      largestStudies?: Array<{ id: string; sizeBytes: number }>;
+    }>(url, fileName, context);
 
     return {
-      totalStudies: data.totalCount ?? 0,
-      lastUpdated: data.lastIndexed ?? new Date().toISOString(),
-      version: data.apiVersion ?? 'v2',
+      totalStudies: data.totalStudies ?? 0,
+      lastUpdated: new Date().toISOString(), // API doesn't provide this field
+      version: 'v2', // Current API version
     };
   }
 
@@ -172,13 +180,17 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
    * @returns The parsed JSON response
    * @throws {McpError} If the request fails or returns non-OK status
    */
-  private async fetchAndBackup<T>(url: string, fileName: string): Promise<T> {
-    logger.debug(`[API] Fetching from ${url}`, this.context);
+  private async fetchAndBackup<T>(
+    url: string,
+    fileName: string,
+    context: RequestContext,
+  ): Promise<T> {
+    logger.debug(`[API] Fetching from ${url}`, context);
 
     const response = await fetchWithTimeout(
       url,
       15000, // 15-second timeout for complex queries
-      this.context,
+      context,
       {
         headers: { Accept: 'application/json' },
       },
@@ -186,7 +198,7 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
 
     if (!response.ok) {
       const errorBody = await response.text();
-      logger.error(`[API] Error response: ${errorBody}`, this.context);
+      logger.error(`[API] Error response: ${errorBody}`, context);
 
       const message =
         response.status === 404
@@ -202,7 +214,7 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
 
     const responseBody = await response.text();
     logger.debug('[API] Response received', {
-      ...this.context,
+      ...context,
       bodyLength: responseBody.length,
     });
 
@@ -213,10 +225,10 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
       const filePath = path.join(config.clinicalTrialsDataPath, fileName);
       try {
         writeFileSync(filePath, JSON.stringify(data, null, 2));
-        logger.debug(`[Backup] Wrote to ${filePath}`, this.context);
+        logger.debug(`[Backup] Wrote to ${filePath}`, context);
       } catch (error) {
         logger.error('[Backup] Failed to write file', {
-          ...this.context,
+          ...context,
           filePath,
           error,
         });

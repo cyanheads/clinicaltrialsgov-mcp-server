@@ -60,6 +60,13 @@ export const StudySchema = z
               })
               .passthrough()
               .optional(),
+            lastUpdatePostDateStruct: z
+              .object({
+                date: z.string().optional(),
+                type: z.string().optional(),
+              })
+              .passthrough()
+              .optional(),
           })
           .passthrough()
           .optional(),
@@ -173,6 +180,76 @@ export const StudySchema = z
                   .passthrough(),
               )
               .optional(),
+          })
+          .passthrough()
+          .optional(),
+        oversightModule: z
+          .object({
+            oversightHasDmc: z.boolean().optional(),
+            isFdaRegulatedDrug: z.boolean().optional(),
+            isFdaRegulatedDevice: z.boolean().optional(),
+          })
+          .passthrough()
+          .optional(),
+        outcomesModule: z
+          .object({
+            primaryOutcomes: z
+              .array(
+                z
+                  .object({
+                    measure: z.string().optional(),
+                    description: z.string().optional(),
+                    timeFrame: z.string().optional(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
+            secondaryOutcomes: z
+              .array(
+                z
+                  .object({
+                    measure: z.string().optional(),
+                    description: z.string().optional(),
+                    timeFrame: z.string().optional(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
+            otherOutcomes: z
+              .array(
+                z
+                  .object({
+                    measure: z.string().optional(),
+                    description: z.string().optional(),
+                    timeFrame: z.string().optional(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
+          })
+          .passthrough()
+          .optional(),
+        referencesModule: z
+          .object({
+            references: z
+              .array(
+                z
+                  .object({
+                    pmid: z.string().optional(),
+                    type: z.string().optional(),
+                    citation: z.string().optional(),
+                  })
+                  .passthrough(),
+              )
+              .optional(),
+          })
+          .passthrough()
+          .optional(),
+        ipdSharingStatementModule: z
+          .object({
+            ipdSharing: z.string().optional(),
+            description: z.string().optional(),
+            url: z.string().optional(),
           })
           .passthrough()
           .optional(),
@@ -294,20 +371,26 @@ export const StudySchema = z
 export type Study = z.infer<typeof StudySchema>;
 
 /**
- * Zod schema for a paged list of studies.
+ * Represents a paged list of studies.
  */
-export const PagedStudiesSchema = z
+export type PagedStudies = {
+  studies: Study[];
+  nextPageToken?: string | undefined;
+  totalCount?: number | undefined;
+  [key: string]: unknown;
+};
+
+/**
+ * Zod schema for a paged list of studies.
+ * Note: Uses explicit type annotation to prevent TypeScript inference issues with deeply nested schemas.
+ */
+export const PagedStudiesSchema: z.ZodType<PagedStudies> = z
   .object({
     studies: z.array(StudySchema),
     nextPageToken: z.string().optional(),
     totalCount: z.number().optional(),
   })
   .passthrough();
-
-/**
- * Represents a paged list of studies.
- */
-export type PagedStudies = z.infer<typeof PagedStudiesSchema>;
 
 /**
  * Represents a node in the study data model tree.
@@ -320,6 +403,7 @@ export interface FieldNode {
 }
 
 /**
+
  * Represents the possible status values for a study.
  */
 export enum Status {

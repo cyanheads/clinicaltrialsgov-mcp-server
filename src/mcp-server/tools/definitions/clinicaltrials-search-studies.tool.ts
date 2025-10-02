@@ -84,9 +84,9 @@ const InputSchema = z
   })
   .describe('Input parameters for searching clinical trial studies.');
 
-const OutputSchema = PagedStudiesSchema.describe(
-  'Paginated list of clinical trial studies matching the search criteria.',
-);
+const OutputSchema = z.object({
+  pagedStudies: PagedStudiesSchema,
+});
 
 type SearchStudiesInput = z.infer<typeof InputSchema>;
 type SearchStudiesOutput = z.infer<typeof OutputSchema>;
@@ -113,13 +113,16 @@ async function searchStudiesLogic(
     ClinicalTrialsProvider,
   );
 
-  const pagedStudies = await provider.listStudies({
-    ...(input.query && { query: input.query }),
-    ...(input.filter && { filter: input.filter }),
-    pageSize: input.pageSize,
-    ...(input.pageToken && { pageToken: input.pageToken }),
-    ...(input.sort && { sort: input.sort }),
-  });
+  const pagedStudies = await provider.listStudies(
+    {
+      ...(input.query && { query: input.query }),
+      ...(input.filter && { filter: input.filter }),
+      pageSize: input.pageSize,
+      ...(input.pageToken && { pageToken: input.pageToken }),
+      ...(input.sort && { sort: input.sort }),
+    },
+    appContext,
+  );
 
   logger.info(
     `Successfully searched studies: ${pagedStudies.studies?.length ?? 0} results`,
@@ -129,16 +132,17 @@ async function searchStudiesLogic(
     },
   );
 
-  return pagedStudies;
+  return { pagedStudies };
 }
 
 /**
  * Formats a concise human-readable summary.
  */
 function responseFormatter(result: SearchStudiesOutput): ContentBlock[] {
-  const studyCount = result.studies?.length ?? 0;
-  const totalCount = result.totalCount;
-  const hasMore = !!result.nextPageToken;
+  const { pagedStudies } = result;
+  const studyCount = pagedStudies.studies?.length ?? 0;
+  const totalCount = pagedStudies.totalCount;
+  const hasMore = !!pagedStudies.nextPageToken;
 
   const summary = [
     `Found ${studyCount} ${studyCount === 1 ? 'study' : 'studies'}`,
@@ -148,7 +152,7 @@ function responseFormatter(result: SearchStudiesOutput): ContentBlock[] {
     .filter(Boolean)
     .join(' ');
 
-  const studyList = (result.studies ?? [])
+  const studyList = (pagedStudies.studies ?? [])
     .slice(0, 5)
     .map((s) => {
       const nctId = s.protocolSection?.identificationModule?.nctId ?? 'Unknown';
@@ -163,7 +167,7 @@ function responseFormatter(result: SearchStudiesOutput): ContentBlock[] {
   const moreStudies = studyCount > 5 ? `\n...and ${studyCount - 5} more` : '';
 
   const pagination = hasMore
-    ? `\n\nNext page token: ${result.nextPageToken}`
+    ? `\n\nNext page token: ${pagedStudies.nextPageToken}`
     : '';
 
   return [

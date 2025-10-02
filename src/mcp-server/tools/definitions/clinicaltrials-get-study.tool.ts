@@ -187,7 +187,7 @@ async function getStudyLogic(
 
   const studyPromises = nctIds.map(async (nctId) => {
     try {
-      const study = await provider.fetchStudy(nctId);
+      const study = await provider.fetchStudy(nctId, appContext);
 
       logger.info(`Successfully fetched study ${nctId}`, { ...appContext });
 
@@ -231,51 +231,14 @@ async function getStudyLogic(
 }
 
 /**
- * Formats a concise human-readable summary.
+ * Formats the full tool output as a JSON string for the LLM.
+ * The LLM requires the complete data, not just a human-readable summary.
  */
 function responseFormatter(result: GetStudyOutput): ContentBlock[] {
-  const studyCount = result.studies.length;
-  const errorCount = result.errors?.length ?? 0;
-
-  const summary = [
-    `Retrieved ${studyCount} ${studyCount === 1 ? 'study' : 'studies'}`,
-    errorCount > 0
-      ? `(${errorCount} ${errorCount === 1 ? 'error' : 'errors'})`
-      : null,
-  ]
-    .filter(Boolean)
-    .join(' ');
-
-  const studyTitles = result.studies
-    .slice(0, 3)
-    .map((s) => {
-      // Check if it's a summary (has nctId as direct property)
-      if ('nctId' in s && typeof s.nctId === 'string') {
-        const title =
-          'title' in s && typeof s.title === 'string' ? s.title : 'No title';
-        return `• ${s.nctId}: ${title}`;
-      }
-      // Otherwise it's a full Study with protocolSection
-      const study = s as Study;
-      const nctId =
-        study.protocolSection?.identificationModule?.nctId ?? 'Unknown';
-      const title =
-        study.protocolSection?.identificationModule?.briefTitle ?? 'No title';
-      return `• ${nctId}: ${title}`;
-    })
-    .join('\n');
-
-  const moreStudies = studyCount > 3 ? `\n...and ${studyCount - 3} more` : '';
-
-  const errorList =
-    errorCount > 0
-      ? `\n\nErrors:\n${result.errors?.map((e) => `• ${e.nctId}: ${e.error}`).join('\n')}`
-      : '';
-
   return [
     {
       type: 'text',
-      text: `${summary}\n\n${studyTitles}${moreStudies}${errorList}`,
+      text: JSON.stringify(result, null, 2),
     },
   ];
 }

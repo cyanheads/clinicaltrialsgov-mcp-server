@@ -2,9 +2,30 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.2] - 2025-10-02
+
+### Added
+
+- **Cloudflare Worker Support**: Introduced `wrangler.toml` to enable seamless deployment of the MCP server to Cloudflare Workers, including configuration for environment variables, secrets, and service bindings.
+- **Pre-commit Hooks**: Added Husky (`.husky/pre-commit`) to automatically run development checks before each commit, ensuring code quality and consistency.
+- **Build Scripts**: Added new scripts for building and deploying the Cloudflare Worker (`build:worker`, `deploy:dev`, `deploy:prod`).
+
+### Changed
+
+- **Docker & Build Overhaul**: Completely refactored the `Dockerfile` to use a multi-stage build with `oven/bun:1-slim`, significantly reducing the final image size and improving security by using a non-root user. The build process is now more efficient and produces a minimal, production-ready image.
+- **Configuration**:
+    - The default HTTP port has been changed from `3010` to `3017` across all relevant configuration files (`src/config/index.ts`, `smithery.yaml`, `README.md`).
+    - The `.dockerignore` and `.prettierignore` files were significantly expanded to provide more comprehensive and robust ignore patterns.
+- **Dependencies**: Updated `package.json` to version `1.2.2` and added the `prepare` script for Husky.
+
+### Fixed
+
+- **Version Synchronization**: Corrected the version in `server.json` to `1.2.2` to match the `package.json`.
+
 ## [1.2.1] - 2025-10-02
 
 ### Changed
+
 - **Observability**: Refactored the `IClinicalTrialsProvider` interface and its implementation to accept a `RequestContext` in every method (`fetchStudy`, `listStudies`, `getStudyMetadata`, `getApiStats`). This ensures that the tracing context is propagated through the entire call stack, enabling full-stack observability.
 - **Tool Logic**: Updated all tool definitions (`clinicaltrials-get-study`, `clinicaltrials-search-studies`, `clinicaltrials-analyze-trends`) to pass the `appContext` to the provider, ensuring that all API calls are part of the same trace.
 - **README Overhaul**: Completely rewrote the `README.md` to be more tool-centric. It now includes a clear overview of each tool, its key features, example use cases, and links to detailed examples.
@@ -13,6 +34,7 @@ All notable changes to this project will be documented in this file.
 - **Server Manifest**: Added `server.json` to define the server and its packages for the MCP registry.
 
 ### Removed
+
 - **Prompts & Roots**: Removed the `prompts` and `roots` capabilities from the MCP server as they were unused and added unnecessary complexity. This includes deleting the corresponding directories and registration logic.
 
 ## [1.2.0] - 2025-10-01

@@ -1,34 +1,80 @@
-# ---- Builder Stage ----
-# Installs all dependencies, builds the project, and then removes dev dependencies.
-FROM node:23-alpine AS builder
+# ==============================================================================
+# Build Stage
+#
+# This stage installs all dependencies (including dev), builds the TypeScript
+# source code into JavaScript, and prepares the production assets.
+# ==============================================================================
+FROM oven/bun:1 AS build
+
 WORKDIR /usr/src/app
 
-# Copy dependency manifests and install ALL dependencies
-COPY package*.json ./
-RUN npm ci
+# Copy dependency manifests for optimized layer caching
+COPY package.json bun.lock ./
 
-# Copy source code and build the TypeScript project
+# Install all dependencies (including dev dependencies for building)
+RUN bun install --frozen-lockfile
+
+# Copy the rest of the source code
 COPY . .
-RUN npm run build
 
-# ---- Runner Stage ----
-# Final, minimal image.
-FROM node:23-alpine
+# Build the application
+RUN bun run build
+
+
+# ==============================================================================
+# Production Stage
+#
+# This stage creates a minimal, optimized, and secure image for running the
+# application. It uses a slim base image and only includes production
+# dependencies and build artifacts.
+# ==============================================================================
+FROM oven/bun:1-slim AS production
+
 WORKDIR /usr/src/app
 
-# Set the environment to development
-ENV NODE_ENV=development
+# Set the environment to production for performance and to ensure only
+# production dependencies are installed.
+ENV NODE_ENV=production
 
-# Copy the built application, production node_modules, and package.json from the builder
-COPY --from=builder /usr/src/app/dist ./dist
-COPY --from=builder /usr/src/app/node_modules ./node_modules
-COPY --from=builder /usr/src/app/package.json ./
+# Add the required OCI label for MCP registry validation.
+# This an immutable property of the image and should not be an ARG.
+LABEL io.modelcontextprotocol.server.name="io.github.cyanheads/clinicaltrialsgov-mcp-server"
 
-# Create a non-root user for better security
-RUN addgroup -S appgroup && adduser -S appuser -G appgroup
-RUN mkdir -p /usr/src/app/logs && chown -R appuser:appgroup /usr/src/app/logs
-USER appuser
+# Copy dependency manifests
+COPY package.json bun.lock ./
 
-# Expose port and define the command to run the app
-EXPOSE 3010
-CMD ["npx", "clinicaltrialsgov-mcp-server"]
+# Install only production dependencies, ignoring any lifecycle scripts (like 'prepare')
+# that are not needed in the final production image.
+RUN bun install --production --frozen-lockfile --ignore-scripts
+
+# Copy the compiled application code from the build stage
+COPY --from=build /usr/src/app/dist ./dist
+
+# The 'oven/bun' image already provides a non-root user named 'bun'.
+# We will use this existing user for enhanced security.
+
+# Create and set permissions for the log directory, assigning ownership to the 'bun' user.
+RUN mkdir -p /var/log/clinicaltrialsgov-mcp-server && chown -R bun:bun /var/log/clinicaltrialsgov-mcp-server
+
+# Switch to the non-root user
+USER bun
+
+# Define an argument for the port, allowing it to be overridden at build time.
+# The `PORT` variable is often injected by cloud environments at runtime.
+ARG PORT
+
+# Set runtime environment variables
+# Note: PORT is an automatic variable in many cloud environments (e.g., Cloud Run)
+ENV MCP_HTTP_PORT=${PORT:-3017}
+ENV MCP_HTTP_HOST="0.0.0.0"
+ENV MCP_TRANSPORT_TYPE="http"
+ENV MCP_SESSION_MODE="stateless"
+ENV MCP_LOG_LEVEL="info"
+ENV LOGS_DIR="/var/log/clinicaltrialsgov-mcp-server"
+ENV MCP_FORCE_CONSOLE_LOGGING="true"
+
+# Expose the port the server listens on
+EXPOSE ${MCP_HTTP_PORT}
+
+# The command to start the server
+CMD ["bun", "run", "dist/index.js"]

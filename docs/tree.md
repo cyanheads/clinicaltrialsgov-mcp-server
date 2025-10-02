@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2025-10-02 06:35:38
+Generated on: 2025-10-02 06:56:33
 
 ```
 clinicaltrialsgov-mcp-server
@@ -10,6 +10,8 @@ clinicaltrialsgov-mcp-server
 │   ├── workflows
 │   │   └── publish.yml
 │   └── FUNDING.yml
+├── .husky
+│   └── pre-commit
 ├── docs
 │   ├── best-practices.md
 │   └── tree.md
@@ -222,6 +224,7 @@ clinicaltrialsgov-mcp-server
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore
+├── .prettierignore
 ├── .prettierrc.json
 ├── AGENTS.md
 ├── bun.lock
@@ -242,7 +245,8 @@ clinicaltrialsgov-mcp-server
 ├── tsconfig.vitest.json
 ├── tsdoc.json
 ├── typedoc.json
-└── vitest.config.ts
+├── vitest.config.ts
+└── wrangler.toml
 ```
 
 _Note: This tree excludes files and directories matched by .gitignore and default patterns._

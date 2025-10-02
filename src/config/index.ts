@@ -10,8 +10,8 @@
 import dotenv from 'dotenv';
 import { z } from 'zod';
 
-import { JsonRpcErrorCode, McpError } from '../types-global/errors.js';
 import packageJson from '../../package.json' with { type: 'json' };
+import { JsonRpcErrorCode, McpError } from '../types-global/errors.js';
 
 type PackageManifest = {
   name?: string;
@@ -93,7 +93,7 @@ const ConfigSchema = z.object({
     emptyStringAsUndefined,
     z.enum(['stateless', 'stateful', 'auto']).default('auto'),
   ),
-  mcpHttpPort: z.coerce.number().default(3010),
+  mcpHttpPort: z.coerce.number().default(3017),
   mcpHttpHost: z.string().default('127.0.0.1'),
   mcpHttpEndpointPath: z.string().default('/mcp'),
   mcpHttpMaxPortRetries: z.coerce.number().default(15),
@@ -386,4 +386,4 @@ const config = parseConfig();
  */
 export type AppConfig = z.infer<typeof ConfigSchema>;
 
-export { config, parseConfig, ConfigSchema };
+export { config, ConfigSchema, parseConfig };

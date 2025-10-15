@@ -45,6 +45,11 @@ let offset = 0;
 
 // Pre-mock modules that are imported before tests call vi.mock
 // Skip these mocks for integration tests so we exercise the real stack.
+// IMPORTANT: Vitest's module mocking can interfere with AsyncLocalStorage context propagation
+// in some test scenarios. If you encounter "getStore is not a function" errors with
+// AsyncLocalStorage, the issue is likely with test isolation settings in vitest.config.ts.
+// Solution: Ensure poolOptions.forks.isolate = true (each test file gets clean module state).
+// See: https://github.com/vitest-dev/vitest/issues/5858
 const IS_INTEGRATION = process.env.INTEGRATION === '1';
 if (!IS_INTEGRATION) {
   try {
@@ -53,7 +58,12 @@ if (!IS_INTEGRATION) {
         connect = (vi as any).fn(async () => {});
         constructor(..._args: any[]) {}
       }
-      return { McpServer };
+      class ResourceTemplate {
+        constructor(..._args: any[]) {}
+        match = (vi as any).fn(() => null);
+        render = (vi as any).fn(() => '');
+      }
+      return { McpServer, ResourceTemplate };
     });
   } catch {}
 
@@ -77,11 +87,6 @@ if (!IS_INTEGRATION) {
 // Ensure global vi exists for any indirect references
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).vi = (globalThis as any).vi ?? vi;
-
-try {
-  // eslint-disable-next-line no-console
-  console.debug('setup vitest vi keys:', Object.keys(vi as any));
-} catch {}
 
 // Global test setup without MSW - tests use real APIs or isolated MSW servers
 beforeAll(() => {

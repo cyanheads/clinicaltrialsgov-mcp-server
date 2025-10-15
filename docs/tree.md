@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2025-10-02 09:47:04
+Generated on: 2025-10-15 16:55:49
 
 ```
 clinicaltrialsgov-mcp-server
@@ -25,10 +25,9 @@ clinicaltrialsgov-mcp-server
 │   ├── clean.ts
 │   ├── devcheck.ts
 │   ├── devdocs.ts
-│   ├── fetch-openapi-spec.ts
 │   ├── make-executable.ts
 │   ├── tree.ts
-│   └── validate-mcp-publish-schema.ts
+│   └── update-coverage.ts
 ├── src
 │   ├── config
 │   │   └── index.ts
@@ -67,6 +66,10 @@ clinicaltrialsgov-mcp-server
 │   │   ├── transports
 │   │   │   ├── auth
 │   │   │   │   ├── lib
+│   │   │   │   │   ├── authContext.ts
+│   │   │   │   │   ├── authTypes.ts
+│   │   │   │   │   ├── authUtils.ts
+│   │   │   │   │   └── withAuth.ts
 │   │   │   │   ├── strategies
 │   │   │   │   │   ├── authStrategy.ts
 │   │   │   │   │   ├── jwtStrategy.ts
@@ -78,7 +81,9 @@ clinicaltrialsgov-mcp-server
 │   │   │   │   ├── httpErrorHandler.ts
 │   │   │   │   ├── httpTransport.ts
 │   │   │   │   ├── httpTypes.ts
-│   │   │   │   └── index.ts
+│   │   │   │   ├── index.ts
+│   │   │   │   ├── sessionIdUtils.ts
+│   │   │   │   └── sessionStore.ts
 │   │   │   ├── stdio
 │   │   │   │   ├── index.ts
 │   │   │   │   └── stdioTransport.ts
@@ -131,6 +136,9 @@ clinicaltrialsgov-mcp-server
 │   ├── types-global
 │   │   └── errors.ts
 │   ├── utils
+│   │   ├── formatting
+│   │   │   ├── index.ts
+│   │   │   └── markdownBuilder.ts
 │   │   ├── internal
 │   │   │   ├── error-handler
 │   │   │   │   ├── errorHandler.ts
@@ -153,6 +161,8 @@ clinicaltrialsgov-mcp-server
 │   │   ├── network
 │   │   │   ├── fetchWithTimeout.ts
 │   │   │   └── index.ts
+│   │   ├── pagination
+│   │   │   └── index.ts
 │   │   ├── parsing
 │   │   │   ├── csvParser.ts
 │   │   │   ├── dateParser.ts
@@ -172,6 +182,7 @@ clinicaltrialsgov-mcp-server
 │   │   ├── telemetry
 │   │   │   ├── index.ts
 │   │   │   ├── instrumentation.ts
+│   │   │   ├── metrics.ts
 │   │   │   ├── semconv.ts
 │   │   │   └── trace.ts
 │   │   └── index.ts
@@ -179,33 +190,115 @@ clinicaltrialsgov-mcp-server
 │   └── worker.ts
 ├── tests
 │   ├── config
-│   │   └── index.int.test.ts
+│   │   ├── index.int.test.ts
+│   │   └── index.test.ts
+│   ├── container
+│   │   ├── registrations
+│   │   │   ├── core.test.ts
+│   │   │   └── mcp.test.ts
+│   │   ├── index.test.ts
+│   │   └── tokens.test.ts
 │   ├── mcp-server
 │   │   ├── resources
-│   │   │   └── definitions
-│   │   │       └── echo.resource.test.ts
+│   │   │   ├── definitions
+│   │   │   ├── utils
+│   │   │   │   ├── resourceDefinition.test.ts
+│   │   │   │   └── resourceHandlerFactory.test.ts
+│   │   │   └── resource-registration.test.ts
 │   │   ├── tools
-│   │   │   └── definitions
-│   │   │       ├── clinicaltrials-analyze-trends.tool.test.ts
-│   │   │       ├── clinicaltrials-compare-studies.tool.test.ts
-│   │   │       ├── clinicaltrials-get-study.tool.test.ts
-│   │   │       └── clinicaltrials-search-studies.tool.test.ts
-│   │   └── transports
-│   │       └── auth
-│   │           └── lib
+│   │   │   ├── definitions
+│   │   │   │   ├── clinicaltrials-analyze-trends.tool.test.ts
+│   │   │   │   ├── clinicaltrials-compare-studies.tool.test.ts
+│   │   │   │   ├── clinicaltrials-get-study.tool.test.ts
+│   │   │   │   └── clinicaltrials-search-studies.tool.test.ts
+│   │   │   ├── utils
+│   │   │   │   ├── core
+│   │   │   │   ├── index.test.ts
+│   │   │   │   ├── toolDefinition.test.ts
+│   │   │   │   └── toolHandlerFactory.test.ts
+│   │   │   └── tool-registration.test.ts
+│   │   ├── transports
+│   │   │   ├── auth
+│   │   │   │   ├── lib
+│   │   │   │   │   ├── authContext.test.ts
+│   │   │   │   │   ├── authTypes.test.ts
+│   │   │   │   │   ├── authUtils.test.ts
+│   │   │   │   │   └── withAuth.test.ts
+│   │   │   │   ├── strategies
+│   │   │   │   │   ├── authStrategy.test.ts
+│   │   │   │   │   ├── jwtStrategy.test.ts
+│   │   │   │   │   └── oauthStrategy.test.ts
+│   │   │   │   ├── authFactory.test.ts
+│   │   │   │   ├── authMiddleware.test.ts
+│   │   │   │   └── index.test.ts
+│   │   │   ├── http
+│   │   │   │   ├── httpErrorHandler.test.ts
+│   │   │   │   ├── httpTransport.test.ts
+│   │   │   │   ├── httpTypes.test.ts
+│   │   │   │   ├── index.test.ts
+│   │   │   │   ├── sessionIdUtils.test.ts
+│   │   │   │   └── sessionStore.test.ts
+│   │   │   ├── stdio
+│   │   │   │   ├── index.test.ts
+│   │   │   │   └── stdioTransport.test.ts
+│   │   │   ├── ITransport.test.ts
+│   │   │   └── manager.test.ts
+│   │   └── server.test.ts.disabled
 │   ├── mocks
 │   │   ├── handlers.ts
 │   │   └── server.ts
+│   ├── scripts
+│   │   └── devdocs.test.ts
+│   ├── services
+│   │   ├── llm
+│   │   │   ├── core
+│   │   │   │   └── ILlmProvider.test.ts
+│   │   │   ├── providers
+│   │   │   │   ├── openrouter.provider.test.ts
+│   │   │   │   └── openrouter.provider.test.ts.disabled
+│   │   │   ├── index.test.ts
+│   │   │   └── types.test.ts
+│   │   └── speech
+│   │       ├── core
+│   │       │   ├── ISpeechProvider.test.ts
+│   │       │   └── SpeechService.test.ts
+│   │       ├── providers
+│   │       │   ├── elevenlabs.provider.test.ts
+│   │       │   └── whisper.provider.test.ts
+│   │       ├── index.test.ts
+│   │       └── types.test.ts
 │   ├── storage
+│   │   ├── core
+│   │   │   ├── IStorageProvider.test.ts
+│   │   │   ├── storageFactory.test.ts
+│   │   │   └── storageValidation.test.ts
 │   │   ├── providers
 │   │   │   ├── cloudflare
 │   │   │   │   ├── kvProvider.test.ts
 │   │   │   │   └── r2Provider.test.ts
-│   │   │   └── inMemory
-│   │   │       └── inMemoryProvider.test.ts
-│   │   └── storageProviderCompliance.test.ts
+│   │   │   ├── fileSystem
+│   │   │   │   └── fileSystemProvider.test.ts
+│   │   │   ├── inMemory
+│   │   │   │   └── inMemoryProvider.test.ts
+│   │   │   └── supabase
+│   │   │       ├── supabase.types.test.ts
+│   │   │       └── supabaseProvider.test.ts
+│   │   ├── index.test.ts
+│   │   ├── storageProviderCompliance.test.ts
+│   │   └── StorageService.test.ts
+│   ├── types-global
+│   │   └── errors.test.ts
 │   ├── utils
+│   │   ├── formatting
+│   │   │   ├── index.test.ts
+│   │   │   └── markdownBuilder.test.ts
 │   │   ├── internal
+│   │   │   ├── error-handler
+│   │   │   │   ├── errorHandler.test.ts
+│   │   │   │   ├── helpers.test.ts
+│   │   │   │   ├── index.test.ts
+│   │   │   │   ├── mappings.test.ts
+│   │   │   │   └── types.test.ts
 │   │   │   ├── encoding.test.ts
 │   │   │   ├── errorHandler.int.test.ts
 │   │   │   ├── errorHandler.unit.test.ts
@@ -214,28 +307,46 @@ clinicaltrialsgov-mcp-server
 │   │   │   ├── performance.init.test.ts
 │   │   │   ├── performance.test.ts
 │   │   │   ├── requestContext.test.ts
-│   │   │   └── runtime.test.ts
+│   │   │   ├── runtime.test.ts
+│   │   │   └── startupBanner.test.ts
 │   │   ├── metrics
+│   │   │   ├── index.test.ts
 │   │   │   ├── registry.test.ts
 │   │   │   └── tokenCounter.test.ts
 │   │   ├── network
-│   │   │   └── fetchWithTimeout.test.ts
+│   │   │   ├── fetchWithTimeout.test.ts
+│   │   │   └── index.test.ts
+│   │   ├── pagination
+│   │   │   └── index.test.ts
 │   │   ├── parsing
 │   │   │   ├── csvParser.test.ts
 │   │   │   ├── dateParser.test.ts
+│   │   │   ├── index.test.ts
 │   │   │   ├── jsonParser.test.ts
 │   │   │   ├── pdfParser.test.ts
 │   │   │   ├── xmlParser.test.ts
 │   │   │   └── yamlParser.test.ts
 │   │   ├── scheduling
+│   │   │   ├── index.test.ts
 │   │   │   └── scheduler.test.ts
-│   │   └── security
-│   │       ├── idGenerator.test.ts
-│   │       ├── rateLimiter.test.ts
-│   │       └── sanitization.test.ts
-│   └── setup.ts
+│   │   ├── security
+│   │   │   ├── idGenerator.test.ts
+│   │   │   ├── index.test.ts
+│   │   │   ├── rateLimiter.test.ts
+│   │   │   └── sanitization.test.ts
+│   │   ├── telemetry
+│   │   │   ├── index.test.ts
+│   │   │   ├── instrumentation.test.ts
+│   │   │   ├── metrics.test.ts
+│   │   │   ├── semconv.test.ts
+│   │   │   └── trace.test.ts
+│   │   └── index.test.ts
+│   ├── index.test.ts
+│   ├── setup.ts
+│   └── worker.test.ts
 ├── .dockerignore
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
 ├── .prettierignore
 ├── .prettierrc.json

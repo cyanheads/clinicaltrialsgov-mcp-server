@@ -61,8 +61,6 @@ __pycache__/
 develop-eggs/
 eggs/
 .eggs/
-lib/
-lib64/
 parts/
 sdist/
 var/
@@ -71,7 +69,6 @@ wheels/
 .installed.cfg
 *.egg
 .pytest_cache/
-.coverage
 htmlcov/
 .tox/
 .venv
@@ -96,11 +93,9 @@ target/
 *.gem
 *.rbc
 /.config
-/coverage/
 /InstalledFiles
 /pkg/
 /spec/reports/
-/spec/examples.txt
 /test/tmp/
 /test/version_tmp/
 /tmp/
@@ -145,7 +140,6 @@ logs/
 # =============================================================================
 # TESTING & COVERAGE
 # =============================================================================
-coverage/
 .nyc_output/
 
 # =============================================================================
@@ -164,7 +158,6 @@ coverage/
 .env.test.local
 .env.production.local
 .sample-env
-sample.*
 !sample.template.*
 mcp-servers.json
 mcp-config.json
@@ -189,6 +182,8 @@ duckdata/
 .claude
 data/
 docs/devdocs.md
+ideas/
+.mcp.json
 
 # =============================================================================
 # MCP REGISTRY

@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.5.0] - 2025-10-15
+
+### Alignment with `mcp-ts-template@v2.4.4`
+
+This release brings the project into full alignment with `cyanheads/mcp-ts-template@v2.4.4`, introducing a wide array of architectural improvements, security enhancements, and developer experience upgrades.
+
+### Added
+
+- **Architectural Enhancements**:
+  - **Error Handling**: `ErrorHandler` now supports `Result` types for functional error handling, automatic cause chain extraction for better debugging, and provider-specific error patterns for services like AWS, Supabase, and OpenRouter.
+  - **Storage Service**: Implemented robust validation for tenant IDs, keys, and prefixes to prevent path traversal. Added secure, opaque, tenant-bound cursors for pagination.
+  - **Telemetry & Logging**: OpenTelemetry initialization is now runtime-aware with graceful degradation for serverless environments. The logger is transport-aware to ensure clean, uncolored output in STDIO mode, adhering to MCP spec.
+- **Security**:
+  - **HTTP Transport**: Added DNS rebinding protection via Origin header validation, and implemented secure session management with identity binding to prevent session hijacking.
+  - **Authentication**: Auth middleware now enriches OpenTelemetry spans with detailed context. Added support for RFC 9728 `WWW-Authenticate` headers.
+- **Developer Experience**:
+  - **`devdocs.ts`**: The script now features a more powerful CLI with support for stats, dry-run mode, and git integration to analyze only changed files.
+
+### Changed
+
+- **Dependencies**: All major dependencies have been updated to their latest versions, including `@modelcontextprotocol/sdk` to `^1.20.0`, `@opentelemetry/*` to `^0.65.0`, `@supabase/supabase-js` to `^2.75.0`, `hono` to `^4.9.12`, and `pino` to `^10.0.0`.
+- **Build Process**: All `npm` scripts now use `bunx` for consistency. Testing and coverage scripts have been updated.
+- **Storage Providers**: Greatly improved performance of batch operations (`getMany`, `setMany`, `deleteMany`) across all storage providers by leveraging parallel execution.
+
+### Fixed
+
+- **Storage**: Correctly handle `ttl=0` in all storage providers.
+- **Logging**: Corrected an issue where `pino-pretty` would output ANSI color codes in STDIO mode, which is now suppressed.
+
+### Removed
+
+- **Obsolete Scripts**: Removed `fetch-openapi-spec.ts` and `validate-mcp-publish-schema.ts` as their functionality is now integrated into a more streamlined workflow.
+
 ## [1.4.0] - 2025-10-02
 
 ### Added

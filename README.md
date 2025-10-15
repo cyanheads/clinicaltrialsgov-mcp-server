@@ -15,13 +15,13 @@
 
 This server provides five powerful tools for accessing and analyzing clinical trial data from ClinicalTrials.gov:
 
-| Tool Name                        | Description                                                                                                           |
-| :------------------------------- | :-------------------------------------------------------------------------------------------------------------------- |
-| `clinicaltrials_search_studies`  | Searches for clinical studies using query terms, filters, pagination, and sorting. Now includes geographic filtering. |
-| `clinicaltrials_get_study`       | Fetches one or more clinical studies by their NCT IDs, returning either full data or concise summaries.               |
-| `clinicaltrials_analyze_trends`  | Performs statistical analysis on up to 5000 studies, with new time-series analysis by year and month.                 |
-| `clinicaltrials_compare_studies` | Performs a detailed side-by-side comparison of 2-5 clinical studies, highlighting commonalities and differences.      |
-| `clinicaltrials_find_eligible_studies` | Matches patient profiles to eligible clinical trials, filtering by age, sex, conditions, and location.             |
+| Tool Name                              | Description                                                                                                           |
+| :------------------------------------- | :-------------------------------------------------------------------------------------------------------------------- |
+| `clinicaltrials_search_studies`        | Searches for clinical studies using query terms, filters, pagination, and sorting. Now includes geographic filtering. |
+| `clinicaltrials_get_study`             | Fetches one or more clinical studies by their NCT IDs, returning either full data or concise summaries.               |
+| `clinicaltrials_analyze_trends`        | Performs statistical analysis on up to 5000 studies, with new time-series analysis by year and month.                 |
+| `clinicaltrials_compare_studies`       | Performs a detailed side-by-side comparison of 2-5 clinical studies, highlighting commonalities and differences.      |
+| `clinicaltrials_find_eligible_studies` | Matches patient profiles to eligible clinical trials, filtering by age, sex, conditions, and location.                |
 
 ### `clinicaltrials_search_studies`
 
@@ -158,14 +158,23 @@ Add the following to your MCP Client configuration file (e.g., `cline_mcp_settin
 {
   "mcpServers": {
     "clinicaltrialsgov-mcp-server": {
+      "type": "stdio",
       "command": "bunx",
       "args": ["clinicaltrialsgov-mcp-server@latest"],
       "env": {
+        "MCP_TRANSPORT_TYPE": "stdio",
         "MCP_LOG_LEVEL": "info"
       }
     }
   }
 }
+```
+
+Or for Streamable HTTP:
+
+```bash
+MCP_TRANSPORT_TYPE=http
+MCP_HTTP_PORT=3015
 ```
 
 ### Prerequisites

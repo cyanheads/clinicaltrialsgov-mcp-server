@@ -6,7 +6,29 @@
  * shutdown on process signals or unhandled errors.
  * @module src/index
  */
-import { shutdownOpenTelemetry } from '@/utils/telemetry/instrumentation.js';
+
+// CRITICAL: Disable ANSI color codes BEFORE any imports when running via MCP clients.
+// The MCP specification requires clean output. Even in HTTP mode, if launched via
+// bunx/npx by an MCP client, colored output pollutes the client's process streams.
+// This must be set before pino-pretty or any other library loads.
+//
+// We disable colors in these scenarios:
+// 1. STDIO mode (always - MCP JSON-RPC on stdout)
+// 2. HTTP mode when NOT in TTY (likely launched by MCP client via bunx/npx)
+// 3. When explicitly disabled via existing NO_COLOR env var
+const transportType = process.env.MCP_TRANSPORT_TYPE?.toLowerCase();
+const isStdioMode = !transportType || transportType === 'stdio';
+const isHttpModeWithoutTty = transportType === 'http' && !process.stdout.isTTY;
+
+if (isStdioMode || isHttpModeWithoutTty) {
+  process.env.NO_COLOR = '1'; // Standard env var that most libraries respect
+  process.env.FORCE_COLOR = '0'; // Disable forced coloring
+}
+
+import {
+  initializeOpenTelemetry,
+  shutdownOpenTelemetry,
+} from '@/utils/telemetry/instrumentation.js';
 import 'reflect-metadata';
 
 import {
@@ -91,6 +113,16 @@ const start = async (): Promise<void> => {
     process.exit(1);
   }
 
+  // Initialize OpenTelemetry before logger to capture all spans
+  // This must happen before logger initialization for proper instrumentation
+  try {
+    await initializeOpenTelemetry();
+  } catch (error) {
+    // Observability failure should not block startup
+    console.error('[Startup] Failed to initialize OpenTelemetry:', error);
+    // Continue - application can run without telemetry
+  }
+
   // Initialize the high-resolution timer
   await initializePerformance_Hrt();
 
@@ -117,12 +149,8 @@ const start = async (): Promise<void> => {
     }
   }
 
-  await logger.initialize(validatedMcpLogLevel);
-
-  logger.info(
-    `Logger initialized. Effective MCP logging level: ${validatedMcpLogLevel}.`,
-    requestContextService.createRequestContext({ operation: 'LoggerInit' }),
-  );
+  // Pass transport type to logger to ensure STDIO mode uses plain JSON (no ANSI colors)
+  await logger.initialize(validatedMcpLogLevel, config.mcpTransportType);
 
   // Storage Service is now initialized in the container
   logger.info(

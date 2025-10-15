@@ -13,7 +13,6 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import http from 'http';
-import { randomUUID } from 'node:crypto';
 
 import { config } from '@/config/index.js';
 import {
@@ -23,6 +22,11 @@ import {
 } from '@/mcp-server/transports/auth/index.js';
 import { httpErrorHandler } from '@/mcp-server/transports/http/httpErrorHandler.js';
 import type { HonoNodeBindings } from '@/mcp-server/transports/http/httpTypes.js';
+import { generateSecureSessionId } from '@/mcp-server/transports/http/sessionIdUtils.js';
+import {
+  SessionStore,
+  type SessionIdentity,
+} from '@/mcp-server/transports/http/sessionStore.js';
 import {
   type RequestContext,
   logger,
@@ -51,6 +55,12 @@ export function createHttpApp(
     component: 'HttpTransportSetup',
   };
 
+  // Initialize session store for stateful mode
+  const sessionStore =
+    config.mcpSessionMode === 'stateful'
+      ? new SessionStore(config.mcpStatefulSessionStaleTimeoutMs)
+      : null;
+
   // CORS (with permissive fallback)
   const allowedOrigin =
     Array.isArray(config.mcpAllowedOrigins) &&
@@ -77,26 +87,75 @@ export function createHttpApp(
   // Centralized error handling
   app.onError(httpErrorHandler);
 
+  // MCP Spec 2025-06-18: Origin header validation for DNS rebinding protection
+  // https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#security-warning
+  app.use(config.mcpHttpEndpointPath, async (c, next) => {
+    const origin = c.req.header('origin');
+    if (origin) {
+      const isAllowed =
+        allowedOrigin === '*' ||
+        (Array.isArray(allowedOrigin) && allowedOrigin.includes(origin));
+
+      if (!isAllowed) {
+        logger.warning('Rejected request with invalid Origin header', {
+          ...transportContext,
+          origin,
+          allowedOrigins: allowedOrigin,
+        });
+        return c.json(
+          { error: 'Invalid origin. DNS rebinding protection.' },
+          403,
+        );
+      }
+    }
+    // Origin is valid or not present, continue
+    return await next();
+  });
+
   // Health and GET /mcp status remain unprotected for convenience
   app.get('/healthz', (c) => c.json({ status: 'ok' }));
 
   // RFC 9728 Protected Resource Metadata endpoint (MCP 2025-06-18)
   // Must be accessible without authentication for discovery
+  // https://datatracker.ietf.org/doc/html/rfc9728
   app.get('/.well-known/oauth-protected-resource', (c) => {
     if (!config.oauthIssuerUrl) {
+      logger.debug(
+        'OAuth Protected Resource Metadata requested but OAuth not configured',
+        transportContext,
+      );
       return c.json(
         { error: 'OAuth not configured on this server' },
         { status: 404 },
       );
     }
 
-    return c.json({
-      resource: config.mcpServerResourceIdentifier || config.oauthAudience,
+    const origin = new URL(c.req.url).origin;
+    const resourceIdentifier =
+      config.mcpServerResourceIdentifier ??
+      config.oauthAudience ??
+      `${origin}/mcp`;
+
+    // Per RFC 9728, this endpoint provides metadata about the protected resource
+    const metadata = {
+      resource: resourceIdentifier,
       authorization_servers: [config.oauthIssuerUrl],
       bearer_methods_supported: ['header'],
       resource_signing_alg_values_supported: ['RS256', 'ES256', 'PS256'],
+      resource_documentation: `${origin}/docs`,
       ...(config.oauthJwksUri && { jwks_uri: config.oauthJwksUri }),
+    };
+
+    // RFC 9728 recommends caching this metadata
+    c.header('Cache-Control', 'public, max-age=3600');
+    c.header('Content-Type', 'application/json');
+
+    logger.debug('Serving OAuth Protected Resource Metadata', {
+      ...transportContext,
+      resourceIdentifier,
     });
+
+    return c.json(metadata);
   });
 
   app.get(config.mcpHttpEndpointPath, (c) => {
@@ -111,6 +170,41 @@ export function createHttpApp(
         sessionMode: config.mcpSessionMode,
       },
     });
+  });
+
+  // MCP Spec 2025-06-18: DELETE endpoint for session termination
+  // Clients SHOULD send DELETE to explicitly terminate sessions
+  // https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#session-management
+  app.delete(config.mcpHttpEndpointPath, (c) => {
+    const sessionId = c.req.header('mcp-session-id');
+
+    if (!sessionId) {
+      logger.warning('DELETE request without session ID', transportContext);
+      return c.json({ error: 'Mcp-Session-Id header required' }, 400);
+    }
+
+    logger.info('Session termination requested', {
+      ...transportContext,
+      sessionId,
+    });
+
+    // For stateless mode or if session management is disabled, return 405
+    if (config.mcpSessionMode === 'stateless' || !sessionStore) {
+      return c.json(
+        { error: 'Session termination not supported in stateless mode' },
+        405,
+      );
+    }
+
+    // Terminate the session in the store
+    sessionStore.terminate(sessionId);
+
+    logger.info('Session terminated successfully', {
+      ...transportContext,
+      sessionId,
+    });
+
+    return c.json({ status: 'terminated', sessionId }, 200);
   });
 
   // Create auth strategy and middleware if auth is enabled
@@ -140,7 +234,8 @@ export function createHttpApp(
       protocolVersion,
     });
 
-    // Per MCP Spec 2025-06-18: MCP-Protocol-Version header should be validated
+    // Per MCP Spec 2025-06-18: MCP-Protocol-Version header MUST be validated
+    // Server MUST respond with 400 Bad Request for unsupported versions
     // We default to 2025-03-26 for backward compatibility if not provided
     const supportedVersions = ['2025-03-26', '2025-06-18'];
     if (!supportedVersions.includes(protocolVersion)) {
@@ -149,14 +244,75 @@ export function createHttpApp(
         protocolVersion,
         supportedVersions,
       });
+      return c.json(
+        {
+          error: 'Unsupported MCP protocol version',
+          protocolVersion,
+          supportedVersions,
+        },
+        400,
+      );
     }
 
-    const sessionId = c.req.header('mcp-session-id') ?? randomUUID();
+    const providedSessionId = c.req.header('mcp-session-id');
+    const sessionId = providedSessionId ?? generateSecureSessionId();
+
+    // Extract identity from auth context (if auth is enabled)
+    // This MUST happen before session validation for security
+    const authStore = authContext.getStore();
+    let sessionIdentity: SessionIdentity | undefined;
+    if (authStore?.authInfo) {
+      // Build identity object conditionally to satisfy exactOptionalPropertyTypes
+      sessionIdentity = {};
+      if (authStore.authInfo.tenantId)
+        sessionIdentity.tenantId = authStore.authInfo.tenantId;
+      if (authStore.authInfo.clientId)
+        sessionIdentity.clientId = authStore.authInfo.clientId;
+      if (authStore.authInfo.subject)
+        sessionIdentity.subject = authStore.authInfo.subject;
+    }
+
+    // MCP Spec 2025-06-18: Return 404 for invalid/terminated sessions
+    // https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#session-management
+    // SECURITY: Validate session WITH identity binding to prevent hijacking
+    if (
+      sessionStore &&
+      providedSessionId &&
+      !sessionStore.isValidForIdentity(providedSessionId, sessionIdentity)
+    ) {
+      logger.warning(
+        'Session validation failed - invalid or hijacked session',
+        {
+          ...transportContext,
+          sessionId: providedSessionId,
+          requestTenant: sessionIdentity?.tenantId,
+          requestClient: sessionIdentity?.clientId,
+        },
+      );
+      return c.json({ error: 'Session not found or expired' }, 404);
+    }
+
+    // Create or update session for stateful mode WITH identity binding
+    if (sessionStore) {
+      sessionStore.getOrCreate(sessionId, sessionIdentity);
+    }
+
     const transport = new McpSessionTransport(sessionId);
 
     const handleRpc = async (): Promise<Response> => {
       await mcpServer.connect(transport);
       const response = await transport.handleRequest(c);
+
+      // MCP Spec 2025-06-18: For stateful sessions, return Mcp-Session-Id header
+      // in InitializeResponse (and all subsequent responses)
+      if (response && config.mcpSessionMode === 'stateful') {
+        response.headers.set('Mcp-Session-Id', sessionId);
+        logger.debug('Added Mcp-Session-Id header to response', {
+          ...transportContext,
+          sessionId,
+        });
+      }
+
       if (response) {
         return response;
       }

@@ -303,6 +303,19 @@ export function createHttpApp(
       await mcpServer.connect(transport);
       const response = await transport.handleRequest(c);
 
+      // Node's HTTP server automatically applies chunked transfer encoding when
+      // streaming. The underlying @hono/mcp transport also sets
+      // `Transfer-Encoding: chunked`, which causes some clients (including the
+      // Go MCP host) to see duplicate transfer-encoding headers and reject the
+      // response. Strip the explicit header here so only the server-added
+      // variant remains.
+      if (response?.headers?.has('transfer-encoding')) {
+        const value = response.headers.get('transfer-encoding');
+        if (value && value.toLowerCase() === 'chunked') {
+          response.headers.delete('transfer-encoding');
+        }
+      }
+
       // MCP Spec 2025-06-18: For stateful sessions, return Mcp-Session-Id header
       // in InitializeResponse (and all subsequent responses)
       if (response && config.mcpSessionMode === 'stateful') {

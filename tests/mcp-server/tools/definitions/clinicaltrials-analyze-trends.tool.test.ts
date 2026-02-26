@@ -303,12 +303,7 @@ describe('analyzeTrendsTool', () => {
     it('should fetch a single page when all studies fit', async () => {
       const studies = [makeStudy(), makeStudy()];
 
-      // Initial count call
-      mockListStudies.mockResolvedValueOnce({
-        studies: [],
-        totalCount: 2,
-      });
-      // Paginated fetch (single page, no nextPageToken)
+      // First page returns all studies — no nextPageToken
       mockListStudies.mockResolvedValueOnce({
         studies,
         totalCount: 2,
@@ -322,20 +317,15 @@ describe('analyzeTrendsTool', () => {
       );
 
       expect(at(result.analysis, 0).totalStudies).toBe(2);
-      // Should have called listStudies twice: 1 for count, 1 for page
-      expect(mockListStudies).toHaveBeenCalledTimes(2);
+      // Single page — only one call needed
+      expect(mockListStudies).toHaveBeenCalledTimes(1);
     });
 
     it('should paginate through multiple pages', async () => {
       const page1Studies = [makeStudy(), makeStudy()];
       const page2Studies = [makeStudy()];
 
-      // Initial count call
-      mockListStudies.mockResolvedValueOnce({
-        studies: [],
-        totalCount: 3,
-      });
-      // Page 1
+      // Page 1 (includes totalCount + nextPageToken)
       mockListStudies.mockResolvedValueOnce({
         studies: page1Studies,
         totalCount: 3,
@@ -355,10 +345,10 @@ describe('analyzeTrendsTool', () => {
       );
 
       expect(at(result.analysis, 0).totalStudies).toBe(3);
-      expect(mockListStudies).toHaveBeenCalledTimes(3);
+      expect(mockListStudies).toHaveBeenCalledTimes(2);
 
       // Verify the second page call included the pageToken
-      const secondPageCall = at(mockListStudies.mock.calls, 2);
+      const secondPageCall = at(mockListStudies.mock.calls, 1);
       expect(secondPageCall[0]).toHaveProperty('pageToken', 'token-page-2');
     });
 
@@ -381,7 +371,7 @@ describe('analyzeTrendsTool', () => {
       expect(at(mockListStudies.mock.calls, 0)[0]).toMatchObject({
         query: 'diabetes',
         filter: 'AREA[Status]Recruiting',
-        pageSize: 1,
+        pageSize: 1000,
       });
     });
   });
@@ -412,9 +402,7 @@ describe('analyzeTrendsTool', () => {
         }),
       ];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 3 })
-        .mockResolvedValueOnce({ studies, totalCount: 3 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 3 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countByStatus' },
@@ -431,9 +419,7 @@ describe('analyzeTrendsTool', () => {
     it('should count "Unknown" when overallStatus is missing', async () => {
       const studies = [makeStudy({ statusModule: {} })];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
-        .mockResolvedValueOnce({ studies, totalCount: 1 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 1 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countByStatus' },
@@ -460,9 +446,7 @@ describe('analyzeTrendsTool', () => {
         }),
       ];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 2 })
-        .mockResolvedValueOnce({ studies, totalCount: 2 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 2 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countByCountry' },
@@ -479,9 +463,7 @@ describe('analyzeTrendsTool', () => {
     it('should handle studies with no locations', async () => {
       const studies = [makeStudy({ contactsLocationsModule: {} })];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
-        .mockResolvedValueOnce({ studies, totalCount: 1 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 1 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countByCountry' },
@@ -502,9 +484,7 @@ describe('analyzeTrendsTool', () => {
         }),
       ];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
-        .mockResolvedValueOnce({ studies, totalCount: 1 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 1 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countByCountry' },
@@ -530,9 +510,7 @@ describe('analyzeTrendsTool', () => {
         }),
       ];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 3 })
-        .mockResolvedValueOnce({ studies, totalCount: 3 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 3 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countBySponsorType' },
@@ -549,9 +527,7 @@ describe('analyzeTrendsTool', () => {
     it('should count "Unknown" when sponsor class is missing', async () => {
       const studies = [makeStudy({ sponsorCollaboratorsModule: {} })];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
-        .mockResolvedValueOnce({ studies, totalCount: 1 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 1 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countBySponsorType' },
@@ -570,9 +546,7 @@ describe('analyzeTrendsTool', () => {
         makeStudy({ designModule: { phases: ['PHASE3'] } }),
       ];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 2 })
-        .mockResolvedValueOnce({ studies, totalCount: 2 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 2 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countByPhase' },
@@ -589,9 +563,7 @@ describe('analyzeTrendsTool', () => {
     it('should count "Unknown" when phases array is missing', async () => {
       const studies = [makeStudy({ designModule: {} })];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
-        .mockResolvedValueOnce({ studies, totalCount: 1 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 1 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countByPhase' },
@@ -626,9 +598,7 @@ describe('analyzeTrendsTool', () => {
         }),
       ];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 3 })
-        .mockResolvedValueOnce({ studies, totalCount: 3 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 3 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countByYear' },
@@ -647,9 +617,7 @@ describe('analyzeTrendsTool', () => {
         makeStudy({ statusModule: { overallStatus: 'Recruiting' } }),
       ];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
-        .mockResolvedValueOnce({ studies, totalCount: 1 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 1 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countByYear' },
@@ -684,9 +652,7 @@ describe('analyzeTrendsTool', () => {
         }),
       ];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 3 })
-        .mockResolvedValueOnce({ studies, totalCount: 3 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 3 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countByMonth' },
@@ -710,9 +676,7 @@ describe('analyzeTrendsTool', () => {
         }),
       ];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
-        .mockResolvedValueOnce({ studies, totalCount: 1 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 1 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countByMonth' },
@@ -728,9 +692,7 @@ describe('analyzeTrendsTool', () => {
         makeStudy({ statusModule: { overallStatus: 'Recruiting' } }),
       ];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
-        .mockResolvedValueOnce({ studies, totalCount: 1 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 1 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: 'countByMonth' },
@@ -757,9 +719,7 @@ describe('analyzeTrendsTool', () => {
         }),
       ];
 
-      mockListStudies
-        .mockResolvedValueOnce({ studies: [], totalCount: 2 })
-        .mockResolvedValueOnce({ studies, totalCount: 2 });
+      mockListStudies.mockResolvedValueOnce({ studies, totalCount: 2 });
 
       const result = await analyzeTrendsTool.logic(
         { analysisType: ['countByStatus', 'countByPhase', 'countByYear'] },

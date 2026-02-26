@@ -133,11 +133,13 @@ type AnalyzeTrendsOutput = z.infer<typeof OutputSchema>;
 /**
  * Fetches all studies for a given query, handling pagination.
  * Throws if the total count exceeds the configured limit.
+ * Checks the AbortSignal between pages to support cancellation.
  */
 async function fetchAllStudies(
   query: string | undefined,
   filter: string | undefined,
   appContext: RequestContext,
+  signal?: AbortSignal,
 ): Promise<Study[]> {
   const config =
     container.resolve<
@@ -148,20 +150,21 @@ async function fetchAllStudies(
   );
 
   const maxStudies = config.maxStudiesForAnalysis;
+  const PAGE_SIZE = 1000;
 
   logger.debug('Fetching all studies for analysis...', { ...appContext });
 
-  // First, make one call to check the total number of studies
-  const initialResponse = await provider.listStudies(
+  // First page doubles as the total-count check — no wasted request.
+  const firstPage = await provider.listStudies(
     {
       ...(query && { query }),
       ...(filter && { filter }),
-      pageSize: 1,
+      pageSize: PAGE_SIZE,
     },
     appContext,
   );
 
-  const totalStudies = initialResponse.totalCount ?? 0;
+  const totalStudies = firstPage.totalCount ?? 0;
 
   if (totalStudies > maxStudies) {
     throw new McpError(
@@ -171,36 +174,34 @@ async function fetchAllStudies(
     );
   }
 
-  if (totalStudies === 0) {
-    return [];
+  const allStudies: Study[] = firstPage.studies ? [...firstPage.studies] : [];
+
+  if (allStudies.length === 0 || !firstPage.nextPageToken) {
+    return allStudies;
   }
 
-  // If within limits, proceed to fetch all studies
-  let allStudies: Study[] = [];
-  let pageToken: string | undefined = undefined;
-  let hasMore = true;
+  // Fetch remaining pages
+  let pageToken: string | undefined = firstPage.nextPageToken;
 
-  while (hasMore) {
+  while (pageToken && allStudies.length < totalStudies) {
+    signal?.throwIfAborted();
+    await delay(API_CALL_DELAY_MS);
+
     const pagedStudies = await provider.listStudies(
       {
         ...(query && { query }),
         ...(filter && { filter }),
-        ...(pageToken && { pageToken }),
-        pageSize: 1000,
+        pageToken,
+        pageSize: PAGE_SIZE,
       },
       appContext,
     );
 
     if (pagedStudies.studies) {
-      allStudies = allStudies.concat(pagedStudies.studies);
+      allStudies.push(...pagedStudies.studies);
     }
 
     pageToken = pagedStudies.nextPageToken;
-    hasMore = !!pageToken && allStudies.length < totalStudies;
-
-    if (hasMore) {
-      await delay(API_CALL_DELAY_MS);
-    }
   }
 
   logger.info(`Fetched a total of ${allStudies.length} studies for analysis.`, {
@@ -216,7 +217,7 @@ async function fetchAllStudies(
 async function analyzeTrendsLogic(
   input: AnalyzeTrendsInput,
   appContext: RequestContext,
-  _sdkContext: SdkContext,
+  sdkContext: SdkContext,
 ): Promise<AnalyzeTrendsOutput> {
   logger.debug('Executing analyzeTrendsLogic', {
     ...appContext,
@@ -227,6 +228,7 @@ async function analyzeTrendsLogic(
     input.query,
     input.filter,
     appContext,
+    sdkContext.signal,
   );
 
   const analysisTypes = Array.isArray(input.analysisType)

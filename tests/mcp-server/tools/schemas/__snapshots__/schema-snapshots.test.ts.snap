@@ -1546,7 +1546,7 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_search_studies > inputSche
       "type": "string",
     },
     "sort": {
-      "description": "Sort order specification (e.g., "LastUpdateDate:desc", "EnrollmentCount").",
+      "description": "Sort order specification. Use valid API field names with optional :asc/:desc suffix (e.g., "LastUpdatePostDate:desc", "EnrollmentCount", "@relevance").",
       "type": "string",
     },
     "state": {

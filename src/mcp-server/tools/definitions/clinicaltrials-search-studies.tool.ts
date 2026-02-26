@@ -79,7 +79,7 @@ const InputSchema = z
       .string()
       .optional()
       .describe(
-        'Sort order specification (e.g., "LastUpdateDate:desc", "EnrollmentCount").',
+        'Sort order specification. Use valid API field names with optional :asc/:desc suffix (e.g., "LastUpdatePostDate:desc", "EnrollmentCount", "@relevance").',
       ),
     fields: z
       .array(z.string())

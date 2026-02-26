@@ -190,17 +190,6 @@ export const PROVIDER_ERROR_PATTERNS: ReadonlyArray<
     errorCode: JsonRpcErrorCode.Forbidden,
   },
 
-  // OpenRouter/LLM provider errors
-  {
-    pattern: /insufficient_quota|quota exceeded/i,
-    errorCode: JsonRpcErrorCode.RateLimited,
-  },
-  { pattern: /model_not_found/i, errorCode: JsonRpcErrorCode.NotFound },
-  {
-    pattern: /context_length_exceeded/i,
-    errorCode: JsonRpcErrorCode.ValidationError,
-  },
-
   // Network errors
   { pattern: /ENOTFOUND|DNS/i, errorCode: JsonRpcErrorCode.ServiceUnavailable },
   {

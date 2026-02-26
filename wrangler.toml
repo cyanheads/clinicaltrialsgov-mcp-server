@@ -23,14 +23,11 @@ STORAGE_PROVIDER_TYPE = "in-memory"  # Options: "in-memory", "cloudflare-kv", "c
 # --- SECRETS (Add via CLI) ---
 # Run these commands to add sensitive configuration:
 #   wrangler secret put MCP_AUTH_SECRET_KEY
-#   wrangler secret put OPENROUTER_API_KEY
 #   wrangler secret put SUPABASE_URL
 #   wrangler secret put SUPABASE_ANON_KEY
 #   wrangler secret put SUPABASE_SERVICE_ROLE_KEY
 #   wrangler secret put OAUTH_ISSUER_URL
 #   wrangler secret put OAUTH_AUDIENCE
-#   wrangler secret put SPEECH_TTS_API_KEY
-#   wrangler secret put SPEECH_STT_API_KEY
 
 # --- SERVICE BINDINGS ---
 # Uncomment and configure the bindings you need for your MCP server.

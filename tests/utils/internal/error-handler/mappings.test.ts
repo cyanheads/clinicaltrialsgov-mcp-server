@@ -303,28 +303,6 @@ describe('Error Handler Mappings', () => {
       expect(match?.errorCode).toBe(JsonRpcErrorCode.Forbidden);
     });
 
-    // LLM patterns
-    it('should match "insufficient_quota" as RateLimited', () => {
-      const match = COMPILED_PROVIDER_PATTERNS.find((p) =>
-        p.compiledPattern.test('insufficient_quota'),
-      );
-      expect(match?.errorCode).toBe(JsonRpcErrorCode.RateLimited);
-    });
-
-    it('should match "model_not_found" as NotFound', () => {
-      const match = COMPILED_PROVIDER_PATTERNS.find((p) =>
-        p.compiledPattern.test('model_not_found'),
-      );
-      expect(match?.errorCode).toBe(JsonRpcErrorCode.NotFound);
-    });
-
-    it('should match "context_length_exceeded" as ValidationError', () => {
-      const match = COMPILED_PROVIDER_PATTERNS.find((p) =>
-        p.compiledPattern.test('context_length_exceeded'),
-      );
-      expect(match?.errorCode).toBe(JsonRpcErrorCode.ValidationError);
-    });
-
     // Network patterns
     it('should match ENOTFOUND as ServiceUnavailable', () => {
       const match = COMPILED_PROVIDER_PATTERNS.find((p) =>

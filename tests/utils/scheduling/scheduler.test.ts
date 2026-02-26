@@ -202,21 +202,53 @@ describe('schedulerService', () => {
     ).toBe(false);
   });
 
-  it('rejects duplicate job identifiers', () => {
-    schedulerService.schedule(
+  it('rejects duplicate job identifiers', async () => {
+    await schedulerService.schedule(
       'job-duplicate',
       '* * * * *',
       () => undefined,
       'First',
     );
 
-    expect(() =>
+    await expect(
       schedulerService.schedule(
         'job-duplicate',
         '* * * * *',
         () => undefined,
         'Second',
       ),
-    ).toThrowError("Job with ID 'job-duplicate' already exists.");
+    ).rejects.toThrowError("Job with ID 'job-duplicate' already exists.");
+  });
+});
+
+describe('schedulerService (non-Node runtime)', () => {
+  it('should throw McpError when scheduling in a non-Node runtime', async () => {
+    // Mock runtimeCaps to simulate a non-Node environment
+    vi.doMock('@/utils/internal/runtime.js', () => ({
+      runtimeCaps: {
+        isNode: false,
+        isWorkerLike: true,
+        isBrowserLike: false,
+        hasProcess: false,
+        hasBuffer: false,
+        hasTextEncoder: true,
+        hasPerformanceNow: true,
+      },
+    }));
+
+    // Reset the module cache so loadCron picks up the mocked runtimeCaps
+    vi.resetModules();
+
+    const { SchedulerService } =
+      await import('../../../src/utils/scheduling/scheduler.js');
+    const service = SchedulerService.getInstance();
+
+    await expect(
+      service.schedule('test', '* * * * *', () => undefined, 'Test'),
+    ).rejects.toThrow(/requires a Node\.js runtime/);
+
+    // Clean up
+    vi.doUnmock('@/utils/internal/runtime.js');
+    vi.resetModules();
   });
 });

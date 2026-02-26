@@ -12,7 +12,6 @@ import {
   ToolRegistryToken,
   ResourceRegistryToken,
 } from '@/container/core/tokens.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 describe('MCP Service Registration', () => {
   beforeAll(() => {
@@ -44,9 +43,7 @@ describe('MCP Service Registration', () => {
     });
 
     it('should register CreateMcpServerInstance factory', () => {
-      const factory = container.resolve<() => Promise<McpServer>>(
-        CreateMcpServerInstance,
-      );
+      const factory = container.resolve(CreateMcpServerInstance);
 
       expect(factory).toBeDefined();
       expect(typeof factory).toBe('function');
@@ -85,9 +82,7 @@ describe('MCP Service Registration', () => {
 
   describe('MCP Server Factory', () => {
     it('should resolve server factory that creates McpServer instance', async () => {
-      const factory = container.resolve<() => Promise<McpServer>>(
-        CreateMcpServerInstance,
-      );
+      const factory = container.resolve(CreateMcpServerInstance);
 
       expect(factory).toBeDefined();
       expect(typeof factory).toBe('function');
@@ -98,9 +93,7 @@ describe('MCP Service Registration', () => {
     });
 
     it('should create McpServer with correct capabilities', async () => {
-      const factory = container.resolve<() => Promise<McpServer>>(
-        CreateMcpServerInstance,
-      );
+      const factory = container.resolve(CreateMcpServerInstance);
 
       expect(factory).toBeDefined();
       expect(typeof factory).toBe('function');
@@ -149,9 +142,7 @@ describe('MCP Service Registration', () => {
     });
 
     it.skip('should create complete MCP server instance with all registries', async () => {
-      const factory = container.resolve<() => Promise<McpServer>>(
-        CreateMcpServerInstance,
-      );
+      const factory = container.resolve(CreateMcpServerInstance);
       const toolRegistry = container.resolve(ToolRegistryToken);
       const resourceRegistry = container.resolve(ResourceRegistryToken);
 

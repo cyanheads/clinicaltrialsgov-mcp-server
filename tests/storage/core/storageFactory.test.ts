@@ -167,6 +167,19 @@ describe('createStorageProvider', () => {
         /Cloudflare KV storage is only available in a Cloudflare Worker environment/,
       );
     });
+
+    it('should throw error for D1 provider outside serverless environment', () => {
+      const mockConfig = {
+        storage: {
+          providerType: 'cloudflare-d1' as const,
+        },
+      } as AppConfig;
+
+      expect(() => createStorageProvider(mockConfig)).toThrow(McpError);
+      expect(() => createStorageProvider(mockConfig)).toThrow(
+        /Cloudflare D1 storage is only available in a Cloudflare Worker environment/,
+      );
+    });
   });
 
   describe('unknown provider type', () => {
@@ -185,6 +198,33 @@ describe('createStorageProvider', () => {
     });
   });
 
+  describe('dependency injection', () => {
+    it('should use provided Supabase client when available', () => {
+      const mockConfig = {
+        storage: {
+          providerType: 'supabase' as const,
+        },
+        supabase: {
+          url: 'https://test.supabase.co',
+          serviceRoleKey: 'test-key',
+        },
+      } as AppConfig;
+
+      const mockClient = {
+        from: vi.fn().mockReturnValue({
+          select: vi.fn(),
+        }),
+      };
+
+      const provider = createStorageProvider(mockConfig, {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        supabaseClient: mockClient as any,
+      });
+
+      expect(provider).toBeInstanceOf(SupabaseProvider);
+    });
+  });
+
   describe('edge cases', () => {
     it('should handle in-memory provider creation consistently', () => {
       // Test that in-memory provider is always created correctly
@@ -197,6 +237,68 @@ describe('createStorageProvider', () => {
       const provider = createStorageProvider(mockConfig);
 
       expect(provider).toBeInstanceOf(InMemoryProvider);
+    });
+
+    it('should handle filesystem provider with various path formats', () => {
+      const testPaths = [
+        '/tmp/test-storage-1',
+        '/tmp/test-storage-2',
+        '/tmp/test-storage-3',
+      ];
+
+      for (const path of testPaths) {
+        const mockConfig = {
+          storage: {
+            providerType: 'filesystem' as const,
+            filesystemPath: path,
+          },
+        } as AppConfig;
+
+        const provider = createStorageProvider(mockConfig);
+        expect(provider).toBeInstanceOf(FileSystemProvider);
+      }
+    });
+
+    it('should handle empty filesystem path as missing', () => {
+      const mockConfig = {
+        storage: {
+          providerType: 'filesystem' as const,
+          filesystemPath: '',
+        },
+      } as AppConfig;
+
+      expect(() => createStorageProvider(mockConfig)).toThrow(McpError);
+      expect(() => createStorageProvider(mockConfig)).toThrow(
+        /STORAGE_FILESYSTEM_PATH must be set/,
+      );
+    });
+
+    it('should handle missing Supabase URL with present service role key', () => {
+      const mockConfig = {
+        storage: {
+          providerType: 'supabase' as const,
+        },
+        supabase: {
+          url: '',
+          serviceRoleKey: 'test-key',
+        },
+      } as AppConfig;
+
+      expect(() => createStorageProvider(mockConfig)).toThrow(McpError);
+    });
+
+    it('should handle missing Supabase service role key with present URL', () => {
+      const mockConfig = {
+        storage: {
+          providerType: 'supabase' as const,
+        },
+        supabase: {
+          url: 'https://test.supabase.co',
+          serviceRoleKey: '',
+        },
+      } as AppConfig;
+
+      expect(() => createStorageProvider(mockConfig)).toThrow(McpError);
     });
   });
 });

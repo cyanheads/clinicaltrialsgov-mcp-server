@@ -1,463 +1,970 @@
 /**
  * @fileoverview Tests for the clinicaltrials_analyze_trends tool definition.
- * @module tests/mcp-server/tools/definitions/clinicaltrials-analyze-trends.tool.test
+ * Validates metadata, input schema, logic (fetchAllStudies + aggregation), and response formatting.
+ * @module tests/mcp-server/tools/definitions/clinicaltrials-analyze-trends.tool
  */
-import { container } from '@/container/core/container.js';
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import {
+  afterAll,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 
-import { AppConfig, ClinicalTrialsProvider } from '@/container/core/tokens.js';
+import {
+  JsonRpcErrorCode,
+  McpError,
+} from '../../../../src/types-global/errors.js';
+import type { RequestContext } from '../../../../src/utils/internal/requestContext.js';
+
+// ----------------------------------------------------------------
+// Mocks
+// ----------------------------------------------------------------
+
+const mockListStudies = vi.fn();
+
+vi.mock('../../../../src/container/index.js', () => {
+  // Tokens use Symbol, so container.resolve receives a Token<T> with an `id: symbol`.
+  // The source imports `AppConfig` and `ClinicalTrialsProvider` tokens and calls
+  // `container.resolve(token)`. We match on the token's `description` property.
+  return {
+    container: {
+      resolve: vi.fn((token: { description?: string }) => {
+        if (token?.description === 'AppConfig') {
+          return { maxStudiesForAnalysis: 5000 };
+        }
+        // Default: ClinicalTrialsProvider
+        return { listStudies: mockListStudies };
+      }),
+    },
+    AppConfig: { id: Symbol('AppConfig'), description: 'AppConfig' },
+    ClinicalTrialsProvider: {
+      id: Symbol('IClinicalTrialsProvider'),
+      description: 'IClinicalTrialsProvider',
+    },
+  };
+});
+
+vi.mock('../../../../src/container/core/tokens.js', () => ({
+  AppConfig: { id: Symbol('AppConfig'), description: 'AppConfig' },
+  ClinicalTrialsProvider: {
+    id: Symbol('IClinicalTrialsProvider'),
+    description: 'IClinicalTrialsProvider',
+  },
+}));
+
+vi.mock('../../../../src/mcp-server/transports/auth/lib/withAuth.js', () => ({
+  withToolAuth: <T extends (...args: never[]) => unknown>(
+    _scopes: string[],
+    fn: T,
+  ) => fn,
+}));
+
+vi.mock('../../../../src/utils/index.js', () => ({
+  logger: {
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    notice: vi.fn(),
+  },
+  requestContextService: {
+    createRequestContext: vi.fn(() => ({
+      requestId: 'test-request-id',
+      operation: 'test',
+    })),
+  },
+}));
+
+// ----------------------------------------------------------------
+// Import under test (must come after vi.mock)
+// ----------------------------------------------------------------
 import { analyzeTrendsTool } from '../../../../src/mcp-server/tools/definitions/clinicaltrials-analyze-trends.tool.js';
-import type { IClinicalTrialsProvider } from '../../../../src/services/clinical-trials-gov/core/IClinicalTrialsProvider.js';
-import type { Study } from '../../../../src/services/clinical-trials-gov/types.js';
-import { McpError } from '../../../../src/types-global/errors.js';
-import { requestContextService } from '../../../../src/utils/index.js';
+
+// ----------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------
+
+const mockSdkContext = {
+  signal: new AbortController().signal,
+  requestId: 'test-request-id',
+  sendNotification: vi.fn(),
+  sendRequest: vi.fn(),
+} as unknown as Parameters<typeof analyzeTrendsTool.logic>[2];
+
+function makeAppContext(): RequestContext {
+  return {
+    requestId: 'test-request-id',
+    timestamp: new Date().toISOString(),
+    operation: 'test',
+  };
+}
+
+interface StudyOverrides {
+  statusModule?: Record<string, unknown>;
+  contactsLocationsModule?: Record<string, unknown>;
+  sponsorCollaboratorsModule?: Record<string, unknown>;
+  designModule?: Record<string, unknown>;
+  identificationModule?: Record<string, unknown>;
+}
+
+function makeStudy(overrides: StudyOverrides = {}) {
+  return {
+    protocolSection: {
+      identificationModule: { nctId: 'NCT00000001' },
+      statusModule: {
+        overallStatus: 'Recruiting',
+        startDateStruct: { date: '2023-06-15' },
+      },
+      contactsLocationsModule: {
+        locations: [{ country: 'United States' }, { country: 'Canada' }],
+      },
+      sponsorCollaboratorsModule: {
+        leadSponsor: { class: 'Industry' },
+      },
+      designModule: {
+        phases: ['PHASE3'],
+      },
+      ...overrides,
+    },
+  };
+}
+
+/** Helper to safely access an array element and assert it exists. */
+function at<T>(arr: T[], index: number): T {
+  const val = arr[index];
+  if (val === undefined) {
+    throw new Error(
+      `Expected element at index ${index} but array has length ${arr.length}`,
+    );
+  }
+  return val;
+}
+
+// ----------------------------------------------------------------
+// Tests
+// ----------------------------------------------------------------
 
 describe('analyzeTrendsTool', () => {
-  let mockProvider: IClinicalTrialsProvider;
-  let mockConfig: any;
+  // The tool's internal `delay()` uses setTimeout. Since fake timers are globally enabled,
+  // we switch to real timers for this file so the 250ms delays resolve naturally.
+  beforeAll(() => {
+    vi.useRealTimers();
+  });
+
+  afterAll(() => {
+    vi.useFakeTimers();
+  });
 
   beforeEach(() => {
-    mockProvider = {
-      fetchStudy: vi.fn(),
-      listStudies: vi.fn(),
-      getStudyMetadata: vi.fn(),
-      getApiStats: vi.fn(),
-    } as unknown as IClinicalTrialsProvider;
-
-    mockConfig = {
-      maxStudiesForAnalysis: 5000,
-    };
-
-    container.clearInstances();
-    container.registerValue(ClinicalTrialsProvider, mockProvider);
-    container.registerValue(AppConfig, mockConfig);
+    vi.clearAllMocks();
   });
 
-  it('should have the correct name, title, and description', () => {
-    expect(analyzeTrendsTool.name).toBe('clinicaltrials_analyze_trends');
-    expect(analyzeTrendsTool.title).toBe('Analyze Clinical Trial Trends');
-    expect(analyzeTrendsTool.description).toContain('statistical analysis');
-  });
-
-  it('should have correct annotations', () => {
-    expect(analyzeTrendsTool.annotations).toEqual({
-      readOnlyHint: true,
-      idempotentHint: true,
-      openWorldHint: true,
+  // ============================================================
+  // 1. Metadata
+  // ============================================================
+  describe('metadata', () => {
+    it('should have the correct name', () => {
+      expect(analyzeTrendsTool.name).toBe('clinicaltrials_analyze_trends');
     });
-  });
 
-  it('should analyze studies by status', async () => {
-    const mockStudies: Partial<Study>[] = [
-      {
-        protocolSection: {
-          statusModule: { overallStatus: 'Recruiting' },
-        },
-      },
-      {
-        protocolSection: {
-          statusModule: { overallStatus: 'Recruiting' },
-        },
-      },
-      {
-        protocolSection: {
-          statusModule: { overallStatus: 'Completed' },
-        },
-      },
-    ];
+    it('should have a title', () => {
+      expect(analyzeTrendsTool.title).toBe('Analyze Clinical Trial Trends');
+    });
 
-    (mockProvider.listStudies as Mock)
-      .mockResolvedValueOnce({
-        studies: [],
-        totalCount: 3,
-      })
-      .mockResolvedValueOnce({
-        studies: mockStudies as Study[],
-        totalCount: 3,
+    it('should have a description', () => {
+      expect(analyzeTrendsTool.description).toContain('statistical analysis');
+    });
+
+    it('should have correct annotations', () => {
+      expect(analyzeTrendsTool.annotations).toEqual({
+        readOnlyHint: true,
+        idempotentHint: true,
+        openWorldHint: true,
       });
+    });
 
-    const input = { analysisType: 'countByStatus' };
-    const parsedInput = analyzeTrendsTool.inputSchema.parse(input);
-    const context = requestContextService.createRequestContext();
-    const sdkContext = {} as any;
-
-    const result = await analyzeTrendsTool.logic(
-      parsedInput,
-      context,
-      sdkContext,
-    );
-
-    expect(result.analysis).toHaveLength(1);
-    expect(result.analysis[0]!.analysisType).toBe('countByStatus');
-    expect(result.analysis[0]!.totalStudies).toBe(3);
-    expect(result.analysis[0]!.results).toEqual({
-      Recruiting: 2,
-      Completed: 1,
+    it('should have inputSchema, outputSchema, logic, and responseFormatter', () => {
+      expect(analyzeTrendsTool.inputSchema).toBeDefined();
+      expect(analyzeTrendsTool.outputSchema).toBeDefined();
+      expect(typeof analyzeTrendsTool.logic).toBe('function');
+      expect(typeof analyzeTrendsTool.responseFormatter).toBe('function');
     });
   });
 
-  it('should analyze studies by country', async () => {
-    const mockStudies: Partial<Study>[] = [
-      {
-        protocolSection: {
-          contactsLocationsModule: {
-            locations: [
-              { country: 'United States' },
-              { country: 'United States' },
-            ],
-          },
-        },
-      },
-      {
-        protocolSection: {
-          contactsLocationsModule: {
-            locations: [{ country: 'Canada' }],
-          },
-        },
-      },
-    ];
+  // ============================================================
+  // 2. Input Schema Validation
+  // ============================================================
+  describe('inputSchema', () => {
+    const schema = analyzeTrendsTool.inputSchema;
 
-    (mockProvider.listStudies as Mock)
-      .mockResolvedValueOnce({ studies: [], totalCount: 2 })
-      .mockResolvedValueOnce({
-        studies: mockStudies as Study[],
-        totalCount: 2,
+    it('should accept a single analysis type', () => {
+      const result = schema.safeParse({ analysisType: 'countByStatus' });
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept an array of analysis types', () => {
+      const result = schema.safeParse({
+        analysisType: ['countByStatus', 'countByCountry'],
       });
-
-    const input = { analysisType: 'countByCountry' };
-    const parsedInput = analyzeTrendsTool.inputSchema.parse(input);
-    const context = requestContextService.createRequestContext();
-    const sdkContext = {} as any;
-
-    const result = await analyzeTrendsTool.logic(
-      parsedInput,
-      context,
-      sdkContext,
-    );
-
-    expect(result.analysis[0]!.results).toEqual({
-      'United States': 2,
-      Canada: 1,
+      expect(result.success).toBe(true);
     });
-  });
 
-  it('should analyze studies by phase', async () => {
-    const mockStudies: Partial<Study>[] = [
-      {
-        protocolSection: {
-          designModule: {
-            phases: ['Phase 1', 'Phase 2'],
-          },
-        },
-      },
-      {
-        protocolSection: {
-          designModule: {
-            phases: ['Phase 2'],
-          },
-        },
-      },
-    ];
-
-    (mockProvider.listStudies as Mock)
-      .mockResolvedValueOnce({ studies: [], totalCount: 2 })
-      .mockResolvedValueOnce({
-        studies: mockStudies as Study[],
-        totalCount: 2,
+    it('should accept optional query and filter', () => {
+      const result = schema.safeParse({
+        analysisType: 'countByPhase',
+        query: 'cancer',
+        filter: 'AREA[Phase]PHASE3',
       });
-
-    const input = { analysisType: 'countByPhase' };
-    const parsedInput = analyzeTrendsTool.inputSchema.parse(input);
-    const context = requestContextService.createRequestContext();
-    const sdkContext = {} as any;
-
-    const result = await analyzeTrendsTool.logic(
-      parsedInput,
-      context,
-      sdkContext,
-    );
-
-    expect(result.analysis[0]!.results).toEqual({
-      'Phase 1': 1,
-      'Phase 2': 2,
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.query).toBe('cancer');
+        expect(result.data.filter).toBe('AREA[Phase]PHASE3');
+      }
     });
-  });
 
-  it('should analyze studies by year', async () => {
-    const mockStudies: Partial<Study>[] = [
-      {
-        protocolSection: {
-          statusModule: {
-            startDateStruct: { date: '2023-01-15' },
-          },
-        },
-      },
-      {
-        protocolSection: {
-          statusModule: {
-            startDateStruct: { date: '2023-06-20' },
-          },
-        },
-      },
-      {
-        protocolSection: {
-          statusModule: {
-            startDateStruct: { date: '2024-03-10' },
-          },
-        },
-      },
-    ];
+    it('should reject an invalid analysis type string', () => {
+      const result = schema.safeParse({ analysisType: 'invalidType' });
+      expect(result.success).toBe(false);
+    });
 
-    (mockProvider.listStudies as Mock)
-      .mockResolvedValueOnce({ studies: [], totalCount: 3 })
-      .mockResolvedValueOnce({
-        studies: mockStudies as Study[],
-        totalCount: 3,
+    it('should reject an empty array of analysis types', () => {
+      const result = schema.safeParse({ analysisType: [] });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject missing analysisType', () => {
+      const result = schema.safeParse({});
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject an array containing invalid analysis types', () => {
+      const result = schema.safeParse({
+        analysisType: ['countByStatus', 'notAType'],
       });
-
-    const input = { analysisType: 'countByYear' };
-    const parsedInput = analyzeTrendsTool.inputSchema.parse(input);
-    const context = requestContextService.createRequestContext();
-    const sdkContext = {} as any;
-
-    const result = await analyzeTrendsTool.logic(
-      parsedInput,
-      context,
-      sdkContext,
-    );
-
-    expect(result.analysis[0]!.results).toEqual({
-      '2023': 2,
-      '2024': 1,
+      expect(result.success).toBe(false);
     });
   });
 
-  it('should analyze studies by month', async () => {
-    const mockStudies: Partial<Study>[] = [
-      {
-        protocolSection: {
-          statusModule: {
-            startDateStruct: { date: '2023-01-15' },
-          },
-        },
-      },
-      {
-        protocolSection: {
-          statusModule: {
-            startDateStruct: { date: '2023-01-20' },
-          },
-        },
-      },
-      {
-        protocolSection: {
-          statusModule: {
-            startDateStruct: { date: '2023-02-10' },
-          },
-        },
-      },
-    ];
-
-    (mockProvider.listStudies as Mock)
-      .mockResolvedValueOnce({ studies: [], totalCount: 3 })
-      .mockResolvedValueOnce({
-        studies: mockStudies as Study[],
-        totalCount: 3,
-      });
-
-    const input = { analysisType: 'countByMonth' };
-    const parsedInput = analyzeTrendsTool.inputSchema.parse(input);
-    const context = requestContextService.createRequestContext();
-    const sdkContext = {} as any;
-
-    const result = await analyzeTrendsTool.logic(
-      parsedInput,
-      context,
-      sdkContext,
-    );
-
-    expect(result.analysis[0]!.results).toEqual({
-      '2023-01': 2,
-      '2023-02': 1,
-    });
-  });
-
-  it('should analyze studies by sponsor type', async () => {
-    const mockStudies: Partial<Study>[] = [
-      {
-        protocolSection: {
-          sponsorCollaboratorsModule: {
-            leadSponsor: { class: 'INDUSTRY' },
-          },
-        },
-      },
-      {
-        protocolSection: {
-          sponsorCollaboratorsModule: {
-            leadSponsor: { class: 'INDUSTRY' },
-          },
-        },
-      },
-      {
-        protocolSection: {
-          sponsorCollaboratorsModule: {
-            leadSponsor: { class: 'NIH' },
-          },
-        },
-      },
-    ];
-
-    (mockProvider.listStudies as Mock)
-      .mockResolvedValueOnce({ studies: [], totalCount: 3 })
-      .mockResolvedValueOnce({
-        studies: mockStudies as Study[],
-        totalCount: 3,
-      });
-
-    const input = { analysisType: 'countBySponsorType' };
-    const parsedInput = analyzeTrendsTool.inputSchema.parse(input);
-    const context = requestContextService.createRequestContext();
-    const sdkContext = {} as any;
-
-    const result = await analyzeTrendsTool.logic(
-      parsedInput,
-      context,
-      sdkContext,
-    );
-
-    expect(result.analysis[0]!.results).toEqual({
-      INDUSTRY: 2,
-      NIH: 1,
-    });
-  });
-
-  it('should support multiple analysis types', async () => {
-    const mockStudies: Partial<Study>[] = [
-      {
-        protocolSection: {
-          statusModule: { overallStatus: 'Recruiting' },
-          designModule: { phases: ['Phase 2'] },
-        },
-      },
-    ];
-
-    (mockProvider.listStudies as Mock)
-      .mockResolvedValueOnce({ studies: [], totalCount: 1 })
-      .mockResolvedValueOnce({
-        studies: mockStudies as Study[],
-        totalCount: 1,
-      });
-
-    const input = { analysisType: ['countByStatus', 'countByPhase'] };
-    const parsedInput = analyzeTrendsTool.inputSchema.parse(input);
-    const context = requestContextService.createRequestContext();
-    const sdkContext = {} as any;
-
-    const result = await analyzeTrendsTool.logic(
-      parsedInput,
-      context,
-      sdkContext,
-    );
-
-    expect(result.analysis).toHaveLength(2);
-    expect(result.analysis[0]!.analysisType).toBe('countByStatus');
-    expect(result.analysis[1]!.analysisType).toBe('countByPhase');
-  });
-
-  it('should throw when study count exceeds limit', async () => {
-    (mockProvider.listStudies as Mock).mockResolvedValue({
-      studies: [],
-      totalCount: 10000,
-    });
-
-    const input = { analysisType: 'countByStatus' };
-    const parsedInput = analyzeTrendsTool.inputSchema.parse(input);
-    const context = requestContextService.createRequestContext();
-    const sdkContext = {} as any;
-
-    await expect(
-      analyzeTrendsTool.logic(parsedInput, context, sdkContext),
-    ).rejects.toThrow(McpError);
-
-    await expect(
-      analyzeTrendsTool.logic(parsedInput, context, sdkContext),
-    ).rejects.toThrow('exceeds the limit');
-  });
-
-  it('should handle empty result sets', async () => {
-    (mockProvider.listStudies as Mock)
-      .mockResolvedValueOnce({ studies: [], totalCount: 0 })
-      .mockResolvedValueOnce({
+  // ============================================================
+  // 3. Logic — fetchAllStudies behavior
+  // ============================================================
+  describe('logic - fetchAllStudies', () => {
+    it('should return empty analysis when totalCount is 0', async () => {
+      mockListStudies.mockResolvedValueOnce({
         studies: [],
         totalCount: 0,
       });
 
-    const input = { analysisType: 'countByStatus' };
-    const parsedInput = analyzeTrendsTool.inputSchema.parse(input);
-    const context = requestContextService.createRequestContext();
-    const sdkContext = {} as any;
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByStatus' },
+        makeAppContext(),
+        mockSdkContext,
+      );
 
-    const result = await analyzeTrendsTool.logic(
-      parsedInput,
-      context,
-      sdkContext,
-    );
+      expect(result.analysis).toHaveLength(1);
+      expect(at(result.analysis, 0).totalStudies).toBe(0);
+      expect(at(result.analysis, 0).results).toEqual({});
+    });
 
-    expect(result.analysis[0]!.totalStudies).toBe(0);
-    expect(result.analysis[0]!.results).toEqual({});
-  });
-
-  it('should format response with analysis summaries', () => {
-    const mockOutput = {
-      analysis: [
-        {
-          analysisType: 'countByStatus' as const,
-          totalStudies: 100,
-          results: {
-            Recruiting: 60,
-            Completed: 30,
-            'Not yet recruiting': 10,
-          },
-        },
-      ],
-    };
-
-    const formatted = analyzeTrendsTool.responseFormatter!(mockOutput);
-
-    expect(formatted).toHaveLength(1);
-    expect(formatted[0]!.type).toBe('text');
-    const text = (formatted[0]! as any).text;
-    expect(text).toContain('Completed 1 analysis');
-    expect(text).toContain('Total Studies: 100');
-    expect(text).toContain('Recruiting: 60 (60.0%)');
-    expect(text).toContain('Completed: 30 (30.0%)');
-  });
-
-  it('should support query and filter parameters', async () => {
-    (mockProvider.listStudies as Mock)
-      .mockResolvedValueOnce({ studies: [], totalCount: 5 })
-      .mockResolvedValueOnce({
+    it('should throw McpError ValidationError when totalCount exceeds maxStudies', async () => {
+      mockListStudies.mockResolvedValueOnce({
         studies: [],
-        totalCount: 5,
+        totalCount: 10000,
       });
 
-    const input = {
-      query: 'cancer',
-      filter: 'AREA[OverallStatus]Recruiting',
-      analysisType: 'countByPhase',
-    };
-    const parsedInput = analyzeTrendsTool.inputSchema.parse(input);
-    const context = requestContextService.createRequestContext();
-    const sdkContext = {} as any;
+      await expect(
+        analyzeTrendsTool.logic(
+          { analysisType: 'countByStatus' },
+          makeAppContext(),
+          mockSdkContext,
+        ),
+      ).rejects.toThrow(McpError);
 
-    await analyzeTrendsTool.logic(parsedInput, context, sdkContext);
+      try {
+        mockListStudies.mockResolvedValueOnce({
+          studies: [],
+          totalCount: 10000,
+        });
+        await analyzeTrendsTool.logic(
+          { analysisType: 'countByStatus' },
+          makeAppContext(),
+          mockSdkContext,
+        );
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        expect((err as McpError).code).toBe(JsonRpcErrorCode.ValidationError);
+        expect((err as McpError).message).toContain('exceeds the limit');
+      }
+    });
 
-    expect(mockProvider.listStudies).toHaveBeenCalledWith(
-      expect.objectContaining({
-        query: 'cancer',
-        filter: 'AREA[OverallStatus]Recruiting',
+    it('should fetch a single page when all studies fit', async () => {
+      const studies = [makeStudy(), makeStudy()];
+
+      // Initial count call
+      mockListStudies.mockResolvedValueOnce({
+        studies: [],
+        totalCount: 2,
+      });
+      // Paginated fetch (single page, no nextPageToken)
+      mockListStudies.mockResolvedValueOnce({
+        studies,
+        totalCount: 2,
+        nextPageToken: undefined,
+      });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByStatus' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).totalStudies).toBe(2);
+      // Should have called listStudies twice: 1 for count, 1 for page
+      expect(mockListStudies).toHaveBeenCalledTimes(2);
+    });
+
+    it('should paginate through multiple pages', async () => {
+      const page1Studies = [makeStudy(), makeStudy()];
+      const page2Studies = [makeStudy()];
+
+      // Initial count call
+      mockListStudies.mockResolvedValueOnce({
+        studies: [],
+        totalCount: 3,
+      });
+      // Page 1
+      mockListStudies.mockResolvedValueOnce({
+        studies: page1Studies,
+        totalCount: 3,
+        nextPageToken: 'token-page-2',
+      });
+      // Page 2 (no more pages)
+      mockListStudies.mockResolvedValueOnce({
+        studies: page2Studies,
+        totalCount: 3,
+        nextPageToken: undefined,
+      });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByStatus' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).totalStudies).toBe(3);
+      expect(mockListStudies).toHaveBeenCalledTimes(3);
+
+      // Verify the second page call included the pageToken
+      const secondPageCall = at(mockListStudies.mock.calls, 2);
+      expect(secondPageCall[0]).toHaveProperty('pageToken', 'token-page-2');
+    });
+
+    it('should pass query and filter to listStudies', async () => {
+      mockListStudies.mockResolvedValueOnce({
+        studies: [],
+        totalCount: 0,
+      });
+
+      await analyzeTrendsTool.logic(
+        {
+          analysisType: 'countByStatus',
+          query: 'diabetes',
+          filter: 'AREA[Status]Recruiting',
+        },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(mockListStudies.mock.calls, 0)[0]).toMatchObject({
+        query: 'diabetes',
+        filter: 'AREA[Status]Recruiting',
         pageSize: 1,
-      }),
-      context,
-    );
+      });
+    });
+  });
+
+  // ============================================================
+  // 4. Logic — each analysis type
+  // ============================================================
+  describe('logic - countByStatus', () => {
+    it('should aggregate studies by overallStatus', async () => {
+      const studies = [
+        makeStudy({
+          statusModule: {
+            overallStatus: 'Recruiting',
+            startDateStruct: { date: '2023-01-01' },
+          },
+        }),
+        makeStudy({
+          statusModule: {
+            overallStatus: 'Recruiting',
+            startDateStruct: { date: '2023-01-01' },
+          },
+        }),
+        makeStudy({
+          statusModule: {
+            overallStatus: 'Completed',
+            startDateStruct: { date: '2023-01-01' },
+          },
+        }),
+      ];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 3 })
+        .mockResolvedValueOnce({ studies, totalCount: 3 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByStatus' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).results).toEqual({
+        Recruiting: 2,
+        Completed: 1,
+      });
+    });
+
+    it('should count "Unknown" when overallStatus is missing', async () => {
+      const studies = [makeStudy({ statusModule: {} })];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
+        .mockResolvedValueOnce({ studies, totalCount: 1 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByStatus' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).results).toEqual({ Unknown: 1 });
+    });
+  });
+
+  describe('logic - countByCountry', () => {
+    it('should aggregate studies by country, counting multi-location studies per location', async () => {
+      const studies = [
+        makeStudy({
+          contactsLocationsModule: {
+            locations: [{ country: 'United States' }, { country: 'Canada' }],
+          },
+        }),
+        makeStudy({
+          contactsLocationsModule: {
+            locations: [{ country: 'United States' }],
+          },
+        }),
+      ];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 2 })
+        .mockResolvedValueOnce({ studies, totalCount: 2 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByCountry' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).results).toEqual({
+        'United States': 2,
+        Canada: 1,
+      });
+    });
+
+    it('should handle studies with no locations', async () => {
+      const studies = [makeStudy({ contactsLocationsModule: {} })];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
+        .mockResolvedValueOnce({ studies, totalCount: 1 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByCountry' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      // No locations to iterate — results should be empty
+      expect(at(result.analysis, 0).results).toEqual({});
+    });
+
+    it('should count "Unknown" for locations missing a country', async () => {
+      const studies = [
+        makeStudy({
+          contactsLocationsModule: {
+            locations: [{ country: undefined }],
+          },
+        }),
+      ];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
+        .mockResolvedValueOnce({ studies, totalCount: 1 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByCountry' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).results).toEqual({ Unknown: 1 });
+    });
+  });
+
+  describe('logic - countBySponsorType', () => {
+    it('should aggregate studies by sponsor class', async () => {
+      const studies = [
+        makeStudy({
+          sponsorCollaboratorsModule: { leadSponsor: { class: 'Industry' } },
+        }),
+        makeStudy({
+          sponsorCollaboratorsModule: { leadSponsor: { class: 'Industry' } },
+        }),
+        makeStudy({
+          sponsorCollaboratorsModule: { leadSponsor: { class: 'NIH' } },
+        }),
+      ];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 3 })
+        .mockResolvedValueOnce({ studies, totalCount: 3 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countBySponsorType' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).results).toEqual({
+        Industry: 2,
+        NIH: 1,
+      });
+    });
+
+    it('should count "Unknown" when sponsor class is missing', async () => {
+      const studies = [makeStudy({ sponsorCollaboratorsModule: {} })];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
+        .mockResolvedValueOnce({ studies, totalCount: 1 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countBySponsorType' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).results).toEqual({ Unknown: 1 });
+    });
+  });
+
+  describe('logic - countByPhase', () => {
+    it('should aggregate studies by phase, supporting multi-phase studies', async () => {
+      const studies = [
+        makeStudy({ designModule: { phases: ['PHASE2', 'PHASE3'] } }),
+        makeStudy({ designModule: { phases: ['PHASE3'] } }),
+      ];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 2 })
+        .mockResolvedValueOnce({ studies, totalCount: 2 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByPhase' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).results).toEqual({
+        PHASE2: 1,
+        PHASE3: 2,
+      });
+    });
+
+    it('should count "Unknown" when phases array is missing', async () => {
+      const studies = [makeStudy({ designModule: {} })];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
+        .mockResolvedValueOnce({ studies, totalCount: 1 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByPhase' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).results).toEqual({ Unknown: 1 });
+    });
+  });
+
+  describe('logic - countByYear', () => {
+    it('should extract YYYY from startDateStruct.date', async () => {
+      const studies = [
+        makeStudy({
+          statusModule: {
+            overallStatus: 'Recruiting',
+            startDateStruct: { date: '2023-06-15' },
+          },
+        }),
+        makeStudy({
+          statusModule: {
+            overallStatus: 'Recruiting',
+            startDateStruct: { date: '2023-01-01' },
+          },
+        }),
+        makeStudy({
+          statusModule: {
+            overallStatus: 'Recruiting',
+            startDateStruct: { date: '2022-12-01' },
+          },
+        }),
+      ];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 3 })
+        .mockResolvedValueOnce({ studies, totalCount: 3 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByYear' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).results).toEqual({
+        '2023': 2,
+        '2022': 1,
+      });
+    });
+
+    it('should count "Unknown" when startDateStruct is missing', async () => {
+      const studies = [
+        makeStudy({ statusModule: { overallStatus: 'Recruiting' } }),
+      ];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
+        .mockResolvedValueOnce({ studies, totalCount: 1 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByYear' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).results).toEqual({ Unknown: 1 });
+    });
+  });
+
+  describe('logic - countByMonth', () => {
+    it('should extract YYYY-MM from startDateStruct.date', async () => {
+      const studies = [
+        makeStudy({
+          statusModule: {
+            overallStatus: 'Recruiting',
+            startDateStruct: { date: '2023-06-15' },
+          },
+        }),
+        makeStudy({
+          statusModule: {
+            overallStatus: 'Recruiting',
+            startDateStruct: { date: '2023-06-01' },
+          },
+        }),
+        makeStudy({
+          statusModule: {
+            overallStatus: 'Recruiting',
+            startDateStruct: { date: '2023-07-01' },
+          },
+        }),
+      ];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 3 })
+        .mockResolvedValueOnce({ studies, totalCount: 3 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByMonth' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).results).toEqual({
+        '2023-06': 2,
+        '2023-07': 1,
+      });
+    });
+
+    it('should count "Unknown" when date is too short for YYYY-MM extraction', async () => {
+      const studies = [
+        makeStudy({
+          statusModule: {
+            overallStatus: 'Recruiting',
+            startDateStruct: { date: '2023' },
+          },
+        }),
+      ];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
+        .mockResolvedValueOnce({ studies, totalCount: 1 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByMonth' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).results).toEqual({ Unknown: 1 });
+    });
+
+    it('should count "Unknown" when startDateStruct is missing', async () => {
+      const studies = [
+        makeStudy({ statusModule: { overallStatus: 'Recruiting' } }),
+      ];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 1 })
+        .mockResolvedValueOnce({ studies, totalCount: 1 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: 'countByMonth' },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(at(result.analysis, 0).results).toEqual({ Unknown: 1 });
+    });
+  });
+
+  // ============================================================
+  // 5. Logic — multiple analysis types in one call
+  // ============================================================
+  describe('logic - multiple analysis types', () => {
+    it('should return one result per requested analysis type', async () => {
+      const studies = [
+        makeStudy(),
+        makeStudy({
+          statusModule: {
+            overallStatus: 'Completed',
+            startDateStruct: { date: '2022-03-01' },
+          },
+        }),
+      ];
+
+      mockListStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 2 })
+        .mockResolvedValueOnce({ studies, totalCount: 2 });
+
+      const result = await analyzeTrendsTool.logic(
+        { analysisType: ['countByStatus', 'countByPhase', 'countByYear'] },
+        makeAppContext(),
+        mockSdkContext,
+      );
+
+      expect(result.analysis).toHaveLength(3);
+      expect(at(result.analysis, 0).analysisType).toBe('countByStatus');
+      expect(at(result.analysis, 1).analysisType).toBe('countByPhase');
+      expect(at(result.analysis, 2).analysisType).toBe('countByYear');
+
+      // Verify each has the same totalStudies
+      for (const a of result.analysis) {
+        expect(a.totalStudies).toBe(2);
+      }
+
+      // countByStatus
+      expect(at(result.analysis, 0).results).toEqual({
+        Recruiting: 1,
+        Completed: 1,
+      });
+
+      // countByPhase — both studies have PHASE3
+      expect(at(result.analysis, 1).results).toEqual({ PHASE3: 2 });
+
+      // countByYear
+      expect(at(result.analysis, 2).results).toEqual({
+        '2023': 1,
+        '2022': 1,
+      });
+    });
+  });
+
+  // ============================================================
+  // 6. Response Formatter
+  // ============================================================
+  describe('responseFormatter', () => {
+    // responseFormatter is guaranteed to exist on this tool definition
+    const formatter = analyzeTrendsTool.responseFormatter as NonNullable<
+      typeof analyzeTrendsTool.responseFormatter
+    >;
+
+    it('should produce a single text content block', () => {
+      const output = {
+        analysis: [
+          {
+            analysisType: 'countByStatus' as const,
+            totalStudies: 100,
+            results: { Recruiting: 60, Completed: 40 },
+          },
+        ],
+      };
+
+      const blocks = formatter(output);
+      expect(blocks).toHaveLength(1);
+      expect(at(blocks, 0).type).toBe('text');
+    });
+
+    it('should say "1 analysis" for singular', () => {
+      const output = {
+        analysis: [
+          {
+            analysisType: 'countByStatus' as const,
+            totalStudies: 10,
+            results: { Recruiting: 10 },
+          },
+        ],
+      };
+
+      const blocks = formatter(output);
+      const text = (at(blocks, 0) as { type: 'text'; text: string }).text;
+      expect(text).toContain('Completed 1 analysis');
+    });
+
+    it('should say "2 analyses" for plural', () => {
+      const output = {
+        analysis: [
+          {
+            analysisType: 'countByStatus' as const,
+            totalStudies: 10,
+            results: { Recruiting: 10 },
+          },
+          {
+            analysisType: 'countByPhase' as const,
+            totalStudies: 10,
+            results: { PHASE3: 10 },
+          },
+        ],
+      };
+
+      const blocks = formatter(output);
+      const text = (at(blocks, 0) as { type: 'text'; text: string }).text;
+      expect(text).toContain('Completed 2 analyses');
+    });
+
+    it('should separate multiple analyses with ---', () => {
+      const output = {
+        analysis: [
+          {
+            analysisType: 'countByStatus' as const,
+            totalStudies: 10,
+            results: { Recruiting: 10 },
+          },
+          {
+            analysisType: 'countByPhase' as const,
+            totalStudies: 10,
+            results: { PHASE3: 10 },
+          },
+        ],
+      };
+
+      const blocks = formatter(output);
+      const text = (at(blocks, 0) as { type: 'text'; text: string }).text;
+      expect(text).toContain('---');
+    });
+
+    it('should include percentage calculations', () => {
+      const output = {
+        analysis: [
+          {
+            analysisType: 'countByStatus' as const,
+            totalStudies: 200,
+            results: { Recruiting: 100, Completed: 100 },
+          },
+        ],
+      };
+
+      const blocks = formatter(output);
+      const text = (at(blocks, 0) as { type: 'text'; text: string }).text;
+      expect(text).toContain('50.0%');
+    });
+
+    it('should show top 10 and "...and N more" when >10 categories', () => {
+      const results: Record<string, number> = {};
+      for (let i = 0; i < 15; i++) {
+        results[`Country${String(i).padStart(2, '0')}`] = 15 - i;
+      }
+
+      const output = {
+        analysis: [
+          {
+            analysisType: 'countByCountry' as const,
+            totalStudies: 120,
+            results,
+          },
+        ],
+      };
+
+      const blocks = formatter(output);
+      const text = (at(blocks, 0) as { type: 'text'; text: string }).text;
+
+      // Should have 10 bullet entries
+      const bulletCount = (text.match(/\u2022/g) ?? []).length;
+      expect(bulletCount).toBe(10);
+
+      // Should mention the remaining 5
+      expect(text).toContain('...and 5 more');
+    });
+
+    it('should not show "...and N more" when <=10 categories', () => {
+      const output = {
+        analysis: [
+          {
+            analysisType: 'countByStatus' as const,
+            totalStudies: 100,
+            results: { Recruiting: 60, Completed: 40 },
+          },
+        ],
+      };
+
+      const blocks = formatter(output);
+      const text = (at(blocks, 0) as { type: 'text'; text: string }).text;
+      expect(text).not.toContain('...and');
+    });
+
+    it('should sort entries by count descending', () => {
+      const output = {
+        analysis: [
+          {
+            analysisType: 'countByStatus' as const,
+            totalStudies: 100,
+            results: {
+              Finished: 10,
+              Recruiting: 50,
+              'Not yet recruiting': 40,
+            },
+          },
+        ],
+      };
+
+      const blocks = formatter(output);
+      const text = (at(blocks, 0) as { type: 'text'; text: string }).text;
+
+      // Extract only the bullet lines to verify sort order
+      const bulletLines = text
+        .split('\n')
+        .filter((line) => line.includes('\u2022'));
+      expect(bulletLines).toHaveLength(3);
+      expect(at(bulletLines, 0)).toContain('Recruiting');
+      expect(at(bulletLines, 0)).toContain('50');
+      expect(at(bulletLines, 1)).toContain('Not yet recruiting');
+      expect(at(bulletLines, 1)).toContain('40');
+      expect(at(bulletLines, 2)).toContain('Finished');
+      expect(at(bulletLines, 2)).toContain('10');
+    });
   });
 });

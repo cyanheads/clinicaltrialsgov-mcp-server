@@ -12,7 +12,6 @@ import {
   StorageService,
   RateLimiterService,
 } from '@/container/core/tokens.js';
-import type { IStorageProvider } from '@/storage/core/IStorageProvider.js';
 
 describe('Core Service Registration', () => {
   beforeAll(() => {
@@ -44,8 +43,7 @@ describe('Core Service Registration', () => {
     });
 
     it('should register StorageProvider factory', () => {
-      const storageProvider =
-        container.resolve<IStorageProvider>(StorageProvider);
+      const storageProvider = container.resolve(StorageProvider);
 
       expect(storageProvider).toBeDefined();
       expect(typeof storageProvider.get).toBe('function');
@@ -92,7 +90,7 @@ describe('Core Service Registration', () => {
       const config = container.resolve(AppConfig) as ReturnType<
         typeof import('@/config/index.js').parseConfig
       >;
-      const provider = container.resolve<IStorageProvider>(StorageProvider);
+      const provider = container.resolve(StorageProvider);
 
       expect(provider).toBeDefined();
       expect(config).toBeDefined();
@@ -105,8 +103,7 @@ describe('Core Service Registration', () => {
       const storageService = container.resolve(
         StorageService,
       ) as import('@/storage/core/StorageService.js').StorageService;
-      const storageProvider =
-        container.resolve<IStorageProvider>(StorageProvider);
+      const storageProvider = container.resolve(StorageProvider);
 
       expect(storageService).toBeDefined();
       expect(storageProvider).toBeDefined();
@@ -130,7 +127,7 @@ describe('Core Service Registration', () => {
       const config = container.resolve(AppConfig) as ReturnType<
         typeof import('@/config/index.js').parseConfig
       >;
-      const provider = container.resolve<IStorageProvider>(StorageProvider);
+      const provider = container.resolve(StorageProvider);
 
       expect(config).toBeDefined();
       expect(provider).toBeDefined();

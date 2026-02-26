@@ -45,14 +45,11 @@ describe('config parsing', () => {
     process.env.OTEL_ENABLED = 'true';
     process.env.OTEL_LOG_LEVEL = 'warning';
     process.env.OTEL_TRACES_SAMPLER_ARG = '0.5';
-    process.env.OPENROUTER_APP_URL = 'https://app.example.com';
-    delete process.env.OPENROUTER_APP_NAME;
     delete process.env.LOGS_DIR;
-    process.env.LLM_DEFAULT_TEMPERATURE = '0.7';
 
     const parsed = parseConfig();
 
-    expect(parsed.logLevel).toBe('warn');
+    expect(parsed.logLevel).toBe('warning');
     expect(parsed.environment).toBe('production');
     expect(parsed.mcpSessionMode).toBe('auto');
     expect(parsed.mcpAllowedOrigins).toEqual([
@@ -61,13 +58,10 @@ describe('config parsing', () => {
     ]);
     expect(parsed.devMcpScopes).toEqual(['scope:read', 'scope:write']);
     expect(parsed.storage.providerType).toBe('filesystem');
-    expect(parsed.logsPath).toBe('logs');
+    expect(parsed.logsPath).toMatch(/logs$/);
     expect(parsed.openTelemetry.enabled).toBe(true);
     expect(parsed.openTelemetry.logLevel).toBe('WARN');
     expect(parsed.openTelemetry.samplingRatio).toBe(0.5);
-    expect(parsed.openrouterAppUrl).toBe('https://app.example.com');
-    expect(parsed.openrouterAppName).toBe('clinicaltrialsgov-mcp-server');
-    expect(parsed.llmDefaultTemperature).toBeCloseTo(0.7);
   });
 
   it('throws a configuration error when validation fails', async () => {

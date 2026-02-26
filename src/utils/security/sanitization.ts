@@ -9,15 +9,16 @@ import sanitizeHtml from 'sanitize-html';
 import validator from 'validator';
 
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
+import { isRecord } from '@/utils/types/guards.js';
 import { logger, requestContextService } from '@/utils/index.js';
 
 const isServerless =
   typeof process === 'undefined' || process.env.IS_SERVERLESS === 'true';
 
 // Dynamically import 'path' only in non-serverless environments
-let pathModule: typeof import('path') | undefined;
+let pathModule: typeof import('node:path') | undefined;
 if (!isServerless) {
-  import('path')
+  import('node:path')
     .then((mod) => {
       pathModule = mod.default;
     })
@@ -110,6 +111,11 @@ export class Sanitization {
     'privatekey',
   ];
 
+  /** Cached normalized sensitive field set for redaction (invalidated on setSensitiveFields). */
+  private normalizedSensitiveSet: Set<string> | null = null;
+  /** Cached word-level sensitive field set for redaction (invalidated on setSensitiveFields). */
+  private wordSensitiveSet: Set<string> | null = null;
+
   /**
    * Default configuration for HTML sanitization.
    * @private
@@ -164,13 +170,22 @@ export class Sanitization {
     allowedAttributes: {
       a: ['href', 'name', 'target', 'rel', 'title'],
       img: ['src', 'alt', 'title', 'width', 'height', 'loading'],
-      // Allow data attributes, class, id, and style on all tags
-      '*': ['class', 'id', 'style', 'data-*'],
+      // Allow data attributes, class, and id on all tags.
+      // Note: 'style' is intentionally excluded — sanitize-html does not sanitize
+      // CSS property values, so allowing it enables CSS injection (data exfiltration
+      // via background:url(), UI redress via positioning, content injection via
+      // ::before/::after). Use 'class' with external stylesheets instead.
+      '*': ['class', 'id', 'data-*'],
       // Table-specific attributes
       th: ['scope'],
       td: ['colspan', 'rowspan'],
     },
     preserveComments: true,
+    // Enforce rel="noopener noreferrer" on all links to prevent tabnabbing
+    // (window.opener access when target="_blank" is used)
+    transformTags: {
+      a: sanitizeHtml.simpleTransform('a', { rel: 'noopener noreferrer' }),
+    },
   };
 
   /** @private */
@@ -198,6 +213,9 @@ export class Sanitization {
         ...fields.map((f) => f.toLowerCase()),
       ]),
     ];
+    // Invalidate cached sets so they're rebuilt on next redaction
+    this.normalizedSensitiveSet = null;
+    this.wordSensitiveSet = null;
     const logContext = requestContextService.createRequestContext({
       operation: 'Sanitization.setSensitiveFields',
       additionalContext: {
@@ -219,11 +237,17 @@ export class Sanitization {
   }
 
   /**
-   * Gets a pino-compliant copy of the current list of sensitive field names.
-   * @returns A pino-compliant array of sensitive field names.
+   * Gets pino-compliant redact paths covering sensitive field names at multiple nesting depths.
+   * Uses wildcard paths so fields like `auth.token` or `context.auth.secret` are redacted,
+   * not just top-level properties.
+   * @returns An array of fast-redact compatible paths for pino's `redact.paths` option.
    */
   public getSensitivePinoFields(): string[] {
-    return this.sensitiveFields.map((field) => field.replace(/[-_]/g, ''));
+    return this.sensitiveFields.flatMap((field) => [
+      field, // top-level: { password: '...' }
+      `*.${field}`, // one level deep: { auth: { token: '...' } }
+      `*.*.${field}`, // two levels deep: { context: { auth: { secret: '...' } } }
+    ]);
   }
 
   /**
@@ -240,7 +264,8 @@ export class Sanitization {
       allowedAttributes:
         config?.allowedAttributes ??
         this.defaultHtmlSanitizeConfig.allowedAttributes,
-      transformTags: config?.transformTags, // Can be undefined
+      transformTags:
+        config?.transformTags ?? this.defaultHtmlSanitizeConfig.transformTags,
       preserveComments:
         config?.preserveComments ??
         this.defaultHtmlSanitizeConfig.preserveComments,
@@ -375,7 +400,7 @@ export class Sanitization {
         );
       }
       return trimmedInput;
-    } catch (error) {
+    } catch (error: unknown) {
       throw new McpError(
         JsonRpcErrorCode.ValidationError,
         error instanceof Error
@@ -488,7 +513,7 @@ export class Sanitization {
           !effectiveOptions.allowAbsolute,
         optionsUsed: effectiveOptions,
       };
-    } catch (error) {
+    } catch (error: unknown) {
       logger.warning(
         'Path sanitization error',
         requestContextService.createRequestContext({
@@ -548,7 +573,7 @@ export class Sanitization {
       }
 
       return JSON.parse(input) as T;
-    } catch (error) {
+    } catch (error: unknown) {
       if (error instanceof McpError) throw error;
       throw new McpError(
         JsonRpcErrorCode.ValidationError,
@@ -655,13 +680,10 @@ export class Sanitization {
     try {
       if (!input || typeof input !== 'object') return input;
 
-      const clonedInput: unknown =
-        typeof globalThis.structuredClone === 'function'
-          ? globalThis.structuredClone(input)
-          : JSON.parse(JSON.stringify(input));
+      const clonedInput: unknown = structuredClone(input);
       this.redactSensitiveFields(clonedInput);
       return clonedInput;
-    } catch (error) {
+    } catch (error: unknown) {
       logger.error(
         'Error during log sanitization, returning placeholder.',
         requestContextService.createRequestContext({
@@ -689,18 +711,24 @@ export class Sanitization {
       return;
     }
 
+    // Type guard ensures obj is a Record<string, unknown>
+    if (!isRecord(obj)) return;
+
     const normalize = (str: string): string =>
       str.toLowerCase().replace(/[^a-z0-9]/g, '');
-    const normalizedSensitiveSet = new Set(
+
+    // Lazily build and cache the sensitive field sets
+    this.normalizedSensitiveSet ??= new Set(
       this.sensitiveFields.map((f) => normalize(f)).filter(Boolean),
     );
-    const wordSensitiveSet = new Set(
+    this.wordSensitiveSet ??= new Set(
       this.sensitiveFields.map((f) => f.toLowerCase()).filter(Boolean),
     );
+    const { normalizedSensitiveSet, wordSensitiveSet } = this;
 
     for (const key in obj) {
       if (Object.prototype.hasOwnProperty.call(obj, key)) {
-        const value = (obj as Record<string, unknown>)[key];
+        const value = obj[key];
         const normalizedKey = normalize(key);
         // Split into words for token-based matching (camelCase, snake_case, kebab-case)
         const keyWords = key
@@ -714,7 +742,7 @@ export class Sanitization {
         const isSensitive = isExactSensitive || isWordSensitive;
 
         if (isSensitive) {
-          (obj as Record<string, unknown>)[key] = '[REDACTED]';
+          obj[key] = '[REDACTED]';
         } else if (value && typeof value === 'object') {
           this.redactSensitiveFields(value);
         }

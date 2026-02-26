@@ -7,8 +7,6 @@
 
 import { writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { injectable } from 'tsyringe';
-
 import { config } from '../../../config/index.js';
 import { JsonRpcErrorCode, McpError } from '../../../types-global/errors.js';
 import { logger, type RequestContext } from '../../../utils/index.js';
@@ -31,7 +29,6 @@ const BASE_URL = 'https://clinicaltrials.gov/api/v2';
  * Implementation of IClinicalTrialsProvider for the ClinicalTrials.gov API.
  * Provides methods to fetch clinical trial data with optional filesystem backups.
  */
-@injectable()
 export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
   constructor() {}
 
@@ -51,12 +48,12 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
       logger.error('[API] Study validation failed', {
         ...context,
         nctId,
-        errors: result.error.errors,
+        errors: result.error.issues,
       });
       throw new McpError(
         JsonRpcErrorCode.ValidationError,
         'Invalid study data received from API',
-        { nctId, validationErrors: result.error.errors },
+        { nctId, validationErrors: result.error.issues },
       );
     }
 
@@ -112,12 +109,12 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
     if (!result.success) {
       logger.error('[API] Studies list validation failed', {
         ...context,
-        errors: result.error.errors,
+        errors: result.error.issues,
       });
       throw new McpError(
         JsonRpcErrorCode.ValidationError,
         'Invalid studies data received from API',
-        { validationErrors: result.error.errors },
+        { validationErrors: result.error.issues },
       );
     }
 

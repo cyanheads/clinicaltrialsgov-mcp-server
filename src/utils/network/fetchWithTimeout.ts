@@ -1,5 +1,6 @@
 /**
- * @fileoverview Provides a utility function to make fetch requests with a specified timeout.
+ * @fileoverview Provides a utility function to make fetch requests with a specified timeout
+ * and optional SSRF protection.
  * @module src/utils/network/fetchWithTimeout
  */
 // Adjusted import path
@@ -12,17 +13,90 @@ import type { RequestContext } from '@/utils/internal/requestContext.js';
  * Options for the fetchWithTimeout utility.
  * Extends standard RequestInit but omits 'signal' as it's handled internally.
  */
-export type FetchWithTimeoutOptions = Omit<RequestInit, 'signal'>;
+export interface FetchWithTimeoutOptions extends Omit<RequestInit, 'signal'> {
+  /**
+   * When true, rejects requests to private/reserved IP ranges and localhost.
+   * Use this when fetching user-controlled URLs to prevent SSRF attacks
+   * against internal services (e.g., cloud metadata endpoints, internal APIs).
+   * Default: false (no restriction).
+   */
+  rejectPrivateIPs?: boolean;
+}
 
 /**
- * Fetches a resource with a specified timeout.
+ * IPv4 patterns for private/reserved ranges that should be blocked when
+ * `rejectPrivateIPs` is enabled. Covers RFC 1918, loopback, link-local,
+ * and cloud metadata endpoints.
+ */
+const PRIVATE_IP_PATTERNS = [
+  /^127\./, // Loopback
+  /^10\./, // RFC 1918 Class A
+  /^172\.(1[6-9]|2\d|3[01])\./, // RFC 1918 Class B
+  /^192\.168\./, // RFC 1918 Class C
+  /^169\.254\./, // Link-local / cloud metadata
+  /^0\./, // Current network
+  /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./, // RFC 6598 (CGNAT)
+];
+
+const PRIVATE_HOSTNAMES = new Set([
+  'localhost',
+  'metadata.google.internal',
+  'metadata.internal',
+]);
+
+/**
+ * Validates that a URL does not target private/reserved IP space.
+ * @throws {McpError} If the hostname resolves to a private IP or is a known internal hostname.
+ */
+function assertNotPrivateUrl(urlString: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(urlString);
+  } catch {
+    throw new McpError(
+      JsonRpcErrorCode.ValidationError,
+      `Invalid URL: ${urlString}`,
+    );
+  }
+
+  const hostname = parsed.hostname.replace(/^\[|\]$/g, ''); // Strip IPv6 brackets
+
+  // Check known private hostnames
+  if (PRIVATE_HOSTNAMES.has(hostname.toLowerCase())) {
+    throw new McpError(
+      JsonRpcErrorCode.ValidationError,
+      `Request to private/internal hostname blocked: ${hostname}`,
+    );
+  }
+
+  // Check IPv6 loopback
+  if (hostname === '::1' || hostname === '0:0:0:0:0:0:0:1') {
+    throw new McpError(
+      JsonRpcErrorCode.ValidationError,
+      `Request to loopback address blocked: ${hostname}`,
+    );
+  }
+
+  // Check IPv4 private ranges
+  if (PRIVATE_IP_PATTERNS.some((pattern) => pattern.test(hostname))) {
+    throw new McpError(
+      JsonRpcErrorCode.ValidationError,
+      `Request to private/reserved IP blocked: ${hostname}`,
+    );
+  }
+}
+
+/**
+ * Fetches a resource with a specified timeout and optional SSRF protection.
  *
  * @param url - The URL to fetch.
  * @param timeoutMs - The timeout duration in milliseconds.
  * @param context - The request context for logging.
  * @param options - Optional fetch options (RequestInit), excluding 'signal'.
+ *   Set `rejectPrivateIPs: true` when fetching user-controlled URLs.
  * @returns A promise that resolves to the Response object.
- * @throws {McpError} If the request times out or another fetch-related error occurs.
+ * @throws {McpError} If the request times out, targets a private IP (when enabled),
+ *   or another fetch-related error occurs.
  */
 export async function fetchWithTimeout(
   url: string | URL,
@@ -30,10 +104,13 @@ export async function fetchWithTimeout(
   context: RequestContext,
   options?: FetchWithTimeoutOptions,
 ): Promise<Response> {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-
   const urlString = url.toString();
+
+  // SSRF protection: reject private/internal targets when enabled
+  if (options?.rejectPrivateIPs) {
+    assertNotPrivateUrl(urlString);
+  }
+
   const operationDescription = `fetch ${options?.method || 'GET'} ${urlString}`;
 
   logger.debug(
@@ -41,12 +118,14 @@ export async function fetchWithTimeout(
     context,
   );
 
+  // Strip custom options before passing to native fetch
+  const { rejectPrivateIPs: _, ...fetchInit } = options ?? {};
+
   try {
     const response = await fetch(url, {
-      ...options,
-      signal: controller.signal,
+      ...fetchInit,
+      signal: AbortSignal.timeout(timeoutMs),
     });
-    clearTimeout(timeoutId);
 
     if (!response.ok) {
       const errorBody = await response
@@ -79,9 +158,11 @@ export async function fetchWithTimeout(
       context,
     );
     return response;
-  } catch (error) {
-    clearTimeout(timeoutId);
-    if (error instanceof Error && error.name === 'AbortError') {
+  } catch (error: unknown) {
+    if (
+      error instanceof Error &&
+      (error.name === 'TimeoutError' || error.name === 'AbortError')
+    ) {
       logger.error(`${operationDescription} timed out after ${timeoutMs}ms.`, {
         ...context,
         errorSource: 'FetchTimeout',
@@ -93,7 +174,6 @@ export async function fetchWithTimeout(
       );
     }
 
-    // Log and re-throw other errors as McpError
     const errorMessage = error instanceof Error ? error.message : String(error);
     logger.error(
       `Network error during ${operationDescription}: ${errorMessage}`,
@@ -105,12 +185,11 @@ export async function fetchWithTimeout(
     );
 
     if (error instanceof McpError) {
-      // If it's already an McpError, re-throw it
       throw error;
     }
 
     throw new McpError(
-      JsonRpcErrorCode.ServiceUnavailable, // Generic error for network/service issues
+      JsonRpcErrorCode.ServiceUnavailable,
       `Network error during ${operationDescription}: ${errorMessage}`,
       {
         ...context,

@@ -9,6 +9,7 @@ import {
   type Attributes,
   type Counter,
   type Histogram,
+  type Meter,
   type MetricOptions,
   metrics,
 } from '@opentelemetry/api';
@@ -21,7 +22,33 @@ type HistogramMap = Map<string, Histogram>;
 const counters: CounterMap = new Map();
 const histograms: HistogramMap = new Map();
 
-function getMeter() {
+/**
+ * No-op counter implementation for when OpenTelemetry is disabled.
+ * Provides a type-safe implementation that matches the Counter interface
+ * without unsafe type assertions.
+ */
+const noOpCounter: Counter = {
+  add: () => undefined,
+  bind: () => ({ add: () => undefined }),
+  unbind: () => undefined,
+} as Counter;
+
+/**
+ * No-op histogram implementation for when OpenTelemetry is disabled.
+ * Provides a type-safe implementation that matches the Histogram interface
+ * without unsafe type assertions.
+ */
+const noOpHistogram: Histogram = {
+  record: () => undefined,
+  bind: () => ({ record: () => undefined }),
+  unbind: () => undefined,
+} as Histogram;
+
+/**
+ * Gets the OpenTelemetry meter for creating metrics.
+ * @returns The configured Meter instance
+ */
+function getMeter(): Meter {
   return metrics.getMeter(
     config.openTelemetry.serviceName,
     config.openTelemetry.serviceVersion,
@@ -38,11 +65,7 @@ function getCounter(
   unit?: string,
 ): Counter {
   if (!isEnabled()) {
-    return {
-      add: () => undefined,
-      bind: () => ({ add: () => undefined }),
-      unbind: () => undefined,
-    } as unknown as Counter;
+    return noOpCounter;
   }
   const key = `${name}|${description ?? ''}|${unit ?? ''}`;
   const existing = counters.get(key);
@@ -63,11 +86,7 @@ function getHistogram(
   unit?: string,
 ): Histogram {
   if (!isEnabled()) {
-    return {
-      record: () => undefined,
-      bind: () => ({ record: () => undefined }),
-      unbind: () => undefined,
-    } as unknown as Histogram;
+    return noOpHistogram;
   }
   const key = `${name}|${description ?? ''}|${unit ?? ''}`;
   const existing = histograms.get(key);

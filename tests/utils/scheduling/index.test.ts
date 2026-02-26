@@ -97,9 +97,8 @@ describe('Scheduling Utilities Barrel Export', () => {
     });
 
     it('should have consistent singleton instances', async () => {
-      const { SchedulerService, schedulerService } = await import(
-        '@/utils/scheduling/index.js'
-      );
+      const { SchedulerService, schedulerService } =
+        await import('@/utils/scheduling/index.js');
 
       const instance = SchedulerService.getInstance();
       expect(instance).toBe(schedulerService);
@@ -123,7 +122,7 @@ describe('Scheduling Utilities Barrel Export', () => {
         // Test task
       };
 
-      const job = schedulerService.schedule(
+      const job = await schedulerService.schedule(
         jobId,
         schedule,
         taskFn,

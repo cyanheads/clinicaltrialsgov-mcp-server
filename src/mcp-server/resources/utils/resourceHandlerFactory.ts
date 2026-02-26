@@ -110,7 +110,7 @@ export async function registerResource<
         resourceName,
         template,
         {
-          name: title,
+          title,
           description: def.description,
           mimeType,
           ...(def.examples && { examples: def.examples }),
@@ -123,7 +123,12 @@ export async function registerResource<
 
           const handlerContext: RequestContext =
             requestContextService.createRequestContext({
-              parentContext: callContext,
+              parentContext: {
+                ...(typeof callContext?.requestId === 'string'
+                  ? { requestId: callContext.requestId }
+                  : {}),
+                ...(sessionId ? { sessionId } : {}),
+              },
               operation: 'HandleResourceRead',
               additionalContext: {
                 resourceUri: uri.href,
@@ -160,7 +165,7 @@ export async function registerResource<
 
             const readResult: ReadResourceResult = { contents };
             return readResult;
-          } catch (error) {
+          } catch (error: unknown) {
             // Centralized handler re-throws the error for the SDK to catch
             throw ErrorHandler.handleError(error, {
               operation: `resource:${resourceName}:readHandler`,

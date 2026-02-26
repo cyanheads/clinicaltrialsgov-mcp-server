@@ -5,8 +5,11 @@
  * it defaults to `in-memory` to ensure compatibility.
  * @module src/storage/core/storageFactory
  */
-import { container } from 'tsyringe';
-import type { R2Bucket, KVNamespace } from '@cloudflare/workers-types';
+import type {
+  R2Bucket,
+  KVNamespace,
+  D1Database,
+} from '@cloudflare/workers-types';
 import type { SupabaseClient } from '@supabase/supabase-js';
 
 import type { AppConfig } from '@/config/index.js';
@@ -18,6 +21,7 @@ import { InMemoryProvider } from '@/storage/providers/inMemory/inMemoryProvider.
 import { SupabaseProvider } from '@/storage/providers/supabase/supabaseProvider.js';
 import { R2Provider } from '@/storage/providers/cloudflare/r2Provider.js';
 import { KvProvider } from '@/storage/providers/cloudflare/kvProvider.js';
+import { D1Provider } from '@/storage/providers/cloudflare/d1Provider.js';
 import { logger, requestContextService } from '@/utils/index.js';
 
 const isServerless =
@@ -35,6 +39,27 @@ export interface StorageFactoryDeps {
   readonly r2Bucket?: R2Bucket;
   /** Cloudflare KV namespace binding */
   readonly kvNamespace?: KVNamespace;
+  /** Cloudflare D1 database binding */
+  readonly d1Database?: D1Database;
+}
+
+/**
+ * Retrieves a Cloudflare binding from globalThis by key.
+ * Throws a ConfigurationError if the binding is not present.
+ */
+function getGlobalBinding<T>(
+  key: string,
+  context: ReturnType<typeof requestContextService.createRequestContext>,
+): T {
+  const g = globalThis as Record<string, unknown>;
+  if (!(key in g) || g[key] == null) {
+    throw new McpError(
+      JsonRpcErrorCode.ConfigurationError,
+      `${key} binding not available in globalThis. Ensure wrangler.toml is configured correctly.`,
+      context,
+    );
+  }
+  return g[key] as T;
 }
 
 /**
@@ -62,14 +87,15 @@ export interface StorageFactoryDeps {
  *
  * @example
  * ```typescript
- * // Standard usage via DI
- * const config = container.resolve<AppConfig>(AppConfig);
- * const provider = createStorageProvider(config);
+ * // Standard usage — DI container resolves clients and passes via deps
+ * const provider = createStorageProvider(config, {
+ *   supabaseClient: resolvedSupabaseClient,
+ * });
  *
- * // Worker usage with pre-resolved bindings
+ * // Worker usage with Cloudflare bindings
  * const provider = createStorageProvider(config, {
  *   r2Bucket: env.R2_BUCKET,
- *   kvNamespace: env.KV_NAMESPACE
+ *   kvNamespace: env.KV_NAMESPACE,
  * });
  * ```
  */
@@ -85,7 +111,9 @@ export function createStorageProvider(
 
   if (
     isServerless &&
-    !['in-memory', 'cloudflare-r2', 'cloudflare-kv'].includes(providerType)
+    !['in-memory', 'cloudflare-r2', 'cloudflare-kv', 'cloudflare-d1'].includes(
+      providerType,
+    )
   ) {
     logger.warning(
       `Forcing 'in-memory' storage provider in serverless environment (configured: ${providerType}).`,
@@ -116,17 +144,21 @@ export function createStorageProvider(
           context,
         );
       }
-      if (deps.supabaseClient) {
-        return new SupabaseProvider(deps.supabaseClient);
+      if (!deps.supabaseClient) {
+        throw new McpError(
+          JsonRpcErrorCode.ConfigurationError,
+          'Supabase client must be provided via deps for the supabase storage provider.',
+          context,
+        );
       }
-      // Fallback to DI container (backward-compatible)
-      return container.resolve(SupabaseProvider);
+      return new SupabaseProvider(deps.supabaseClient);
     case 'cloudflare-r2':
       if (isServerless) {
-        const bucket =
-          deps.r2Bucket ??
-          (globalThis as unknown as { R2_BUCKET: R2Bucket }).R2_BUCKET;
-        return new R2Provider(bucket);
+        if (deps.r2Bucket) {
+          return new R2Provider(deps.r2Bucket);
+        }
+        const r2Binding = getGlobalBinding<R2Bucket>('R2_BUCKET', context);
+        return new R2Provider(r2Binding);
       }
       throw new McpError(
         JsonRpcErrorCode.ConfigurationError,
@@ -135,14 +167,31 @@ export function createStorageProvider(
       );
     case 'cloudflare-kv':
       if (isServerless) {
-        const kv =
-          deps.kvNamespace ??
-          (globalThis as unknown as { KV_NAMESPACE: KVNamespace }).KV_NAMESPACE;
-        return new KvProvider(kv);
+        if (deps.kvNamespace) {
+          return new KvProvider(deps.kvNamespace);
+        }
+        const kvBinding = getGlobalBinding<KVNamespace>(
+          'KV_NAMESPACE',
+          context,
+        );
+        return new KvProvider(kvBinding);
       }
       throw new McpError(
         JsonRpcErrorCode.ConfigurationError,
         'Cloudflare KV storage is only available in a Cloudflare Worker environment.',
+        context,
+      );
+    case 'cloudflare-d1':
+      if (isServerless) {
+        if (deps.d1Database) {
+          return new D1Provider(deps.d1Database);
+        }
+        const d1Binding = getGlobalBinding<D1Database>('DB', context);
+        return new D1Provider(d1Binding);
+      }
+      throw new McpError(
+        JsonRpcErrorCode.ConfigurationError,
+        'Cloudflare D1 storage is only available in a Cloudflare Worker environment.',
         context,
       );
     default: {

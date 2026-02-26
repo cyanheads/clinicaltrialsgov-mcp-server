@@ -53,9 +53,8 @@ describe('RateLimiter', () => {
     process.env.NODE_ENV = 'production';
 
     const configModule = await import('../../../src/config/index.js');
-    const rateLimiterModule = await import(
-      '../../../src/utils/security/rateLimiter.js'
-    );
+    const rateLimiterModule =
+      await import('../../../src/utils/security/rateLimiter.js');
     config = configModule.config;
     RateLimiter = rateLimiterModule.RateLimiter;
 
@@ -110,9 +109,8 @@ describe('RateLimiter', () => {
     process.env.NODE_ENV = 'development';
     // Re-import modules to get the updated config
     const configModule = await import('../../../src/config/index.js');
-    const rateLimiterModule = await import(
-      '../../../src/utils/security/rateLimiter.js'
-    );
+    const rateLimiterModule =
+      await import('../../../src/utils/security/rateLimiter.js');
     config = configModule.parseConfig(); // Use parseConfig to get a fresh config
     RateLimiter = rateLimiterModule.RateLimiter;
 
@@ -248,5 +246,86 @@ describe('RateLimiter', () => {
     expect(rateLimiter.getStatus('dispose-key')).toBeNull();
 
     clearIntervalSpy.mockRestore();
+  });
+
+  it('should evict the least-recently-used entry when maxTrackedKeys is exceeded', () => {
+    rateLimiter.configure({
+      windowMs: 60_000,
+      maxRequests: 100,
+      maxTrackedKeys: 3,
+    });
+    const ctx = { requestId: 'lru', timestamp: new Date().toISOString() };
+
+    rateLimiter.check('key-1', ctx);
+    rateLimiter.check('key-2', ctx);
+    rateLimiter.check('key-3', ctx);
+    // All three slots full; adding key-4 should evict the oldest (key-1)
+    rateLimiter.check('key-4', ctx);
+
+    expect(rateLimiter.getStatus('key-1')).toBeNull();
+    expect(rateLimiter.getStatus('key-4')).not.toBeNull();
+    expect(spanMock.addEvent).toHaveBeenCalledWith('rate_limit_lru_eviction', {
+      'mcp.rate_limit.size_before_eviction': expect.any(Number),
+      'mcp.rate_limit.max_keys': 3,
+    });
+  });
+
+  it('should use a custom keyGenerator when configured', () => {
+    rateLimiter.configure({
+      windowMs: 60_000,
+      maxRequests: 1,
+      keyGenerator: (id, ctx) => `custom:${id}:${ctx?.requestId ?? 'none'}`,
+    });
+    const ctx = { requestId: 'gen-req', timestamp: new Date().toISOString() };
+
+    rateLimiter.check('user', ctx);
+
+    // The entry should be stored under the generated key
+    expect(rateLimiter.getStatus('custom:user:gen-req')).toMatchObject({
+      current: 1,
+    });
+    // Original key should not exist
+    expect(rateLimiter.getStatus('user')).toBeNull();
+  });
+
+  it('should substitute {waitTime} in custom error messages', () => {
+    rateLimiter.configure({
+      windowMs: 10_000,
+      maxRequests: 1,
+      errorMessage: 'Slow down! Retry in {waitTime}s.',
+    });
+    const ctx = { requestId: 'msg', timestamp: new Date().toISOString() };
+
+    rateLimiter.check('err-key', ctx);
+
+    let thrown: unknown;
+    try {
+      rateLimiter.check('err-key', ctx);
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeDefined();
+    expect((thrown as { message: string }).message).toMatch(
+      /^Slow down! Retry in \d+s\.$/,
+    );
+  });
+
+  it('resets the window when the reset time has elapsed', () => {
+    rateLimiter.configure({ windowMs: 1, maxRequests: 1 });
+    const ctx = { requestId: 'window', timestamp: new Date().toISOString() };
+
+    rateLimiter.check('window-key', ctx);
+    // Manually expire the entry
+    const limits = (
+      rateLimiter as unknown as {
+        limits: Map<string, { count: number; resetTime: number }>;
+      }
+    ).limits;
+    const entry = limits.get('window-key');
+    if (entry) entry.resetTime = Date.now() - 1;
+
+    // Should not throw — window has reset
+    expect(() => rateLimiter.check('window-key', ctx)).not.toThrow();
+    expect(rateLimiter.getStatus('window-key')).toMatchObject({ current: 1 });
   });
 });

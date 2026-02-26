@@ -1,11 +1,11 @@
 <div align="center">
   <h1>clinicaltrialsgov-mcp-server</h1>
-  <p><b>ClinicalTrials.gov Model Context Protocol (MCP) Server with tools to programmatically search, retrieve, compare, analyze, and find eligible clinical trials. Built for performance and scalability, with native support for serverless deployment (Cloudflare Workers).</b></p>
+  <p><b>MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details, compare studies, analyze trends, and match patients to eligible trials. Runs over stdio or HTTP. Deployable to Cloudflare Workers.</b></p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-1.4.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--06--18-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-06-18/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.18.2-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.2.23-blueviolet.svg?style=flat-square)](https://bun.sh/) [![Code Coverage](https://img.shields.io/badge/Coverage-92.46%25-brightgreen.svg?style=flat-square)](./vitest.config.ts)
+[![Version](https://img.shields.io/badge/Version-1.6.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--06--18-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-06-18/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.27.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.2.23-blueviolet.svg?style=flat-square)](https://bun.sh/) [![Code Coverage](https://img.shields.io/badge/Coverage-92.46%25-brightgreen.svg?style=flat-square)](./vitest.config.ts)
 
 </div>
 
@@ -13,7 +13,7 @@
 
 ## 🛠️ Tools Overview
 
-This server provides five powerful tools for accessing and analyzing clinical trial data from ClinicalTrials.gov:
+Five tools for working with ClinicalTrials.gov data:
 
 | Tool Name                              | Description                                                                                                           |
 | :------------------------------------- | :-------------------------------------------------------------------------------------------------------------------- |
@@ -139,7 +139,7 @@ This server is built on the [`mcp-ts-template`](https://github.com/cyanheads/mcp
 - **Pluggable Authentication**: Secure your server with zero-fuss support for `none`, `jwt`, or `oauth` modes.
 - **Abstracted Storage**: Swap storage backends (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2`) without changing business logic.
 - **Full-Stack Observability**: Deep insights with structured logging (Pino) and optional, auto-instrumented OpenTelemetry for traces and metrics.
-- **Dependency Injection**: Built with `tsyringe` for a clean, decoupled, and testable architecture.
+- **Dependency Injection**: Lightweight custom typed container with `Token<T>` phantom branding for a clean, decoupled, and testable architecture.
 - **Edge-Ready**: Write code once and run it seamlessly on your local machine or at the edge on Cloudflare Workers.
 
 Plus, specialized features for **ClinicalTrials.gov**:
@@ -209,16 +209,16 @@ This server equips AI agents with specialized tools to interact with the Clinica
 
 All configuration is centralized and validated at startup in `src/config/index.ts`. Key environment variables in your `.env` file include:
 
-| Variable                | Description                                                                    | Default     |
-| :---------------------- | :----------------------------------------------------------------------------- | :---------- |
-| `MCP_TRANSPORT_TYPE`    | The transport to use: `stdio` or `http`.                                       | `http`      |
-| `MCP_HTTP_PORT`         | The port for the HTTP server.                                                  | `3017`      |
-| `MCP_AUTH_MODE`         | Authentication mode: `none`, `jwt`, or `oauth`.                                | `none`      |
-| `STORAGE_PROVIDER_TYPE` | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv`, `r2`. | `in-memory` |
-| `OTEL_ENABLED`          | Set to `true` to enable OpenTelemetry.                                         | `false`     |
-| `LOG_LEVEL`             | The minimum level for logging (`debug`, `info`, `warn`, `error`).              | `info`      |
-| `MCP_AUTH_SECRET_KEY`   | **Required for `jwt` auth.** A 32+ character secret key.                       | `(none)`    |
-| `OAUTH_ISSUER_URL`      | **Required for `oauth` auth.** URL of the OIDC provider.                       | `(none)`    |
+| Variable                | Description                                                                                                | Default     |
+| :---------------------- | :--------------------------------------------------------------------------------------------------------- | :---------- |
+| `MCP_TRANSPORT_TYPE`    | The transport to use: `stdio` or `http`.                                                                   | `http`      |
+| `MCP_HTTP_PORT`         | The port for the HTTP server.                                                                              | `3017`      |
+| `MCP_AUTH_MODE`         | Authentication mode: `none`, `jwt`, or `oauth`.                                                            | `none`      |
+| `STORAGE_PROVIDER_TYPE` | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv`, `cloudflare-r2`, `cloudflare-d1`. | `in-memory` |
+| `OTEL_ENABLED`          | Set to `true` to enable OpenTelemetry.                                                                     | `false`     |
+| `LOG_LEVEL`             | The minimum level for logging (RFC 5424: `debug`, `info`, `notice`, `warning`, `error`, `crit`, `emerg`).  | `info`      |
+| `MCP_AUTH_SECRET_KEY`   | **Required for `jwt` auth.** A 32+ character secret key.                                                   | `(none)`    |
+| `OAUTH_ISSUER_URL`      | **Required for `oauth` auth.** URL of the OIDC provider.                                                   | `(none)`    |
 
 ## ▶️ Running the Server
 
@@ -269,7 +269,7 @@ bun deploy:dev
 | `src/mcp-server/resources`  | Your resource definitions (`*.resource.ts`). This is where you add data sources. |
 | `src/mcp-server/transports` | Implementations for HTTP and STDIO transports, including auth middleware.        |
 | `src/storage`               | `StorageService` abstraction and all storage provider implementations.           |
-| `src/services`              | Integrations with external services (ClinicalTrials.gov, LLMs, Speech).          |
+| `src/services`              | Integrations with external services (ClinicalTrials.gov).                        |
 | `src/container`             | Dependency injection container registrations and tokens.                         |
 | `src/utils`                 | Core utilities for logging, error handling, performance, and security.           |
 | `src/config`                | Environment variable parsing and validation with Zod.                            |
@@ -277,7 +277,7 @@ bun deploy:dev
 
 ## 🧑‍💻 Agent Development Guide
 
-For strict rules when using this server with an AI agent, refer to the **`.clinerules`** file in this repository. Key principles include:
+For development guidelines and architectural rules, refer to **[`CLAUDE.md`](./CLAUDE.md)**. Key principles include:
 
 - **Logic Throws, Handlers Catch**: Never use `try/catch` in your tool `logic`. Throw an `McpError` instead.
 - **Pass the Context**: Always pass the `RequestContext` object through your call stack for logging and tracing.

@@ -10,9 +10,10 @@
 import { StreamableHTTPTransport } from '@hono/mcp';
 import { type ServerType, serve } from '@hono/node-server';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/sdk/types.js';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
-import http from 'http';
+import http from 'node:http';
 
 import { config } from '@/config/index.js';
 import {
@@ -45,11 +46,26 @@ class McpSessionTransport extends StreamableHTTPTransport {
   }
 }
 
-export function createHttpApp(
-  mcpServer: McpServer,
+/**
+ * Creates a Hono HTTP application for the MCP server.
+ *
+ * This function is generic and can create apps with different binding types:
+ * - Node.js environments use HonoNodeBindings (default)
+ * - Cloudflare Workers use CloudflareBindings
+ *
+ * The function itself doesn't access bindings; they're only used at runtime
+ * when the app processes requests in its specific environment.
+ *
+ * @template TBindings - The Hono binding type (must extend object, defaults to HonoNodeBindings for Node.js)
+ * @param mcpServer - The MCP server instance
+ * @param parentContext - Parent request context for logging
+ * @returns Configured Hono application with the specified binding type
+ */
+export function createHttpApp<TBindings extends object = HonoNodeBindings>(
+  serverFactory: () => Promise<McpServer>,
   parentContext: RequestContext,
-): Hono<{ Bindings: HonoNodeBindings }> {
-  const app = new Hono<{ Bindings: HonoNodeBindings }>();
+): Hono<{ Bindings: TBindings }> {
+  const app = new Hono<{ Bindings: TBindings }>();
   const transportContext = {
     ...parentContext,
     component: 'HttpTransportSetup',
@@ -67,6 +83,13 @@ export function createHttpApp(
     config.mcpAllowedOrigins.length > 0
       ? config.mcpAllowedOrigins
       : '*';
+
+  if (allowedOrigin === '*') {
+    logger.warning(
+      'CORS origin set to wildcard (*). Set MCP_ALLOWED_ORIGINS for production deployments.',
+      transportContext,
+    );
+  }
 
   app.use(
     '*',
@@ -172,6 +195,24 @@ export function createHttpApp(
     });
   });
 
+  // Create auth strategy and middleware if auth is enabled
+  // IMPORTANT: Auth middleware must be registered BEFORE route handlers
+  // so Hono applies it to all subsequent routes on this path.
+  const authStrategy = createAuthStrategy();
+  if (authStrategy) {
+    const authMiddleware = createAuthMiddleware(authStrategy);
+    app.use(config.mcpHttpEndpointPath, authMiddleware);
+    logger.info(
+      'Authentication middleware enabled for MCP endpoint.',
+      transportContext,
+    );
+  } else {
+    logger.info(
+      'Authentication is disabled; MCP endpoint is unprotected.',
+      transportContext,
+    );
+  }
+
   // MCP Spec 2025-06-18: DELETE endpoint for session termination
   // Clients SHOULD send DELETE to explicitly terminate sessions
   // https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#session-management
@@ -207,22 +248,6 @@ export function createHttpApp(
     return c.json({ status: 'terminated', sessionId }, 200);
   });
 
-  // Create auth strategy and middleware if auth is enabled
-  const authStrategy = createAuthStrategy();
-  if (authStrategy) {
-    const authMiddleware = createAuthMiddleware(authStrategy);
-    app.use(config.mcpHttpEndpointPath, authMiddleware);
-    logger.info(
-      'Authentication middleware enabled for MCP endpoint.',
-      transportContext,
-    );
-  } else {
-    logger.info(
-      'Authentication is disabled; MCP endpoint is unprotected.',
-      transportContext,
-    );
-  }
-
   // JSON-RPC over HTTP (Streamable)
   app.all(config.mcpHttpEndpointPath, async (c) => {
     const protocolVersion =
@@ -237,7 +262,7 @@ export function createHttpApp(
     // Per MCP Spec 2025-06-18: MCP-Protocol-Version header MUST be validated
     // Server MUST respond with 400 Bad Request for unsupported versions
     // We default to 2025-03-26 for backward compatibility if not provided
-    const supportedVersions = ['2025-03-26', '2025-06-18'];
+    const supportedVersions = SUPPORTED_PROTOCOL_VERSIONS;
     if (!supportedVersions.includes(protocolVersion)) {
       logger.warning('Unsupported MCP protocol version requested.', {
         ...transportContext,
@@ -300,7 +325,11 @@ export function createHttpApp(
     const transport = new McpSessionTransport(sessionId);
 
     const handleRpc = async (): Promise<Response> => {
-      await mcpServer.connect(transport);
+      // SDK 1.26.0: Protocol.connect() throws if already connected.
+      // Create a fresh McpServer per request to prevent cross-client data leaks.
+      // See GHSA-345p-7cg4-v4c7.
+      const server = await serverFactory();
+      await server.connect(transport);
       const response = await transport.handleRequest(c);
 
       // MCP Spec 2025-06-18: For stateful sessions, return Mcp-Session-Id header
@@ -364,8 +393,8 @@ async function isPortInUse(
   });
 }
 
-function startHttpServerWithRetry(
-  app: Hono<{ Bindings: HonoNodeBindings }>,
+function startHttpServerWithRetry<TBindings extends object = HonoNodeBindings>(
+  app: Hono<{ Bindings: TBindings }>,
   initialPort: number,
   host: string,
   maxRetries: number,
@@ -380,69 +409,71 @@ function startHttpServerWithRetry(
     startContext,
   );
 
-  return new Promise((resolve, reject) => {
-    const tryBind = (port: number, attempt: number) => {
-      if (attempt > maxRetries + 1) {
-        const error = new Error(
-          `Failed to bind to any port after ${maxRetries} retries.`,
-        );
-        logger.fatal(error.message, { ...startContext, port, attempt });
-        return reject(error);
-      }
+  const { promise, resolve, reject } = Promise.withResolvers<ServerType>();
 
-      isPortInUse(port, host, { ...startContext, port, attempt })
-        .then((inUse) => {
-          if (inUse) {
-            logger.warning(`Port ${port} is in use, retrying...`, {
-              ...startContext,
-              port,
-              attempt,
-            });
-            setTimeout(
-              () => tryBind(port + 1, attempt + 1),
-              config.mcpHttpPortRetryDelayMs,
-            );
-            return;
-          }
+  const tryBind = (port: number, attempt: number) => {
+    if (attempt > maxRetries + 1) {
+      const error = new Error(
+        `Failed to bind to any port after ${maxRetries} retries.`,
+      );
+      logger.fatal(error.message, { ...startContext, port, attempt });
+      return reject(error);
+    }
 
-          try {
-            const serverInstance = serve(
-              { fetch: app.fetch, port, hostname: host },
-              (info) => {
-                const serverAddress = `http://${info.address}:${info.port}${config.mcpHttpEndpointPath}`;
-                logger.info(`HTTP transport listening at ${serverAddress}`, {
-                  ...startContext,
-                  port,
-                  address: serverAddress,
-                });
-                logStartupBanner(
-                  `\n🚀 MCP Server running at: ${serverAddress}`,
-                );
-              },
-            );
-            resolve(serverInstance);
-          } catch (err: unknown) {
-            logger.warning(
-              `Binding attempt failed for port ${port}, retrying...`,
-              { ...startContext, port, attempt, error: String(err) },
-            );
-            setTimeout(
-              () => tryBind(port + 1, attempt + 1),
-              config.mcpHttpPortRetryDelayMs,
-            );
-          }
-        })
-        .catch((err) =>
-          reject(err instanceof Error ? err : new Error(String(err))),
-        );
-    };
+    isPortInUse(port, host, { ...startContext, port, attempt })
+      .then((inUse) => {
+        if (inUse) {
+          logger.warning(`Port ${port} is in use, retrying...`, {
+            ...startContext,
+            port,
+            attempt,
+          });
+          setTimeout(
+            () => tryBind(port + 1, attempt + 1),
+            config.mcpHttpPortRetryDelayMs,
+          );
+          return;
+        }
 
-    tryBind(initialPort, 1);
-  });
+        try {
+          const serverInstance = serve(
+            { fetch: app.fetch, port, hostname: host },
+            (info) => {
+              const serverAddress = `http://${info.address}:${info.port}${config.mcpHttpEndpointPath}`;
+              logger.info(`HTTP transport listening at ${serverAddress}`, {
+                ...startContext,
+                port,
+                address: serverAddress,
+              });
+              logStartupBanner(
+                `\n🚀 MCP Server running at: ${serverAddress}`,
+                'http',
+              );
+            },
+          );
+          resolve(serverInstance);
+        } catch (err: unknown) {
+          logger.warning(
+            `Binding attempt failed for port ${port}, retrying...`,
+            { ...startContext, port, attempt, error: String(err) },
+          );
+          setTimeout(
+            () => tryBind(port + 1, attempt + 1),
+            config.mcpHttpPortRetryDelayMs,
+          );
+        }
+      })
+      .catch((err) =>
+        reject(err instanceof Error ? err : new Error(String(err))),
+      );
+  };
+
+  tryBind(initialPort, 1);
+  return promise;
 }
 
 export async function startHttpTransport(
-  mcpServer: McpServer,
+  serverFactory: () => Promise<McpServer>,
   parentContext: RequestContext,
 ): Promise<ServerType> {
   const transportContext = {
@@ -451,7 +482,7 @@ export async function startHttpTransport(
   };
   logger.info('Starting HTTP transport.', transportContext);
 
-  const app = createHttpApp(mcpServer, transportContext);
+  const app = createHttpApp(serverFactory, transportContext);
 
   const server = await startHttpServerWithRetry(
     app,

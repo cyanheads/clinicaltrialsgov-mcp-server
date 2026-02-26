@@ -31,8 +31,8 @@ export function withToolAuth<TInput, TOutput>(
     context: RequestContext,
     sdkContext: SdkContext,
   ): Promise<TOutput> => {
-    withRequiredScopes(requiredScopes);
-    return Promise.resolve(logicFn(input, context, sdkContext));
+    withRequiredScopes(requiredScopes, context);
+    return logicFn(input, context, sdkContext);
   };
 }
 
@@ -57,7 +57,7 @@ export function withResourceAuth<TUri, TParams, TOutput>(
     params: TParams,
     context: RequestContext,
   ): Promise<TOutput> => {
-    withRequiredScopes(requiredScopes);
-    return Promise.resolve(logicFn(uri, params, context));
+    withRequiredScopes(requiredScopes, context);
+    return logicFn(uri, params, context);
   };
 }

@@ -1,18 +1,18 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
   "name": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
-  "description": "Provides rich tools to search, retrieve, and analyze data from ClinicalTrials.gov API v2.",
+  "description": "MCP server for the ClinicalTrials.gov v2 API. Search, retrieve, compare, and analyze clinical trial data.",
   "repository": {
     "url": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server",
     "source": "github"
   },
-  "version": "1.5.0",
+  "version": "1.6.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
-      "version": "1.5.0",
+      "version": "1.6.0",
       "runtimeHint": "bun",
       "packageArguments": [
         {
@@ -48,7 +48,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
-      "version": "1.5.0",
+      "version": "1.6.0",
       "runtimeHint": "bun",
       "packageArguments": [
         {

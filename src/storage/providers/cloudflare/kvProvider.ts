@@ -44,7 +44,7 @@ export class KvProvider implements IStorageProvider {
         try {
           const result = await this.kv.get<T>(kvKey, 'json');
           return result; // null indicates not found
-        } catch (error) {
+        } catch (error: unknown) {
           throw new McpError(
             JsonRpcErrorCode.SerializationError,
             `[KvProvider] Failed to parse JSON for key: ${kvKey}`,
@@ -103,16 +103,7 @@ export class KvProvider implements IStorageProvider {
     return ErrorHandler.tryCatch(
       async () => {
         logger.debug(`[KvProvider] Deleting key: ${kvKey}`, context);
-
-        const value = await this.kv.get(kvKey);
-        if (value === null) {
-          logger.debug(
-            `[KvProvider] Key to delete not found: ${kvKey}`,
-            context,
-          );
-          return false;
-        }
-
+        // KV delete is idempotent — no need to check existence first
         await this.kv.delete(kvKey);
         logger.debug(
           `[KvProvider] Successfully deleted key: ${kvKey}`,
@@ -194,9 +185,14 @@ export class KvProvider implements IStorageProvider {
           return new Map<string, T>();
         }
 
+        const entries = await Promise.all(
+          keys.map(async (key) => {
+            const value = await this.get<T>(tenantId, key, context);
+            return [key, value] as const;
+          }),
+        );
         const results = new Map<string, T>();
-        for (const key of keys) {
-          const value = await this.get<T>(tenantId, key, context);
+        for (const [key, value] of entries) {
           if (value !== null) {
             results.set(key, value);
           }

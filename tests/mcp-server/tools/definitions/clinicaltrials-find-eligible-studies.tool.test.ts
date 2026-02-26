@@ -13,6 +13,7 @@ const mockCheckAgeEligibility = vi.fn();
 const mockCheckSexEligibility = vi.fn();
 const mockCheckHealthyVolunteerEligibility = vi.fn();
 const mockCalculateMatchScore = vi.fn();
+const mockCalculateConditionRelevance = vi.fn();
 const mockRankStudies = vi.fn();
 const mockExtractRelevantLocations = vi.fn();
 const mockExtractContactInfo = vi.fn();
@@ -46,6 +47,8 @@ vi.mock('@/mcp-server/tools/utils/eligibilityCheckers.js', () => ({
 
 vi.mock('@/mcp-server/tools/utils/studyRanking.js', () => ({
   calculateMatchScore: (...args: unknown[]) => mockCalculateMatchScore(...args),
+  calculateConditionRelevance: (...args: unknown[]) =>
+    mockCalculateConditionRelevance(...args),
   rankStudies: (...args: unknown[]) => mockRankStudies(...args),
 }));
 
@@ -78,6 +81,9 @@ function makeStudy(nctId: string, overrides?: Record<string, unknown>) {
       identificationModule: { nctId, briefTitle: `Study ${nctId}` },
       statusModule: { overallStatus: 'Recruiting' },
       descriptionModule: { briefSummary: `Summary for ${nctId}` },
+      conditionsModule: {
+        conditions: ['Type 2 Diabetes Mellitus'],
+      },
       eligibilityModule: {
         minimumAge: '18 Years',
         maximumAge: '65 Years',
@@ -153,6 +159,7 @@ describe('findEligibleStudiesTool', () => {
       eligible: true,
       reason: 'Eligibility status matches study requirements',
     });
+    mockCalculateConditionRelevance.mockReturnValue(0.8);
     mockCalculateMatchScore.mockReturnValue(75);
     mockRankStudies.mockImplementation((studies: unknown[]) => studies);
     mockExtractRelevantLocations.mockReturnValue([
@@ -316,7 +323,7 @@ describe('findEligibleStudiesTool', () => {
   // ── Logic: Search Behavior ────────────────────────────────────
 
   describe('logic — search behavior', () => {
-    it('should join conditions with OR for the query', async () => {
+    it('should join conditions with OR for the conditionQuery', async () => {
       const input = { ...baseInput, conditions: ['Diabetes', 'Hypertension'] };
       await findEligibleStudiesTool.logic(
         input,
@@ -325,12 +332,14 @@ describe('findEligibleStudiesTool', () => {
       );
 
       expect(mockListStudies).toHaveBeenCalledWith(
-        expect.objectContaining({ query: 'Diabetes OR Hypertension' }),
+        expect.objectContaining({
+          conditionQuery: 'Diabetes OR Hypertension',
+        }),
         expect.anything(),
       );
     });
 
-    it('should use a single condition as-is in the query', async () => {
+    it('should use a single condition as-is in the conditionQuery', async () => {
       await findEligibleStudiesTool.logic(
         baseInput,
         appContext as never,
@@ -338,7 +347,7 @@ describe('findEligibleStudiesTool', () => {
       );
 
       expect(mockListStudies).toHaveBeenCalledWith(
-        expect.objectContaining({ query: 'Type 2 Diabetes' }),
+        expect.objectContaining({ conditionQuery: 'Type 2 Diabetes' }),
         expect.anything(),
       );
     });
@@ -523,25 +532,28 @@ describe('findEligibleStudiesTool', () => {
       );
     });
 
-    it('should pass eligibility checks array to calculateMatchScore', async () => {
+    it('should pass condition relevance and demographic checks to calculateMatchScore', async () => {
       await findEligibleStudiesTool.logic(
         baseInput,
         appContext as never,
         mockSdkContext as never,
       );
 
-      expect(mockCalculateMatchScore).toHaveBeenCalledWith([
-        { eligible: true, reason: 'Age within range (18-65)' },
-        { eligible: true, reason: 'Study accepts all sexes' },
-        {
-          eligible: true,
-          reason: 'Eligibility status matches study requirements',
-        },
-        { eligible: true, reason: '1 location(s) in United States' },
-      ]);
+      expect(mockCalculateMatchScore).toHaveBeenCalledWith(
+        0.8, // conditionRelevance from mock
+        [
+          { eligible: true, reason: 'Age within range (18-65)' },
+          { eligible: true, reason: 'Study accepts all sexes' },
+          {
+            eligible: true,
+            reason: 'Eligibility status matches study requirements',
+          },
+          { eligible: true, reason: '1 location(s) in United States' },
+        ],
+      );
     });
 
-    it('should include match reasons from passing checks', async () => {
+    it('should include match reasons from passing checks and condition relevance', async () => {
       const result = await findEligibleStudiesTool.logic(
         baseInput,
         appContext as never,
@@ -553,6 +565,7 @@ describe('findEligibleStudiesTool', () => {
         'Study accepts all sexes',
         'Eligibility status matches study requirements',
         '1 location(s) in United States',
+        'Condition relevance: 80% (Type 2 Diabetes Mellitus)',
       ]);
     });
 
@@ -568,6 +581,19 @@ describe('findEligibleStudiesTool', () => {
       expect(highlights?.sex).toBe('All');
       expect(highlights?.healthyVolunteers).toBe(false);
       expect(highlights?.criteriaSnippet).toContain('Inclusion: age 18-65');
+    });
+
+    it('should exclude study with zero condition relevance', async () => {
+      mockCalculateConditionRelevance.mockReturnValue(0);
+
+      const result = await findEligibleStudiesTool.logic(
+        baseInput,
+        appContext as never,
+        mockSdkContext as never,
+      );
+
+      expect(result.eligibleStudies).toHaveLength(0);
+      expect(result.totalMatches).toBe(0);
     });
 
     it('should handle multiple studies filtering some out', async () => {

@@ -72,6 +72,9 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
     if (params.query) {
       queryParams.set('query.term', params.query);
     }
+    if (params.conditionQuery) {
+      queryParams.set('query.cond', params.conditionQuery);
+    }
 
     // Combine user filter with geographic filters
     const combinedFilter = params.filter || '';

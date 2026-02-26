@@ -13,9 +13,14 @@ import type { PagedStudies, Study, StudyMetadata } from '../types.js';
  */
 export interface ListStudiesParams {
   /**
-   * Search query to filter studies.
+   * General search query (maps to `query.term` — full-text search across all fields).
    */
   query?: string;
+
+  /**
+   * Condition-specific search query (maps to `query.cond` — searches only condition/synonym fields).
+   */
+  conditionQuery?: string;
 
   /**
    * Filter expression for advanced querying.

@@ -87,24 +87,88 @@ export function rankStudies<T extends RankableStudy>(studies: T[]): T[] {
 }
 
 /**
- * Calculates a match score as a percentage of passed eligibility checks.
+ * Calculates a weighted match score combining condition relevance and demographic eligibility.
  *
- * @param checks - Array of eligibility check results
- * @returns Match score as a percentage (0-100), rounded to the nearest integer
+ * Condition relevance is the dominant factor (0–60 points). Demographic checks (age, sex,
+ * healthy volunteers, location) contribute the remaining 0–40 points, evenly split.
+ *
+ * @param conditionRelevance - Condition relevance score (0–1)
+ * @param demographicChecks - Array of demographic eligibility check results
+ * @returns Match score (0–100), rounded to the nearest integer
  *
  * @example
- * calculateMatchScore([
+ * calculateMatchScore(0.85, [
  *   { eligible: true },
  *   { eligible: true },
- *   { eligible: false },
+ *   { eligible: true },
  *   { eligible: true },
  * ])
- * // returns 75 (3/4 passed)
+ * // returns 91 (51 condition + 40 demographic)
  */
 export function calculateMatchScore(
-  checks: Array<{ eligible: boolean }>,
+  conditionRelevance: number,
+  demographicChecks: Array<{ eligible: boolean }>,
 ): number {
-  if (checks.length === 0) return 0;
-  const passedChecks = checks.filter((c) => c.eligible).length;
-  return Math.round((passedChecks / checks.length) * 100);
+  const CONDITION_WEIGHT = 60;
+  const DEMOGRAPHIC_WEIGHT = 40;
+
+  const conditionScore = conditionRelevance * CONDITION_WEIGHT;
+
+  const demographicScore =
+    demographicChecks.length > 0
+      ? (demographicChecks.filter((c) => c.eligible).length /
+          demographicChecks.length) *
+        DEMOGRAPHIC_WEIGHT
+      : 0;
+
+  return Math.round(conditionScore + demographicScore);
+}
+
+/**
+ * Calculates condition relevance by comparing a study's listed conditions
+ * against the patient's input conditions using normalized token overlap.
+ *
+ * @param studyConditions - Conditions listed on the study (from `conditionsModule.conditions`)
+ * @param patientConditions - Conditions the patient reported
+ * @returns Relevance score between 0 and 1
+ *
+ * @example
+ * calculateConditionRelevance(
+ *   ["Diabetes Mellitus, Type 2", "Hyperglycemia"],
+ *   ["Type 2 Diabetes"],
+ * )
+ * // returns ~0.67 (strong overlap on normalized tokens)
+ */
+export function calculateConditionRelevance(
+  studyConditions: string[],
+  patientConditions: string[],
+): number {
+  if (studyConditions.length === 0 || patientConditions.length === 0) return 0;
+
+  const normalize = (s: string): string[] =>
+    s
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter((t) => t.length > 1);
+
+  const patientTokenSets = patientConditions.map((c) => new Set(normalize(c)));
+
+  // For each patient condition, find the best-matching study condition
+  let totalRelevance = 0;
+  for (const patientTokens of patientTokenSets) {
+    if (patientTokens.size === 0) continue;
+
+    let bestOverlap = 0;
+    for (const studyCond of studyConditions) {
+      const studyTokens = normalize(studyCond);
+      const overlap = studyTokens.filter((t) => patientTokens.has(t)).length;
+      // Jaccard-like: overlap relative to patient token count
+      const score = overlap / patientTokens.size;
+      bestOverlap = Math.max(bestOverlap, score);
+    }
+    totalRelevance += bestOverlap;
+  }
+
+  return totalRelevance / patientTokenSets.length;
 }

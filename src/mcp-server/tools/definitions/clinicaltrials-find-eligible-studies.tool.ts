@@ -29,7 +29,11 @@ import {
   extractRelevantLocations,
   extractStudyDetails,
 } from '../utils/studyExtractors.js';
-import { calculateMatchScore, rankStudies } from '../utils/studyRanking.js';
+import {
+  calculateConditionRelevance,
+  calculateMatchScore,
+  rankStudies,
+} from '../utils/studyRanking.js';
 
 /** --------------------------------------------------------- */
 /** Programmatic tool name (must be unique). */
@@ -198,7 +202,13 @@ type FindEligibleStudiesOutput = z.infer<typeof OutputSchema>;
 // --------------------------
 
 /**
- * Filters studies based on eligibility criteria.
+ * Filters studies based on eligibility criteria and scores them by condition relevance.
+ *
+ * Hard filters (age, sex, healthy volunteers, location) exclude ineligible studies.
+ * Condition relevance is scored by comparing the study's `conditionsModule.conditions`
+ * against the patient's input conditions using normalized token overlap.
+ * Studies with zero condition relevance are excluded — they matched only via
+ * incidental keyword hits in the API's full-text search.
  */
 function filterByEligibility(
   studies: Study[],
@@ -218,30 +228,30 @@ function filterByEligibility(
     }
 
     const matchReasons: string[] = [];
-    const eligibilityChecks: Array<{ eligible: boolean; reason: string }> = [];
+    const demographicChecks: Array<{ eligible: boolean; reason: string }> = [];
 
-    // Age Check
+    // Age check
     const ageCheck = checkAgeEligibility(
       eligibility.minimumAge,
       eligibility.maximumAge,
       input.age,
     );
-    eligibilityChecks.push(ageCheck);
+    demographicChecks.push(ageCheck);
     if (!ageCheck.eligible) continue;
     matchReasons.push(ageCheck.reason);
 
-    // Sex Check
+    // Sex check
     const sexCheck = checkSexEligibility(eligibility.sex, input.sex);
-    eligibilityChecks.push(sexCheck);
+    demographicChecks.push(sexCheck);
     if (!sexCheck.eligible) continue;
     matchReasons.push(sexCheck.reason);
 
-    // Healthy Volunteers Check
+    // Healthy volunteers check
     const hvCheck = checkHealthyVolunteerEligibility(
       eligibility.healthyVolunteers,
       input.healthyVolunteer,
     );
-    eligibilityChecks.push(hvCheck);
+    demographicChecks.push(hvCheck);
     if (!hvCheck.eligible) continue;
     matchReasons.push(hvCheck.reason);
 
@@ -254,12 +264,38 @@ function filterByEligibility(
           ? `${locations.length} location(s) in ${input.location.country}`
           : `No locations in ${input.location.country}`,
     };
-    eligibilityChecks.push(locationCheck);
+    demographicChecks.push(locationCheck);
     if (!locationCheck.eligible) continue;
     matchReasons.push(locationCheck.reason);
 
-    // Calculate match score based on checks passed
-    const matchScore = calculateMatchScore(eligibilityChecks);
+    // Condition relevance — compare study conditions against patient conditions
+    const studyConditions =
+      study.protocolSection?.conditionsModule?.conditions ?? [];
+    const conditionRelevance = calculateConditionRelevance(
+      studyConditions,
+      input.conditions,
+    );
+
+    // Exclude studies with no condition overlap (false positives from full-text search)
+    if (conditionRelevance === 0) {
+      logger.debug('Excluding study with zero condition relevance', {
+        ...appContext,
+        nctId: study.protocolSection?.identificationModule?.nctId,
+        studyConditions,
+        patientConditions: input.conditions,
+      });
+      continue;
+    }
+
+    matchReasons.push(
+      `Condition relevance: ${Math.round(conditionRelevance * 100)}% (${studyConditions.join(', ')})`,
+    );
+
+    // Weighted score: condition relevance (0–60) + demographics (0–40)
+    const matchScore = calculateMatchScore(
+      conditionRelevance,
+      demographicChecks,
+    );
 
     // Extract study information
     const nctId =
@@ -313,7 +349,9 @@ async function findEligibleStudiesLogic(
     ClinicalTrialsProvider,
   );
 
-  // Build search query
+  // Use the condition-specific query field (query.cond) to search only the
+  // Conditions/Synonyms index, avoiding false positives from full-text matches
+  // (e.g. a cardiovascular study that mentions diabetes in exclusion criteria).
   const conditionQuery = input.conditions.join(' OR ');
 
   // Build filter for recruiting status
@@ -321,12 +359,11 @@ async function findEligibleStudiesLogic(
     ? 'STATUS:Recruiting OR STATUS:"Not yet recruiting"'
     : undefined;
 
-  // Fetch first page of studies for eligibility filtering.
-  // We fetch up to 100 candidates; if the query matches more, we surface
+  // Fetch up to 100 candidates; if the query matches more, we surface
   // totalAvailable so the caller knows results were truncated.
   const PAGE_SIZE = 100;
   const searchParams = {
-    query: conditionQuery,
+    conditionQuery,
     ...(filter ? { filter } : {}),
     pageSize: PAGE_SIZE,
   };

@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.0] - 2026-02-26
+
+### Added
+
+- **Condition relevance scoring**: `clinicaltrials_find_eligible_studies` now scores studies by comparing their listed conditions against patient input using normalized token overlap, and excludes studies with zero condition relevance (false positives from incidental keyword hits)
+- **Condition-specific search**: Eligible study search now uses `query.cond` (condition/synonym index) instead of `query.term` (full-text), reducing false positives from unrelated full-text matches (e.g. a cardiovascular study mentioning diabetes in exclusion criteria)
+- **`conditionQuery` parameter**: `ListStudiesParams` and `ClinicalTrialsGovProvider` now support `conditionQuery` mapped to the API's `query.cond` field
+
+### Changed
+
+- **Weighted match scoring**: Match scores are now weighted — condition relevance contributes 0–60 points and demographic eligibility (age, sex, healthy volunteers, location) contributes 0–40 points, replacing the previous equal-weight percentage system
+- **Dockerfile**: Added OCI labels (`org.opencontainers.image.source`, `description`, `licenses`) for GitHub Container Registry integration
+- **CLAUDE.md**: Added npm/Docker registry links and a Publishing section with release commands
+
 ## [1.7.1] - 2026-02-26
 
 ### Fixed

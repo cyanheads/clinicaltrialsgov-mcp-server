@@ -2,10 +2,10 @@
  * @fileoverview Tests for the clinicaltrials_search_studies tool definition.
  * @module tests/mcp-server/tools/definitions/clinicaltrials-search-studies.tool.test
  */
-import { container } from 'tsyringe';
+import { container } from '@/container/core/container.js';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-import { ClinicalTrialsProvider } from '../../../../src/container/tokens.js';
+import { ClinicalTrialsProvider } from '@/container/core/tokens.js';
 import { searchStudiesTool } from '../../../../src/mcp-server/tools/definitions/clinicaltrials-search-studies.tool.js';
 import type { IClinicalTrialsProvider } from '../../../../src/services/clinical-trials-gov/core/IClinicalTrialsProvider.js';
 import type { PagedStudies } from '../../../../src/services/clinical-trials-gov/types.js';
@@ -23,7 +23,7 @@ describe('searchStudiesTool', () => {
     } as unknown as IClinicalTrialsProvider;
 
     container.clearInstances();
-    container.registerInstance(ClinicalTrialsProvider, mockProvider);
+    container.registerValue(ClinicalTrialsProvider, mockProvider);
   });
 
   it('should have the correct name, title, and description', () => {

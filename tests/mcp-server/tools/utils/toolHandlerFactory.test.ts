@@ -45,9 +45,9 @@ describe('createMcpToolHandler', () => {
       const result = await handler({}, {});
 
       expect(result.content![0]!.type).toBe('text');
-      const text = result.content![0]!.text;
-      expect(text).toContain('"result"');
-      expect(text).toContain('"success"');
+      const block = result.content![0] as { type: 'text'; text: string };
+      expect(block.text).toContain('"result"');
+      expect(block.text).toContain('"success"');
     });
 
     it('should use custom response formatter when provided', async () => {
@@ -64,7 +64,9 @@ describe('createMcpToolHandler', () => {
 
       const result = await handler({}, {});
 
-      expect(result.content![0]!.text).toBe('Custom: custom');
+      expect((result.content![0] as { text: string }).text).toBe(
+        'Custom: custom',
+      );
     });
   });
 
@@ -220,7 +222,9 @@ describe('createMcpToolHandler', () => {
 
       expect(result.isError).toBe(true);
       expect(result.content![0]!.type).toBe('text');
-      expect(result.content![0]!.text).toContain('Test error message');
+      expect((result.content![0] as { text: string }).text).toContain(
+        'Test error message',
+      );
       expect(result.structuredContent).toMatchObject({
         code: JsonRpcErrorCode.InvalidParams,
         message: 'Test error message',
@@ -240,7 +244,7 @@ describe('createMcpToolHandler', () => {
       const result = await handler({}, {});
 
       expect(result.isError).toBe(true);
-      expect(result.content![0]!.text).toContain('Error:');
+      expect((result.content![0] as { text: string }).text).toContain('Error:');
       expect(result.structuredContent!.code).toBeDefined();
       expect(result.structuredContent!.message).toBeDefined();
     });

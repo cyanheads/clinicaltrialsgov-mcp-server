@@ -3,14 +3,14 @@
  * @module tests/mcp-server/transports/auth/authFactory
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { container } from 'tsyringe';
+import { container } from '@/container/core/container.js';
 
 import { createAuthStrategy } from '@/mcp-server/transports/auth/authFactory.js';
 import { JwtStrategy } from '@/mcp-server/transports/auth/strategies/jwtStrategy.js';
 import { OauthStrategy } from '@/mcp-server/transports/auth/strategies/oauthStrategy.js';
 import { config } from '@/config/index.js';
 import { logger } from '@/utils/index.js';
-import { AppConfig, Logger } from '@/container/tokens.js';
+import { AppConfig, Logger } from '@/container/core/tokens.js';
 
 describe('createAuthStrategy', () => {
   let originalAuthMode: string;
@@ -20,8 +20,8 @@ describe('createAuthStrategy', () => {
     container.clearInstances();
 
     // Register required dependencies in DI container
-    container.register(AppConfig, { useValue: config });
-    container.register(Logger, { useValue: logger });
+    container.registerValue(AppConfig, config);
+    container.registerValue(Logger, logger);
 
     originalAuthMode = config.mcpAuthMode;
   });

@@ -2,10 +2,10 @@
  * @fileoverview Tests for the clinicaltrials_get_study tool definition.
  * @module tests/mcp-server/tools/definitions/clinicaltrials-get-study.tool.test
  */
-import { container } from 'tsyringe';
+import { container } from '@/container/core/container.js';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-import { ClinicalTrialsProvider } from '../../../../src/container/tokens.js';
+import { ClinicalTrialsProvider } from '@/container/core/tokens.js';
 import { getStudyTool } from '../../../../src/mcp-server/tools/definitions/clinicaltrials-get-study.tool.js';
 import type { IClinicalTrialsProvider } from '../../../../src/services/clinical-trials-gov/core/IClinicalTrialsProvider.js';
 import type { Study } from '../../../../src/services/clinical-trials-gov/types.js';
@@ -29,7 +29,7 @@ describe('getStudyTool', () => {
 
     // Register the mock in the DI container
     container.clearInstances();
-    container.registerInstance(ClinicalTrialsProvider, mockProvider);
+    container.registerValue(ClinicalTrialsProvider, mockProvider);
   });
 
   it('should have the correct name, title, and description', () => {

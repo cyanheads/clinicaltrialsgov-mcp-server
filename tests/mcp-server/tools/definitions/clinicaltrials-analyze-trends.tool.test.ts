@@ -2,13 +2,10 @@
  * @fileoverview Tests for the clinicaltrials_analyze_trends tool definition.
  * @module tests/mcp-server/tools/definitions/clinicaltrials-analyze-trends.tool.test
  */
-import { container } from 'tsyringe';
+import { container } from '@/container/core/container.js';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-import {
-  AppConfig,
-  ClinicalTrialsProvider,
-} from '../../../../src/container/tokens.js';
+import { AppConfig, ClinicalTrialsProvider } from '@/container/core/tokens.js';
 import { analyzeTrendsTool } from '../../../../src/mcp-server/tools/definitions/clinicaltrials-analyze-trends.tool.js';
 import type { IClinicalTrialsProvider } from '../../../../src/services/clinical-trials-gov/core/IClinicalTrialsProvider.js';
 import type { Study } from '../../../../src/services/clinical-trials-gov/types.js';
@@ -32,8 +29,8 @@ describe('analyzeTrendsTool', () => {
     };
 
     container.clearInstances();
-    container.registerInstance(ClinicalTrialsProvider, mockProvider);
-    container.registerInstance(AppConfig, mockConfig);
+    container.registerValue(ClinicalTrialsProvider, mockProvider);
+    container.registerValue(AppConfig, mockConfig);
   });
 
   it('should have the correct name, title, and description', () => {

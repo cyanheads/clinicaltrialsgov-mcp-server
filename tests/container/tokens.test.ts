@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import * as tokens from '@/container/tokens.js';
+import * as tokens from '@/container/core/tokens.js';
 
 describe('DI Tokens', () => {
   describe('Token Definitions', () => {
@@ -13,14 +13,12 @@ describe('DI Tokens', () => {
       expect(tokens.Logger).toBeDefined();
       expect(tokens.StorageService).toBeDefined();
       expect(tokens.StorageProvider).toBeDefined();
-      expect(tokens.LlmProvider).toBeDefined();
       expect(tokens.ToolDefinitions).toBeDefined();
       expect(tokens.ResourceDefinitions).toBeDefined();
       expect(tokens.CreateMcpServerInstance).toBeDefined();
       expect(tokens.RateLimiterService).toBeDefined();
       expect(tokens.TransportManagerToken).toBeDefined();
       expect(tokens.SupabaseAdminClient).toBeDefined();
-      expect(tokens.SpeechService).toBeDefined();
     });
 
     it('should define tokens as Symbol instances', () => {
@@ -28,14 +26,12 @@ describe('DI Tokens', () => {
       expect(typeof tokens.Logger).toBe('symbol');
       expect(typeof tokens.StorageService).toBe('symbol');
       expect(typeof tokens.StorageProvider).toBe('symbol');
-      expect(typeof tokens.LlmProvider).toBe('symbol');
       expect(typeof tokens.ToolDefinitions).toBe('symbol');
       expect(typeof tokens.ResourceDefinitions).toBe('symbol');
       expect(typeof tokens.CreateMcpServerInstance).toBe('symbol');
       expect(typeof tokens.RateLimiterService).toBe('symbol');
       expect(typeof tokens.TransportManagerToken).toBe('symbol');
       expect(typeof tokens.SupabaseAdminClient).toBe('symbol');
-      expect(typeof tokens.SpeechService).toBe('symbol');
     });
 
     it('should have unique token values', () => {
@@ -44,14 +40,12 @@ describe('DI Tokens', () => {
         tokens.Logger,
         tokens.StorageService,
         tokens.StorageProvider,
-        tokens.LlmProvider,
         tokens.ToolDefinitions,
         tokens.ResourceDefinitions,
         tokens.CreateMcpServerInstance,
         tokens.RateLimiterService,
         tokens.TransportManagerToken,
         tokens.SupabaseAdminClient,
-        tokens.SpeechService,
       ];
 
       const uniqueValues = new Set(tokenValues);
@@ -63,7 +57,6 @@ describe('DI Tokens', () => {
       expect(tokens.Logger.description).toBe('Logger');
       expect(tokens.StorageService.description).toBe('StorageService');
       expect(tokens.StorageProvider.description).toBe('IStorageProvider');
-      expect(tokens.LlmProvider.description).toBe('ILlmProvider');
       expect(tokens.ToolDefinitions.description).toBe('ToolDefinitions');
       expect(tokens.ResourceDefinitions.description).toBe(
         'ResourceDefinitions',
@@ -76,7 +69,6 @@ describe('DI Tokens', () => {
       expect(tokens.SupabaseAdminClient.description).toBe(
         'SupabaseAdminClient',
       );
-      expect(tokens.SpeechService.description).toBe('SpeechService');
     });
   });
 
@@ -112,9 +104,7 @@ describe('DI Tokens', () => {
 
     it('should have provider tokens', () => {
       const providerTokens = [
-        tokens.LlmProvider,
         tokens.StorageProvider,
-        tokens.SpeechService,
         tokens.SupabaseAdminClient,
       ];
 
@@ -132,8 +122,8 @@ describe('DI Tokens', () => {
 
       // TypeScript would prevent this at compile time, but we test runtime behavior
       expect(() => {
-        // @ts-expect-error - Testing runtime immutability
-        tokens.AppConfig = Symbol('NewAppConfig');
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (tokens as any).AppConfig = Symbol('NewAppConfig');
       }).toThrow();
 
       // Verify token hasn't changed
@@ -161,11 +151,15 @@ describe('DI Tokens', () => {
   });
 
   describe('Token Count', () => {
-    it('should have exactly 12 tokens defined', () => {
+    it('should have the expected number of tokens defined', () => {
       const exportedSymbols = Object.values(tokens).filter(
         (value) => typeof value === 'symbol',
       );
 
+      // 13 tokens: AppConfig, Logger, StorageService, StorageProvider, SupabaseAdminClient,
+      // ClinicalTrialsProvider, RateLimiterService, CreateMcpServerInstance,
+      // TransportManagerToken, ToolRegistryToken, ResourceRegistryToken,
+      // ToolDefinitions, ResourceDefinitions
       expect(exportedSymbols.length).toBe(13);
     });
 

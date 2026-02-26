@@ -1,4 +1,3 @@
-import 'reflect-metadata';
 // This setup file is preloaded by Bun (see bunfig.toml).
 // It provides a lightweight Vitest compatibility layer so tests can run under `bun test`.
 

@@ -3,15 +3,15 @@
  * @module tests/container/registrations/mcp.test.ts
  */
 import { describe, expect, it, beforeAll } from 'vitest';
-import { container } from 'tsyringe';
+import { container } from '@/container/core/container.js';
 import { registerCoreServices } from '@/container/registrations/core.js';
 import { registerMcpServices } from '@/container/registrations/mcp.js';
 import {
   CreateMcpServerInstance,
   TransportManagerToken,
-} from '@/container/tokens.js';
-import { ToolRegistry } from '@/mcp-server/tools/tool-registration.js';
-import { ResourceRegistry } from '@/mcp-server/resources/resource-registration.js';
+  ToolRegistryToken,
+  ResourceRegistryToken,
+} from '@/container/core/tokens.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 
 describe('MCP Service Registration', () => {
@@ -26,8 +26,8 @@ describe('MCP Service Registration', () => {
     // allToolDefinitions/allResourceDefinitions to be empty when registerTools/registerResources
     // is called. This works fine in production and under bun:test. Skipping for now.
     it.skip('should register ToolRegistry as singleton', () => {
-      const registry1 = container.resolve(ToolRegistry);
-      const registry2 = container.resolve(ToolRegistry);
+      const registry1 = container.resolve(ToolRegistryToken);
+      const registry2 = container.resolve(ToolRegistryToken);
 
       expect(registry1).toBeDefined();
       expect(registry1).toBe(registry2); // Same instance
@@ -35,8 +35,8 @@ describe('MCP Service Registration', () => {
     });
 
     it.skip('should register ResourceRegistry as singleton', () => {
-      const registry1 = container.resolve(ResourceRegistry);
-      const registry2 = container.resolve(ResourceRegistry);
+      const registry1 = container.resolve(ResourceRegistryToken);
+      const registry2 = container.resolve(ResourceRegistryToken);
 
       expect(registry1).toBeDefined();
       expect(registry1).toBe(registry2); // Same instance
@@ -66,7 +66,7 @@ describe('MCP Service Registration', () => {
     });
 
     it.skip('should create functional ToolRegistry with tools', () => {
-      const registry = container.resolve(ToolRegistry);
+      const registry = container.resolve(ToolRegistryToken);
 
       expect(registry).toBeDefined();
       // Registry should be initialized with tools (from registerTools)
@@ -75,7 +75,7 @@ describe('MCP Service Registration', () => {
     });
 
     it.skip('should create functional ResourceRegistry with resources', () => {
-      const registry = container.resolve(ResourceRegistry);
+      const registry = container.resolve(ResourceRegistryToken);
 
       expect(registry).toBeDefined();
       // Registry should be initialized with resources (from registerResources)
@@ -124,17 +124,17 @@ describe('MCP Service Registration', () => {
 
   describe('Integration', () => {
     it.skip('should resolve all MCP services after registration', () => {
-      expect(() => container.resolve(ToolRegistry)).not.toThrow();
-      expect(() => container.resolve(ResourceRegistry)).not.toThrow();
+      expect(() => container.resolve(ToolRegistryToken)).not.toThrow();
+      expect(() => container.resolve(ResourceRegistryToken)).not.toThrow();
       expect(() => container.resolve(CreateMcpServerInstance)).not.toThrow();
       expect(() => container.resolve(TransportManagerToken)).not.toThrow();
     });
 
     it.skip('should maintain singleton behavior for registries', () => {
-      const toolRegistry1 = container.resolve(ToolRegistry);
-      const toolRegistry2 = container.resolve(ToolRegistry);
-      const resourceRegistry1 = container.resolve(ResourceRegistry);
-      const resourceRegistry2 = container.resolve(ResourceRegistry);
+      const toolRegistry1 = container.resolve(ToolRegistryToken);
+      const toolRegistry2 = container.resolve(ToolRegistryToken);
+      const resourceRegistry1 = container.resolve(ResourceRegistryToken);
+      const resourceRegistry2 = container.resolve(ResourceRegistryToken);
 
       expect(toolRegistry1).toBe(toolRegistry2);
       expect(resourceRegistry1).toBe(resourceRegistry2);
@@ -144,7 +144,7 @@ describe('MCP Service Registration', () => {
   describe('Dependency Chain', () => {
     it.skip('should work with all dependencies resolved', () => {
       // Core services already registered in beforeAll
-      const toolRegistry = container.resolve(ToolRegistry);
+      const toolRegistry = container.resolve(ToolRegistryToken);
       expect(toolRegistry).toBeDefined();
     });
 
@@ -152,8 +152,8 @@ describe('MCP Service Registration', () => {
       const factory = container.resolve<() => Promise<McpServer>>(
         CreateMcpServerInstance,
       );
-      const toolRegistry = container.resolve(ToolRegistry);
-      const resourceRegistry = container.resolve(ResourceRegistry);
+      const toolRegistry = container.resolve(ToolRegistryToken);
+      const resourceRegistry = container.resolve(ResourceRegistryToken);
 
       expect(factory).toBeDefined();
       expect(typeof factory).toBe('function');

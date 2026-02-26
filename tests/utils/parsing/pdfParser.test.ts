@@ -1002,15 +1002,16 @@ describe('PdfParser', () => {
       doc.addPage([600, 400]);
     });
 
-    it('should return placeholder text for each page', () => {
-      const textPages = parser.extractText(doc, context);
+    it('should return placeholder text for each page', async () => {
+      const result = await parser.extractText(doc, {}, context);
+      const textPages = result.text as string[];
       expect(textPages).toHaveLength(3);
       expect(textPages[0]).toContain('Text extraction not implemented');
     });
 
-    it('should log warning about limited text extraction', () => {
+    it('should log warning about limited text extraction', async () => {
       const warningSpy = vi.spyOn(logger, 'warning');
-      parser.extractText(doc, context);
+      await parser.extractText(doc, {}, context);
 
       expect(warningSpy).toHaveBeenCalledWith(
         expect.stringContaining('Text extraction is not fully implemented'),
@@ -1018,9 +1019,9 @@ describe('PdfParser', () => {
       );
     });
 
-    it('should log debug message with page count', () => {
+    it('should log debug message with page count', async () => {
       const debugSpy = vi.spyOn(logger, 'debug');
-      parser.extractText(doc, context);
+      await parser.extractText(doc, {}, context);
 
       expect(debugSpy).toHaveBeenCalledWith(
         'Extracting text from PDF.',
@@ -1030,8 +1031,9 @@ describe('PdfParser', () => {
       );
     });
 
-    it('should create context if none provided', () => {
-      const textPages = parser.extractText(doc);
+    it('should create context if none provided', async () => {
+      const result = await parser.extractText(doc);
+      const textPages = result.text as string[];
       expect(textPages).toHaveLength(3);
     });
   });
@@ -1198,30 +1200,26 @@ describe('PdfParser', () => {
 
   describe('Singleton export', () => {
     it('should export pdfParser singleton', async () => {
-      const { pdfParser } = await import(
-        '../../../src/utils/parsing/pdfParser.js'
-      );
+      const { pdfParser } =
+        await import('../../../src/utils/parsing/pdfParser.js');
       expect(pdfParser).toBeInstanceOf(PdfParser);
     });
 
     it('should export PDFDocument class', async () => {
-      const { PDFDocument: ExportedPDFDocument } = await import(
-        '../../../src/utils/parsing/pdfParser.js'
-      );
+      const { PDFDocument: ExportedPDFDocument } =
+        await import('../../../src/utils/parsing/pdfParser.js');
       expect(ExportedPDFDocument).toBe(PDFDocument);
     });
 
     it('should export StandardFonts enum', async () => {
-      const { StandardFonts: ExportedStandardFonts } = await import(
-        '../../../src/utils/parsing/pdfParser.js'
-      );
+      const { StandardFonts: ExportedStandardFonts } =
+        await import('../../../src/utils/parsing/pdfParser.js');
       expect(ExportedStandardFonts).toBe(StandardFonts);
     });
 
     it('should export rgb utility', async () => {
-      const { rgb: exportedRgb } = await import(
-        '../../../src/utils/parsing/pdfParser.js'
-      );
+      const { rgb: exportedRgb } =
+        await import('../../../src/utils/parsing/pdfParser.js');
       expect(exportedRgb).toBe(rgb);
     });
   });

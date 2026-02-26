@@ -3,18 +3,15 @@
  * @module tests/container/registrations/core.test.ts
  */
 import { describe, expect, it, beforeAll } from 'vitest';
-import { container } from 'tsyringe';
+import { container } from '@/container/core/container.js';
 import { registerCoreServices } from '@/container/registrations/core.js';
 import {
   AppConfig,
   Logger,
   StorageProvider,
   StorageService,
-  LlmProvider,
   RateLimiterService,
-  SpeechService,
-} from '@/container/tokens.js';
-import type { ILlmProvider } from '@/services/llm/core/ILlmProvider.js';
+} from '@/container/core/tokens.js';
 import type { IStorageProvider } from '@/storage/core/IStorageProvider.js';
 
 describe('Core Service Registration', () => {
@@ -68,17 +65,6 @@ describe('Core Service Registration', () => {
       expect(typeof storageService.delete).toBe('function');
     });
 
-    it('should register LlmProvider', () => {
-      // LlmProvider may throw if OPENROUTER_API_KEY is not set
-      try {
-        const llmProvider = container.resolve<ILlmProvider>(LlmProvider);
-        expect(llmProvider).toBeDefined();
-      } catch (error) {
-        // Expected in test environment without API key
-        expect(error).toBeDefined();
-      }
-    });
-
     it('should register RateLimiterService as singleton', () => {
       const rateLimiter1 = container.resolve(
         RateLimiterService,
@@ -89,18 +75,6 @@ describe('Core Service Registration', () => {
 
       expect(rateLimiter1).toBeDefined();
       expect(rateLimiter1).toBe(rateLimiter2); // Same instance
-    });
-
-    it('should register SpeechService with factory', () => {
-      const speechService = container.resolve(
-        SpeechService,
-      ) as import('@/services/speech/core/SpeechService.js').SpeechService;
-
-      expect(speechService).toBeDefined();
-      expect(
-        typeof speechService.getTTSProvider === 'function' ||
-          typeof speechService.getSTTProvider === 'function',
-      ).toBe(true);
     });
 
     it('should resolve same AppConfig instance multiple times', () => {
@@ -140,17 +114,6 @@ describe('Core Service Registration', () => {
       expect(typeof storageService.get).toBe('function');
       expect(typeof storageProvider.get).toBe('function');
     });
-
-    it('should create LlmProvider as OpenRouterProvider', () => {
-      // LlmProvider may throw if OPENROUTER_API_KEY is not set
-      try {
-        const llmProvider = container.resolve<ILlmProvider>(LlmProvider);
-        expect(llmProvider).toBeDefined();
-      } catch (error) {
-        // Expected in test environment without API key
-        expect(error).toBeDefined();
-      }
-    });
   });
 
   describe('Error Handling', () => {
@@ -163,16 +126,6 @@ describe('Core Service Registration', () => {
   });
 
   describe('Service Factory Resolution', () => {
-    it('should use factory to create SpeechService with config-based providers', () => {
-      const speechService = container.resolve(
-        SpeechService,
-      ) as import('@/services/speech/core/SpeechService.js').SpeechService;
-
-      expect(speechService).toBeDefined();
-      // Service should have health check capability
-      expect(typeof speechService.healthCheck).toBe('function');
-    });
-
     it('should create StorageProvider via factory with AppConfig dependency', () => {
       const config = container.resolve(AppConfig) as ReturnType<
         typeof import('@/config/index.js').parseConfig

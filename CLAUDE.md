@@ -1,6 +1,6 @@
 # Agent Protocol
 
-**Version:** 1.8.0
+**Version:** 1.7.2
 **Project:** clinicaltrialsgov-mcp-server
 **Updated:** 2026-02-27
 **npm:** [clinicaltrialsgov-mcp-server](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server)

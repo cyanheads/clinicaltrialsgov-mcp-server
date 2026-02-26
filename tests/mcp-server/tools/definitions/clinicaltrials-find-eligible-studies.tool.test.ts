@@ -537,6 +537,7 @@ describe('findEligibleStudiesTool', () => {
           eligible: true,
           reason: 'Eligibility status matches study requirements',
         },
+        { eligible: true, reason: '1 location(s) in United States' },
       ]);
     });
 
@@ -551,6 +552,7 @@ describe('findEligibleStudiesTool', () => {
         'Age within range (18-65)',
         'Study accepts all sexes',
         'Eligibility status matches study requirements',
+        '1 location(s) in United States',
       ]);
     });
 

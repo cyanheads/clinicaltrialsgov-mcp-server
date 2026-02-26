@@ -163,6 +163,7 @@ export const StudySchema = z
             healthyVolunteers: z.boolean().optional(),
             sex: z.string().optional(),
             minimumAge: z.string().optional(),
+            maximumAge: z.string().optional(),
             stdAges: z.array(z.string()).optional(),
           })
           .passthrough()

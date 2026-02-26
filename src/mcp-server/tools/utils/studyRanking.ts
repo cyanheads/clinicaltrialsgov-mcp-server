@@ -87,24 +87,24 @@ export function rankStudies<T extends RankableStudy>(studies: T[]): T[] {
 }
 
 /**
- * Calculates a match score based on eligibility checks.
- * Each successful check adds points to the total score.
+ * Calculates a match score as a percentage of passed eligibility checks.
  *
  * @param checks - Array of eligibility check results
- * @returns Total match score (0-100)
+ * @returns Match score as a percentage (0-100), rounded to the nearest integer
  *
  * @example
  * calculateMatchScore([
  *   { eligible: true },
  *   { eligible: true },
+ *   { eligible: false },
  *   { eligible: true },
  * ])
- * // returns 75 (3 checks × 25 points each)
+ * // returns 75 (3/4 passed)
  */
 export function calculateMatchScore(
   checks: Array<{ eligible: boolean }>,
 ): number {
-  const pointsPerCheck = 25;
+  if (checks.length === 0) return 0;
   const passedChecks = checks.filter((c) => c.eligible).length;
-  return passedChecks * pointsPerCheck;
+  return Math.round((passedChecks / checks.length) * 100);
 }

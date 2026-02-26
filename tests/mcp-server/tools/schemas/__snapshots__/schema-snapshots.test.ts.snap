@@ -754,6 +754,10 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_find_eligible_studies > ou
       ],
       "type": "object",
     },
+    "totalAvailable": {
+      "description": "Total studies matching the query (before eligibility filtering). Present when results were truncated.",
+      "type": "number",
+    },
     "totalMatches": {
       "description": "Total number of eligible studies found",
       "type": "number",
@@ -1154,6 +1158,9 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_study > outputSchema J
                       },
                       "healthyVolunteers": {
                         "type": "boolean",
+                      },
+                      "maximumAge": {
+                        "type": "string",
                       },
                       "minimumAge": {
                         "type": "string",
@@ -1880,6 +1887,9 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_search_studies > outputSch
                       },
                       "healthyVolunteers": {
                         "type": "boolean",
+                      },
+                      "maximumAge": {
+                        "type": "string",
                       },
                       "minimumAge": {
                         "type": "string",

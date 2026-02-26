@@ -68,10 +68,11 @@ export function extractRelevantLocations(
   if (!locations || locations.length === 0) return [];
 
   const relevantLocations: StudyLocation[] = [];
+  const normalizedCountry = patientLocation.country.toLowerCase();
 
   for (const loc of locations) {
-    // Only include if at least country matches
-    if (loc.country) {
+    // Only include locations that match the patient's country
+    if (loc.country && loc.country.toLowerCase() === normalizedCountry) {
       relevantLocations.push({
         facility: (loc as { facility?: string }).facility,
         city: loc.city,

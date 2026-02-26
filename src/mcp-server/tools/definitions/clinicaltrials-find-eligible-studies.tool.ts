@@ -173,6 +173,12 @@ const OutputSchema = z
       .array(EligibleStudySchema)
       .describe('Array of eligible studies, ranked by relevance'),
     totalMatches: z.number().describe('Total number of eligible studies found'),
+    totalAvailable: z
+      .number()
+      .optional()
+      .describe(
+        'Total studies matching the query (before eligibility filtering). Present when results were truncated.',
+      ),
     searchCriteria: z
       .object({
         conditions: z.array(z.string()).describe('Searched conditions'),
@@ -217,7 +223,7 @@ function filterByEligibility(
     // Age Check
     const ageCheck = checkAgeEligibility(
       eligibility.minimumAge,
-      (eligibility as { maximumAge?: string }).maximumAge,
+      eligibility.maximumAge,
       input.age,
     );
     eligibilityChecks.push(ageCheck);
@@ -239,6 +245,19 @@ function filterByEligibility(
     if (!hvCheck.eligible) continue;
     matchReasons.push(hvCheck.reason);
 
+    // Location check — at least one location must match the patient's country
+    const locations = extractRelevantLocations(study, input.location);
+    const locationCheck = {
+      eligible: locations.length > 0,
+      reason:
+        locations.length > 0
+          ? `${locations.length} location(s) in ${input.location.country}`
+          : `No locations in ${input.location.country}`,
+    };
+    eligibilityChecks.push(locationCheck);
+    if (!locationCheck.eligible) continue;
+    matchReasons.push(locationCheck.reason);
+
     // Calculate match score based on checks passed
     const matchScore = calculateMatchScore(eligibilityChecks);
 
@@ -248,13 +267,6 @@ function filterByEligibility(
     const title =
       study.protocolSection?.identificationModule?.briefTitle ?? 'No title';
     const briefSummary = study.protocolSection?.descriptionModule?.briefSummary;
-
-    const locations = extractRelevantLocations(study, input.location);
-
-    // If no locations match the patient's location, skip this study
-    if (locations.length === 0) {
-      continue;
-    }
 
     const contact = extractContactInfo(study);
     const studyDetails = extractStudyDetails(study);
@@ -266,7 +278,7 @@ function filterByEligibility(
       matchScore,
       matchReasons,
       eligibilityHighlights: {
-        ageRange: `${eligibility.minimumAge ?? 'N/A'} - ${(eligibility as { maximumAge?: string }).maximumAge ?? 'N/A'}`,
+        ageRange: `${eligibility.minimumAge ?? 'N/A'} - ${eligibility.maximumAge ?? 'N/A'}`,
         sex: eligibility.sex ?? 'All',
         healthyVolunteers: eligibility.healthyVolunteers,
         criteriaSnippet: eligibility.eligibilityCriteria?.substring(0, 300),
@@ -309,11 +321,14 @@ async function findEligibleStudiesLogic(
     ? 'STATUS:Recruiting OR STATUS:"Not yet recruiting"'
     : undefined;
 
-  // Fetch initial studies
+  // Fetch first page of studies for eligibility filtering.
+  // We fetch up to 100 candidates; if the query matches more, we surface
+  // totalAvailable so the caller knows results were truncated.
+  const PAGE_SIZE = 100;
   const searchParams = {
     query: conditionQuery,
     ...(filter ? { filter } : {}),
-    pageSize: 100, // Fetch more for filtering
+    pageSize: PAGE_SIZE,
   };
 
   logger.info('Searching for studies with criteria', {
@@ -322,10 +337,19 @@ async function findEligibleStudiesLogic(
   });
 
   const pagedStudies = await provider.listStudies(searchParams, appContext);
+  const totalAvailable = pagedStudies.totalCount;
+  const fetched = pagedStudies.studies?.length ?? 0;
 
-  logger.info(`Found ${pagedStudies.studies?.length ?? 0} studies to filter`, {
+  if (totalAvailable && totalAvailable > fetched) {
+    logger.warning(
+      `Query matched ${totalAvailable} studies but only ${fetched} were evaluated for eligibility`,
+      { ...appContext, totalAvailable, fetched },
+    );
+  }
+
+  logger.info(`Found ${fetched} studies to filter`, {
     ...appContext,
-    totalCount: pagedStudies.totalCount,
+    totalCount: totalAvailable,
   });
 
   // Filter by eligibility
@@ -353,9 +377,12 @@ async function findEligibleStudiesLogic(
     },
   );
 
+  const wasTruncated = totalAvailable != null && totalAvailable > fetched;
+
   return {
     eligibleStudies: finalStudies,
     totalMatches: eligibleStudies.length,
+    ...(wasTruncated ? { totalAvailable } : {}),
     searchCriteria: {
       conditions: input.conditions,
       location:
@@ -369,7 +396,13 @@ async function findEligibleStudiesLogic(
  * Formats the eligible studies as markdown with summaries and details.
  */
 function responseFormatter(result: FindEligibleStudiesOutput): ContentBlock[] {
-  const { eligibleStudies, totalMatches, searchCriteria } = result;
+  const { eligibleStudies, totalMatches, totalAvailable, searchCriteria } =
+    result;
+
+  const truncationNote =
+    totalAvailable != null
+      ? `\n> **Note:** ${totalAvailable} studies matched the query but only the first 100 were evaluated for eligibility. Narrow your search for more precise results.\n`
+      : '';
 
   const summary = [
     `# Eligible Clinical Trials`,
@@ -378,7 +411,7 @@ function responseFormatter(result: FindEligibleStudiesOutput): ContentBlock[] {
     `- **Conditions:** ${searchCriteria.conditions.join(', ')}`,
     `- **Location:** ${searchCriteria.location}`,
     `- **Patient:** ${searchCriteria.ageRange}`,
-    ``,
+    truncationNote,
     `Showing top ${eligibleStudies.length} ${eligibleStudies.length === 1 ? 'result' : 'results'}:`,
     ``,
     `---`,

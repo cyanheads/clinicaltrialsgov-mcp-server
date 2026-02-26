@@ -4,10 +4,7 @@
  * @module src/utils/security/rateLimiter
  */
 import { trace } from '@opentelemetry/api';
-import { inject, injectable } from 'tsyringe';
-
 import { config as ConfigType } from '@/config/index.js';
-import { AppConfig, Logger } from '@/container/tokens.js';
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import {
   type RequestContext,
@@ -47,15 +44,14 @@ export interface RateLimitEntry {
   lastAccess: number;
 }
 
-@injectable()
 export class RateLimiter {
   private readonly limits: Map<string, RateLimitEntry>;
   private cleanupTimer: NodeJS.Timeout | null = null;
   private readonly effectiveConfig: RateLimitConfig;
 
   constructor(
-    @inject(AppConfig) private config: typeof ConfigType,
-    @inject(Logger) private logger: typeof LoggerType,
+    private config: typeof ConfigType,
+    private logger: typeof LoggerType,
   ) {
     const defaultConfig: RateLimitConfig = {
       windowMs: 15 * 60 * 1000,
@@ -218,7 +214,7 @@ export class RateLimiter {
       const waitTime = Math.ceil((entry.resetTime - now) / 1000);
       const errorMessage = (
         this.effectiveConfig.errorMessage ||
-        'Rate limit exceeded. Please try again in {waitTime}  seconds.'
+        'Rate limit exceeded. Please try again in {waitTime} seconds.'
       ).replace('{waitTime}', waitTime.toString());
 
       activeSpan?.addEvent('rate_limit_exceeded', {

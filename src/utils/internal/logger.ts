@@ -53,6 +53,7 @@ export class Logger {
   private interactionLogger?: PinoLogger | undefined;
   private initialized = false;
   private currentMcpLevel: McpLogLevel = 'info';
+  private transportType: 'stdio' | 'http' | undefined;
 
   private rateLimitThreshold = 10;
   private rateLimitWindow = 60000;
@@ -76,13 +77,9 @@ export class Logger {
     transportType?: 'stdio' | 'http',
   ): Promise<PinoLogger> {
     const pinoLevel = mcpToPinoLevel[level] || 'info';
-    const isTest = config.environment === 'testing';
-
-    // In test environment, suppress all output unless explicitly enabled
-    const enableTestLogs = process.env.ENABLE_TEST_LOGS === 'true';
 
     const pinoOptions: pino.LoggerOptions = {
-      level: isTest && !enableTestLogs ? 'silent' : pinoLevel,
+      level: pinoLevel,
       base: {
         env: config.environment,
         version: config.mcpServerVersion,
@@ -104,6 +101,7 @@ export class Logger {
 
     const transports: pino.TransportTargetOptions[] = [];
     const isDevelopment = config.environment === 'development';
+    const isTest = config.environment === 'testing';
 
     // CRITICAL: STDIO transport MUST NOT output colored logs to stdout.
     // The MCP specification requires clean JSON-RPC on stdout with no ANSI codes.
@@ -126,9 +124,12 @@ export class Logger {
           options: { colorize: true, translateTime: 'yyyy-mm-dd HH:MM:ss' },
         });
       } catch (err) {
-        console.warn(
-          `[Logger Init] Pretty transport unavailable (${err instanceof Error ? err.message : String(err)}); falling back to stdout JSON.`,
-        );
+        // Only log to console if TTY to avoid polluting stderr in STDIO mode
+        if (process.stderr?.isTTY) {
+          console.warn(
+            `[Logger Init] Pretty transport unavailable (${err instanceof Error ? err.message : String(err)}); falling back to stdout JSON.`,
+          );
+        }
         transports.push({ target: 'pino/file', options: { destination: 1 } });
       }
     } else if (!isTest) {
@@ -160,9 +161,12 @@ export class Logger {
           },
         });
       } catch (err) {
-        console.error(
-          `[Logger Init] Failed to configure file logging: ${err instanceof Error ? err.message : String(err)}`,
-        );
+        // Only log to console if TTY to avoid polluting stderr in STDIO mode
+        if (process.stderr?.isTTY) {
+          console.error(
+            `[Logger Init] Failed to configure file logging: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
     }
 
@@ -174,6 +178,10 @@ export class Logger {
 
     const { default: path } = await import('path');
     return pino({
+      redact: {
+        paths: sanitization.getSensitivePinoFields(),
+        censor: '[REDACTED]',
+      },
       transport: {
         target: 'pino/file',
         options: {
@@ -198,6 +206,7 @@ export class Logger {
       return;
     }
     this.currentMcpLevel = level;
+    this.transportType = transportType;
     this.pinoLogger = await this.createPinoLogger(level, transportType);
     this.interactionLogger = await this.createInteractionLogger();
 
@@ -219,7 +228,10 @@ export class Logger {
 
   public setLevel(newLevel: McpLogLevel): void {
     if (!this.pinoLogger || !this.initialized) {
-      console.error('Cannot set level: Logger not initialized.');
+      // Only log to console if TTY to avoid polluting stderr in STDIO mode
+      if (process.stderr?.isTTY) {
+        console.error('Cannot set level: Logger not initialized.');
+      }
       return;
     }
     this.currentMcpLevel = newLevel;
@@ -232,6 +244,10 @@ export class Logger {
     );
   }
 
+  async [Symbol.asyncDispose](): Promise<void> {
+    return this.close();
+  }
+
   public async close(): Promise<void> {
     if (!this.initialized) return Promise.resolve();
     this.info(
@@ -242,27 +258,26 @@ export class Logger {
     this.flushSuppressedMessages();
 
     // Wait for all pending writes to complete
+    const flushPino = (pinoInstance: PinoLogger | undefined, label: string) => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      if (pinoInstance != null) {
+        pinoInstance.flush((err) => {
+          // Only log to console if TTY AND not in STDIO mode
+          // In STDIO mode, stdout is reserved for MCP JSON-RPC, so avoid polluting stderr with shutdown noise
+          if (err && process.stderr?.isTTY && this.transportType !== 'stdio') {
+            console.error(`Error flushing ${label}:`, err);
+          }
+          resolve();
+        });
+      } else {
+        resolve();
+      }
+      return promise;
+    };
+
     await Promise.all([
-      new Promise<void>((resolve) => {
-        if (this.pinoLogger) {
-          this.pinoLogger.flush((err) => {
-            if (err) console.error('Error flushing main logger:', err);
-            resolve();
-          });
-        } else {
-          resolve();
-        }
-      }),
-      new Promise<void>((resolve) => {
-        if (this.interactionLogger) {
-          this.interactionLogger.flush((err) => {
-            if (err) console.error('Error flushing interaction logger:', err);
-            resolve();
-          });
-        } else {
-          resolve();
-        }
-      }),
+      flushPino(this.pinoLogger, 'main logger'),
+      flushPino(this.interactionLogger, 'interaction logger'),
     ]);
 
     this.initialized = false;

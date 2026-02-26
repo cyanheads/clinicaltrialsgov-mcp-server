@@ -61,13 +61,20 @@ export function createMcpToolHandler<
         ? sdkContext.sessionId
         : undefined;
 
-    // Create the application's internal logger/tracing context.
-    // Elicitation is available to tool logic via sdkContext directly.
+    // Only pass serializable properties from sdkContext as parentContext.
+    // sdkContext contains non-serializable values (signal, sendNotification,
+    // sendRequest) that cause Bun runtime errors when Pino attempts serialization.
     const appContext: RequestContext =
       requestContextService.createRequestContext({
-        parentContext: sdkContext,
+        parentContext: {
+          sessionId,
+          requestId:
+            typeof sdkContext?.requestId === 'string'
+              ? sdkContext.requestId
+              : undefined,
+        },
         operation: 'HandleToolRequest',
-        additionalContext: { toolName, sessionId, input },
+        additionalContext: { toolName },
       });
 
     try {

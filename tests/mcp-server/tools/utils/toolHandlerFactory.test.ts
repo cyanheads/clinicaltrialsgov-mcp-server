@@ -200,11 +200,11 @@ describe('createMcpToolHandler', () => {
 
       await handler({}, createMockSdkContext({ elicitInput: mockElicitInput }));
 
-      // elicitInput should be on both sdkContext and appContext (factory copies it)
+      // elicitInput should be on sdkContext only (appContext is serializable logger context)
       expect(capturedSdk).toBeDefined();
       expect(typeof capturedSdk.elicitInput).toBe('function');
       expect(capturedApp).toBeDefined();
-      expect('elicitInput' in capturedApp!).toBe(true);
+      expect('elicitInput' in capturedApp!).toBe(false);
     });
 
     it('should not have elicitInput on sdkContext when SDK does not support it', async () => {

@@ -121,10 +121,13 @@ export async function fetchWithTimeout(
   // Strip custom options before passing to native fetch
   const { rejectPrivateIPs: _, ...fetchInit } = options ?? {};
 
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
     const response = await fetch(url, {
       ...fetchInit,
-      signal: AbortSignal.timeout(timeoutMs),
+      signal: controller.signal,
     });
 
     if (!response.ok) {
@@ -197,5 +200,7 @@ export async function fetchWithTimeout(
         errorSource: 'FetchNetworkErrorWrapper',
       },
     );
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

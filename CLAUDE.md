@@ -1,8 +1,10 @@
 # Agent Protocol
 
-**Version:** 1.7.1
+**Version:** 1.8.0
 **Project:** clinicaltrialsgov-mcp-server
-**Updated:** 2026-02-26
+**Updated:** 2026-02-27
+**npm:** [clinicaltrialsgov-mcp-server](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server)
+**Docker:** [ghcr.io/cyanheads/clinicaltrialsgov-mcp-server](https://ghcr.io/cyanheads/clinicaltrialsgov-mcp-server)
 
 > **Symlink note:** `AGENTS.md` is a symlink to `CLAUDE.md`. Only edit the root `CLAUDE.md`.
 
@@ -236,6 +238,23 @@ EOF
 | `build(scope):`    | Build system or dependency changes |
 
 Group related changes into atomic commits.
+
+---
+
+## Publishing
+
+After a version bump and final commit, publish to both npm and GHCR:
+
+```bash
+bun publish --access public
+
+docker buildx build --platform linux/amd64,linux/arm64 \
+  -t ghcr.io/cyanheads/clinicaltrialsgov-mcp-server:<version> \
+  -t ghcr.io/cyanheads/clinicaltrialsgov-mcp-server:latest \
+  --push .
+```
+
+Remind the user to run these after completing a release flow.
 
 ---
 

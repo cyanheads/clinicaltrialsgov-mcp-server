@@ -36,8 +36,10 @@ WORKDIR /usr/src/app
 # production dependencies are installed.
 ENV NODE_ENV=production
 
-# Add the required OCI label for MCP registry validation.
-# This an immutable property of the image and should not be an ARG.
+# OCI labels: links the package to the GitHub repo and provides metadata.
+LABEL org.opencontainers.image.source="https://github.com/cyanheads/clinicaltrialsgov-mcp-server"
+LABEL org.opencontainers.image.description="MCP server for ClinicalTrials.gov API v2"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
 LABEL io.modelcontextprotocol.server.name="io.github.cyanheads/clinicaltrialsgov-mcp-server"
 
 # Copy dependency manifests

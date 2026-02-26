@@ -54,16 +54,29 @@ const ConfigSchema = z.object({
         const str = emptyStringAsUndefined(val);
         if (typeof str === 'string') {
           const lower = str.toLowerCase();
+          // Normalize common aliases to RFC5424/MCP log level names
           const aliasMap: Record<string, string> = {
-            warning: 'warn',
+            warn: 'warning',
             err: 'error',
             information: 'info',
+            fatal: 'emerg',
+            trace: 'debug',
+            silent: 'emerg',
           };
           return aliasMap[lower] ?? lower;
         }
         return str;
       },
-      z.enum(['fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent']),
+      z.enum([
+        'debug',
+        'info',
+        'notice',
+        'warning',
+        'error',
+        'crit',
+        'alert',
+        'emerg',
+      ]),
     )
     .default('debug'),
   logsPath: z.string().optional(), // Made optional as it's Node-specific
@@ -92,6 +105,10 @@ const ConfigSchema = z.object({
   mcpSessionMode: z.preprocess(
     emptyStringAsUndefined,
     z.enum(['stateless', 'stateful', 'auto']).default('auto'),
+  ),
+  mcpResponseVerbosity: z.preprocess(
+    emptyStringAsUndefined,
+    z.enum(['minimal', 'standard', 'full']).default('standard'),
   ),
   mcpHttpPort: z.coerce.number().default(3017),
   mcpHttpHost: z.string().default('127.0.0.1'),
@@ -160,13 +177,39 @@ const ConfigSchema = z.object({
           'supabase',
           'cloudflare-r2',
           'cloudflare-kv',
+          'cloudflare-d1',
         ]),
       )
       .default('in-memory'),
-    filesystemPath: z.string().default('./.storage'), // This remains, but will only be used if providerType is 'filesystem'
+    filesystemPath: z.string().default('./.storage'),
   }),
+  // Experimental: Task store configuration
+  tasks: z.object({
+    storeType: z
+      .preprocess(
+        (val) => {
+          const str = emptyStringAsUndefined(val);
+          if (typeof str === 'string') {
+            const lower = str.toLowerCase();
+            const aliasMap: Record<string, string> = {
+              mem: 'in-memory',
+              memory: 'in-memory',
+              persistent: 'storage',
+            };
+            return aliasMap[lower] ?? lower;
+          }
+          return str;
+        },
+        z.enum(['in-memory', 'storage']),
+      )
+      .default('in-memory'),
+    tenantId: z.string().default('system-tasks'),
+    defaultTtlMs: z.coerce.number().nullable().optional(),
+  }),
+  // --- Clinical Trials specific ---
   clinicalTrialsDataPath: z.string().optional(),
   maxStudiesForAnalysis: z.coerce.number().int().positive().default(5000),
+  // --- End Clinical Trials specific ---
   openTelemetry: z.object({
     enabled: z.coerce.boolean().default(false),
     serviceName: z.string(),
@@ -235,6 +278,7 @@ const parseConfig = () => {
     environment: env.NODE_ENV,
     mcpTransportType: env.MCP_TRANSPORT_TYPE,
     mcpSessionMode: env.MCP_SESSION_MODE,
+    mcpResponseVerbosity: env.MCP_RESPONSE_VERBOSITY,
     mcpHttpPort: env.MCP_HTTP_PORT,
     mcpHttpHost: env.MCP_HTTP_HOST,
     mcpHttpEndpointPath: env.MCP_HTTP_ENDPOINT_PATH,
@@ -288,6 +332,11 @@ const parseConfig = () => {
     storage: {
       providerType: env.STORAGE_PROVIDER_TYPE,
       filesystemPath: env.STORAGE_FILESYSTEM_PATH,
+    },
+    tasks: {
+      storeType: env.TASK_STORE_TYPE,
+      tenantId: env.TASK_STORE_TENANT_ID,
+      defaultTtlMs: env.TASK_STORE_DEFAULT_TTL_MS,
     },
     clinicalTrialsDataPath: env.CLINICALTRIALS_DATA_PATH,
     maxStudiesForAnalysis: env.MAX_STUDIES_FOR_ANALYSIS,
@@ -344,7 +393,18 @@ const parseConfig = () => {
   const finalRawConfig = {
     ...rawConfig,
     pkg: parsedPkg,
-    logsPath: rawConfig.logsPath ?? (hasFileSystemAccess ? 'logs' : undefined),
+    logsPath: hasFileSystemAccess
+      ? (() => {
+          // Bundled (dist/index.js) is one level deep; source (src/config/index.ts) is two.
+          // Detect bundle path to avoid overshooting the project root.
+          const depth = import.meta.url.includes('/dist/') ? '..' : '../..';
+          const p = new URL(depth, import.meta.url).pathname;
+          const root = p.endsWith('/') ? p.slice(0, -1) : p;
+          const logsDir = rawConfig.logsPath ?? 'logs';
+          if (logsDir.startsWith('/')) return logsDir;
+          return `${root}/${logsDir}`;
+        })()
+      : undefined,
     mcpServerName: env.MCP_SERVER_NAME ?? parsedPkg.name,
     mcpServerVersion: env.MCP_SERVER_VERSION ?? parsedPkg.version,
     mcpServerDescription: env.MCP_SERVER_DESCRIPTION ?? parsedPkg.description,

@@ -14,11 +14,12 @@
  * @module src/mcp-server/server
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { container } from 'tsyringe';
-
+import { container } from '@/container/core/container.js';
+import {
+  ResourceRegistryToken,
+  ToolRegistryToken,
+} from '@/container/core/tokens.js';
 import { config } from '@/config/index.js';
-import { ResourceRegistry } from '@/mcp-server/resources/resource-registration.js';
-import { ToolRegistry } from '@/mcp-server/tools/tool-registration.js';
 import { logger, requestContextService } from '@/utils/index.js';
 
 /**
@@ -52,10 +53,7 @@ export async function createMcpServerInstance(): Promise<McpServer> {
         logging: {},
         resources: { listChanged: true },
         tools: { listChanged: true },
-        elicitation: {},
-        sampling: {}, // MCP 2025-06-18: Allow tools to request LLM completions from clients
-        prompts: { listChanged: true }, // MCP 2025-06-18: Provide structured message templates
-        roots: { listChanged: true }, // MCP 2025-06-18: Workspace/filesystem context awareness
+        prompts: { listChanged: true },
       },
     },
   );
@@ -64,10 +62,10 @@ export async function createMcpServerInstance(): Promise<McpServer> {
     logger.debug('Registering all MCP capabilities via registries...', context);
 
     // Resolve and use registry services
-    const toolRegistry = container.resolve(ToolRegistry);
+    const toolRegistry = container.resolve(ToolRegistryToken);
     await toolRegistry.registerAll(server);
 
-    const resourceRegistry = container.resolve(ResourceRegistry);
+    const resourceRegistry = container.resolve(ResourceRegistryToken);
     await resourceRegistry.registerAll(server);
 
     logger.info('All MCP capabilities registered successfully', context);

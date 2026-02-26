@@ -4,21 +4,19 @@
  * McpServer instance.
  * @module src/mcp-server/tools/tool-registration
  */
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { type DependencyContainer, injectable, injectAll } from 'tsyringe';
-import { ZodObject, type ZodRawShape } from 'zod';
+import type {
+  McpServer,
+  ToolCallback,
+} from '@modelcontextprotocol/sdk/server/mcp.js';
+import type { ZodObject, ZodRawShape } from 'zod';
 
-import { ToolDefinitions } from '@/container/index.js';
-import { JsonRpcErrorCode } from '@/types-global/errors.js';
-import { ErrorHandler, logger, requestContextService } from '@/utils/index.js';
-import { allToolDefinitions } from '@/mcp-server/tools/definitions/index.js';
 import type { ToolDefinition } from '@/mcp-server/tools/utils/index.js';
 import { createMcpToolHandler } from '@/mcp-server/tools/utils/index.js';
+import { JsonRpcErrorCode } from '@/types-global/errors.js';
+import { ErrorHandler, logger, requestContextService } from '@/utils/index.js';
 
-@injectable()
 export class ToolRegistry {
   constructor(
-    @injectAll(ToolDefinitions, { isOptional: true })
     private toolDefs: ToolDefinition<
       ZodObject<ZodRawShape>,
       ZodObject<ZodRawShape>
@@ -79,11 +77,11 @@ export class ToolRegistry {
           {
             title,
             description: tool.description,
-            inputSchema: tool.inputSchema.shape,
-            outputSchema: tool.outputSchema.shape,
+            inputSchema: tool.inputSchema,
+            outputSchema: tool.outputSchema,
             ...(tool.annotations && { annotations: tool.annotations }),
           },
-          handler,
+          handler as ToolCallback<TInputSchema>,
         );
 
         logger.notice(
@@ -100,16 +98,3 @@ export class ToolRegistry {
     );
   }
 }
-
-/**
- * Registers all tool definitions with the provided dependency container.
- * This function uses multi-injection to register each tool under the `ToolDefinitions` token.
- *
- * @param {DependencyContainer} container - The tsyringe container instance to register tools with.
- */
-export const registerTools = (container: DependencyContainer): void => {
-  for (const tool of allToolDefinitions) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-    container.register(ToolDefinitions, { useValue: tool });
-  }
-};

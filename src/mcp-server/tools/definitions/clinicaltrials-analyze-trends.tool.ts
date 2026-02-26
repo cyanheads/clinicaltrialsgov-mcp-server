@@ -6,10 +6,10 @@
  */
 
 import type { ContentBlock } from '@modelcontextprotocol/sdk/types.js';
-import { container } from 'tsyringe';
+import { container } from '@/container/index.js';
 import { z } from 'zod';
 
-import { AppConfig, ClinicalTrialsProvider } from '@/container/tokens.js';
+import { AppConfig, ClinicalTrialsProvider } from '@/container/core/tokens.js';
 import type {
   SdkContext,
   ToolAnnotations,
@@ -107,7 +107,7 @@ const AnalysisResultSchema = z
       .int()
       .describe('Total number of studies included in this analysis.'),
     results: z
-      .record(z.number())
+      .record(z.string(), z.number())
       .describe(
         'Aggregated counts by category (e.g., status, country, phase).',
       ),
@@ -330,8 +330,11 @@ function responseFormatter(result: AnalyzeTrendsOutput): ContentBlock[] {
 
     const categoryList = topEntries
       .map(([category, count]) => {
-        const percentage = ((count / analysis.totalStudies) * 100).toFixed(1);
-        return `  • ${category}: ${count} (${percentage}%)`;
+        const numCount = count;
+        const percentage = ((numCount / analysis.totalStudies) * 100).toFixed(
+          1,
+        );
+        return `  • ${category}: ${numCount} (${percentage}%)`;
       })
       .join('\n');
 

@@ -6,10 +6,10 @@
  */
 
 import type { ContentBlock } from '@modelcontextprotocol/sdk/types.js';
-import { container } from 'tsyringe';
+import { container } from '@/container/index.js';
 import { z } from 'zod';
 
-import { ClinicalTrialsProvider } from '@/container/tokens.js';
+import { ClinicalTrialsProvider } from '@/container/core/tokens.js';
 import type {
   SdkContext,
   ToolAnnotations,

@@ -5,8 +5,6 @@
  * it for the Cloudflare Workers runtime with support for bindings (KV, R2, D1, AI).
  * @module src/worker
  */
-import 'reflect-metadata';
-
 import type {
   R2Bucket,
   KVNamespace,
@@ -187,14 +185,13 @@ function initializeApp(env: CloudflareBindings): Promise<Hono<WorkerEnv>> {
         storageProvider: env.STORAGE_PROVIDER_TYPE ?? 'in-memory',
       });
 
-      // Create the MCP Server instance.
-      const mcpServer = await createMcpServerInstance();
-
-      // Create the Hono application.
-      const app = createHttpApp(
-        mcpServer,
+      // Create the Hono application with server factory.
+      // Pass factory so each request gets a fresh McpServer+transport pair
+      // (SDK 1.26.0 security fix — GHSA-345p-7cg4-v4c7)
+      const app = createHttpApp<CloudflareBindings>(
+        createMcpServerInstance,
         workerContext,
-      ) as unknown as Hono<WorkerEnv>;
+      );
 
       const initDuration = Date.now() - initStartTime;
       logger.info('Cloudflare Worker initialized successfully.', {

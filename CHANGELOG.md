@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.7.1] - 2026-02-26
+
+### Fixed
+
+- **Tool handler serialization**: `toolHandlerFactory` now passes only serializable properties (`sessionId`, `requestId`) as `parentContext` instead of the full `sdkContext`, preventing Bun/Pino runtime errors when encountering non-serializable values (`signal`, `sendNotification`, `sendRequest`)
+- **Fetch timeout cleanup**: Replaced `AbortSignal.timeout()` with manual `AbortController` + `setTimeout` in `fetchWithTimeout`, ensuring the timer is properly cleared in a `finally` block
+
+### Changed
+
+- **Search sort description**: Improved `sort` field description in `clinicaltrials_search_studies` with correct API field names (`LastUpdatePostDate` instead of `LastUpdateDate`) and added `@relevance` example
+
 ## [1.7.0] - 2026-02-26
 
 ### Fixed

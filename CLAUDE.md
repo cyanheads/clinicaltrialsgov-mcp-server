@@ -1,6 +1,6 @@
 # Agent Protocol
 
-**Version:** 1.7.0
+**Version:** 1.7.1
 **Project:** clinicaltrialsgov-mcp-server
 **Updated:** 2026-02-26
 

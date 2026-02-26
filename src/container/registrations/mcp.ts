@@ -50,7 +50,13 @@ export const registerMcpServices = () => {
 
   container.registerSingleton(
     ResourceRegistryToken,
-    (c) => new ResourceRegistry(c.resolveAll(ResourceDefinitions)),
+
+    (c) =>
+      new ResourceRegistry(
+        c.resolveAll(ResourceDefinitions) as ConstructorParameters<
+          typeof ResourceRegistry
+        >[0],
+      ),
   );
 
   // Server factory function

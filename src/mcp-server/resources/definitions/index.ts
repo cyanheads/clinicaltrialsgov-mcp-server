@@ -4,6 +4,8 @@
  * @module src/mcp-server/resources/definitions
  */
 
+import type { ResourceDefinition } from '../utils/resourceDefinition.js';
+
 // import { echoResourceDefinition } from './echo.resource.js';
 
 /**
@@ -11,4 +13,5 @@
  * This is used by the registration system to automatically discover and register
  * all available resources.
  */
-export const allResourceDefinitions = []; // [echoResourceDefinition];
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const allResourceDefinitions: ResourceDefinition<any, any>[] = []; // [echoResourceDefinition];

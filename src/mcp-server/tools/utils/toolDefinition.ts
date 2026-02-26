@@ -32,6 +32,16 @@ export interface ToolAnnotations {
    */
   readOnlyHint?: boolean;
   /**
+   * A hint indicating that the tool may perform destructive operations
+   * that cannot be easily undone (e.g., deleting data).
+   */
+  destructiveHint?: boolean;
+  /**
+   * A hint indicating that calling the tool multiple times with the same
+   * arguments produces the same result (safe to retry).
+   */
+  idempotentHint?: boolean;
+  /**
    * A hint indicating that the tool may interact with external, unpredictable,
    * or dynamic systems (e.g., fetching from a live API, web search).
    */

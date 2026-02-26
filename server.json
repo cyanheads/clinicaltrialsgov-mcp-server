@@ -1,5 +1,5 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-09-29/server.schema.json",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
   "description": "MCP server for the ClinicalTrials.gov v2 API. Search, retrieve, compare, and analyze clinical trial data.",
   "repository": {
@@ -106,9 +106,8 @@
       ],
       "transport": {
         "type": "streamable-http",
-        "url": "http://localhost:3000/mcp"
+        "url": "http://localhost:3017/mcp"
       }
     }
-  ],
-  "mcpName": "io.github.cyanheads/clinicaltrialsgov-mcp-server"
+  ]
 }

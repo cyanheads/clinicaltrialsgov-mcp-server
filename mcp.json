@@ -6,7 +6,7 @@
       "env": {
         "MCP_LOG_LEVEL": "debug",
         "MCP_TRANSPORT_TYPE": "http",
-        "MCP_HTTP_PORT": "3010"
+        "MCP_HTTP_PORT": "3017"
       }
     }
   }

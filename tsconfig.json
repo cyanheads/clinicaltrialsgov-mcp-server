@@ -33,13 +33,9 @@
     // Ensure consistent file naming
     "forceConsistentCasingInFileNames": true,
 
-    // Enable experimental decorators if needed
-    "experimentalDecorators": true,
-    "emitDecoratorMetadata": true,
-
     // Node.js specific
     "lib": ["ES2022"],
-    "types": ["bun-types", "node", "reflect-metadata"],
+    "types": ["bun-types", "node"],
 
     // Error on unused locals and parameters
     "noUnusedLocals": true,

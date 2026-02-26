@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-02-26 15:37:33
+Generated on: 2026-02-26 15:59:50
 
 ```
 clinicaltrialsgov-mcp-server/
@@ -186,27 +186,58 @@ clinicaltrialsgov-mcp-server/
 │   ├── config/
 │   │   ├── index.int.test.ts
 │   │   └── index.test.ts
+│   ├── conformance/
+│   │   ├── helpers/
+│   │   │   ├── assertions.ts
+│   │   │   └── server-harness.ts
+│   │   ├── lifecycle.test.ts
+│   │   ├── prompts.test.ts
+│   │   ├── protocol-init.test.ts
+│   │   ├── resources.test.ts
+│   │   └── tools.test.ts
 │   ├── container/
 │   │   ├── registrations/
 │   │   │   ├── core.test.ts
 │   │   │   └── mcp.test.ts
+│   │   ├── container.test.ts
 │   │   ├── index.test.ts
 │   │   └── tokens.test.ts
+│   ├── fixtures/
+│   │   └── index.ts
 │   ├── mcp-server/
 │   │   ├── resources/
 │   │   │   ├── definitions/
+│   │   │   │   ├── data-explorer-ui.app-resource.test.ts
+│   │   │   │   ├── echo.resource.test.ts
+│   │   │   │   └── index.test.ts
+│   │   │   ├── schemas/
+│   │   │   │   ├── __snapshots__/
+│   │   │   │   │   └── schema-snapshots.test.ts.snap
+│   │   │   │   ├── json-schema-compatibility.test.ts
+│   │   │   │   └── schema-snapshots.test.ts
 │   │   │   ├── utils/
 │   │   │   │   ├── resourceDefinition.test.ts
 │   │   │   │   └── resourceHandlerFactory.test.ts
 │   │   │   └── resource-registration.test.ts
 │   │   ├── tools/
 │   │   │   ├── definitions/
-│   │   │   │   ├── clinicaltrials-analyze-trends.tool.test.ts
-│   │   │   │   ├── clinicaltrials-compare-studies.tool.test.ts
-│   │   │   │   ├── clinicaltrials-get-study.tool.test.ts
-│   │   │   │   └── clinicaltrials-search-studies.tool.test.ts
+│   │   │   │   ├── index.test.ts
+│   │   │   │   ├── template-async-countdown.task-tool.test.ts
+│   │   │   │   ├── template-cat-fact.tool.test.ts
+│   │   │   │   ├── template-code-review-sampling.tool.test.ts
+│   │   │   │   ├── template-data-explorer.app-tool.test.ts
+│   │   │   │   ├── template-echo-message.tool.test.ts
+│   │   │   │   ├── template-image-test.tool.test.ts
+│   │   │   │   └── template-madlibs-elicitation.tool.test.ts
+│   │   │   ├── fuzz/
+│   │   │   │   └── tool-input-fuzz.test.ts
+│   │   │   ├── schemas/
+│   │   │   │   ├── __snapshots__/
+│   │   │   │   │   └── schema-snapshots.test.ts.snap
+│   │   │   │   ├── json-schema-compatibility.test.ts
+│   │   │   │   ├── schema-snapshots.test.ts
+│   │   │   │   └── zod4-compatibility.test.ts
 │   │   │   ├── utils/
-│   │   │   │   ├── core/
 │   │   │   │   ├── index.test.ts
 │   │   │   │   ├── toolDefinition.test.ts
 │   │   │   │   └── toolHandlerFactory.test.ts
@@ -227,6 +258,7 @@ clinicaltrialsgov-mcp-server/
 │   │   │   │   └── index.test.ts
 │   │   │   ├── http/
 │   │   │   │   ├── httpErrorHandler.test.ts
+│   │   │   │   ├── httpTransport.integration.test.ts
 │   │   │   │   ├── httpTransport.test.ts
 │   │   │   │   ├── httpTypes.test.ts
 │   │   │   │   ├── index.test.ts
@@ -237,7 +269,7 @@ clinicaltrialsgov-mcp-server/
 │   │   │   │   └── stdioTransport.test.ts
 │   │   │   ├── ITransport.test.ts
 │   │   │   └── manager.test.ts
-│   │   └── server.test.ts.disabled
+│   │   └── server.test.ts
 │   ├── mocks/
 │   │   ├── handlers.ts
 │   │   └── server.ts
@@ -251,6 +283,7 @@ clinicaltrialsgov-mcp-server/
 │   │   │   └── storageValidation.test.ts
 │   │   ├── providers/
 │   │   │   ├── cloudflare/
+│   │   │   │   ├── d1Provider.test.ts
 │   │   │   │   ├── kvProvider.test.ts
 │   │   │   │   └── r2Provider.test.ts
 │   │   │   ├── fileSystem/
@@ -267,8 +300,11 @@ clinicaltrialsgov-mcp-server/
 │   │   └── errors.test.ts
 │   ├── utils/
 │   │   ├── formatting/
+│   │   │   ├── diffFormatter.test.ts
 │   │   │   ├── index.test.ts
-│   │   │   └── markdownBuilder.test.ts
+│   │   │   ├── markdownBuilder.test.ts
+│   │   │   ├── tableFormatter.test.ts
+│   │   │   └── treeFormatter.test.ts
 │   │   ├── internal/
 │   │   │   ├── error-handler/
 │   │   │   │   ├── errorHandler.test.ts
@@ -281,6 +317,7 @@ clinicaltrialsgov-mcp-server/
 │   │   │   ├── errorHandler.unit.test.ts
 │   │   │   ├── health.test.ts
 │   │   │   ├── logger.int.test.ts
+│   │   │   ├── logger.test.ts
 │   │   │   ├── performance.init.test.ts
 │   │   │   ├── performance.test.ts
 │   │   │   ├── requestContext.test.ts
@@ -298,6 +335,7 @@ clinicaltrialsgov-mcp-server/
 │   │   ├── parsing/
 │   │   │   ├── csvParser.test.ts
 │   │   │   ├── dateParser.test.ts
+│   │   │   ├── frontmatterParser.test.ts
 │   │   │   ├── index.test.ts
 │   │   │   ├── jsonParser.test.ts
 │   │   │   ├── pdfParser.test.ts
@@ -310,6 +348,7 @@ clinicaltrialsgov-mcp-server/
 │   │   │   ├── idGenerator.test.ts
 │   │   │   ├── index.test.ts
 │   │   │   ├── rateLimiter.test.ts
+│   │   │   ├── sanitization.property.test.ts
 │   │   │   └── sanitization.test.ts
 │   │   ├── telemetry/
 │   │   │   ├── index.test.ts
@@ -317,6 +356,8 @@ clinicaltrialsgov-mcp-server/
 │   │   │   ├── metrics.test.ts
 │   │   │   ├── semconv.test.ts
 │   │   │   └── trace.test.ts
+│   │   ├── types/
+│   │   │   └── guards.test.ts
 │   │   └── index.test.ts
 │   ├── index.test.ts
 │   ├── setup.ts
@@ -325,7 +366,6 @@ clinicaltrialsgov-mcp-server/
 ├── .env.example
 ├── .gitattributes
 ├── .gitignore
-├── .prettiercache
 ├── .prettierignore
 ├── .prettierrc.json
 ├── AGENTS.md
@@ -343,11 +383,12 @@ clinicaltrialsgov-mcp-server/
 ├── server.json
 ├── smithery.yaml
 ├── tsconfig.json
-├── tsconfig.typedoc.json
-├── tsconfig.vitest.json
+├── tsconfig.scripts.json
+├── tsconfig.test.json
 ├── tsdoc.json
 ├── typedoc.json
 ├── vitest.config.ts
+├── vitest.conformance.ts
 └── wrangler.toml
 ```
 

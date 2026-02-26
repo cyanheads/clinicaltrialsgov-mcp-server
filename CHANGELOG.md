@@ -29,6 +29,9 @@ Major infrastructure upgrade aligning with `cyanheads/mcp-ts-template@v2.9.8`. R
 - **Config**: RFC 5424 log levels (`warn`→`warning`, `fatal`→`emerg`), `mcpResponseVerbosity`, `cloudflare-d1` storage type, bundled-path detection fix for `logsPath`
 - **Dependencies**: Major version bumps — `hono@^4.12.3`, `pino@^10.3.1`, `@supabase/supabase-js@^2.98.0`, `@opentelemetry/*@^0.212.0`. Runtime deps split into `dependencies`, build/test into `devDependencies`.
 - **Worker**: `src/worker.ts` passes server factory function instead of awaited instance to `createHttpApp`
+- **Build**: `tsconfig.json` targets `ESNext`, adds incremental compilation, `@cloudflare/workers-types`, `useUnknownInCatchVariables`, `noUncheckedSideEffectImports`. Replaced `tsconfig.typedoc.json`/`tsconfig.vitest.json` with `tsconfig.scripts.json`/`tsconfig.test.json`. `tsdoc.json` now extends `typedoc/tsdoc.json`.
+- **Test infrastructure**: Vitest config switched to `istanbul` coverage, `pool: 'forks'` for isolation, inlined `zod` for Vite SSR compatibility, added coverage thresholds (80/75/70/80). New `vitest.conformance.ts` for conformance suite.
+- **Documentation**: Rewrote `CLAUDE.md` (v1.2.1 → v1.6.0) — condensed, updated for new DI system, added service/utility reference tables, git commit conventions, command reference. `AGENTS.md` converted from hard-linked copy to symlink → `CLAUDE.md`. Tightened descriptions in `package.json`, `server.json`, `README.md`.
 
 ### Added
 
@@ -40,6 +43,11 @@ Major infrastructure upgrade aligning with `cyanheads/mcp-ts-template@v2.9.8`. R
 - `src/utils/formatting/treeFormatter.ts` — tree formatting utility
 - `src/utils/parsing/frontmatterParser.ts` — frontmatter parsing utility
 - `src/utils/types/` — shared type utilities
+- `tests/conformance/` — MCP protocol conformance test suite (lifecycle, init, tools, resources, prompts)
+- `tests/fixtures/` — shared test fixtures and factories
+- Schema snapshot and JSON Schema compatibility tests for tools and resources
+- `tests/services/clinical-trials-gov/` — provider and type tests
+- New formatter, parser, and type guard test suites
 
 ### Removed
 
@@ -49,6 +57,9 @@ Major infrastructure upgrade aligning with `cyanheads/mcp-ts-template@v2.9.8`. R
 - `src/container/tokens.ts` — replaced by `src/container/core/tokens.ts`
 - `reflect-metadata` — removed from setup, tsconfig, and all imports
 - Unused dependencies: `openai`, `@modelcontextprotocol/ext-apps`, `@traversable/*`, `ajv`, `ajv-formats`, `fast-check`
+- `docs/best-practices.md` — superseded by `CLAUDE.md`
+- `.clinerules/AGENTS.md` — replaced by symlink
+- `tsconfig.typedoc.json`, `tsconfig.vitest.json` — replaced by `tsconfig.scripts.json`, `tsconfig.test.json`
 
 ## [1.5.0] - 2025-10-15
 

@@ -2,7 +2,7 @@
   "name": "clinicaltrialsgov-mcp-server",
   "version": "1.6.0",
   "mcpName": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
-  "description": "ClinicalTrials.gov Model Context Protocol (MCP) Server that provides a suite of tools for interacting with the official ClinicalTrials.gov v2 API. Enables AI agents and LLMs to programmatically search, retrieve, compare, analyze, and find eligible clinical trials.",
+  "description": "MCP server for the ClinicalTrials.gov v2 API. Allow LLMs to search trials, retrieve study details, compare studies, analyze trends, and match patients to eligible trials.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "files": [

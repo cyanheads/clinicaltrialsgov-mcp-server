@@ -534,7 +534,9 @@ async function compareStudiesLogic(
   const comparisons: StudyComparison[] = [];
   const errors: { nctId: string; error: string }[] = [];
 
-  // Fetch all studies
+  // Fetch all studies concurrently, preserving input order.
+  // NOTE: try/catch here is intentional — partial success is valid when
+  // comparing multiple IDs. Only throws if fewer than 2 succeed.
   const studyPromises = input.nctIds.map(async (nctId) => {
     try {
       const study = await provider.fetchStudy(nctId, appContext);

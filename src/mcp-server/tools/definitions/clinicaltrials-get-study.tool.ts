@@ -182,36 +182,46 @@ async function getStudyLogic(
     ClinicalTrialsProvider,
   );
 
+  // Fetch all studies concurrently, preserving input order.
+  // NOTE: try/catch here is intentional — partial success is valid when
+  // fetching multiple IDs. Only throws if *all* fetches fail.
+  const settled = await Promise.all(
+    nctIds.map(async (nctId) => {
+      try {
+        const study = await provider.fetchStudy(nctId, appContext);
+        logger.info(`Successfully fetched study ${nctId}`, { ...appContext });
+        if (input.summaryOnly) {
+          logger.debug(`Creating summary for study ${nctId}`, {
+            ...appContext,
+          });
+          return { ok: true as const, value: createStudySummary(study) };
+        }
+        return { ok: true as const, value: study };
+      } catch (error) {
+        const errorMessage =
+          error instanceof McpError
+            ? error.message
+            : 'An unexpected error occurred';
+        logger.warning(`Failed to fetch study ${nctId}: ${errorMessage}`, {
+          ...appContext,
+          nctId,
+          error,
+        });
+        return { ok: false as const, nctId, error: errorMessage };
+      }
+    }),
+  );
+
   const studies: (Study | StudySummary)[] = [];
   const errors: { nctId: string; error: string }[] = [];
 
-  const studyPromises = nctIds.map(async (nctId) => {
-    try {
-      const study = await provider.fetchStudy(nctId, appContext);
-
-      logger.info(`Successfully fetched study ${nctId}`, { ...appContext });
-
-      if (input.summaryOnly) {
-        logger.debug(`Creating summary for study ${nctId}`, { ...appContext });
-        studies.push(createStudySummary(study));
-      } else {
-        studies.push(study);
-      }
-    } catch (error) {
-      const errorMessage =
-        error instanceof McpError
-          ? error.message
-          : 'An unexpected error occurred';
-      logger.warning(`Failed to fetch study ${nctId}: ${errorMessage}`, {
-        ...appContext,
-        nctId,
-        error,
-      });
-      errors.push({ nctId, error: errorMessage });
+  for (const entry of settled) {
+    if (entry.ok) {
+      studies.push(entry.value);
+    } else {
+      errors.push({ nctId: entry.nctId, error: entry.error });
     }
-  });
-
-  await Promise.all(studyPromises);
+  }
 
   // If all studies failed, throw an error
   if (studies.length === 0 && errors.length > 0) {

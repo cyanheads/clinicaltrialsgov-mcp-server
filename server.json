@@ -6,13 +6,13 @@
     "url": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server",
     "source": "github"
   },
-  "version": "1.6.0",
+  "version": "1.7.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
-      "version": "1.6.0",
+      "version": "1.7.0",
       "runtimeHint": "bun",
       "packageArguments": [
         {
@@ -34,7 +34,7 @@
         },
         {
           "name": "STORAGE_PROVIDER_TYPE",
-          "description": "Storage provider type: 'in-memory', 'filesystem', 'supabase', 'cloudflare-r2', or 'cloudflare-kv'.",
+          "description": "Storage provider type: 'in-memory', 'filesystem', 'supabase', 'cloudflare-r2', 'cloudflare-kv', or 'cloudflare-d1'.",
           "format": "string",
           "isRequired": false,
           "default": "in-memory"
@@ -48,7 +48,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
-      "version": "1.6.0",
+      "version": "1.7.0",
       "runtimeHint": "bun",
       "packageArguments": [
         {
@@ -98,7 +98,7 @@
         },
         {
           "name": "STORAGE_PROVIDER_TYPE",
-          "description": "Storage provider type: 'in-memory', 'filesystem', 'supabase', 'cloudflare-r2', or 'cloudflare-kv'.",
+          "description": "Storage provider type: 'in-memory', 'filesystem', 'supabase', 'cloudflare-r2', 'cloudflare-kv', or 'cloudflare-d1'.",
           "format": "string",
           "isRequired": false,
           "default": "in-memory"

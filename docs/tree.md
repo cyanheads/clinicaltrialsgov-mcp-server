@@ -1,19 +1,18 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-02-26 15:59:50
+Generated on: 2026-02-26 17:22:19
 
 ```
 clinicaltrialsgov-mcp-server/
-├── .clinerules/
-│   └── AGENTS.md
 ├── .github/
 │   ├── workflows/
+│   │   ├── claude-code-review.yml
+│   │   ├── claude.yml
 │   │   └── publish.yml
 │   └── FUNDING.yml
 ├── .husky/
 │   └── pre-commit
 ├── docs/
-│   └── best-practices.md
 ├── examples/
 │   ├── clinicaltrials_analyze_trends.md
 │   ├── clinicaltrials_get_study.md
@@ -207,12 +206,10 @@ clinicaltrialsgov-mcp-server/
 │   ├── mcp-server/
 │   │   ├── resources/
 │   │   │   ├── definitions/
-│   │   │   │   ├── data-explorer-ui.app-resource.test.ts
 │   │   │   │   ├── echo.resource.test.ts
 │   │   │   │   └── index.test.ts
 │   │   │   ├── schemas/
 │   │   │   │   ├── __snapshots__/
-│   │   │   │   │   └── schema-snapshots.test.ts.snap
 │   │   │   │   ├── json-schema-compatibility.test.ts
 │   │   │   │   └── schema-snapshots.test.ts
 │   │   │   ├── utils/
@@ -221,16 +218,13 @@ clinicaltrialsgov-mcp-server/
 │   │   │   └── resource-registration.test.ts
 │   │   ├── tools/
 │   │   │   ├── definitions/
-│   │   │   │   ├── index.test.ts
-│   │   │   │   ├── template-async-countdown.task-tool.test.ts
-│   │   │   │   ├── template-cat-fact.tool.test.ts
-│   │   │   │   ├── template-code-review-sampling.tool.test.ts
-│   │   │   │   ├── template-data-explorer.app-tool.test.ts
-│   │   │   │   ├── template-echo-message.tool.test.ts
-│   │   │   │   ├── template-image-test.tool.test.ts
-│   │   │   │   └── template-madlibs-elicitation.tool.test.ts
+│   │   │   │   ├── clinicaltrials-analyze-trends.tool.test.ts
+│   │   │   │   ├── clinicaltrials-compare-studies.tool.test.ts
+│   │   │   │   ├── clinicaltrials-find-eligible-studies.tool.test.ts
+│   │   │   │   ├── clinicaltrials-get-study.tool.test.ts
+│   │   │   │   ├── clinicaltrials-search-studies.tool.test.ts
+│   │   │   │   └── index.test.ts
 │   │   │   ├── fuzz/
-│   │   │   │   └── tool-input-fuzz.test.ts
 │   │   │   ├── schemas/
 │   │   │   │   ├── __snapshots__/
 │   │   │   │   │   └── schema-snapshots.test.ts.snap
@@ -270,12 +264,13 @@ clinicaltrialsgov-mcp-server/
 │   │   │   ├── ITransport.test.ts
 │   │   │   └── manager.test.ts
 │   │   └── server.test.ts
-│   ├── mocks/
-│   │   ├── handlers.ts
-│   │   └── server.ts
 │   ├── scripts/
 │   │   └── devdocs.test.ts
 │   ├── services/
+│   │   └── clinical-trials-gov/
+│   │       ├── providers/
+│   │       │   └── clinicaltrials-gov.provider.test.ts
+│   │       └── types.test.ts
 │   ├── storage/
 │   │   ├── core/
 │   │   │   ├── IStorageProvider.test.ts
@@ -348,7 +343,6 @@ clinicaltrialsgov-mcp-server/
 │   │   │   ├── idGenerator.test.ts
 │   │   │   ├── index.test.ts
 │   │   │   ├── rateLimiter.test.ts
-│   │   │   ├── sanitization.property.test.ts
 │   │   │   └── sanitization.test.ts
 │   │   ├── telemetry/
 │   │   │   ├── index.test.ts

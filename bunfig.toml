@@ -13,7 +13,7 @@ frozenLockfile = false
 bun = true
 
 [test]
-# Preload the setup file to ensure 'reflect-metadata' is imported before tests run.
+# Preload the setup file before tests run.
 preload = ["./tests/setup.ts"]
 # Enable test coverage reporting. Reporters and ignore patterns will be set in 'package.json' scripts.
 coverage = true

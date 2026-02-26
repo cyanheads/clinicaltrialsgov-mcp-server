@@ -5,7 +5,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-1.6.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--06--18-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-06-18/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.27.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.2.23-blueviolet.svg?style=flat-square)](https://bun.sh/) [![Code Coverage](https://img.shields.io/badge/Coverage-92.46%25-brightgreen.svg?style=flat-square)](./vitest.config.ts)
+[![Version](https://img.shields.io/badge/Version-1.7.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--06--18-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-06-18/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.27.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/) [![Code Coverage](https://img.shields.io/badge/Coverage-92.46%25-brightgreen.svg?style=flat-square)](./vitest.config.ts)
 
 </div>
 
@@ -209,16 +209,16 @@ This server equips AI agents with specialized tools to interact with the Clinica
 
 All configuration is centralized and validated at startup in `src/config/index.ts`. Key environment variables in your `.env` file include:
 
-| Variable                | Description                                                                                                | Default     |
-| :---------------------- | :--------------------------------------------------------------------------------------------------------- | :---------- |
-| `MCP_TRANSPORT_TYPE`    | The transport to use: `stdio` or `http`.                                                                   | `http`      |
-| `MCP_HTTP_PORT`         | The port for the HTTP server.                                                                              | `3017`      |
-| `MCP_AUTH_MODE`         | Authentication mode: `none`, `jwt`, or `oauth`.                                                            | `none`      |
-| `STORAGE_PROVIDER_TYPE` | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv`, `cloudflare-r2`, `cloudflare-d1`. | `in-memory` |
-| `OTEL_ENABLED`          | Set to `true` to enable OpenTelemetry.                                                                     | `false`     |
-| `LOG_LEVEL`             | The minimum level for logging (RFC 5424: `debug`, `info`, `notice`, `warning`, `error`, `crit`, `emerg`).  | `info`      |
-| `MCP_AUTH_SECRET_KEY`   | **Required for `jwt` auth.** A 32+ character secret key.                                                   | `(none)`    |
-| `OAUTH_ISSUER_URL`      | **Required for `oauth` auth.** URL of the OIDC provider.                                                   | `(none)`    |
+| Variable                | Description                                                                                                        | Default     |
+| :---------------------- | :----------------------------------------------------------------------------------------------------------------- | :---------- |
+| `MCP_TRANSPORT_TYPE`    | The transport to use: `stdio` or `http`.                                                                           | `http`      |
+| `MCP_HTTP_PORT`         | The port for the HTTP server.                                                                                      | `3017`      |
+| `MCP_AUTH_MODE`         | Authentication mode: `none`, `jwt`, or `oauth`.                                                                    | `none`      |
+| `STORAGE_PROVIDER_TYPE` | Storage backend: `in-memory`, `filesystem`, `supabase`, `cloudflare-kv`, `cloudflare-r2`, `cloudflare-d1`.         | `in-memory` |
+| `OTEL_ENABLED`          | Set to `true` to enable OpenTelemetry.                                                                             | `false`     |
+| `MCP_LOG_LEVEL`         | The minimum level for logging (RFC 5424: `debug`, `info`, `notice`, `warning`, `error`, `crit`, `alert`, `emerg`). | `info`      |
+| `MCP_AUTH_SECRET_KEY`   | **Required for `jwt` auth.** A 32+ character secret key.                                                           | `(none)`    |
+| `OAUTH_ISSUER_URL`      | **Required for `oauth` auth.** URL of the OIDC provider.                                                           | `(none)`    |
 
 ## ▶️ Running the Server
 

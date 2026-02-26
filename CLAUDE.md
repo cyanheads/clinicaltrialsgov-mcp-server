@@ -1,6 +1,6 @@
 # Agent Protocol
 
-**Version:** 1.6.0
+**Version:** 1.7.0
 **Project:** clinicaltrialsgov-mcp-server
 **Updated:** 2026-02-26
 
@@ -191,7 +191,7 @@ From `@/utils/index.js`:
 
 - **JSDoc:** `@fileoverview` and `@module` required
 - **Validation:** Zod schemas, all fields need `.describe()`
-- **Logging:** include `RequestContext`, use `logger.{debug|info|notice|warning|error|crit|emerg}`
+- **Logging:** include `RequestContext`, use `logger.{debug|info|notice|warning|error|crit|alert|emerg}`
 - **Errors:** logic throws `McpError`, handlers catch. `ErrorHandler.tryCatch` for services only.
 - **Secrets:** `src/config/index.ts` only
 - **Rate limiting:** DI-injected `RateLimiter`

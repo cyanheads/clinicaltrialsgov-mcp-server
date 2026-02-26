@@ -196,5 +196,4 @@ describe('Configuration Service', () => {
       serviceRoleKey: 'service-role-key',
     });
   });
-
 });

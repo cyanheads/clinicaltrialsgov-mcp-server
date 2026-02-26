@@ -9,7 +9,6 @@
       "bun",
       "bun-types",
       "node",
-      "reflect-metadata",
       "@cloudflare/workers-types",
       "vitest/globals" // Include Vitest globals
     ]

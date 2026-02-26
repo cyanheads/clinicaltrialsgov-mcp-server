@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.7.0] - 2026-02-26
+
+### Fixed
+
+- **Location filtering**: `extractRelevantLocations` now actually compares the patient's country against each study location (was previously including all locations that had any country set)
+- **Match scoring**: `calculateMatchScore` now returns a percentage (0-100) based on passed/total checks instead of a fixed 25-points-per-check system that could exceed 100
+- **Study result ordering**: `clinicaltrials_get_study` now preserves input order when fetching multiple NCT IDs concurrently (previously used shared mutable arrays from concurrent callbacks)
+
+### Changed
+
+- **Eligibility matching**: Location check is now an eligibility gate (studies without matching locations are excluded earlier), and `totalAvailable` is surfaced when results are truncated so callers know more candidates exist
+- **Analyze-trends pagination**: First page now doubles as the total-count check (eliminates a wasted API request), and `AbortSignal` is threaded through for cancellation support
+- **Tool handler**: Removed `ElicitableContext` shim from `toolHandlerFactory` — elicitation is available to tool logic via `sdkContext` directly
+- **Tool annotations**: Added `destructiveHint` and `idempotentHint` to `ToolAnnotations` interface
+- **Type safety**: `allToolDefinitions` and `allResourceDefinitions` barrel exports are now typed instead of `any[]`; `ResourceRegistry` constructor call uses proper type assertion
+- **StudySchema**: Added `maximumAge` field to eligibility module (was previously accessed via unsafe cast)
+- **Config cleanup**: Removed unused OpenRouter, LLM, and Speech TTS/STT configuration schemas, env vars, worker bindings, error patterns, and test mocks
+- **Dependencies**: Added `@vitest/coverage-istanbul`, updated Bun to 1.3.2, removed `reflect-metadata` from test tsconfig types
+- **Documentation**: Fixed logging levels in CLAUDE.md (added `alert`), renamed `LOG_LEVEL` → `MCP_LOG_LEVEL` in README, added `cloudflare-d1` to server.json storage description
+
+### Removed
+
+- `tests/mocks/handlers.ts` and `tests/mocks/server.ts` — contained OpenRouter/cat image mock handlers no longer needed
+- OpenRouter/LLM error patterns from `PROVIDER_ERROR_PATTERNS`
+- Speech TTS/STT bindings from Cloudflare Worker and wrangler secrets
+
 ## [1.6.0] - 2026-02-26
 
 ### Alignment with `mcp-ts-template@v2.9.8`

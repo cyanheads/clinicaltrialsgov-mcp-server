@@ -21,33 +21,16 @@ import type { Study } from '@/services/clinical-trials-gov/types.js';
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { logger, type RequestContext } from '@/utils/index.js';
 
-/** --------------------------------------------------------- */
-/** Programmatic tool name (must be unique). */
 const TOOL_NAME = 'clinicaltrials_compare_studies';
-/** --------------------------------------------------------- */
-
-/** Human-readable title used by UIs. */
 const TOOL_TITLE = 'Compare Clinical Studies';
-/** --------------------------------------------------------- */
-
-/**
- * LLM-facing description of the tool.
- */
 const TOOL_DESCRIPTION =
   'Performs side-by-side comparison of 2-5 clinical trial studies. Compares eligibility criteria, design, interventions, outcomes, sponsors, and other key aspects.';
-/** --------------------------------------------------------- */
 
-/** UI/behavior hints for clients. */
 const TOOL_ANNOTATIONS: ToolAnnotations = {
   readOnlyHint: true,
   idempotentHint: true,
-  openWorldHint: true, // Accesses external ClinicalTrials.gov API
+  openWorldHint: true,
 };
-/** --------------------------------------------------------- */
-
-//
-// Schemas (input and output)
-// --------------------------
 
 /**
  * Defines the comparison categories available.
@@ -241,10 +224,6 @@ type CompareStudiesInput = z.infer<typeof InputSchema>;
 type StudyComparison = z.infer<typeof StudyComparisonSchema>;
 type CompareStudiesOutput = z.infer<typeof OutputSchema>;
 
-//
-// Helper functions
-// --------------------------
-
 /**
  * Extracts eligibility data from a study.
  */
@@ -341,15 +320,17 @@ function extractLocations(study: Study): StudyComparison['locations'] {
   if (!locations || locations.length === 0) return undefined;
 
   const countries = [
-    ...new Set(locations.map((l) => l.country).filter(Boolean)),
-  ] as string[];
+    ...new Set(
+      locations.map((l) => l.country).filter((c): c is string => c != null),
+    ),
+  ];
 
   const cityCount: Record<string, number> = {};
-  locations.forEach((loc) => {
+  for (const loc of locations) {
     if (loc.city) {
       cityCount[loc.city] = (cityCount[loc.city] ?? 0) + 1;
     }
-  });
+  }
 
   const topCities = Object.entries(cityCount)
     .sort((a, b) => b[1] - a[1])
@@ -495,6 +476,78 @@ function analyzeSummary(
     }
   }
 
+  // Check for intervention overlap
+  if (
+    compareFields.includes('all') ||
+    compareFields.includes('interventions')
+  ) {
+    const allInterventionNames = comparisons.map(
+      (c) =>
+        new Set(
+          (c.interventions ?? [])
+            .map((i) => i.name?.toLowerCase())
+            .filter((name): name is string => name != null),
+        ),
+    );
+    const nonEmpty = allInterventionNames.filter((s) => s.size > 0);
+    const firstIntSet = nonEmpty[0];
+    if (nonEmpty.length > 1 && firstIntSet) {
+      const sharedInterventions = [...firstIntSet].filter((name) =>
+        nonEmpty.every((s) => s.has(name)),
+      );
+      if (sharedInterventions.length > 0) {
+        commonalities.push(
+          `Shared interventions: ${sharedInterventions.join(', ')}`,
+        );
+      } else {
+        differences.push('No shared interventions across studies');
+      }
+    }
+
+    // Compare intervention types
+    const allTypes = comparisons.map(
+      (c) =>
+        new Set(
+          (c.interventions ?? [])
+            .map((i) => i.type)
+            .filter(Boolean) as string[],
+        ),
+    );
+    const nonEmptyTypes = allTypes.filter((s) => s.size > 0);
+    const firstTypeSet = nonEmptyTypes[0];
+    if (nonEmptyTypes.length > 1 && firstTypeSet) {
+      const sharedTypes = [...firstTypeSet].filter((t) =>
+        nonEmptyTypes.every((s) => s.has(t)),
+      );
+      if (sharedTypes.length > 0) {
+        commonalities.push(
+          `Common intervention types: ${sharedTypes.join(', ')}`,
+        );
+      }
+    }
+  }
+
+  // Check for eligibility overlap
+  if (compareFields.includes('all') || compareFields.includes('eligibility')) {
+    // Compare sex requirements
+    const sexReqs = comparisons.map((c) => c.eligibility?.sex).filter(Boolean);
+    const uniqueSex = [...new Set(sexReqs)];
+    if (uniqueSex.length === 1 && sexReqs.length === comparisons.length) {
+      commonalities.push(`All studies accept: ${uniqueSex[0]}`);
+    } else if (uniqueSex.length > 1) {
+      differences.push(`Different sex requirements: ${uniqueSex.join(', ')}`);
+    }
+
+    // Compare age ranges
+    const ageRanges = comparisons
+      .map((c) => c.eligibility?.minimumAge)
+      .filter(Boolean);
+    const uniqueAges = [...new Set(ageRanges)];
+    if (uniqueAges.length > 1) {
+      differences.push(`Different minimum ages: ${uniqueAges.join(', ')}`);
+    }
+  }
+
   return {
     totalStudies: comparisons.length,
     comparedFields: compareFields,
@@ -502,10 +555,6 @@ function analyzeSummary(
     differences: differences.length > 0 ? differences : undefined,
   };
 }
-
-//
-// Pure business logic (no try/catch; throw McpError on failure)
-// -------------------------------------------------------------
 
 /**
  * Compares 2-5 clinical studies side-by-side.
@@ -562,12 +611,11 @@ async function compareStudiesLogic(
   const results = await Promise.all(studyPromises);
 
   // Create comparisons for successfully fetched studies
-  results.forEach((result) => {
+  for (const result of results) {
     if (result) {
-      const comparison = createStudyComparison(result.study, compareFields);
-      comparisons.push(comparison);
+      comparisons.push(createStudyComparison(result.study, compareFields));
     }
-  });
+  }
 
   // Need at least 2 studies to compare
   if (comparisons.length < 2) {
@@ -593,9 +641,6 @@ async function compareStudiesLogic(
   return result;
 }
 
-/**
- * Formats the comparison with both summary analysis and full structured details.
- */
 function responseFormatter(result: CompareStudiesOutput): ContentBlock[] {
   const { comparisons, summary, errors } = result;
 
@@ -632,7 +677,7 @@ function responseFormatter(result: CompareStudiesOutput): ContentBlock[] {
   // Build detailed comparison sections
   const detailParts: string[] = ['## Detailed Comparison', ''];
 
-  comparisons.forEach((comp, idx) => {
+  for (const [idx, comp] of comparisons.entries()) {
     if (idx > 0) detailParts.push('---', '');
     detailParts.push(`### ${comp.nctId}: ${comp.title ?? 'No title'}`, '');
 
@@ -687,34 +732,34 @@ function responseFormatter(result: CompareStudiesOutput): ContentBlock[] {
 
     if (comp.interventions && comp.interventions.length > 0) {
       detailParts.push('**Interventions:**');
-      comp.interventions.forEach((int) => {
+      for (const int of comp.interventions) {
         detailParts.push(`- ${int.type ?? 'Unknown'}: ${int.name ?? 'N/A'}`);
         if (int.description) {
           detailParts.push(
             `  ${int.description.substring(0, 150)}${int.description.length > 150 ? '...' : ''}`,
           );
         }
-      });
+      }
       detailParts.push('');
     }
 
     if (comp.outcomes) {
       if (comp.outcomes.primary && comp.outcomes.primary.length > 0) {
         detailParts.push('**Primary Outcomes:**');
-        comp.outcomes.primary.forEach((out) => {
+        for (const out of comp.outcomes.primary) {
           detailParts.push(`- ${out.measure ?? 'N/A'}`);
           if (out.timeFrame) {
             detailParts.push(`  Time Frame: ${out.timeFrame}`);
           }
-        });
+        }
         detailParts.push('');
       }
 
       if (comp.outcomes.secondary && comp.outcomes.secondary.length > 0) {
         detailParts.push('**Secondary Outcomes:**');
-        comp.outcomes.secondary.slice(0, 3).forEach((out) => {
+        for (const out of comp.outcomes.secondary.slice(0, 3)) {
           detailParts.push(`- ${out.measure ?? 'N/A'}`);
-        });
+        }
         if (comp.outcomes.secondary.length > 3) {
           detailParts.push(
             `  ...and ${comp.outcomes.secondary.length - 3} more`,
@@ -738,9 +783,9 @@ function responseFormatter(result: CompareStudiesOutput): ContentBlock[] {
         detailParts.push(
           `- Collaborators: ${comp.sponsors.collaborators.length}`,
         );
-        comp.sponsors.collaborators.slice(0, 3).forEach((collab) => {
+        for (const collab of comp.sponsors.collaborators.slice(0, 3)) {
           detailParts.push(`  - ${collab.name ?? 'N/A'}`);
-        });
+        }
         if (comp.sponsors.collaborators.length > 3) {
           detailParts.push(
             `  ...and ${comp.sponsors.collaborators.length - 3} more`,
@@ -763,7 +808,7 @@ function responseFormatter(result: CompareStudiesOutput): ContentBlock[] {
       }
       detailParts.push('');
     }
-  });
+  }
 
   return [
     {
@@ -773,9 +818,6 @@ function responseFormatter(result: CompareStudiesOutput): ContentBlock[] {
   ];
 }
 
-/**
- * The complete tool definition for comparing clinical trial studies.
- */
 export const compareStudiesTool: ToolDefinition<
   typeof InputSchema,
   typeof OutputSchema

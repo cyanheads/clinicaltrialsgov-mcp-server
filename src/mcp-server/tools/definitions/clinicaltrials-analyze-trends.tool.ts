@@ -21,41 +21,23 @@ import type { Study } from '@/services/clinical-trials-gov/types.js';
 import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { logger, type RequestContext } from '@/utils/index.js';
 
-/** --------------------------------------------------------- */
-/** Programmatic tool name (must be unique). */
 const TOOL_NAME = 'clinicaltrials_analyze_trends';
-/** --------------------------------------------------------- */
-
-/** Human-readable title used by UIs. */
 const TOOL_TITLE = 'Analyze Clinical Trial Trends';
-/** --------------------------------------------------------- */
-
-/**
- * LLM-facing description of the tool.
- */
 const TOOL_DESCRIPTION =
-  'Performs statistical analysis on clinical trial studies matching search criteria. Aggregates data by status, country, sponsor type, phase, year, or month. May fetch up to 5000 studies.';
-/** --------------------------------------------------------- */
+  'Performs statistical analysis on clinical trial studies matching search criteria. Aggregates data by status, country, sponsor type, phase, year, month, study type, or intervention type. May fetch up to 5000 studies.';
 
-/** UI/behavior hints for clients. */
 const TOOL_ANNOTATIONS: ToolAnnotations = {
   readOnlyHint: true,
   idempotentHint: true,
-  openWorldHint: true, // Accesses external ClinicalTrials.gov API
+  openWorldHint: true,
 };
-/** --------------------------------------------------------- */
 
-/** API call delay to avoid rate limiting */
 const API_CALL_DELAY_MS = 250;
 
 /**
  * A simple promise-based delay function.
  */
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-//
-// Schemas (input and output)
-// --------------------------
 
 /**
  * Defines the types of analysis that can be performed.
@@ -67,6 +49,8 @@ const AnalysisTypeSchema = z.enum([
   'countByPhase',
   'countByYear',
   'countByMonth',
+  'countByStudyType',
+  'countByInterventionType',
 ]);
 
 const InputSchema = z
@@ -92,7 +76,7 @@ const InputSchema = z
           .describe('An array of analysis types to perform.'),
       ])
       .describe(
-        'Specify one or more analysis types: countByStatus, countByCountry, countBySponsorType, countByPhase, countByYear, or countByMonth.',
+        'Specify one or more analysis types: countByStatus, countByCountry, countBySponsorType, countByPhase, countByYear, countByMonth, countByStudyType, or countByInterventionType.',
       ),
   })
   .describe('Input parameters for analyzing clinical trial trends.');
@@ -125,10 +109,6 @@ const OutputSchema = z
 type AnalyzeTrendsInput = z.infer<typeof InputSchema>;
 type AnalysisResult = z.infer<typeof AnalysisResultSchema>;
 type AnalyzeTrendsOutput = z.infer<typeof OutputSchema>;
-
-//
-// Pure business logic (no try/catch; throw McpError on failure)
-// -------------------------------------------------------------
 
 /**
  * Fetches all studies for a given query, handling pagination.
@@ -248,14 +228,19 @@ async function analyzeTrendsLogic(
           key = study.protocolSection?.statusModule?.overallStatus ?? 'Unknown';
           break;
 
-        case 'countByCountry':
-          study.protocolSection?.contactsLocationsModule?.locations?.forEach(
-            (loc) => {
-              const country = loc.country ?? 'Unknown';
-              results[country] = (results[country] ?? 0) + 1;
-            },
-          );
+        case 'countByCountry': {
+          // Deduplicate countries per study — a study with 10 US sites
+          // should count as 1 for "United States", not 10.
+          const countries = new Set<string>();
+          for (const loc of study.protocolSection?.contactsLocationsModule
+            ?.locations ?? []) {
+            countries.add(loc.country ?? 'Unknown');
+          }
+          for (const country of countries) {
+            results[country] = (results[country] ?? 0) + 1;
+          }
           continue;
+        }
 
         case 'countBySponsorType':
           key =
@@ -267,10 +252,10 @@ async function analyzeTrendsLogic(
           const phases = study.protocolSection?.designModule?.phases ?? [
             'Unknown',
           ];
-          phases.forEach((phase) => {
+          for (const phase of phases) {
             const phaseKey = phase ?? 'Unknown';
             results[phaseKey] = (results[phaseKey] ?? 0) + 1;
-          });
+          }
           continue;
         }
 
@@ -281,7 +266,7 @@ async function analyzeTrendsLogic(
             const year = startDate.substring(0, 4); // Extract YYYY from date
             results[year] = (results[year] ?? 0) + 1;
           } else {
-            results['Unknown'] = (results['Unknown'] ?? 0) + 1;
+            results.Unknown = (results.Unknown ?? 0) + 1;
           }
           continue;
         }
@@ -293,7 +278,29 @@ async function analyzeTrendsLogic(
             const yearMonth = startDate.substring(0, 7); // Extract YYYY-MM from date
             results[yearMonth] = (results[yearMonth] ?? 0) + 1;
           } else {
-            results['Unknown'] = (results['Unknown'] ?? 0) + 1;
+            results.Unknown = (results.Unknown ?? 0) + 1;
+          }
+          continue;
+        }
+
+        case 'countByStudyType':
+          key = study.protocolSection?.designModule?.studyType ?? 'Unknown';
+          break;
+
+        case 'countByInterventionType': {
+          const interventions =
+            study.protocolSection?.armsInterventionsModule?.interventions;
+          if (interventions?.length) {
+            // Deduplicate intervention types per study
+            const types = new Set<string>();
+            for (const intr of interventions) {
+              types.add(intr.type ?? 'Unknown');
+            }
+            for (const intrType of types) {
+              results[intrType] = (results[intrType] ?? 0) + 1;
+            }
+          } else {
+            results.Unknown = (results.Unknown ?? 0) + 1;
           }
           continue;
         }
@@ -319,9 +326,6 @@ async function analyzeTrendsLogic(
   return { analysis: finalResults };
 }
 
-/**
- * Formats a concise human-readable summary.
- */
 function responseFormatter(result: AnalyzeTrendsOutput): ContentBlock[] {
   const analysisCount = result.analysis.length;
 
@@ -332,11 +336,8 @@ function responseFormatter(result: AnalyzeTrendsOutput): ContentBlock[] {
 
     const categoryList = topEntries
       .map(([category, count]) => {
-        const numCount = count;
-        const percentage = ((numCount / analysis.totalStudies) * 100).toFixed(
-          1,
-        );
-        return `  • ${category}: ${numCount} (${percentage}%)`;
+        const percentage = ((count / analysis.totalStudies) * 100).toFixed(1);
+        return `  • ${category}: ${count} (${percentage}%)`;
       })
       .join('\n');
 
@@ -364,9 +365,6 @@ function responseFormatter(result: AnalyzeTrendsOutput): ContentBlock[] {
   ];
 }
 
-/**
- * The complete tool definition for analyzing clinical trial trends.
- */
 export const analyzeTrendsTool: ToolDefinition<
   typeof InputSchema,
   typeof OutputSchema

@@ -35,33 +35,16 @@ import {
   rankStudies,
 } from '../utils/studyRanking.js';
 
-/** --------------------------------------------------------- */
-/** Programmatic tool name (must be unique). */
 const TOOL_NAME = 'clinicaltrials_find_eligible_studies';
-/** --------------------------------------------------------- */
-
-/** Human-readable title used by UIs. */
 const TOOL_TITLE = 'Find Eligible Clinical Trials';
-/** --------------------------------------------------------- */
-
-/**
- * LLM-facing description of the tool.
- */
 const TOOL_DESCRIPTION =
   'Matches patient demographics and medical profile to eligible clinical trials. Filters by age, sex, conditions, location, and healthy volunteer status. Returns ranked list of matching studies with eligibility explanations.';
-/** --------------------------------------------------------- */
 
-/** UI/behavior hints for clients. */
 const TOOL_ANNOTATIONS: ToolAnnotations = {
   readOnlyHint: true,
   idempotentHint: true,
-  openWorldHint: true, // Accesses external ClinicalTrials.gov API
+  openWorldHint: true,
 };
-/** --------------------------------------------------------- */
-
-//
-// Schemas (input and output)
-// --------------------------
 
 const PatientLocationSchema = z
   .object({
@@ -197,10 +180,6 @@ type FindEligibleStudiesInput = z.infer<typeof InputSchema>;
 type EligibleStudy = z.infer<typeof EligibleStudySchema>;
 type FindEligibleStudiesOutput = z.infer<typeof OutputSchema>;
 
-//
-// Helper functions
-// --------------------------
-
 /**
  * Filters studies based on eligibility criteria and scores them by condition relevance.
  *
@@ -328,10 +307,6 @@ function filterByEligibility(
   return eligible;
 }
 
-//
-// Pure business logic (no try/catch; throw McpError on failure)
-// -------------------------------------------------------------
-
 /**
  * Finds clinical studies that match a patient's eligibility profile.
  */
@@ -352,7 +327,14 @@ async function findEligibleStudiesLogic(
   // Use the condition-specific query field (query.cond) to search only the
   // Conditions/Synonyms index, avoiding false positives from full-text matches
   // (e.g. a cardiovascular study that mentions diabetes in exclusion criteria).
-  const conditionQuery = input.conditions.join(' OR ');
+  // Quote multi-word conditions to prevent token splitting.
+  // Escape any embedded double quotes to avoid malformed queries.
+  const conditionQuery = input.conditions
+    .map((c) => {
+      const escaped = c.replace(/"/g, '\\"');
+      return c.includes(' ') ? `"${escaped}"` : escaped;
+    })
+    .join(' OR ');
 
   // Build filter for recruiting status
   const filter = input.recruitingOnly
@@ -429,9 +411,6 @@ async function findEligibleStudiesLogic(
   };
 }
 
-/**
- * Formats the eligible studies as markdown with summaries and details.
- */
 function responseFormatter(result: FindEligibleStudiesOutput): ContentBlock[] {
   const { eligibleStudies, totalMatches, totalAvailable, searchCriteria } =
     result;
@@ -515,9 +494,6 @@ function responseFormatter(result: FindEligibleStudiesOutput): ContentBlock[] {
   ];
 }
 
-/**
- * The complete tool definition for finding eligible clinical trial studies.
- */
 export const findEligibleStudiesTool: ToolDefinition<
   typeof InputSchema,
   typeof OutputSchema

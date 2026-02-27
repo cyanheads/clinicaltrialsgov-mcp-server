@@ -6,7 +6,7 @@
  */
 
 import type { RequestContext } from '@/utils/index.js';
-import type { PagedStudies, Study, StudyMetadata } from '../types.js';
+import type { PagedStudies, Study } from '../types.js';
 
 /**
  * Query parameters for listing clinical trials.
@@ -23,9 +23,42 @@ export interface ListStudiesParams {
   conditionQuery?: string;
 
   /**
-   * Filter expression for advanced querying.
+   * Intervention-specific search query (maps to `query.intr` — searches intervention/treatment fields).
+   */
+  interventionQuery?: string;
+
+  /**
+   * Sponsor-specific search query (maps to `query.spons` — searches sponsor name fields).
+   */
+  sponsorQuery?: string;
+
+  /**
+   * Location-specific search query (maps to `query.locn` — searches location/facility fields).
+   */
+  locationQuery?: string;
+
+  /**
+   * Filter expression for advanced querying (maps to `filter.advanced`).
    */
   filter?: string;
+
+  /**
+   * Comma-separated list of overall statuses to filter by (maps to `filter.overallStatus`).
+   * Example: 'RECRUITING,NOT_YET_RECRUITING'
+   */
+  statusFilter?: string;
+
+  /**
+   * Comma-separated list of phases to filter by (maps to `filter.phase`).
+   * Example: 'PHASE1,PHASE2'
+   */
+  phaseFilter?: string;
+
+  /**
+   * Geographic proximity filter (maps to `filter.geo`).
+   * Format: `distance(lat,lon,distance)` where distance is in miles.
+   */
+  geoFilter?: string;
 
   /**
    * Maximum number of results to return.
@@ -48,21 +81,6 @@ export interface ListStudiesParams {
    * Example: ['NCTId', 'BriefTitle', 'OverallStatus']
    */
   fields?: string[];
-
-  /**
-   * Filter by country.
-   */
-  country?: string;
-
-  /**
-   * Filter by state/province.
-   */
-  state?: string;
-
-  /**
-   * Filter by city.
-   */
-  city?: string;
 }
 
 /**
@@ -92,27 +110,23 @@ export interface IClinicalTrialsProvider {
   ): Promise<PagedStudies>;
 
   /**
-   * Retrieves metadata for a specific study without full details.
+   * Fetches valid field values and study counts for a given field name.
+   * Wraps the /stats/fieldValues/{fieldName} endpoint.
    *
-   * @param nctId - The NCT identifier
-   * @returns Study metadata (title, status, dates)
-   * @throws {McpError} If the study is not found or API request fails
+   * @param fieldName - The API field name (e.g., 'OverallStatus', 'Phase', 'InterventionType')
+   * @returns Array of field values with study counts
+   * @throws {McpError} If the API request fails or field name is invalid
    */
-  getStudyMetadata(
-    nctId: string,
+  getFieldValues(
+    fieldName: string,
     context: RequestContext,
-  ): Promise<StudyMetadata>;
+  ): Promise<Array<{ value: string; count: number }>>;
 
   /**
-   * Fetches current API statistics from the /stats/size endpoint.
-   * Returns total study count, current timestamp, and API version.
+   * Checks connectivity to the ClinicalTrials.gov API.
    *
-   * @returns API statistics object with totalStudies (from API), lastUpdated (current timestamp), and version ('v2')
-   * @throws {McpError} If the API request fails
+   * @returns true if the API is reachable and responding
+   * @throws {McpError} If the API is unreachable
    */
-  getApiStats(context: RequestContext): Promise<{
-    totalStudies: number;
-    lastUpdated: string;
-    version: string;
-  }>;
+  healthCheck(context: RequestContext): Promise<boolean>;
 }

@@ -5,7 +5,7 @@
  * @module src/services/clinical-trials-gov/providers/clinicaltrials-gov.provider
  */
 
-import { writeFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { config } from '../../../config/index.js';
 import { JsonRpcErrorCode, McpError } from '../../../types-global/errors.js';
@@ -20,7 +20,6 @@ import {
   StudySchema,
   type PagedStudies,
   type Study,
-  type StudyMetadata,
 } from '../types.js';
 
 const BASE_URL = 'https://clinicaltrials.gov/api/v2';
@@ -30,8 +29,6 @@ const BASE_URL = 'https://clinicaltrials.gov/api/v2';
  * Provides methods to fetch clinical trial data with optional filesystem backups.
  */
 export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
-  constructor() {}
-
   /**
    * @inheritdoc
    */
@@ -75,12 +72,38 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
     if (params.conditionQuery) {
       queryParams.set('query.cond', params.conditionQuery);
     }
+    if (params.interventionQuery) {
+      queryParams.set('query.intr', params.interventionQuery);
+    }
+    if (params.sponsorQuery) {
+      queryParams.set('query.spons', params.sponsorQuery);
+    }
+    if (params.locationQuery) {
+      queryParams.set('query.locn', params.locationQuery);
+    }
 
-    // Combine user filter with geographic filters
-    const combinedFilter = params.filter || '';
+    // Build filter.advanced — merge user-supplied AREA[] expression with phase filter
+    const advancedParts: string[] = [];
+    if (params.filter) {
+      advancedParts.push(params.filter);
+    }
+    if (params.phaseFilter) {
+      const phases = params.phaseFilter.split(',');
+      const phaseExpr =
+        phases.length === 1
+          ? `AREA[Phase]${phases[0]}`
+          : `AREA[Phase](${phases.join(' OR ')})`;
+      advancedParts.push(phaseExpr);
+    }
+    if (advancedParts.length > 0) {
+      queryParams.set('filter.advanced', advancedParts.join(' AND '));
+    }
 
-    if (combinedFilter) {
-      queryParams.set('filter.advanced', combinedFilter);
+    if (params.statusFilter) {
+      queryParams.set('filter.overallStatus', params.statusFilter);
+    }
+    if (params.geoFilter) {
+      queryParams.set('filter.geo', params.geoFilter);
     }
 
     if (params.pageSize) {
@@ -127,59 +150,43 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
   /**
    * @inheritdoc
    */
-  async getStudyMetadata(
-    nctId: string,
+  async getFieldValues(
+    fieldName: string,
     context: RequestContext,
-  ): Promise<StudyMetadata> {
-    // Fields parameter uses Pascal case format
-    const url = `${BASE_URL}/studies/${nctId}?fields=NCTId,BriefTitle,OfficialTitle,OverallStatus,StartDateStruct,CompletionDateStruct,LastUpdatePostDateStruct`;
+  ): Promise<Array<{ value: string; count: number }>> {
+    const url = `${BASE_URL}/stats/fieldValues/${encodeURIComponent(fieldName)}`;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `metadata_${nctId}_${timestamp}.json`;
+    // Sanitize fieldName for filesystem safety — strip anything that isn't alphanumeric
+    const safeFieldName = fieldName.replace(/[^a-zA-Z0-9_-]/g, '_');
+    const fileName = `fieldValues_${safeFieldName}_${timestamp}.json`;
 
-    const data = await this.fetchAndBackup<Study>(url, fileName, context);
+    const data = await this.fetchAndBackup<{
+      topValues?: Array<{ value?: string; studiesCount?: number }>;
+    }>(url, fileName, context);
 
-    // Extract metadata from filtered study response
-    const metadata: StudyMetadata = {
-      nctId: data.protocolSection?.identificationModule?.nctId ?? nctId,
-      title:
-        data.protocolSection?.identificationModule?.briefTitle ??
-        data.protocolSection?.identificationModule?.officialTitle,
-      status: data.protocolSection?.statusModule?.overallStatus,
-      startDate: data.protocolSection?.statusModule?.startDateStruct?.date,
-      completionDate:
-        data.protocolSection?.statusModule?.completionDateStruct?.date,
-      lastUpdateDate:
-        data.protocolSection?.statusModule?.lastUpdatePostDateStruct?.date,
-    };
+    // API returns { topValues: [{ value, studiesCount }], type, piece, field, ... }
+    const topValues = data?.topValues;
+    if (!Array.isArray(topValues)) {
+      return [];
+    }
 
-    return metadata;
+    return topValues.map((item) => ({
+      value: item.value ?? '',
+      count: item.studiesCount ?? 0,
+    }));
   }
 
   /**
    * @inheritdoc
    */
-  async getApiStats(context: RequestContext): Promise<{
-    totalStudies: number;
-    lastUpdated: string;
-    version: string;
-  }> {
-    const url = `${BASE_URL}/stats/size`;
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const fileName = `stats_${timestamp}.json`;
-
-    const data = await this.fetchAndBackup<{
-      totalStudies?: number;
-      averageSizeBytes?: number;
-      percentiles?: Record<string, number>;
-      ranges?: Array<{ sizeRange: string; studiesCount: number }>;
-      largestStudies?: Array<{ id: string; sizeBytes: number }>;
-    }>(url, fileName, context);
-
-    return {
-      totalStudies: data.totalStudies ?? 0,
-      lastUpdated: new Date().toISOString(), // API doesn't provide this field
-      version: 'v2', // Current API version
-    };
+  async healthCheck(context: RequestContext): Promise<boolean> {
+    const response = await fetchWithTimeout(
+      `${BASE_URL}/version`,
+      10_000,
+      context,
+      { method: 'GET', headers: { Accept: 'application/json' } },
+    );
+    return response.ok;
   }
 
   /**
@@ -188,7 +195,7 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
    * @param url - The full URL to fetch
    * @param fileName - The filename for backup storage
    * @returns The parsed JSON response
-   * @throws {McpError} If the request fails or returns non-OK status
+   * @throws {McpError} If the request fails, returns non-OK status, or response is not valid JSON
    */
   private async fetchAndBackup<T>(
     url: string,
@@ -199,28 +206,13 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
 
     const response = await fetchWithTimeout(
       url,
-      15000, // 15-second timeout for complex queries
+      30_000, // 30-second timeout per API recommendations
       context,
       {
         headers: { Accept: 'application/json' },
+        retryOn429: true,
       },
     );
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      logger.error(`[API] Error response: ${errorBody}`, context);
-
-      const message =
-        response.status === 404
-          ? `Resource not found: ${errorBody}`
-          : `API request failed with status ${response.status}: ${response.statusText}`;
-
-      throw new McpError(JsonRpcErrorCode.ServiceUnavailable, message, {
-        url,
-        status: response.status,
-        body: errorBody,
-      });
-    }
 
     const responseBody = await response.text();
     logger.debug('[API] Response received', {
@@ -228,21 +220,27 @@ export class ClinicalTrialsGovProvider implements IClinicalTrialsProvider {
       bodyLength: responseBody.length,
     });
 
-    const data = JSON.parse(responseBody) as T;
+    let data: T;
+    try {
+      data = JSON.parse(responseBody) as T;
+    } catch {
+      throw new McpError(
+        JsonRpcErrorCode.InternalError,
+        'Malformed JSON response from API',
+        { url, bodySnippet: responseBody.slice(0, 200) },
+      );
+    }
 
-    // Optional filesystem backup
+    // Optional filesystem backup (async — does not block the response)
     if (config.clinicalTrialsDataPath) {
       const filePath = path.join(config.clinicalTrialsDataPath, fileName);
-      try {
-        writeFileSync(filePath, JSON.stringify(data, null, 2));
-        logger.debug(`[Backup] Wrote to ${filePath}`, context);
-      } catch (error) {
+      writeFile(filePath, JSON.stringify(data, null, 2)).catch((error) => {
         logger.error('[Backup] Failed to write file', {
           ...context,
           filePath,
           error,
         });
-      }
+      });
     }
 
     return data;

@@ -21,6 +21,13 @@ export interface FetchWithTimeoutOptions extends Omit<RequestInit, 'signal'> {
    * Default: false (no restriction).
    */
   rejectPrivateIPs?: boolean;
+
+  /**
+   * When true, retries once on 429 (Too Many Requests) responses.
+   * Parses the Retry-After header (seconds only), defaults to 5s, caps at 30s.
+   * Default: false.
+   */
+  retryOn429?: boolean;
 }
 
 /**
@@ -119,16 +126,38 @@ export async function fetchWithTimeout(
   );
 
   // Strip custom options before passing to native fetch
-  const { rejectPrivateIPs: _, ...fetchInit } = options ?? {};
+  const { rejectPrivateIPs: _, retryOn429: _r, ...fetchInit } = options ?? {};
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const doFetch = async (): Promise<Response> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        ...fetchInit,
+        signal: controller.signal,
+      });
+      return response;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
 
   try {
-    const response = await fetch(url, {
-      ...fetchInit,
-      signal: controller.signal,
-    });
+    let response = await doFetch();
+
+    // Single retry on 429 — parse Retry-After (seconds only), cap at 30s
+    if (response.status === 429 && options?.retryOn429) {
+      const retryAfter = response.headers.get('Retry-After');
+      const parsedSeconds = retryAfter ? Number.parseInt(retryAfter, 10) : NaN;
+      const delaySec = Number.isNaN(parsedSeconds) ? 5 : parsedSeconds;
+      const delayMs = Math.min(delaySec * 1000, 30_000);
+      logger.warning(
+        `Rate limited (429) on ${urlString}, retrying after ${delayMs}ms`,
+        context,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      response = await doFetch();
+    }
 
     if (!response.ok) {
       const errorBody = await response
@@ -144,8 +173,12 @@ export async function fetchWithTimeout(
           errorSource: 'FetchHttpError',
         },
       );
+      const errorCode =
+        response.status === 404
+          ? JsonRpcErrorCode.InvalidParams
+          : JsonRpcErrorCode.ServiceUnavailable;
       throw new McpError(
-        JsonRpcErrorCode.ServiceUnavailable,
+        errorCode,
         `Fetch failed for ${urlString}. Status: ${response.status}`,
         {
           ...context,
@@ -200,7 +233,5 @@ export async function fetchWithTimeout(
         errorSource: 'FetchNetworkErrorWrapper',
       },
     );
-  } finally {
-    clearTimeout(timeoutId);
   }
 }

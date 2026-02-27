@@ -2,6 +2,39 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.0] - 2026-02-27
+
+### Added
+
+- **`clinicaltrials_get_field_values` tool**: Discovers valid enum values for any ClinicalTrials.gov API field (e.g., OverallStatus, Phase, InterventionType) with per-value study counts, enabling informed query construction
+- **`clinicaltrials_get_study_results` tool**: Fetches trial results data for completed studies — outcome statistics, adverse events, participant flow, and baseline characteristics with section-level filtering
+- **`countByStudyType` and `countByInterventionType` analysis types**: `clinicaltrials_analyze_trends` now supports aggregation by study type and intervention type
+- **Search query specialization**: `clinicaltrials_search_studies` gained `conditionQuery`, `interventionQuery`, and `sponsorQuery` parameters that target specific API indexes for more precise results
+- **Enum-based status and phase filters**: `clinicaltrials_search_studies` now exposes `statusFilter` and `phaseFilter` as typed enums (single or array), replacing free-form AREA[] expressions for common filters
+- **Geographic proximity filter**: `clinicaltrials_search_studies` added `geoFilter` parameter for distance-based searches (e.g., `distance(lat,lon,miles)`)
+- **StudySchema: `resultsSection`**: Full Zod schema coverage for participant flow, baseline characteristics, outcome measures, and adverse events
+- **StudySchema: additional fields**: `enrollmentInfo`, `centralContacts`, `overallOfficials`, `facility`/`zip`/`geoPoint` on locations, `studyFirstSubmitDate`, `studyFirstPostDateStruct`, `resultsFirstPostDateStruct`
+- **New enums**: `Phase`, `StudyType`, `InterventionType`, `StdAge`; expanded `Status` enum with `Available`, `NoLongerAvailable`, `TemporarilyNotAvailable`, `ApprovedForMarketing`, `Withheld`
+- **Rate limit retry**: `fetchWithTimeout` gained `retryOn429` option — parses `Retry-After` header, caps at 30s, single retry
+
+### Changed
+
+- **Provider interface**: Replaced `getStudyMetadata()` and `getApiStats()` with `getFieldValues()` and `healthCheck()` on `IClinicalTrialsProvider`
+- **Provider: location filtering**: Replaced `country`/`state`/`city` params with `locationQuery`, `statusFilter`, `phaseFilter`, `geoFilter` on `ListStudiesParams`; added `interventionQuery`, `sponsorQuery`
+- **Provider: robustness**: Increased API timeout from 15s to 30s; enabled `retryOn429`; switched backup writes to async (`writeFile` instead of `writeFileSync`); added explicit JSON parse error handling
+- **`get_study` batch fetch**: Multi-ID requests now use a single `filter.ids` batch API call instead of N parallel fetches, with fallback to individual fetches on failure
+- **`get_study` response formatter**: Multi-study results now render a markdown summary instead of raw JSON
+- **`analyze_trends` countByCountry**: Deduplicates countries per study — a study with 10 US sites counts as 1 for "United States"
+- **`compare_studies` summary analysis**: Now detects intervention overlap, shared intervention types, and eligibility (sex/age) commonalities/differences
+- **`find_eligible_studies` query building**: Multi-word conditions are now quoted to prevent token splitting in the condition index query
+- **`fetchWithTimeout` error codes**: 404 responses now throw `InvalidParams` instead of `ServiceUnavailable`
+- **Code style**: Replaced `.forEach` with `for...of` loops across all tools; removed redundant JSDoc section separators
+- **Dependencies**: Updated `@hono/mcp` to ^0.2.4, `@cloudflare/workers-types`, `@types/node`
+
+### Removed
+
+- `FieldNode`, `StudyMetadata`, `StudyMetadataSchema` types — replaced by `getFieldValues` provider method and richer enums
+
 ## [1.7.2] - 2026-02-26
 
 ### Added

@@ -5,7 +5,7 @@
 
 <div align="center">
 
-[![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![Version](https://img.shields.io/badge/Version-1.7.2-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--06--18-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-06-18/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.27.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/) [![Code Coverage](https://img.shields.io/badge/Coverage-92.46%25-brightgreen.svg?style=flat-square)](./vitest.config.ts)
+[![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![Version](https://img.shields.io/badge/Version-1.8.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP Spec](https://img.shields.io/badge/MCP%20Spec-2025--06--18-8A2BE2.svg?style=flat-square)](https://github.com/modelcontextprotocol/modelcontextprotocol/blob/main/docs/specification/2025-06-18/changelog.mdx) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.27.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Status](https://img.shields.io/badge/Status-Stable-brightgreen.svg?style=flat-square)](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/) [![Code Coverage](https://img.shields.io/badge/Coverage-92.46%25-brightgreen.svg?style=flat-square)](./vitest.config.ts)
 
 </div>
 
@@ -13,14 +13,16 @@
 
 ## 🛠️ Tools Overview
 
-Five tools for working with ClinicalTrials.gov data:
+Seven tools for working with ClinicalTrials.gov data:
 
-| Tool Name                              | Description                                                                                                           |
-| :------------------------------------- | :-------------------------------------------------------------------------------------------------------------------- |
-| `clinicaltrials_search_studies`        | Searches for clinical studies using query terms, filters, pagination, and sorting. Now includes geographic filtering. |
-| `clinicaltrials_get_study`             | Fetches one or more clinical studies by their NCT IDs, returning either full data or concise summaries.               |
-| `clinicaltrials_analyze_trends`        | Performs statistical analysis on up to 5000 studies, with new time-series analysis by year and month.                 |
-| `clinicaltrials_compare_studies`       | Performs a detailed side-by-side comparison of 2-5 clinical studies, highlighting commonalities and differences.      |
+| Tool Name                              | Description                                                                                                                             |
+| :------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------- |
+| `clinicaltrials_search_studies`        | Searches for clinical studies using query terms, filters, pagination, and sorting. Includes geographic and enum-based filtering.        |
+| `clinicaltrials_get_study`             | Fetches one or more clinical studies by their NCT IDs, returning either full data or concise summaries.                                 |
+| `clinicaltrials_get_study_results`     | Fetches trial results data for completed studies — outcomes, adverse events, participant flow, and baseline characteristics.            |
+| `clinicaltrials_get_field_values`      | Discovers valid enum values for any API field with study counts, enabling informed query construction.                                  |
+| `clinicaltrials_analyze_trends`        | Performs statistical analysis on up to 5000 studies by status, country, sponsor, phase, year, month, study type, or intervention type.  |
+| `clinicaltrials_compare_studies`       | Performs a detailed side-by-side comparison of 2-5 clinical studies, highlighting commonalities and differences.                        |
 | `clinicaltrials_find_eligible_studies` | Matches patient profiles to eligible clinical trials with condition relevance scoring, filtering by age, sex, conditions, and location. |
 
 ### `clinicaltrials_search_studies`
@@ -130,6 +132,45 @@ Five tools for working with ClinicalTrials.gov data:
 - "Search for healthy volunteer studies for a 25-year-old in California"
 
 📖 **[View detailed examples →](./examples/clinicaltrials-find-eligible-studies.md)**
+
+---
+
+### `clinicaltrials_get_study_results`
+
+**Access trial results data** for completed studies that have posted results.
+
+**Key Features:**
+
+- Fetches outcome measures, adverse events, participant flow, and baseline characteristics
+- Section-level filtering — request only the results sections you need
+- Handles multiple studies in a single request (up to 5)
+- Clearly reports which studies lack results and which failed to fetch
+- Statistical analyses (p-values, methods) included with outcome data
+
+**Example Use Cases:**
+
+- "What were the primary outcome results for NCT04280783?"
+- "Show me the adverse events profile for these two completed trials"
+- "Compare baseline characteristics across these three studies"
+
+---
+
+### `clinicaltrials_get_field_values`
+
+**Discover valid API field values** with study counts for informed query building.
+
+**Key Features:**
+
+- Returns all valid values for any ClinicalTrials.gov API field
+- Includes study counts per value, sorted by frequency
+- Useful for exploring OverallStatus, Phase, InterventionType, StudyType, and more
+- Helps construct precise filters without guessing valid enum values
+
+**Example Use Cases:**
+
+- "What are the valid OverallStatus values and how many studies have each?"
+- "Show me all intervention types available in the API"
+- "What phases are available and how are studies distributed across them?"
 
 ## ✨ Features
 

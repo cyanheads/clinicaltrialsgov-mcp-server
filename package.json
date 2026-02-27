@@ -1,6 +1,6 @@
 {
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "1.7.2",
+  "version": "1.8.0",
   "mcpName": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
   "description": "MCP server for the ClinicalTrials.gov v2 API. Allow LLMs to search trials, retrieve study details, compare studies, analyze trends, and match patients to eligible trials.",
   "main": "dist/index.js",
@@ -152,13 +152,13 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260305.0",
+    "@cloudflare/workers-types": "^4.20260226.1",
     "@eslint/js": "^10.0.1",
-    "@hono/mcp": "^0.2.3",
+    "@hono/mcp": "^0.2.4",
     "@types/bun": "^1.3.9",
     "@types/diff": "^8.0.0",
     "@types/js-yaml": "^4.0.9",
-    "@types/node": "^25.3.1",
+    "@types/node": "^25.3.2",
     "@types/node-cron": "^3.0.11",
     "@types/papaparse": "^5.5.2",
     "@types/sanitize-html": "^2.16.0",

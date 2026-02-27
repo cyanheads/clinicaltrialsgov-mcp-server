@@ -51,6 +51,8 @@ clinicaltrialsgov-mcp-server/
 │   │   │   │   ├── clinicaltrials-analyze-trends.tool.ts
 │   │   │   │   ├── clinicaltrials-compare-studies.tool.ts
 │   │   │   │   ├── clinicaltrials-find-eligible-studies.tool.ts
+│   │   │   │   ├── clinicaltrials-get-field-values.tool.ts
+│   │   │   │   ├── clinicaltrials-get-study-results.tool.ts
 │   │   │   │   ├── clinicaltrials-get-study.tool.ts
 │   │   │   │   ├── clinicaltrials-search-studies.tool.ts
 │   │   │   │   └── index.ts

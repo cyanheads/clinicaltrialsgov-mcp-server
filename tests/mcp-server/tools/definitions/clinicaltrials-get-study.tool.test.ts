@@ -14,11 +14,13 @@ import { requestContextService, type RequestContext } from '@/utils/index.js';
 // ---------------------------------------------------------------------------
 
 const mockFetchStudy = vi.fn();
+const mockListStudies = vi.fn();
 
 vi.mock('@/container/index.js', () => ({
   container: {
     resolve: vi.fn(() => ({
       fetchStudy: mockFetchStudy,
+      listStudies: mockListStudies,
     })),
   },
 }));
@@ -320,12 +322,13 @@ describe('clinicaltrials_get_study tool', () => {
   // =========================================================================
 
   describe('Logic — multiple studies', () => {
-    it('fetches multiple studies successfully', async () => {
+    it('fetches multiple studies successfully via listStudies batch', async () => {
       const study1 = buildMockStudy();
       const study2 = buildMockStudy2();
-      mockFetchStudy
-        .mockResolvedValueOnce(study1)
-        .mockResolvedValueOnce(study2);
+      mockListStudies.mockResolvedValueOnce({
+        studies: [study1, study2],
+        totalCount: 2,
+      });
 
       const result = await getStudyTool.logic(
         { nctIds: ['NCT12345678', 'NCT87654321'], summaryOnly: false },
@@ -333,18 +336,26 @@ describe('clinicaltrials_get_study tool', () => {
         sdkContext,
       );
 
-      expect(mockFetchStudy).toHaveBeenCalledTimes(2);
+      expect(mockFetchStudy).not.toHaveBeenCalled();
+      expect(mockListStudies).toHaveBeenCalledTimes(1);
+      expect(mockListStudies).toHaveBeenCalledWith(
+        {
+          filter: 'AREA[NCTId](NCT12345678 OR NCT87654321)',
+          pageSize: 2,
+        },
+        expect.objectContaining({ operation: 'test-get-study' }),
+      );
       expect(result.studies).toHaveLength(2);
       expect(result.errors).toBeUndefined();
     });
 
-    it('returns partial results when one study fails', async () => {
+    it('returns partial results when one study is missing from batch response', async () => {
       const study1 = buildMockStudy();
-      mockFetchStudy
-        .mockResolvedValueOnce(study1)
-        .mockRejectedValueOnce(
-          new McpError(JsonRpcErrorCode.NotFound, 'Study not found'),
-        );
+      // Only study1 returned; NCT00000000 is missing from batch
+      mockListStudies.mockResolvedValueOnce({
+        studies: [study1],
+        totalCount: 1,
+      });
 
       const result = await getStudyTool.logic(
         { nctIds: ['NCT12345678', 'NCT00000000'], summaryOnly: false },
@@ -356,17 +367,17 @@ describe('clinicaltrials_get_study tool', () => {
       expect(result.errors).toBeDefined();
       expect(result.errors).toHaveLength(1);
       expect(result.errors![0]!.nctId).toBe('NCT00000000');
-      expect(result.errors![0]!.error).toBe('Study not found');
+      expect(result.errors![0]!.error).toBe(
+        'Study not found in batch response',
+      );
     });
 
-    it('throws McpError ServiceUnavailable when ALL studies fail', async () => {
-      mockFetchStudy
-        .mockRejectedValueOnce(
-          new McpError(JsonRpcErrorCode.ServiceUnavailable, 'API down'),
-        )
-        .mockRejectedValueOnce(
-          new McpError(JsonRpcErrorCode.ServiceUnavailable, 'API down'),
-        );
+    it('throws McpError ServiceUnavailable when ALL studies are missing from batch', async () => {
+      // Batch returns no studies at all
+      mockListStudies.mockResolvedValueOnce({
+        studies: [],
+        totalCount: 0,
+      });
 
       await expect(
         getStudyTool.logic(
@@ -375,6 +386,11 @@ describe('clinicaltrials_get_study tool', () => {
           sdkContext,
         ),
       ).rejects.toThrow(McpError);
+
+      mockListStudies.mockResolvedValueOnce({
+        studies: [],
+        totalCount: 0,
+      });
 
       try {
         await getStudyTool.logic(
@@ -394,20 +410,37 @@ describe('clinicaltrials_get_study tool', () => {
       }
     });
 
-    it('collects non-McpError failures with generic message', async () => {
+    it('preserves input order in results', async () => {
       const study1 = buildMockStudy();
-      mockFetchStudy
-        .mockResolvedValueOnce(study1)
-        .mockRejectedValueOnce(new Error('Network timeout'));
+      const study2 = buildMockStudy2();
+      // Return in reverse order from API
+      mockListStudies.mockResolvedValueOnce({
+        studies: [study2, study1],
+        totalCount: 2,
+      });
 
       const result = await getStudyTool.logic(
-        { nctIds: ['NCT12345678', 'NCT00000000'], summaryOnly: false },
+        { nctIds: ['NCT12345678', 'NCT87654321'], summaryOnly: false },
         createAppContext(),
         sdkContext,
       );
 
-      expect(result.errors).toHaveLength(1);
-      expect(result.errors![0]!.error).toBe('An unexpected error occurred');
+      expect(result.studies).toHaveLength(2);
+      // Should be reordered to match input
+      expect(
+        (
+          result.studies[0] as Record<string, unknown> & {
+            protocolSection: { identificationModule: { nctId: string } };
+          }
+        ).protocolSection.identificationModule.nctId,
+      ).toBe('NCT12345678');
+      expect(
+        (
+          result.studies[1] as Record<string, unknown> & {
+            protocolSection: { identificationModule: { nctId: string } };
+          }
+        ).protocolSection.identificationModule.nctId,
+      ).toBe('NCT87654321');
     });
   });
 
@@ -512,45 +545,60 @@ describe('clinicaltrials_get_study tool', () => {
   // =========================================================================
 
   describe('Response Formatter', () => {
-    it('returns a single text content block with JSON', () => {
+    it('returns a single text content block with study JSON for single study (no errors)', () => {
+      const study = { nctId: 'NCT12345678' };
       const data = {
-        studies: [{ nctId: 'NCT12345678' }],
+        studies: [study],
       };
 
-      const blocks = getStudyTool.responseFormatter!(data as any);
+      const blocks = getStudyTool.responseFormatter!(data as never);
 
       expect(blocks).toHaveLength(1);
       expect(blocks[0]!.type).toBe('text');
+      // Single study format: just the study itself, not the wrapper
       expect((blocks[0] as { text: string }).text).toBe(
-        JSON.stringify(data, null, 2),
+        JSON.stringify(study, null, 2),
       );
     });
 
-    it('includes errors in formatted output when present', () => {
+    it('returns a single markdown summary block for multi-study results', () => {
+      const data = {
+        studies: [buildMockStudy(), buildMockStudy2()],
+      };
+
+      const blocks = getStudyTool.responseFormatter!(data as never);
+
+      expect(blocks).toHaveLength(1);
+      expect(blocks[0]!.type).toBe('text');
+
+      const markdown = (blocks[0] as { text: string }).text;
+      expect(markdown).toContain('# 2 Studies Retrieved');
+    });
+
+    it('returns a single markdown block with errors when single study has errors', () => {
       const data = {
         studies: [{ nctId: 'NCT12345678' }],
         errors: [{ nctId: 'NCT00000000', error: 'Not found' }],
       };
 
-      const blocks = getStudyTool.responseFormatter!(data as any);
-      const text = (blocks[0] as { text: string }).text;
-      const parsed = JSON.parse(text);
+      const blocks = getStudyTool.responseFormatter!(data as never);
 
-      expect(parsed.studies).toHaveLength(1);
-      expect(parsed.errors).toHaveLength(1);
-      expect(parsed.errors[0].nctId).toBe('NCT00000000');
+      expect(blocks).toHaveLength(1);
+      const markdown = (blocks[0] as { text: string }).text;
+      expect(markdown).toContain('Errors');
+      expect(markdown).toContain('NCT00000000');
     });
 
-    it('produces valid JSON that can be parsed back', () => {
+    it('produces valid JSON in single-study block that can be parsed back', () => {
       const study = buildMockStudy();
       const data = { studies: [study] };
 
-      const blocks = getStudyTool.responseFormatter!(data as any);
+      const blocks = getStudyTool.responseFormatter!(data as never);
       const text = (blocks[0] as { text: string }).text;
 
       expect(() => JSON.parse(text)).not.toThrow();
       const parsed = JSON.parse(text);
-      expect(parsed.studies[0].protocolSection.identificationModule.nctId).toBe(
+      expect(parsed.protocolSection.identificationModule.nctId).toBe(
         'NCT12345678',
       );
     });

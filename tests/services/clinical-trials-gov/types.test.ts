@@ -9,14 +9,11 @@ import { ZodError } from 'zod';
 import {
   StudySchema,
   PagedStudiesSchema,
-  StudyMetadataSchema,
   Status,
 } from '@/services/clinical-trials-gov/types.js';
 import type {
   Study,
   PagedStudies,
-  StudyMetadata,
-  FieldNode,
 } from '@/services/clinical-trials-gov/types.js';
 
 // ---------------------------------------------------------------------------
@@ -548,65 +545,13 @@ describe('PagedStudiesSchema', () => {
 });
 
 // ---------------------------------------------------------------------------
-// StudyMetadataSchema
-// ---------------------------------------------------------------------------
-
-describe('StudyMetadataSchema', () => {
-  it('accepts minimal metadata with only nctId', () => {
-    const result = StudyMetadataSchema.parse({ nctId: 'NCT00000001' });
-    expect(result.nctId).toBe('NCT00000001');
-    expect(result.title).toBeUndefined();
-    expect(result.status).toBeUndefined();
-    expect(result.startDate).toBeUndefined();
-    expect(result.completionDate).toBeUndefined();
-    expect(result.lastUpdateDate).toBeUndefined();
-  });
-
-  it('accepts full metadata with all optional fields', () => {
-    const metadata = {
-      nctId: 'NCT00000002',
-      title: 'Study Title',
-      status: 'RECRUITING',
-      startDate: '2024-01-01',
-      completionDate: '2025-12-31',
-      lastUpdateDate: '2024-06-15',
-    };
-    const result = StudyMetadataSchema.parse(metadata);
-    expect(result).toEqual(metadata);
-  });
-
-  it('rejects missing nctId', () => {
-    expect(() => StudyMetadataSchema.parse({ title: 'No ID' })).toThrow(
-      ZodError,
-    );
-  });
-
-  it('rejects non-string nctId', () => {
-    expect(() => StudyMetadataSchema.parse({ nctId: 12345 })).toThrow(ZodError);
-  });
-
-  it('rejects null nctId', () => {
-    expect(() => StudyMetadataSchema.parse({ nctId: null })).toThrow(ZodError);
-  });
-
-  it('accepts partial optional fields', () => {
-    const result = StudyMetadataSchema.parse({
-      nctId: 'NCT00000003',
-      status: 'COMPLETED',
-    });
-    expect(result.status).toBe('COMPLETED');
-    expect(result.title).toBeUndefined();
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Status enum
 // ---------------------------------------------------------------------------
 
 describe('Status enum', () => {
-  it('has exactly 9 values', () => {
+  it('has exactly 14 values', () => {
     const values = Object.values(Status);
-    expect(values).toHaveLength(9);
+    expect(values).toHaveLength(14);
   });
 
   it.each([
@@ -618,6 +563,11 @@ describe('Status enum', () => {
     ['Suspended', 'SUSPENDED'],
     ['Terminated', 'TERMINATED'],
     ['Withdrawn', 'WITHDRAWN'],
+    ['Available', 'AVAILABLE'],
+    ['NoLongerAvailable', 'NO_LONGER_AVAILABLE'],
+    ['TemporarilyNotAvailable', 'TEMPORARILY_NOT_AVAILABLE'],
+    ['ApprovedForMarketing', 'APPROVED_FOR_MARKETING'],
+    ['Withheld', 'WITHHELD'],
     ['Unknown', 'UNKNOWN'],
   ] as const)('Status.%s equals "%s"', (key, value) => {
     expect(Status[key as keyof typeof Status]).toBe(value);
@@ -632,53 +582,12 @@ describe('Status enum', () => {
 });
 
 // ---------------------------------------------------------------------------
-// FieldNode interface (structural check)
-// ---------------------------------------------------------------------------
-
-describe('FieldNode interface', () => {
-  it('satisfies the interface shape with required fields', () => {
-    const node: FieldNode = {
-      name: 'protocolSection',
-      type: 'object',
-      description: 'The protocol section of a study',
-    };
-    expect(node.name).toBe('protocolSection');
-    expect(node.type).toBe('object');
-    expect(node.description).toBe('The protocol section of a study');
-    expect(node.children).toBeUndefined();
-  });
-
-  it('satisfies the interface shape with optional children', () => {
-    const node: FieldNode = {
-      name: 'parent',
-      type: 'object',
-      description: 'A parent node',
-      children: [
-        { name: 'child1', type: 'string', description: 'First child' },
-        {
-          name: 'child2',
-          type: 'object',
-          description: 'Second child',
-          children: [
-            { name: 'grandchild', type: 'number', description: 'Nested' },
-          ],
-        },
-      ],
-    };
-    expect(node.children).toHaveLength(2);
-    expect(node.children?.[1]?.children).toHaveLength(1);
-    expect(node.children?.[1]?.children?.[0]?.name).toBe('grandchild');
-  });
-});
-
-// ---------------------------------------------------------------------------
 // Type inference checks (compile-time + runtime structural)
 // ---------------------------------------------------------------------------
 
 describe('Type inference', () => {
   it('Study type is inferred correctly from StudySchema', () => {
     const study: Study = StudySchema.parse(fullStudy);
-    // Access typed fields to verify inference works
     expect(study.protocolSection?.identificationModule?.nctId).toBe(
       'NCT00000001',
     );
@@ -693,14 +602,5 @@ describe('Type inference', () => {
     });
     expect(paged.studies).toHaveLength(1);
     expect(paged.nextPageToken).toBe('tok');
-  });
-
-  it('StudyMetadata type matches schema output', () => {
-    const metadata: StudyMetadata = StudyMetadataSchema.parse({
-      nctId: 'NCT00000001',
-      title: 'Test',
-    });
-    expect(metadata.nctId).toBe('NCT00000001');
-    expect(metadata.title).toBe('Test');
   });
 });

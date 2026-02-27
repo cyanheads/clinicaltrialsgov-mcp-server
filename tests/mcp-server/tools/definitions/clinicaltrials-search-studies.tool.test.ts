@@ -52,8 +52,8 @@ describe('searchStudiesTool', () => {
     mockProvider = {
       fetchStudy: vi.fn(),
       listStudies: vi.fn(),
-      getStudyMetadata: vi.fn(),
-      getApiStats: vi.fn(),
+      getFieldValues: vi.fn(),
+      healthCheck: vi.fn(),
     } as unknown as IClinicalTrialsProvider;
 
     container.clearInstances();
@@ -289,7 +289,7 @@ describe('searchStudiesTool', () => {
       );
     });
 
-    it('should pass location filters to provider', async () => {
+    it('should combine location fields into locationQuery for the provider', async () => {
       (mockProvider.listStudies as Mock).mockResolvedValue(makePagedStudies());
 
       const input = searchStudiesTool.inputSchema.parse({
@@ -305,12 +305,15 @@ describe('searchStudiesTool', () => {
 
       expect(mockProvider.listStudies).toHaveBeenCalledWith(
         expect.objectContaining({
-          country: 'United States',
-          state: 'California',
-          city: 'San Francisco',
+          locationQuery: 'San Francisco, California, United States',
         }),
         context,
       );
+      // Individual location fields should NOT be passed to the provider
+      const calledWith = (mockProvider.listStudies as Mock).mock.calls[0]![0];
+      expect(calledWith).not.toHaveProperty('country');
+      expect(calledWith).not.toHaveProperty('state');
+      expect(calledWith).not.toHaveProperty('city');
     });
 
     it('should pass field selection to provider', async () => {

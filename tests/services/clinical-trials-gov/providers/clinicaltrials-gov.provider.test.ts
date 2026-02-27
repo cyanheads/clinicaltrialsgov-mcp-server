@@ -24,9 +24,9 @@ vi.mock('@/config/index.js', () => ({
   }),
 }));
 
-const mockWriteFileSync = vi.fn();
-vi.mock('node:fs', () => ({
-  writeFileSync: (...args: unknown[]) => mockWriteFileSync(...args),
+const mockWriteFile = vi.fn();
+vi.mock('node:fs/promises', () => ({
+  writeFile: (...args: unknown[]) => mockWriteFile(...args),
 }));
 
 vi.mock('@/utils/index.js', () => ({
@@ -48,29 +48,12 @@ import { ClinicalTrialsGovProvider } from '@/services/clinical-trials-gov/provid
 const BASE_URL = 'https://clinicaltrials.gov/api/v2';
 const FIXED_TIME = new Date('2025-06-15T12:30:45.123Z');
 
-function createMockResponse(
-  body: unknown,
-  options: { ok?: boolean; status?: number; statusText?: string } = {},
-) {
-  const { ok = true, status = 200, statusText = 'OK' } = options;
+function createMockResponse(body: unknown) {
   return {
-    ok,
-    status,
-    statusText,
+    ok: true,
+    status: 200,
+    statusText: 'OK',
     text: vi.fn().mockResolvedValue(JSON.stringify(body)),
-  } as unknown as Response;
-}
-
-function createMockTextResponse(
-  text: string,
-  options: { ok?: boolean; status?: number; statusText?: string } = {},
-) {
-  const { ok = true, status = 200, statusText = 'OK' } = options;
-  return {
-    ok,
-    status,
-    statusText,
-    text: vi.fn().mockResolvedValue(text),
   } as unknown as Response;
 }
 
@@ -102,10 +85,10 @@ describe('ClinicalTrialsGovProvider', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.setSystemTime(FIXED_TIME);
-    // Reset config between tests
     for (const key of Object.keys(mockConfig)) {
       delete mockConfig[key];
     }
+    mockWriteFile.mockResolvedValue(undefined);
     provider = new ClinicalTrialsGovProvider();
   });
 
@@ -121,9 +104,9 @@ describe('ClinicalTrialsGovProvider', () => {
 
       expect(mockFetchWithTimeout).toHaveBeenCalledWith(
         `${BASE_URL}/studies/NCT12345678`,
-        15000,
+        30000,
         mockContext,
-        { headers: { Accept: 'application/json' } },
+        { headers: { Accept: 'application/json' }, retryOn429: true },
       );
     });
 
@@ -136,8 +119,6 @@ describe('ClinicalTrialsGovProvider', () => {
     });
 
     it('throws McpError ValidationError when schema validation fails', async () => {
-      // studies array at root level is not a valid Study shape — StudySchema expects
-      // an object (optionally with protocolSection). A non-object will fail.
       const invalidStudy = 'not-an-object';
       mockFetchWithTimeout.mockResolvedValue(createMockResponse(invalidStudy));
 
@@ -152,13 +133,12 @@ describe('ClinicalTrialsGovProvider', () => {
       });
     });
 
-    it('propagates McpError when fetch returns non-OK response', async () => {
-      mockFetchWithTimeout.mockResolvedValue(
-        createMockTextResponse('Server Error', {
-          ok: false,
-          status: 500,
-          statusText: 'Internal Server Error',
-        }),
+    it('propagates McpError from fetchWithTimeout', async () => {
+      mockFetchWithTimeout.mockRejectedValue(
+        new McpError(
+          JsonRpcErrorCode.ServiceUnavailable,
+          'Fetch failed. Status: 500',
+        ),
       );
 
       await expect(
@@ -219,6 +199,142 @@ describe('ClinicalTrialsGovProvider', () => {
       expect(url.searchParams.get('countTotal')).toBe('true');
     });
 
+    it('maps conditionQuery to query.cond', async () => {
+      mockFetchWithTimeout.mockResolvedValue(
+        createMockResponse(validPagedStudies),
+      );
+
+      await provider.listStudies(
+        { conditionQuery: 'lung cancer' },
+        mockContext,
+      );
+
+      const calledUrl = mockFetchWithTimeout.mock.calls[0]![0] as string;
+      const url = new URL(calledUrl);
+      expect(url.searchParams.get('query.cond')).toBe('lung cancer');
+    });
+
+    it('maps interventionQuery to query.intr', async () => {
+      mockFetchWithTimeout.mockResolvedValue(
+        createMockResponse(validPagedStudies),
+      );
+
+      await provider.listStudies(
+        { interventionQuery: 'pembrolizumab' },
+        mockContext,
+      );
+
+      const calledUrl = mockFetchWithTimeout.mock.calls[0]![0] as string;
+      const url = new URL(calledUrl);
+      expect(url.searchParams.get('query.intr')).toBe('pembrolizumab');
+    });
+
+    it('maps sponsorQuery to query.spons', async () => {
+      mockFetchWithTimeout.mockResolvedValue(
+        createMockResponse(validPagedStudies),
+      );
+
+      await provider.listStudies({ sponsorQuery: 'Pfizer' }, mockContext);
+
+      const calledUrl = mockFetchWithTimeout.mock.calls[0]![0] as string;
+      const url = new URL(calledUrl);
+      expect(url.searchParams.get('query.spons')).toBe('Pfizer');
+    });
+
+    it('maps locationQuery to query.locn', async () => {
+      mockFetchWithTimeout.mockResolvedValue(
+        createMockResponse(validPagedStudies),
+      );
+
+      await provider.listStudies(
+        { locationQuery: 'New York, United States' },
+        mockContext,
+      );
+
+      const calledUrl = mockFetchWithTimeout.mock.calls[0]![0] as string;
+      const url = new URL(calledUrl);
+      expect(url.searchParams.get('query.locn')).toBe(
+        'New York, United States',
+      );
+    });
+
+    it('maps statusFilter to filter.overallStatus', async () => {
+      mockFetchWithTimeout.mockResolvedValue(
+        createMockResponse(validPagedStudies),
+      );
+
+      await provider.listStudies(
+        { statusFilter: 'RECRUITING,ACTIVE_NOT_RECRUITING' },
+        mockContext,
+      );
+
+      const calledUrl = mockFetchWithTimeout.mock.calls[0]![0] as string;
+      const url = new URL(calledUrl);
+      expect(url.searchParams.get('filter.overallStatus')).toBe(
+        'RECRUITING,ACTIVE_NOT_RECRUITING',
+      );
+    });
+
+    it('maps single phaseFilter to AREA[Phase] in filter.advanced', async () => {
+      mockFetchWithTimeout.mockResolvedValue(
+        createMockResponse(validPagedStudies),
+      );
+
+      await provider.listStudies({ phaseFilter: 'PHASE3' }, mockContext);
+
+      const calledUrl = mockFetchWithTimeout.mock.calls[0]![0] as string;
+      const url = new URL(calledUrl);
+      expect(url.searchParams.get('filter.advanced')).toBe('AREA[Phase]PHASE3');
+    });
+
+    it('maps multi-phase phaseFilter to AREA[Phase](... OR ...) in filter.advanced', async () => {
+      mockFetchWithTimeout.mockResolvedValue(
+        createMockResponse(validPagedStudies),
+      );
+
+      await provider.listStudies({ phaseFilter: 'PHASE2,PHASE3' }, mockContext);
+
+      const calledUrl = mockFetchWithTimeout.mock.calls[0]![0] as string;
+      const url = new URL(calledUrl);
+      expect(url.searchParams.get('filter.advanced')).toBe(
+        'AREA[Phase](PHASE2 OR PHASE3)',
+      );
+    });
+
+    it('merges user filter with phaseFilter via AND', async () => {
+      mockFetchWithTimeout.mockResolvedValue(
+        createMockResponse(validPagedStudies),
+      );
+
+      await provider.listStudies(
+        { filter: 'AREA[StudyType]INTERVENTIONAL', phaseFilter: 'PHASE3' },
+        mockContext,
+      );
+
+      const calledUrl = mockFetchWithTimeout.mock.calls[0]![0] as string;
+      const url = new URL(calledUrl);
+      expect(url.searchParams.get('filter.advanced')).toBe(
+        'AREA[StudyType]INTERVENTIONAL AND AREA[Phase]PHASE3',
+      );
+    });
+
+    it('maps geoFilter to filter.geo', async () => {
+      mockFetchWithTimeout.mockResolvedValue(
+        createMockResponse(validPagedStudies),
+      );
+
+      await provider.listStudies(
+        { geoFilter: 'distance(39.0035,-77.1013,50)' },
+        mockContext,
+      );
+
+      const calledUrl = mockFetchWithTimeout.mock.calls[0]![0] as string;
+      const url = new URL(calledUrl);
+      expect(url.searchParams.get('filter.geo')).toBe(
+        'distance(39.0035,-77.1013,50)',
+      );
+    });
+
     it('always sets countTotal=true', async () => {
       mockFetchWithTimeout.mockResolvedValue(
         createMockResponse(validPagedStudies),
@@ -243,6 +359,8 @@ describe('ClinicalTrialsGovProvider', () => {
 
       expect(url.searchParams.has('query.term')).toBe(false);
       expect(url.searchParams.has('filter.advanced')).toBe(false);
+      expect(url.searchParams.has('filter.overallStatus')).toBe(false);
+      expect(url.searchParams.has('filter.geo')).toBe(false);
       expect(url.searchParams.has('pageSize')).toBe(false);
       expect(url.searchParams.has('pageToken')).toBe(false);
       expect(url.searchParams.has('sort')).toBe(false);
@@ -264,7 +382,6 @@ describe('ClinicalTrialsGovProvider', () => {
     });
 
     it('throws McpError ValidationError on invalid response shape', async () => {
-      // PagedStudiesSchema requires studies to be an array
       const invalid = { studies: 'not-an-array' };
       mockFetchWithTimeout.mockResolvedValue(createMockResponse(invalid));
 
@@ -279,13 +396,12 @@ describe('ClinicalTrialsGovProvider', () => {
       );
     });
 
-    it('propagates McpError from fetchAndBackup on API error', async () => {
-      mockFetchWithTimeout.mockResolvedValue(
-        createMockTextResponse('Bad Request', {
-          ok: false,
-          status: 400,
-          statusText: 'Bad Request',
-        }),
+    it('propagates McpError from fetchWithTimeout on API error', async () => {
+      mockFetchWithTimeout.mockRejectedValue(
+        new McpError(
+          JsonRpcErrorCode.ServiceUnavailable,
+          'Fetch failed. Status: 400',
+        ),
       );
 
       await expect(provider.listStudies({}, mockContext)).rejects.toThrow(
@@ -300,195 +416,124 @@ describe('ClinicalTrialsGovProvider', () => {
   });
 
   // =========================================================================
-  // getStudyMetadata
+  // getFieldValues
   // =========================================================================
 
-  describe('getStudyMetadata', () => {
-    const fullStudyResponse = {
-      protocolSection: {
-        identificationModule: {
-          nctId: 'NCT12345678',
-          briefTitle: 'Test Study Title',
-          officialTitle: 'Official Study Title',
-        },
-        statusModule: {
-          overallStatus: 'Recruiting',
-          startDateStruct: { date: '2025-01-01' },
-          completionDateStruct: { date: '2026-06-01' },
-          lastUpdatePostDateStruct: { date: '2025-05-15' },
-        },
-      },
+  describe('getFieldValues', () => {
+    const fieldValuesResponse = {
+      type: 'ENUM',
+      piece: 'Phase',
+      field: 'protocolSection.designModule.phases',
+      topValues: [
+        { value: 'NA', studiesCount: 221098 },
+        { value: 'PHASE2', studiesCount: 87121 },
+        { value: 'PHASE1', studiesCount: 63452 },
+      ],
     };
 
-    it('extracts metadata from the study response', async () => {
+    it('constructs the correct URL with encoded field name', async () => {
       mockFetchWithTimeout.mockResolvedValue(
-        createMockResponse(fullStudyResponse),
+        createMockResponse(fieldValuesResponse),
       );
 
-      const result = await provider.getStudyMetadata(
-        'NCT12345678',
+      await provider.getFieldValues('Phase', mockContext);
+
+      expect(mockFetchWithTimeout).toHaveBeenCalledWith(
+        `${BASE_URL}/stats/fieldValues/Phase`,
+        30000,
         mockContext,
+        { headers: { Accept: 'application/json' }, retryOn429: true },
       );
-
-      expect(result).toEqual({
-        nctId: 'NCT12345678',
-        title: 'Test Study Title',
-        status: 'Recruiting',
-        startDate: '2025-01-01',
-        completionDate: '2026-06-01',
-        lastUpdateDate: '2025-05-15',
-      });
     });
 
-    it('constructs the correct URL with fields parameter', async () => {
+    it('maps topValues with studiesCount to value/count pairs', async () => {
       mockFetchWithTimeout.mockResolvedValue(
-        createMockResponse(fullStudyResponse),
+        createMockResponse(fieldValuesResponse),
       );
 
-      await provider.getStudyMetadata('NCT12345678', mockContext);
+      const result = await provider.getFieldValues('Phase', mockContext);
 
-      const calledUrl = mockFetchWithTimeout.mock.calls[0]![0] as string;
-      expect(calledUrl).toContain(`${BASE_URL}/studies/NCT12345678?fields=`);
-      expect(calledUrl).toContain('NCTId');
-      expect(calledUrl).toContain('BriefTitle');
-      expect(calledUrl).toContain('OverallStatus');
+      expect(result).toEqual([
+        { value: 'NA', count: 221098 },
+        { value: 'PHASE2', count: 87121 },
+        { value: 'PHASE1', count: 63452 },
+      ]);
     });
 
-    it('falls back nctId to input param when not in response', async () => {
-      const responseWithoutNctId = {
-        protocolSection: {
-          identificationModule: {
-            briefTitle: 'Some Title',
-          },
-        },
-      };
+    it('returns empty array when topValues is missing', async () => {
       mockFetchWithTimeout.mockResolvedValue(
-        createMockResponse(responseWithoutNctId),
+        createMockResponse({ type: 'UNKNOWN' }),
       );
 
-      const result = await provider.getStudyMetadata(
-        'NCT99999999',
-        mockContext,
-      );
+      const result = await provider.getFieldValues('BadField', mockContext);
 
-      expect(result.nctId).toBe('NCT99999999');
+      expect(result).toEqual([]);
     });
 
-    it('handles missing optional fields gracefully', async () => {
-      const minimalResponse = {};
+    it('defaults missing value to empty string and missing count to 0', async () => {
       mockFetchWithTimeout.mockResolvedValue(
-        createMockResponse(minimalResponse),
+        createMockResponse({ topValues: [{}] }),
       );
 
-      const result = await provider.getStudyMetadata(
-        'NCT12345678',
-        mockContext,
-      );
+      const result = await provider.getFieldValues('Field', mockContext);
 
-      expect(result).toEqual({
-        nctId: 'NCT12345678',
-        title: undefined,
-        status: undefined,
-        startDate: undefined,
-        completionDate: undefined,
-        lastUpdateDate: undefined,
-      });
+      expect(result).toEqual([{ value: '', count: 0 }]);
     });
 
-    it('prefers briefTitle over officialTitle', async () => {
-      const responseWithBothTitles = {
-        protocolSection: {
-          identificationModule: {
-            briefTitle: 'Brief Title',
-            officialTitle: 'Official Title',
-          },
-        },
-      };
+    it('sanitizes fieldName in backup filename', async () => {
+      mockConfig.clinicalTrialsDataPath = '/data';
       mockFetchWithTimeout.mockResolvedValue(
-        createMockResponse(responseWithBothTitles),
+        createMockResponse(fieldValuesResponse),
       );
 
-      const result = await provider.getStudyMetadata(
-        'NCT12345678',
-        mockContext,
-      );
+      await provider.getFieldValues('../etc/passwd', mockContext);
 
-      expect(result.title).toBe('Brief Title');
-    });
-
-    it('falls back to officialTitle when briefTitle is missing', async () => {
-      const responseWithOfficialOnly = {
-        protocolSection: {
-          identificationModule: {
-            officialTitle: 'Official Title Only',
-          },
-        },
-      };
-      mockFetchWithTimeout.mockResolvedValue(
-        createMockResponse(responseWithOfficialOnly),
-      );
-
-      const result = await provider.getStudyMetadata(
-        'NCT12345678',
-        mockContext,
-      );
-
-      expect(result.title).toBe('Official Title Only');
+      const filePath = mockWriteFile.mock.calls[0]![0] as string;
+      expect(filePath).not.toContain('..');
+      // ../etc/passwd → ___etc_passwd, prefixed with fieldValues_ → fieldValues____etc_passwd
+      expect(filePath).toContain('fieldValues____etc_passwd_');
     });
   });
 
   // =========================================================================
-  // getApiStats
+  // healthCheck
   // =========================================================================
 
-  describe('getApiStats', () => {
-    it('returns stats with totalStudies from response', async () => {
-      const statsResponse = { totalStudies: 500000 };
-      mockFetchWithTimeout.mockResolvedValue(createMockResponse(statsResponse));
+  describe('healthCheck', () => {
+    it('fetches the /version endpoint with a 10s timeout', async () => {
+      mockFetchWithTimeout.mockResolvedValue({
+        ok: true,
+      } as unknown as Response);
 
-      const result = await provider.getApiStats(mockContext);
+      await provider.healthCheck(mockContext);
 
-      expect(result.totalStudies).toBe(500000);
+      expect(mockFetchWithTimeout).toHaveBeenCalledWith(
+        `${BASE_URL}/version`,
+        10000,
+        mockContext,
+        { method: 'GET', headers: { Accept: 'application/json' } },
+      );
     });
 
-    it('falls back totalStudies to 0 when not in response', async () => {
-      const statsResponse = { averageSizeBytes: 12345 };
-      mockFetchWithTimeout.mockResolvedValue(createMockResponse(statsResponse));
+    it('returns true when API responds ok', async () => {
+      mockFetchWithTimeout.mockResolvedValue({
+        ok: true,
+      } as unknown as Response);
 
-      const result = await provider.getApiStats(mockContext);
+      const result = await provider.healthCheck(mockContext);
 
-      expect(result.totalStudies).toBe(0);
+      expect(result).toBe(true);
     });
 
-    it('returns current timestamp for lastUpdated', async () => {
-      mockFetchWithTimeout.mockResolvedValue(
-        createMockResponse({ totalStudies: 1 }),
+    it('propagates errors from fetchWithTimeout', async () => {
+      mockFetchWithTimeout.mockRejectedValue(
+        new McpError(
+          JsonRpcErrorCode.ServiceUnavailable,
+          'Fetch failed. Status: 503',
+        ),
       );
 
-      const result = await provider.getApiStats(mockContext);
-
-      expect(result.lastUpdated).toBe(FIXED_TIME.toISOString());
-    });
-
-    it('returns "v2" for version', async () => {
-      mockFetchWithTimeout.mockResolvedValue(
-        createMockResponse({ totalStudies: 1 }),
-      );
-
-      const result = await provider.getApiStats(mockContext);
-
-      expect(result.version).toBe('v2');
-    });
-
-    it('fetches from the correct stats/size URL', async () => {
-      mockFetchWithTimeout.mockResolvedValue(
-        createMockResponse({ totalStudies: 1 }),
-      );
-
-      await provider.getApiStats(mockContext);
-
-      const calledUrl = mockFetchWithTimeout.mock.calls[0]![0] as string;
-      expect(calledUrl).toBe(`${BASE_URL}/stats/size`);
+      await expect(provider.healthCheck(mockContext)).rejects.toThrow(McpError);
     });
   });
 
@@ -497,91 +542,52 @@ describe('ClinicalTrialsGovProvider', () => {
   // =========================================================================
 
   describe('fetchAndBackup (indirect)', () => {
-    it('passes 15000ms timeout and Accept header to fetchWithTimeout', async () => {
+    it('passes 30s timeout, Accept header, and retryOn429 to fetchWithTimeout', async () => {
       mockFetchWithTimeout.mockResolvedValue(createMockResponse(validStudy));
 
       await provider.fetchStudy('NCT12345678', mockContext);
 
       expect(mockFetchWithTimeout).toHaveBeenCalledWith(
         expect.any(String),
-        15000,
+        30000,
         mockContext,
-        { headers: { Accept: 'application/json' } },
+        { headers: { Accept: 'application/json' }, retryOn429: true },
       );
     });
 
-    it('handles 404 with "Resource not found" message', async () => {
-      const errorBody = 'Study NCT00000000 not found';
-      mockFetchWithTimeout.mockResolvedValue(
-        createMockTextResponse(errorBody, {
-          ok: false,
-          status: 404,
-          statusText: 'Not Found',
-        }),
-      );
+    it('throws McpError InternalError when response is not valid JSON', async () => {
+      const invalidJsonResponse = {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        text: vi.fn().mockResolvedValue('this is not json{{{'),
+      } as unknown as Response;
+      mockFetchWithTimeout.mockResolvedValue(invalidJsonResponse);
 
-      try {
-        await provider.fetchStudy('NCT00000000', mockContext);
-        expect.fail('Should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(McpError);
-        const mcpErr = err as McpError;
-        expect(mcpErr.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
-        expect(mcpErr.message).toBe(`Resource not found: ${errorBody}`);
-        expect(mcpErr.data).toEqual({
-          url: `${BASE_URL}/studies/NCT00000000`,
-          status: 404,
-          body: errorBody,
-        });
-      }
+      await expect(
+        provider.fetchStudy('NCT12345678', mockContext),
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.InternalError,
+        message: 'Malformed JSON response from API',
+      });
     });
 
-    it('handles non-404 error with status and statusText message', async () => {
-      mockFetchWithTimeout.mockResolvedValue(
-        createMockTextResponse('rate limited', {
-          ok: false,
-          status: 429,
-          statusText: 'Too Many Requests',
-        }),
-      );
-
-      try {
-        await provider.fetchStudy('NCT12345678', mockContext);
-        expect.fail('Should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(McpError);
-        const mcpErr = err as McpError;
-        expect(mcpErr.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
-        expect(mcpErr.message).toBe(
-          'API request failed with status 429: Too Many Requests',
-        );
-        expect(mcpErr.data).toEqual({
-          url: `${BASE_URL}/studies/NCT12345678`,
-          status: 429,
-          body: 'rate limited',
-        });
-      }
-    });
-
-    it('includes url, status, and body in McpError data for error responses', async () => {
-      const body = '{"error": "bad request"}';
-      mockFetchWithTimeout.mockResolvedValue(
-        createMockTextResponse(body, {
-          ok: false,
-          status: 400,
-          statusText: 'Bad Request',
-        }),
-      );
+    it('includes URL and body snippet in JSON parse error data', async () => {
+      const longGarbage = 'x'.repeat(500);
+      const invalidJsonResponse = {
+        ok: true,
+        text: vi.fn().mockResolvedValue(longGarbage),
+      } as unknown as Response;
+      mockFetchWithTimeout.mockResolvedValue(invalidJsonResponse);
 
       try {
         await provider.fetchStudy('NCT12345678', mockContext);
         expect.fail('Should have thrown');
       } catch (err) {
         const mcpErr = err as McpError;
-        expect(mcpErr.data).toEqual({
+        expect(mcpErr.data).toMatchObject({
           url: `${BASE_URL}/studies/NCT12345678`,
-          status: 400,
-          body,
+          bodySnippet: 'x'.repeat(200),
         });
       }
     });
@@ -592,9 +598,9 @@ describe('ClinicalTrialsGovProvider', () => {
 
       await provider.fetchStudy('NCT12345678', mockContext);
 
-      expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
-      const [filePath, content] = mockWriteFileSync.mock.calls[0]!;
-      // The timestamp in the filename uses the faked time
+      expect(mockWriteFile).toHaveBeenCalledTimes(1);
+      const call = mockWriteFile.mock.calls[0] as [string, string];
+      const [filePath, content] = call;
       const expectedTimestamp = FIXED_TIME.toISOString().replace(/[:.]/g, '-');
       expect(filePath).toBe(
         `/tmp/backup/study_NCT12345678_${expectedTimestamp}.json`,
@@ -608,23 +614,22 @@ describe('ClinicalTrialsGovProvider', () => {
 
       await provider.fetchStudy('NCT12345678', mockContext);
 
-      expect(mockWriteFileSync).not.toHaveBeenCalled();
+      expect(mockWriteFile).not.toHaveBeenCalled();
     });
 
     it('logs error but does not throw when backup write fails', async () => {
       mockConfig.clinicalTrialsDataPath = '/tmp/backup';
-      mockWriteFileSync.mockImplementation(() => {
-        throw new Error('EACCES: permission denied');
-      });
+      mockWriteFile.mockRejectedValue(new Error('EACCES: permission denied'));
       mockFetchWithTimeout.mockResolvedValue(createMockResponse(validStudy));
 
-      // Should not throw — backup failure is caught internally
       const result = await provider.fetchStudy('NCT12345678', mockContext);
 
       expect(result).toEqual(validStudy);
-      expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+      expect(mockWriteFile).toHaveBeenCalledTimes(1);
 
-      // Verify logger.error was called for the backup failure
+      // Flush microtask queue so the .catch() handler runs
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
       const { logger } = await import('@/utils/index.js');
       expect(logger.error).toHaveBeenCalledWith(
         '[Backup] Failed to write file',
@@ -632,21 +637,7 @@ describe('ClinicalTrialsGovProvider', () => {
       );
     });
 
-    it('throws when response body is not valid JSON', async () => {
-      const invalidJsonResponse = {
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        text: vi.fn().mockResolvedValue('this is not json{{{'),
-      } as unknown as Response;
-      mockFetchWithTimeout.mockResolvedValue(invalidJsonResponse);
-
-      await expect(
-        provider.fetchStudy('NCT12345678', mockContext),
-      ).rejects.toThrow();
-    });
-
-    it('propagates errors from fetchWithTimeout itself (e.g., network failure)', async () => {
+    it('propagates errors from fetchWithTimeout itself', async () => {
       mockFetchWithTimeout.mockRejectedValue(new Error('ECONNREFUSED'));
 
       await expect(
@@ -660,8 +651,7 @@ describe('ClinicalTrialsGovProvider', () => {
 
       await provider.fetchStudy('NCT12345678', mockContext);
 
-      const filePath = mockWriteFileSync.mock.calls[0]![0] as string;
-      // Should contain the formatted timestamp (colons and dots replaced with dashes)
+      const filePath = mockWriteFile.mock.calls[0]![0] as string;
       expect(filePath).toMatch(
         /study_NCT12345678_\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z\.json$/,
       );
@@ -675,37 +665,9 @@ describe('ClinicalTrialsGovProvider', () => {
 
       await provider.listStudies({}, mockContext);
 
-      const filePath = mockWriteFileSync.mock.calls[0]![0] as string;
+      const filePath = mockWriteFile.mock.calls[0]![0] as string;
       const expectedTimestamp = FIXED_TIME.toISOString().replace(/[:.]/g, '-');
       expect(filePath).toBe(`/data/studies_${expectedTimestamp}.json`);
-    });
-
-    it('generates correct backup filename for getApiStats', async () => {
-      mockConfig.clinicalTrialsDataPath = '/data';
-      mockFetchWithTimeout.mockResolvedValue(
-        createMockResponse({ totalStudies: 1 }),
-      );
-
-      await provider.getApiStats(mockContext);
-
-      const filePath = mockWriteFileSync.mock.calls[0]![0] as string;
-      const expectedTimestamp = FIXED_TIME.toISOString().replace(/[:.]/g, '-');
-      expect(filePath).toBe(`/data/stats_${expectedTimestamp}.json`);
-    });
-
-    it('generates correct backup filename for getStudyMetadata', async () => {
-      mockConfig.clinicalTrialsDataPath = '/data';
-      mockFetchWithTimeout.mockResolvedValue(
-        createMockResponse({ protocolSection: {} }),
-      );
-
-      await provider.getStudyMetadata('NCT12345678', mockContext);
-
-      const filePath = mockWriteFileSync.mock.calls[0]![0] as string;
-      const expectedTimestamp = FIXED_TIME.toISOString().replace(/[:.]/g, '-');
-      expect(filePath).toBe(
-        `/data/metadata_NCT12345678_${expectedTimestamp}.json`,
-      );
     });
   });
 });

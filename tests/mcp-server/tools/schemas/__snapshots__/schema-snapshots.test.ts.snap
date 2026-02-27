@@ -17,6 +17,8 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_analyze_trends > inputSche
             "countByPhase",
             "countByYear",
             "countByMonth",
+            "countByStudyType",
+            "countByInterventionType",
           ],
           "type": "string",
         },
@@ -30,6 +32,8 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_analyze_trends > inputSche
               "countByPhase",
               "countByYear",
               "countByMonth",
+              "countByStudyType",
+              "countByInterventionType",
             ],
             "type": "string",
           },
@@ -37,7 +41,7 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_analyze_trends > inputSche
           "type": "array",
         },
       ],
-      "description": "Specify one or more analysis types: countByStatus, countByCountry, countBySponsorType, countByPhase, countByYear, or countByMonth.",
+      "description": "Specify one or more analysis types: countByStatus, countByCountry, countBySponsorType, countByPhase, countByYear, countByMonth, countByStudyType, or countByInterventionType.",
     },
     "filter": {
       "description": "Advanced filter expression using the ClinicalTrials.gov filter syntax.",
@@ -76,6 +80,8 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_analyze_trends > outputSch
               "countByPhase",
               "countByYear",
               "countByMonth",
+              "countByStudyType",
+              "countByInterventionType",
             ],
             "type": "string",
           },
@@ -772,6 +778,109 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_find_eligible_studies > ou
 }
 `;
 
+exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_field_values > inputSchema JSON output should be stable 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Input parameters for fetching field values.",
+  "properties": {
+    "fieldName": {
+      "description": "The API field name to retrieve values for. Common fields: OverallStatus, Phase, StudyType, InterventionType, LeadSponsorClass, Sex, StdAge, DesignAllocation, DesignPrimaryPurpose.",
+      "minLength": 1,
+      "type": "string",
+    },
+  },
+  "required": [
+    "fieldName",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_field_values > outputSchema JSON output should be stable 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Field values response.",
+  "properties": {
+    "fieldName": {
+      "description": "The queried field name",
+      "type": "string",
+    },
+    "totalValues": {
+      "description": "Total number of distinct values",
+      "type": "number",
+    },
+    "values": {
+      "description": "Available values with study counts, sorted by count descending",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "count": {
+            "description": "Number of studies with this value",
+            "type": "number",
+          },
+          "value": {
+            "description": "The field value",
+            "type": "string",
+          },
+        },
+        "required": [
+          "value",
+          "count",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+  },
+  "required": [
+    "fieldName",
+    "values",
+    "totalValues",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_stats > inputSchema JSON output should be stable 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "No input parameters required.",
+  "properties": {},
+  "type": "object",
+}
+`;
+
+exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_stats > outputSchema JSON output should be stable 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Database statistics.",
+  "properties": {
+    "lastUpdated": {
+      "description": "Timestamp of the latest data update",
+      "type": "string",
+    },
+    "totalStudies": {
+      "description": "Total number of studies in the database",
+      "type": "number",
+    },
+    "version": {
+      "description": "ClinicalTrials.gov API version",
+      "type": "string",
+    },
+  },
+  "required": [
+    "totalStudies",
+    "lastUpdated",
+    "version",
+  ],
+  "type": "object",
+}
+`;
+
 exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_study > inputSchema JSON output should be stable 1`] = `
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1078,6 +1187,27 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_study > outputSchema J
                   "contactsLocationsModule": {
                     "additionalProperties": {},
                     "properties": {
+                      "centralContacts": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "email": {
+                              "type": "string",
+                            },
+                            "name": {
+                              "type": "string",
+                            },
+                            "phone": {
+                              "type": "string",
+                            },
+                            "role": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
                       "locations": {
                         "items": {
                           "additionalProperties": {},
@@ -1088,7 +1218,43 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_study > outputSchema J
                             "country": {
                               "type": "string",
                             },
+                            "facility": {
+                              "type": "string",
+                            },
+                            "geoPoint": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "lat": {
+                                  "type": "number",
+                                },
+                                "lon": {
+                                  "type": "number",
+                                },
+                              },
+                              "type": "object",
+                            },
                             "state": {
+                              "type": "string",
+                            },
+                            "zip": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "overallOfficials": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "affiliation": {
+                              "type": "string",
+                            },
+                            "name": {
+                              "type": "string",
+                            },
+                            "role": {
                               "type": "string",
                             },
                           },
@@ -1133,6 +1299,18 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_study > outputSchema J
                             "type": "object",
                           },
                           "primaryPurpose": {
+                            "type": "string",
+                          },
+                        },
+                        "type": "object",
+                      },
+                      "enrollmentInfo": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "count": {
+                            "type": "number",
+                          },
+                          "type": {
                             "type": "string",
                           },
                         },
@@ -1420,6 +1598,18 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_study > outputSchema J
                         },
                         "type": "object",
                       },
+                      "resultsFirstPostDateStruct": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                          },
+                          "type": {
+                            "type": "string",
+                          },
+                        },
+                        "type": "object",
+                      },
                       "startDateStruct": {
                         "additionalProperties": {},
                         "properties": {
@@ -1431,6 +1621,450 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_study > outputSchema J
                           },
                         },
                         "type": "object",
+                      },
+                      "studyFirstPostDateStruct": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                          },
+                          "type": {
+                            "type": "string",
+                          },
+                        },
+                        "type": "object",
+                      },
+                      "studyFirstSubmitDate": {
+                        "type": "string",
+                      },
+                    },
+                    "type": "object",
+                  },
+                },
+                "type": "object",
+              },
+              "resultsSection": {
+                "additionalProperties": {},
+                "properties": {
+                  "adverseEventsModule": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "description": {
+                        "type": "string",
+                      },
+                      "eventGroups": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "deathsNumAffected": {
+                              "type": "number",
+                            },
+                            "deathsNumAtRisk": {
+                              "type": "number",
+                            },
+                            "description": {
+                              "type": "string",
+                            },
+                            "id": {
+                              "type": "string",
+                            },
+                            "otherNumAffected": {
+                              "type": "number",
+                            },
+                            "otherNumAtRisk": {
+                              "type": "number",
+                            },
+                            "seriousNumAffected": {
+                              "type": "number",
+                            },
+                            "seriousNumAtRisk": {
+                              "type": "number",
+                            },
+                            "title": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "frequencyThreshold": {
+                        "type": "string",
+                      },
+                      "otherEvents": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "assessmentType": {
+                              "type": "string",
+                            },
+                            "organSystem": {
+                              "type": "string",
+                            },
+                            "stats": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "groupId": {
+                                    "type": "string",
+                                  },
+                                  "numAffected": {
+                                    "type": "number",
+                                  },
+                                  "numAtRisk": {
+                                    "type": "number",
+                                  },
+                                  "numEvents": {
+                                    "type": "number",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "term": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "seriousEvents": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "assessmentType": {
+                              "type": "string",
+                            },
+                            "organSystem": {
+                              "type": "string",
+                            },
+                            "stats": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "groupId": {
+                                    "type": "string",
+                                  },
+                                  "numAffected": {
+                                    "type": "number",
+                                  },
+                                  "numAtRisk": {
+                                    "type": "number",
+                                  },
+                                  "numEvents": {
+                                    "type": "number",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "term": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "timeFrame": {
+                        "type": "string",
+                      },
+                    },
+                    "type": "object",
+                  },
+                  "baselineCharacteristicsModule": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "groups": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "description": {
+                              "type": "string",
+                            },
+                            "id": {
+                              "type": "string",
+                            },
+                            "title": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "measures": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "classes": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "categories": {
+                                    "items": {
+                                      "additionalProperties": {},
+                                      "properties": {
+                                        "measurements": {
+                                          "items": {
+                                            "additionalProperties": {},
+                                            "properties": {
+                                              "groupId": {
+                                                "type": "string",
+                                              },
+                                              "lowerLimit": {
+                                                "type": "string",
+                                              },
+                                              "spread": {
+                                                "type": "string",
+                                              },
+                                              "upperLimit": {
+                                                "type": "string",
+                                              },
+                                              "value": {
+                                                "type": "string",
+                                              },
+                                            },
+                                            "type": "object",
+                                          },
+                                          "type": "array",
+                                        },
+                                        "title": {
+                                          "type": "string",
+                                        },
+                                      },
+                                      "type": "object",
+                                    },
+                                    "type": "array",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "paramType": {
+                              "type": "string",
+                            },
+                            "title": {
+                              "type": "string",
+                            },
+                            "unitOfMeasure": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                    },
+                    "type": "object",
+                  },
+                  "outcomeMeasuresModule": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "outcomeMeasures": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "analyses": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "ciLowerLimit": {
+                                    "type": "string",
+                                  },
+                                  "ciNumSides": {
+                                    "type": "string",
+                                  },
+                                  "ciPctValue": {
+                                    "type": "string",
+                                  },
+                                  "ciUpperLimit": {
+                                    "type": "string",
+                                  },
+                                  "groupIds": {
+                                    "items": {
+                                      "type": "string",
+                                    },
+                                    "type": "array",
+                                  },
+                                  "pValue": {
+                                    "type": "string",
+                                  },
+                                  "paramType": {
+                                    "type": "string",
+                                  },
+                                  "paramValue": {
+                                    "type": "string",
+                                  },
+                                  "statisticalMethod": {
+                                    "type": "string",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "classes": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "categories": {
+                                    "items": {
+                                      "additionalProperties": {},
+                                      "properties": {
+                                        "measurements": {
+                                          "items": {
+                                            "additionalProperties": {},
+                                            "properties": {
+                                              "groupId": {
+                                                "type": "string",
+                                              },
+                                              "lowerLimit": {
+                                                "type": "string",
+                                              },
+                                              "spread": {
+                                                "type": "string",
+                                              },
+                                              "upperLimit": {
+                                                "type": "string",
+                                              },
+                                              "value": {
+                                                "type": "string",
+                                              },
+                                            },
+                                            "type": "object",
+                                          },
+                                          "type": "array",
+                                        },
+                                        "title": {
+                                          "type": "string",
+                                        },
+                                      },
+                                      "type": "object",
+                                    },
+                                    "type": "array",
+                                  },
+                                  "title": {
+                                    "type": "string",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "description": {
+                              "type": "string",
+                            },
+                            "groups": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "description": {
+                                    "type": "string",
+                                  },
+                                  "id": {
+                                    "type": "string",
+                                  },
+                                  "title": {
+                                    "type": "string",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "paramType": {
+                              "type": "string",
+                            },
+                            "populationDescription": {
+                              "type": "string",
+                            },
+                            "reportingStatus": {
+                              "type": "string",
+                            },
+                            "timeFrame": {
+                              "type": "string",
+                            },
+                            "title": {
+                              "type": "string",
+                            },
+                            "type": {
+                              "type": "string",
+                            },
+                            "unitOfMeasure": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                    },
+                    "type": "object",
+                  },
+                  "participantFlowModule": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "groups": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "description": {
+                              "type": "string",
+                            },
+                            "id": {
+                              "type": "string",
+                            },
+                            "title": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "periods": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "milestones": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "achievements": {
+                                    "items": {
+                                      "additionalProperties": {},
+                                      "properties": {
+                                        "groupId": {
+                                          "type": "string",
+                                        },
+                                        "numSubjects": {
+                                          "type": "string",
+                                        },
+                                      },
+                                      "type": "object",
+                                    },
+                                    "type": "array",
+                                  },
+                                  "type": {
+                                    "type": "string",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "title": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
                       },
                     },
                     "type": "object",
@@ -1505,6 +2139,365 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_study > outputSchema J
 }
 `;
 
+exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_study_results > inputSchema JSON output should be stable 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Input parameters for fetching clinical trial results.",
+  "properties": {
+    "nctIds": {
+      "anyOf": [
+        {
+          "pattern": "^[Nn][Cc][Tt]\\d{8}$",
+          "type": "string",
+        },
+        {
+          "items": {
+            "pattern": "^[Nn][Cc][Tt]\\d{8}$",
+            "type": "string",
+          },
+          "maxItems": 5,
+          "minItems": 1,
+          "type": "array",
+        },
+      ],
+      "description": "One or more NCT identifiers to fetch results for (max 5).",
+    },
+    "sections": {
+      "anyOf": [
+        {
+          "description": "A single results section to include.",
+          "enum": [
+            "outcomes",
+            "adverseEvents",
+            "participantFlow",
+            "baseline",
+          ],
+          "type": "string",
+        },
+        {
+          "description": "An array of results sections to include.",
+          "items": {
+            "enum": [
+              "outcomes",
+              "adverseEvents",
+              "participantFlow",
+              "baseline",
+            ],
+            "type": "string",
+          },
+          "minItems": 1,
+          "type": "array",
+        },
+      ],
+      "description": "Filter which results sections to return. Omit to include all available sections: outcomes, adverseEvents, participantFlow, baseline.",
+    },
+  },
+  "required": [
+    "nctIds",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_study_results > outputSchema JSON output should be stable 1`] = `
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "description": "Clinical trial results data.",
+  "properties": {
+    "fetchErrors": {
+      "description": "NCT IDs that failed to fetch, with error details",
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "description": "Error message.",
+            "type": "string",
+          },
+          "nctId": {
+            "description": "The NCT ID that failed to fetch.",
+            "type": "string",
+          },
+        },
+        "required": [
+          "nctId",
+          "error",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+    "results": {
+      "description": "Results for each requested study",
+      "items": {
+        "additionalProperties": false,
+        "description": "Results data for a single study.",
+        "properties": {
+          "adverseEvents": {
+            "additionalProperties": false,
+            "description": "Adverse events summary",
+            "properties": {
+              "description": {
+                "type": "string",
+              },
+              "groups": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "otherNumAffected": {
+                      "type": "number",
+                    },
+                    "otherNumAtRisk": {
+                      "type": "number",
+                    },
+                    "seriousNumAffected": {
+                      "type": "number",
+                    },
+                    "seriousNumAtRisk": {
+                      "type": "number",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                  },
+                  "type": "object",
+                },
+                "type": "array",
+              },
+              "otherEventCount": {
+                "type": "number",
+              },
+              "seriousEventCount": {
+                "type": "number",
+              },
+              "timeFrame": {
+                "type": "string",
+              },
+            },
+            "type": "object",
+          },
+          "baseline": {
+            "additionalProperties": false,
+            "description": "Baseline characteristics",
+            "properties": {
+              "groups": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": "string",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                  },
+                  "type": "object",
+                },
+                "type": "array",
+              },
+              "measures": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "paramType": {
+                      "type": "string",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                    "unitOfMeasure": {
+                      "type": "string",
+                    },
+                  },
+                  "type": "object",
+                },
+                "type": "array",
+              },
+            },
+            "type": "object",
+          },
+          "hasResults": {
+            "description": "Whether the study has results",
+            "type": "boolean",
+          },
+          "nctId": {
+            "description": "The NCT identifier",
+            "type": "string",
+          },
+          "outcomes": {
+            "description": "Outcome measures with results",
+            "items": {
+              "additionalProperties": {},
+              "properties": {
+                "analyses": {
+                  "description": "Statistical analyses",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "method": {
+                        "type": "string",
+                      },
+                      "pValue": {
+                        "type": "string",
+                      },
+                    },
+                    "type": "object",
+                  },
+                  "type": "array",
+                },
+                "description": {
+                  "description": "Outcome description",
+                  "type": "string",
+                },
+                "groups": {
+                  "description": "Arm/group definitions",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "description": {
+                        "type": "string",
+                      },
+                      "title": {
+                        "type": "string",
+                      },
+                    },
+                    "type": "object",
+                  },
+                  "type": "array",
+                },
+                "measurements": {
+                  "description": "Measurement data per group",
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "category": {
+                        "type": "string",
+                      },
+                      "values": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "groupTitle": {
+                              "type": "string",
+                            },
+                            "spread": {
+                              "type": "string",
+                            },
+                            "value": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                    },
+                    "type": "object",
+                  },
+                  "type": "array",
+                },
+                "timeFrame": {
+                  "description": "Time frame for measurement",
+                  "type": "string",
+                },
+                "title": {
+                  "description": "Outcome measure title",
+                  "type": "string",
+                },
+                "type": {
+                  "description": "Primary, Secondary, or Other",
+                  "type": "string",
+                },
+                "unitOfMeasure": {
+                  "description": "Unit of measure",
+                  "type": "string",
+                },
+              },
+              "type": "object",
+            },
+            "type": "array",
+          },
+          "participantFlow": {
+            "additionalProperties": false,
+            "description": "Participant flow through the study",
+            "properties": {
+              "groups": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "type": "string",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                  },
+                  "type": "object",
+                },
+                "type": "array",
+              },
+              "periods": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "milestones": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "counts": {
+                            "items": {
+                              "type": "string",
+                            },
+                            "type": "array",
+                          },
+                          "type": {
+                            "type": "string",
+                          },
+                        },
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
+                    "title": {
+                      "type": "string",
+                    },
+                  },
+                  "type": "object",
+                },
+                "type": "array",
+              },
+            },
+            "type": "object",
+          },
+          "title": {
+            "description": "Study title",
+            "type": "string",
+          },
+        },
+        "required": [
+          "nctId",
+          "hasResults",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+    "studiesWithoutResults": {
+      "description": "NCT IDs of studies that do not have results available",
+      "items": {
+        "type": "string",
+      },
+      "type": "array",
+    },
+  },
+  "required": [
+    "results",
+  ],
+  "type": "object",
+}
+`;
+
 exports[`Tool Schema Snapshots > Tool: clinicaltrials_search_studies > inputSchema JSON output should be stable 1`] = `
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
@@ -1512,11 +2505,15 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_search_studies > inputSche
   "description": "Input parameters for searching clinical trial studies.",
   "properties": {
     "city": {
-      "description": "Filter studies by city (e.g., "New York", "Toronto").",
+      "description": "Filter studies by city (e.g., "New York", "Toronto"). Searches location/facility fields.",
+      "type": "string",
+    },
+    "conditionQuery": {
+      "description": "Condition-specific search — searches only the condition/synonym index. More precise than general query for disease/condition searches (e.g., "Type 2 Diabetes", "non-small cell lung cancer").",
       "type": "string",
     },
     "country": {
-      "description": "Filter studies by country (e.g., "United States", "Canada").",
+      "description": "Filter studies by country (e.g., "United States", "Canada"). Searches location/facility fields.",
       "type": "string",
     },
     "fields": {
@@ -1527,7 +2524,15 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_search_studies > inputSche
       "type": "array",
     },
     "filter": {
-      "description": "Advanced filter expression using the ClinicalTrials.gov filter syntax.",
+      "description": "Advanced filter expression using AREA[] syntax. Examples: 'AREA[MinimumAge]RANGE[MIN, 18 years]', 'AREA[StudyType]INTERVENTIONAL', 'AREA[Phase](PHASE1 OR PHASE2)'. Combine with AND/OR. Use statusFilter/phaseFilter for simpler status/phase filtering.",
+      "type": "string",
+    },
+    "geoFilter": {
+      "description": "Geographic proximity filter. Format: "distance(lat,lon,distanceMiles)" — e.g., "distance(39.0035,-77.1013,50)" for studies within 50 miles of Bethesda, MD.",
+      "type": "string",
+    },
+    "interventionQuery": {
+      "description": "Intervention-specific search — searches only intervention/treatment fields (e.g., "pembrolizumab", "cognitive behavioral therapy").",
       "type": "string",
     },
     "pageSize": {
@@ -1541,17 +2546,103 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_search_studies > inputSche
       "description": "Token for retrieving the next page of results.",
       "type": "string",
     },
+    "phaseFilter": {
+      "anyOf": [
+        {
+          "description": "A single phase to filter by.",
+          "enum": [
+            "EARLY_PHASE1",
+            "PHASE1",
+            "PHASE2",
+            "PHASE3",
+            "PHASE4",
+            "NA",
+          ],
+          "type": "string",
+        },
+        {
+          "description": "An array of phases to filter by.",
+          "items": {
+            "enum": [
+              "EARLY_PHASE1",
+              "PHASE1",
+              "PHASE2",
+              "PHASE3",
+              "PHASE4",
+              "NA",
+            ],
+            "type": "string",
+          },
+          "minItems": 1,
+          "type": "array",
+        },
+      ],
+      "description": "Filter by trial phase. Accepts one or more values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA.",
+    },
     "query": {
-      "description": "General search query for conditions, interventions, sponsors, or other terms.",
+      "description": "General full-text search query across all fields (conditions, interventions, sponsors, etc.).",
       "type": "string",
     },
     "sort": {
       "description": "Sort order specification. Use valid API field names with optional :asc/:desc suffix (e.g., "LastUpdatePostDate:desc", "EnrollmentCount", "@relevance").",
       "type": "string",
     },
-    "state": {
-      "description": "Filter studies by state or province (e.g., "California", "Ontario").",
+    "sponsorQuery": {
+      "description": "Sponsor-specific search — searches only sponsor name fields (e.g., "Pfizer", "National Cancer Institute").",
       "type": "string",
+    },
+    "state": {
+      "description": "Filter studies by state or province (e.g., "California", "Ontario"). Searches location/facility fields.",
+      "type": "string",
+    },
+    "statusFilter": {
+      "anyOf": [
+        {
+          "description": "A single status to filter by.",
+          "enum": [
+            "ACTIVE_NOT_RECRUITING",
+            "COMPLETED",
+            "ENROLLING_BY_INVITATION",
+            "NOT_YET_RECRUITING",
+            "RECRUITING",
+            "SUSPENDED",
+            "TERMINATED",
+            "WITHDRAWN",
+            "AVAILABLE",
+            "NO_LONGER_AVAILABLE",
+            "TEMPORARILY_NOT_AVAILABLE",
+            "APPROVED_FOR_MARKETING",
+            "WITHHELD",
+            "UNKNOWN",
+          ],
+          "type": "string",
+        },
+        {
+          "description": "An array of statuses to filter by.",
+          "items": {
+            "enum": [
+              "ACTIVE_NOT_RECRUITING",
+              "COMPLETED",
+              "ENROLLING_BY_INVITATION",
+              "NOT_YET_RECRUITING",
+              "RECRUITING",
+              "SUSPENDED",
+              "TERMINATED",
+              "WITHDRAWN",
+              "AVAILABLE",
+              "NO_LONGER_AVAILABLE",
+              "TEMPORARILY_NOT_AVAILABLE",
+              "APPROVED_FOR_MARKETING",
+              "WITHHELD",
+              "UNKNOWN",
+            ],
+            "type": "string",
+          },
+          "minItems": 1,
+          "type": "array",
+        },
+      ],
+      "description": "Filter by overall study status. Accepts one or more values: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, NOT_YET_RECRUITING, etc.",
     },
   },
   "required": [
@@ -1807,6 +2898,27 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_search_studies > outputSch
                   "contactsLocationsModule": {
                     "additionalProperties": {},
                     "properties": {
+                      "centralContacts": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "email": {
+                              "type": "string",
+                            },
+                            "name": {
+                              "type": "string",
+                            },
+                            "phone": {
+                              "type": "string",
+                            },
+                            "role": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
                       "locations": {
                         "items": {
                           "additionalProperties": {},
@@ -1817,7 +2929,43 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_search_studies > outputSch
                             "country": {
                               "type": "string",
                             },
+                            "facility": {
+                              "type": "string",
+                            },
+                            "geoPoint": {
+                              "additionalProperties": {},
+                              "properties": {
+                                "lat": {
+                                  "type": "number",
+                                },
+                                "lon": {
+                                  "type": "number",
+                                },
+                              },
+                              "type": "object",
+                            },
                             "state": {
+                              "type": "string",
+                            },
+                            "zip": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "overallOfficials": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "affiliation": {
+                              "type": "string",
+                            },
+                            "name": {
+                              "type": "string",
+                            },
+                            "role": {
                               "type": "string",
                             },
                           },
@@ -1862,6 +3010,18 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_search_studies > outputSch
                             "type": "object",
                           },
                           "primaryPurpose": {
+                            "type": "string",
+                          },
+                        },
+                        "type": "object",
+                      },
+                      "enrollmentInfo": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "count": {
+                            "type": "number",
+                          },
+                          "type": {
                             "type": "string",
                           },
                         },
@@ -2149,6 +3309,18 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_search_studies > outputSch
                         },
                         "type": "object",
                       },
+                      "resultsFirstPostDateStruct": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                          },
+                          "type": {
+                            "type": "string",
+                          },
+                        },
+                        "type": "object",
+                      },
                       "startDateStruct": {
                         "additionalProperties": {},
                         "properties": {
@@ -2160,6 +3332,450 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_search_studies > outputSch
                           },
                         },
                         "type": "object",
+                      },
+                      "studyFirstPostDateStruct": {
+                        "additionalProperties": {},
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                          },
+                          "type": {
+                            "type": "string",
+                          },
+                        },
+                        "type": "object",
+                      },
+                      "studyFirstSubmitDate": {
+                        "type": "string",
+                      },
+                    },
+                    "type": "object",
+                  },
+                },
+                "type": "object",
+              },
+              "resultsSection": {
+                "additionalProperties": {},
+                "properties": {
+                  "adverseEventsModule": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "description": {
+                        "type": "string",
+                      },
+                      "eventGroups": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "deathsNumAffected": {
+                              "type": "number",
+                            },
+                            "deathsNumAtRisk": {
+                              "type": "number",
+                            },
+                            "description": {
+                              "type": "string",
+                            },
+                            "id": {
+                              "type": "string",
+                            },
+                            "otherNumAffected": {
+                              "type": "number",
+                            },
+                            "otherNumAtRisk": {
+                              "type": "number",
+                            },
+                            "seriousNumAffected": {
+                              "type": "number",
+                            },
+                            "seriousNumAtRisk": {
+                              "type": "number",
+                            },
+                            "title": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "frequencyThreshold": {
+                        "type": "string",
+                      },
+                      "otherEvents": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "assessmentType": {
+                              "type": "string",
+                            },
+                            "organSystem": {
+                              "type": "string",
+                            },
+                            "stats": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "groupId": {
+                                    "type": "string",
+                                  },
+                                  "numAffected": {
+                                    "type": "number",
+                                  },
+                                  "numAtRisk": {
+                                    "type": "number",
+                                  },
+                                  "numEvents": {
+                                    "type": "number",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "term": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "seriousEvents": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "assessmentType": {
+                              "type": "string",
+                            },
+                            "organSystem": {
+                              "type": "string",
+                            },
+                            "stats": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "groupId": {
+                                    "type": "string",
+                                  },
+                                  "numAffected": {
+                                    "type": "number",
+                                  },
+                                  "numAtRisk": {
+                                    "type": "number",
+                                  },
+                                  "numEvents": {
+                                    "type": "number",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "term": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "timeFrame": {
+                        "type": "string",
+                      },
+                    },
+                    "type": "object",
+                  },
+                  "baselineCharacteristicsModule": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "groups": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "description": {
+                              "type": "string",
+                            },
+                            "id": {
+                              "type": "string",
+                            },
+                            "title": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "measures": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "classes": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "categories": {
+                                    "items": {
+                                      "additionalProperties": {},
+                                      "properties": {
+                                        "measurements": {
+                                          "items": {
+                                            "additionalProperties": {},
+                                            "properties": {
+                                              "groupId": {
+                                                "type": "string",
+                                              },
+                                              "lowerLimit": {
+                                                "type": "string",
+                                              },
+                                              "spread": {
+                                                "type": "string",
+                                              },
+                                              "upperLimit": {
+                                                "type": "string",
+                                              },
+                                              "value": {
+                                                "type": "string",
+                                              },
+                                            },
+                                            "type": "object",
+                                          },
+                                          "type": "array",
+                                        },
+                                        "title": {
+                                          "type": "string",
+                                        },
+                                      },
+                                      "type": "object",
+                                    },
+                                    "type": "array",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "paramType": {
+                              "type": "string",
+                            },
+                            "title": {
+                              "type": "string",
+                            },
+                            "unitOfMeasure": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                    },
+                    "type": "object",
+                  },
+                  "outcomeMeasuresModule": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "outcomeMeasures": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "analyses": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "ciLowerLimit": {
+                                    "type": "string",
+                                  },
+                                  "ciNumSides": {
+                                    "type": "string",
+                                  },
+                                  "ciPctValue": {
+                                    "type": "string",
+                                  },
+                                  "ciUpperLimit": {
+                                    "type": "string",
+                                  },
+                                  "groupIds": {
+                                    "items": {
+                                      "type": "string",
+                                    },
+                                    "type": "array",
+                                  },
+                                  "pValue": {
+                                    "type": "string",
+                                  },
+                                  "paramType": {
+                                    "type": "string",
+                                  },
+                                  "paramValue": {
+                                    "type": "string",
+                                  },
+                                  "statisticalMethod": {
+                                    "type": "string",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "classes": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "categories": {
+                                    "items": {
+                                      "additionalProperties": {},
+                                      "properties": {
+                                        "measurements": {
+                                          "items": {
+                                            "additionalProperties": {},
+                                            "properties": {
+                                              "groupId": {
+                                                "type": "string",
+                                              },
+                                              "lowerLimit": {
+                                                "type": "string",
+                                              },
+                                              "spread": {
+                                                "type": "string",
+                                              },
+                                              "upperLimit": {
+                                                "type": "string",
+                                              },
+                                              "value": {
+                                                "type": "string",
+                                              },
+                                            },
+                                            "type": "object",
+                                          },
+                                          "type": "array",
+                                        },
+                                        "title": {
+                                          "type": "string",
+                                        },
+                                      },
+                                      "type": "object",
+                                    },
+                                    "type": "array",
+                                  },
+                                  "title": {
+                                    "type": "string",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "description": {
+                              "type": "string",
+                            },
+                            "groups": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "description": {
+                                    "type": "string",
+                                  },
+                                  "id": {
+                                    "type": "string",
+                                  },
+                                  "title": {
+                                    "type": "string",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "paramType": {
+                              "type": "string",
+                            },
+                            "populationDescription": {
+                              "type": "string",
+                            },
+                            "reportingStatus": {
+                              "type": "string",
+                            },
+                            "timeFrame": {
+                              "type": "string",
+                            },
+                            "title": {
+                              "type": "string",
+                            },
+                            "type": {
+                              "type": "string",
+                            },
+                            "unitOfMeasure": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                    },
+                    "type": "object",
+                  },
+                  "participantFlowModule": {
+                    "additionalProperties": {},
+                    "properties": {
+                      "groups": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "description": {
+                              "type": "string",
+                            },
+                            "id": {
+                              "type": "string",
+                            },
+                            "title": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
+                      },
+                      "periods": {
+                        "items": {
+                          "additionalProperties": {},
+                          "properties": {
+                            "milestones": {
+                              "items": {
+                                "additionalProperties": {},
+                                "properties": {
+                                  "achievements": {
+                                    "items": {
+                                      "additionalProperties": {},
+                                      "properties": {
+                                        "groupId": {
+                                          "type": "string",
+                                        },
+                                        "numSubjects": {
+                                          "type": "string",
+                                        },
+                                      },
+                                      "type": "object",
+                                    },
+                                    "type": "array",
+                                  },
+                                  "type": {
+                                    "type": "string",
+                                  },
+                                },
+                                "type": "object",
+                              },
+                              "type": "array",
+                            },
+                            "title": {
+                              "type": "string",
+                            },
+                          },
+                          "type": "object",
+                        },
+                        "type": "array",
                       },
                     },
                     "type": "object",

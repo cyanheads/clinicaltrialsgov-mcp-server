@@ -339,7 +339,7 @@ describe('findEligibleStudiesTool', () => {
       );
     });
 
-    it('should use a single condition as-is in the conditionQuery', async () => {
+    it('should quote a single multi-word condition in the conditionQuery', async () => {
       await findEligibleStudiesTool.logic(
         baseInput,
         appContext as never,
@@ -347,7 +347,7 @@ describe('findEligibleStudiesTool', () => {
       );
 
       expect(mockListStudies).toHaveBeenCalledWith(
-        expect.objectContaining({ conditionQuery: 'Type 2 Diabetes' }),
+        expect.objectContaining({ conditionQuery: '"Type 2 Diabetes"' }),
         expect.anything(),
       );
     });

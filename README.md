@@ -31,11 +31,11 @@ Seven tools for working with ClinicalTrials.gov data:
 
 **Key Features:**
 
-- Free-text search across all study fields (conditions, interventions, sponsors, titles)
-- Advanced filtering with ClinicalTrials.gov's official filter syntax
-- Pagination support for large result sets (up to 200 studies per page)
-- Sorting by enrollment count, update date, or other fields
-- Returns concise summaries with NCT IDs, titles, and recruitment status
+- Full-text search plus specialized condition, intervention, and sponsor queries targeting specific API indexes
+- Typed enum filters for study status and phase (single value or array)
+- Geographic proximity filtering by coordinates and distance
+- Advanced filtering with ClinicalTrials.gov's AREA[] syntax
+- Pagination (up to 200 per page), sorting, and field selection
 
 **Example Use Cases:**
 
@@ -76,7 +76,7 @@ Seven tools for working with ClinicalTrials.gov data:
 **Key Features:**
 
 - Aggregate up to 5,000 studies per analysis
-- Multiple analysis types: status distribution, geographic spread, sponsor types, trial phases
+- Multiple analysis types: status, country, sponsor, phase, year, month, study type, intervention type
 - Combine multiple analysis types in a single request
 - Advanced filtering to focus analysis on specific subsets
 - Returns counts, percentages, and top categories
@@ -231,7 +231,7 @@ Or for Streamable HTTP:
 
 ```bash
 MCP_TRANSPORT_TYPE=http
-MCP_HTTP_PORT=3015
+MCP_HTTP_PORT=3017
 ```
 
 ### Prerequisites
@@ -257,10 +257,6 @@ cd clinicaltrialsgov-mcp-server
 ```sh
 bun install
 ```
-
-## 🛠️ Core Capabilities: ClinicalTrials.gov Tools
-
-This server equips AI agents with specialized tools to interact with the ClinicalTrials.gov database.
 
 ## ⚙️ Configuration
 

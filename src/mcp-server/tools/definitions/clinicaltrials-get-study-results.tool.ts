@@ -201,6 +201,23 @@ const StudyResultsSchema = z
               title: z.string().optional(),
               paramType: z.string().optional(),
               unitOfMeasure: z.string().optional(),
+              measurements: z
+                .array(
+                  z.object({
+                    category: z.string().optional(),
+                    values: z
+                      .array(
+                        z.object({
+                          groupTitle: z.string().optional(),
+                          value: z.string().optional(),
+                          spread: z.string().optional(),
+                        }),
+                      )
+                      .optional(),
+                  }),
+                )
+                .optional()
+                .describe('Measurement data per group'),
             }),
           )
           .optional(),
@@ -323,6 +340,9 @@ function extractResults(
 
   if (sections.has('baseline') && rs?.baselineCharacteristicsModule) {
     const bl = rs.baselineCharacteristicsModule;
+    const blGroupMap = new Map(
+      (bl.groups ?? []).map((g) => [g.id, g.title ?? g.id ?? '']),
+    );
     result.baseline = {
       groups: bl.groups?.map((g) => ({
         title: g.title,
@@ -332,6 +352,17 @@ function extractResults(
         title: m.title,
         paramType: m.paramType,
         unitOfMeasure: m.unitOfMeasure,
+        measurements: m.classes?.flatMap(
+          (cls) =>
+            cls.categories?.map((cat) => ({
+              category: (cat.title ?? cls.title) as string | undefined,
+              values: cat.measurements?.map((meas) => ({
+                groupTitle: blGroupMap.get(meas.groupId ?? '') ?? meas.groupId,
+                value: meas.value,
+                spread: meas.spread,
+              })),
+            })) ?? [],
+        ),
       })),
     };
   }
@@ -484,9 +515,15 @@ function responseFormatter(result: GetStudyResultsOutput): ContentBlock[] {
       if (study.baseline.measures?.length) {
         parts.push(`${study.baseline.measures.length} measures recorded`);
         for (const m of study.baseline.measures.slice(0, 10)) {
-          parts.push(
-            `- ${m.title} (${m.paramType ?? 'N/A'}, ${m.unitOfMeasure ?? 'N/A'})`,
-          );
+          const header = `- **${m.title}** (${m.paramType ?? 'N/A'}, ${m.unitOfMeasure ?? 'N/A'})`;
+          const values = m.measurements
+            ?.flatMap((meas) => meas.values ?? [])
+            .map(
+              (v) =>
+                `  - ${v.groupTitle}: ${v.value ?? 'N/A'}${v.spread ? ` (${v.spread})` : ''}`,
+            );
+          parts.push(header);
+          if (values?.length) parts.push(...values);
         }
         if (study.baseline.measures.length > 10) {
           parts.push(`- ...and ${study.baseline.measures.length - 10} more`);

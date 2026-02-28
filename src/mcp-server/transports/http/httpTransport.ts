@@ -7,12 +7,13 @@
  * @see {@link https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http | MCP Streamable HTTP Transport}
  * @module src/mcp-server/transports/http/httpTransport
  */
+
 import { StreamableHTTPTransport } from '@hono/mcp';
-import { type ServerType, serve } from '@hono/node-server';
+import { serve, type ServerType } from '@hono/node-server';
+import { httpInstrumentationMiddleware } from '@hono/otel';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/sdk/types.js';
 import { Hono } from 'hono';
-import { httpInstrumentationMiddleware } from '@hono/otel';
 import { cors } from 'hono/cors';
 import http from 'node:http';
 
@@ -26,13 +27,13 @@ import { httpErrorHandler } from '@/mcp-server/transports/http/httpErrorHandler.
 import type { HonoNodeBindings } from '@/mcp-server/transports/http/httpTypes.js';
 import { generateSecureSessionId } from '@/mcp-server/transports/http/sessionIdUtils.js';
 import {
-  SessionStore,
   type SessionIdentity,
+  SessionStore,
 } from '@/mcp-server/transports/http/sessionStore.js';
 import {
-  type RequestContext,
   logger,
   logStartupBanner,
+  type RequestContext,
 } from '@/utils/index.js';
 
 /**
@@ -82,7 +83,6 @@ export function createHttpApp<TBindings extends object = HonoNodeBindings>(
   // so the span captures the full lifecycle (CORS, auth, handler).
   // On Bun, Node.js HTTP auto-instrumentation is a no-op; this fills that gap.
   if (config.openTelemetry.enabled) {
-     
     app.use(
       config.mcpHttpEndpointPath,
       httpInstrumentationMiddleware({

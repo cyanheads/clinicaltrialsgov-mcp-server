@@ -198,14 +198,6 @@ const OutputSchema = z
         comparedFields: z
           .array(z.string())
           .describe('Fields that were compared.'),
-        commonalities: z
-          .array(z.string())
-          .optional()
-          .describe('Key commonalities found across studies.'),
-        differences: z
-          .array(z.string())
-          .optional()
-          .describe('Key differences found across studies.'),
       })
       .describe('Summary of the comparison.'),
     errors: z
@@ -407,152 +399,13 @@ function createStudyComparison(
   return comparison;
 }
 
-/**
- * Analyzes commonalities and differences across studies.
- */
-function analyzeSummary(
+function buildSummary(
   comparisons: StudyComparison[],
   compareFields: string[],
 ): CompareStudiesOutput['summary'] {
-  const commonalities: string[] = [];
-  const differences: string[] = [];
-
-  // Check for common phases
-  if (compareFields.includes('all') || compareFields.includes('design')) {
-    const allPhases = comparisons.map((c) => c.design?.phases).filter(Boolean);
-    if (allPhases.length > 0) {
-      const firstPhases = allPhases[0]?.join(',');
-      const allSame = allPhases.every((p) => p?.join(',') === firstPhases);
-      if (allSame && firstPhases) {
-        commonalities.push(`All studies are in phase: ${firstPhases}`);
-      } else {
-        differences.push('Studies are in different trial phases');
-      }
-    }
-  }
-
-  // Check for common sponsors
-  if (compareFields.includes('all') || compareFields.includes('sponsors')) {
-    const sponsors = comparisons
-      .map((c) => c.sponsors?.leadSponsor?.name)
-      .filter(Boolean);
-    const uniqueSponsors = [...new Set(sponsors)];
-    if (uniqueSponsors.length === 1 && sponsors.length === comparisons.length) {
-      commonalities.push(`All studies sponsored by: ${uniqueSponsors[0]}`);
-    } else if (uniqueSponsors.length > 1) {
-      differences.push(`Different lead sponsors: ${uniqueSponsors.join(', ')}`);
-    }
-  }
-
-  // Check for common status
-  if (compareFields.includes('all') || compareFields.includes('status')) {
-    const statuses = comparisons
-      .map((c) => c.status?.overallStatus)
-      .filter(Boolean);
-    const uniqueStatuses = [...new Set(statuses)];
-    if (uniqueStatuses.length === 1 && statuses.length === comparisons.length) {
-      commonalities.push(`All studies have status: ${uniqueStatuses[0]}`);
-    } else if (uniqueStatuses.length > 1) {
-      differences.push(`Different statuses: ${uniqueStatuses.join(', ')}`);
-    }
-  }
-
-  // Check for geographic overlap
-  if (compareFields.includes('all') || compareFields.includes('locations')) {
-    const allCountries = comparisons
-      .map((c) => c.locations?.countries ?? [])
-      .filter((countries) => countries.length > 0);
-
-    if (allCountries.length > 1) {
-      const commonCountries = allCountries.reduce((acc, countries) =>
-        acc.filter((c) => countries.includes(c)),
-      );
-
-      if (commonCountries.length > 0) {
-        commonalities.push(
-          `Common countries: ${commonCountries.slice(0, 5).join(', ')}`,
-        );
-      }
-    }
-  }
-
-  // Check for intervention overlap
-  if (
-    compareFields.includes('all') ||
-    compareFields.includes('interventions')
-  ) {
-    const allInterventionNames = comparisons.map(
-      (c) =>
-        new Set(
-          (c.interventions ?? [])
-            .map((i) => i.name?.toLowerCase())
-            .filter((name): name is string => name != null),
-        ),
-    );
-    const nonEmpty = allInterventionNames.filter((s) => s.size > 0);
-    const firstIntSet = nonEmpty[0];
-    if (nonEmpty.length > 1 && firstIntSet) {
-      const sharedInterventions = [...firstIntSet].filter((name) =>
-        nonEmpty.every((s) => s.has(name)),
-      );
-      if (sharedInterventions.length > 0) {
-        commonalities.push(
-          `Shared interventions: ${sharedInterventions.join(', ')}`,
-        );
-      } else {
-        differences.push('No shared interventions across studies');
-      }
-    }
-
-    // Compare intervention types
-    const allTypes = comparisons.map(
-      (c) =>
-        new Set(
-          (c.interventions ?? [])
-            .map((i) => i.type)
-            .filter(Boolean) as string[],
-        ),
-    );
-    const nonEmptyTypes = allTypes.filter((s) => s.size > 0);
-    const firstTypeSet = nonEmptyTypes[0];
-    if (nonEmptyTypes.length > 1 && firstTypeSet) {
-      const sharedTypes = [...firstTypeSet].filter((t) =>
-        nonEmptyTypes.every((s) => s.has(t)),
-      );
-      if (sharedTypes.length > 0) {
-        commonalities.push(
-          `Common intervention types: ${sharedTypes.join(', ')}`,
-        );
-      }
-    }
-  }
-
-  // Check for eligibility overlap
-  if (compareFields.includes('all') || compareFields.includes('eligibility')) {
-    // Compare sex requirements
-    const sexReqs = comparisons.map((c) => c.eligibility?.sex).filter(Boolean);
-    const uniqueSex = [...new Set(sexReqs)];
-    if (uniqueSex.length === 1 && sexReqs.length === comparisons.length) {
-      commonalities.push(`All studies accept: ${uniqueSex[0]}`);
-    } else if (uniqueSex.length > 1) {
-      differences.push(`Different sex requirements: ${uniqueSex.join(', ')}`);
-    }
-
-    // Compare age ranges
-    const ageRanges = comparisons
-      .map((c) => c.eligibility?.minimumAge)
-      .filter(Boolean);
-    const uniqueAges = [...new Set(ageRanges)];
-    if (uniqueAges.length > 1) {
-      differences.push(`Different minimum ages: ${uniqueAges.join(', ')}`);
-    }
-  }
-
   return {
     totalStudies: comparisons.length,
     comparedFields: compareFields,
-    commonalities: commonalities.length > 0 ? commonalities : undefined,
-    differences: differences.length > 0 ? differences : undefined,
   };
 }
 
@@ -626,7 +479,7 @@ async function compareStudiesLogic(
     );
   }
 
-  const summary = analyzeSummary(comparisons, compareFields);
+  const summary = buildSummary(comparisons, compareFields);
 
   logger.info(`Successfully compared ${comparisons.length} studies`, {
     ...appContext,
@@ -652,18 +505,6 @@ function responseFormatter(result: CompareStudiesOutput): ContentBlock[] {
     ...comparisons.map((c) => `- **${c.nctId}**: ${c.title ?? 'No title'}`),
     '',
   ];
-
-  if (summary.commonalities && summary.commonalities.length > 0) {
-    summaryParts.push('## Commonalities');
-    summaryParts.push(...summary.commonalities.map((c) => `- ${c}`));
-    summaryParts.push('');
-  }
-
-  if (summary.differences && summary.differences.length > 0) {
-    summaryParts.push('## Key Differences');
-    summaryParts.push(...summary.differences.map((d) => `- ${d}`));
-    summaryParts.push('');
-  }
 
   if (errors && errors.length > 0) {
     summaryParts.push('## Errors');

@@ -25,15 +25,13 @@ import {
   checkSexEligibility,
 } from '../utils/eligibilityCheckers.js';
 import {
+  type PatientLocation,
+  type StudyLocation,
   extractContactInfo,
   extractRelevantLocations,
   extractStudyDetails,
 } from '../utils/studyExtractors.js';
-import {
-  calculateConditionRelevance,
-  calculateMatchScore,
-  rankStudies,
-} from '../utils/studyRanking.js';
+import { calculateConditionRelevance } from '../utils/studyRanking.js';
 
 const TOOL_NAME = 'clinicaltrials_find_eligible_studies';
 const TOOL_TITLE = 'Find Eligible Clinical Trials';
@@ -126,27 +124,24 @@ const StudyDetailsSchema = z
     enrollmentCount: z.number().optional().describe('Planned enrollment count'),
     sponsor: z.string().optional().describe('Lead sponsor name'),
   })
-  .describe('Study details for ranking and display.');
+  .describe('Study details.');
 
 const EligibleStudySchema = z
   .object({
     nctId: z.string().describe('The NCT identifier'),
     title: z.string().describe('Study title'),
     briefSummary: z.string().optional().describe('Brief study summary'),
-    matchScore: z
-      .number()
-      .min(0)
-      .max(100)
-      .describe('Confidence score (0-100) for eligibility match'),
     matchReasons: z
       .array(z.string())
       .describe(
-        'Reasons why this study matches (e.g., "Age within range", "Accepts females")',
+        'Reasons why this study matches the patient profile (e.g., "Age within range", "Accepts females", "Condition relevance: 80%")',
       ),
     eligibilityHighlights: EligibilityHighlightsSchema,
     locations: z
       .array(StudyLocationSchema)
-      .describe('Relevant study locations'),
+      .describe(
+        "Relevant study locations in the patient's country, sorted nearest first",
+      ),
     contact: StudyContactSchema.optional().describe(
       'Study contact information',
     ),
@@ -158,7 +153,9 @@ const OutputSchema = z
   .object({
     eligibleStudies: z
       .array(EligibleStudySchema)
-      .describe('Array of eligible studies, ranked by relevance'),
+      .describe(
+        'Eligible studies sorted by location proximity (city > state > country), then number of nearby sites',
+      ),
     totalMatches: z.number().describe('Total number of eligible studies found'),
     totalAvailable: z
       .number()
@@ -181,13 +178,31 @@ type EligibleStudy = z.infer<typeof EligibleStudySchema>;
 type FindEligibleStudiesOutput = z.infer<typeof OutputSchema>;
 
 /**
- * Filters studies based on eligibility criteria and scores them by condition relevance.
+ * Returns a tier (2=city, 1=state, 0=country-only) for a study's best
+ * geographic match against the patient's location. Used for result ordering.
+ */
+function getLocationTier(
+  locations: StudyLocation[],
+  patientLocation: PatientLocation,
+): number {
+  const normalCity = patientLocation.city?.toLowerCase();
+  const normalState = patientLocation.state?.toLowerCase();
+
+  let hasStateMatch = false;
+  for (const loc of locations) {
+    if (normalCity && loc.city?.toLowerCase() === normalCity) return 2;
+    if (normalState && loc.state?.toLowerCase() === normalState)
+      hasStateMatch = true;
+  }
+  return hasStateMatch ? 1 : 0;
+}
+
+/**
+ * Filters studies based on eligibility criteria.
  *
- * Hard filters (age, sex, healthy volunteers, location) exclude ineligible studies.
- * Condition relevance is scored by comparing the study's `conditionsModule.conditions`
- * against the patient's input conditions using normalized token overlap.
- * Studies with zero condition relevance are excluded — they matched only via
- * incidental keyword hits in the API's full-text search.
+ * Hard filters (age, sex, healthy volunteers, country) exclude ineligible studies.
+ * Condition relevance guards against false positives from the API's full-text index:
+ * studies with zero token overlap against the patient's conditions are excluded.
  */
 function filterByEligibility(
   studies: Study[],
@@ -207,7 +222,6 @@ function filterByEligibility(
     }
 
     const matchReasons: string[] = [];
-    const demographicChecks: Array<{ eligible: boolean; reason: string }> = [];
 
     // Age check
     const ageCheck = checkAgeEligibility(
@@ -215,13 +229,11 @@ function filterByEligibility(
       eligibility.maximumAge,
       input.age,
     );
-    demographicChecks.push(ageCheck);
     if (!ageCheck.eligible) continue;
     matchReasons.push(ageCheck.reason);
 
     // Sex check
     const sexCheck = checkSexEligibility(eligibility.sex, input.sex);
-    demographicChecks.push(sexCheck);
     if (!sexCheck.eligible) continue;
     matchReasons.push(sexCheck.reason);
 
@@ -230,24 +242,18 @@ function filterByEligibility(
       eligibility.healthyVolunteers,
       input.healthyVolunteer,
     );
-    demographicChecks.push(hvCheck);
     if (!hvCheck.eligible) continue;
     matchReasons.push(hvCheck.reason);
 
     // Location check — at least one location must match the patient's country
     const locations = extractRelevantLocations(study, input.location);
-    const locationCheck = {
-      eligible: locations.length > 0,
-      reason:
-        locations.length > 0
-          ? `${locations.length} location(s) in ${input.location.country}`
-          : `No locations in ${input.location.country}`,
-    };
-    demographicChecks.push(locationCheck);
-    if (!locationCheck.eligible) continue;
-    matchReasons.push(locationCheck.reason);
+    if (locations.length === 0) continue;
+    matchReasons.push(
+      `${locations.length} location(s) in ${input.location.country}`,
+    );
 
-    // Condition relevance — compare study conditions against patient conditions
+    // Condition relevance — exclude studies with no condition token overlap
+    // (false positives from the API's full-text index)
     const studyConditions =
       study.protocolSection?.conditionsModule?.conditions ?? [];
     const conditionRelevance = calculateConditionRelevance(
@@ -255,7 +261,6 @@ function filterByEligibility(
       input.conditions,
     );
 
-    // Exclude studies with no condition overlap (false positives from full-text search)
     if (conditionRelevance === 0) {
       logger.debug('Excluding study with zero condition relevance', {
         ...appContext,
@@ -266,31 +271,13 @@ function filterByEligibility(
       continue;
     }
 
-    matchReasons.push(
-      `Condition relevance: ${Math.round(conditionRelevance * 100)}% (${studyConditions.join(', ')})`,
-    );
-
-    // Weighted score: condition relevance (0–60) + demographics (0–40)
-    const matchScore = calculateMatchScore(
-      conditionRelevance,
-      demographicChecks,
-    );
-
-    // Extract study information
-    const nctId =
-      study.protocolSection?.identificationModule?.nctId ?? 'Unknown';
-    const title =
-      study.protocolSection?.identificationModule?.briefTitle ?? 'No title';
-    const briefSummary = study.protocolSection?.descriptionModule?.briefSummary;
-
-    const contact = extractContactInfo(study);
-    const studyDetails = extractStudyDetails(study);
+    matchReasons.push(`Study conditions: ${studyConditions.join(', ')}`);
 
     eligible.push({
-      nctId,
-      title,
-      briefSummary,
-      matchScore,
+      nctId: study.protocolSection?.identificationModule?.nctId ?? 'Unknown',
+      title:
+        study.protocolSection?.identificationModule?.briefTitle ?? 'No title',
+      briefSummary: study.protocolSection?.descriptionModule?.briefSummary,
       matchReasons,
       eligibilityHighlights: {
         ageRange: `${eligibility.minimumAge ?? 'N/A'} - ${eligibility.maximumAge ?? 'N/A'}`,
@@ -299,8 +286,8 @@ function filterByEligibility(
         criteriaSnippet: eligibility.eligibilityCriteria?.substring(0, 300),
       },
       locations,
-      contact,
-      studyDetails,
+      contact: extractContactInfo(study),
+      studyDetails: extractStudyDetails(study),
     });
   }
 
@@ -371,7 +358,6 @@ async function findEligibleStudiesLogic(
     totalCount: totalAvailable,
   });
 
-  // Filter by eligibility
   const eligibleStudies = filterByEligibility(
     pagedStudies.studies ?? [],
     input,
@@ -382,11 +368,17 @@ async function findEligibleStudiesLogic(
     ...appContext,
   });
 
-  // Rank by relevance
-  const rankedStudies = rankStudies(eligibleStudies);
+  // Sort by location proximity: city match (tier 2) > state match (tier 1) > country-only (tier 0),
+  // then by number of sites in the patient's country (more = better access).
+  // API relevance order is preserved within each tier.
+  const sorted = [...eligibleStudies].sort((a, b) => {
+    const aTier = getLocationTier(a.locations, input.location);
+    const bTier = getLocationTier(b.locations, input.location);
+    if (aTier !== bTier) return bTier - aTier;
+    return b.locations.length - a.locations.length;
+  });
 
-  // Limit results
-  const finalStudies = rankedStudies.slice(0, input.maxResults);
+  const finalStudies = sorted.slice(0, input.maxResults);
 
   logger.info(
     `Returning ${finalStudies.length} eligible studies (top ${input.maxResults})`,
@@ -428,7 +420,7 @@ function responseFormatter(result: FindEligibleStudiesOutput): ContentBlock[] {
     `- **Location:** ${searchCriteria.location}`,
     `- **Patient:** ${searchCriteria.ageRange}`,
     truncationNote,
-    `Showing top ${eligibleStudies.length} ${eligibleStudies.length === 1 ? 'result' : 'results'}:`,
+    `Showing top ${eligibleStudies.length} ${eligibleStudies.length === 1 ? 'result' : 'results'} (sorted by proximity):`,
     ``,
     `---`,
     ``,
@@ -451,8 +443,6 @@ function responseFormatter(result: FindEligibleStudiesOutput): ContentBlock[] {
     return [
       `## ${idx + 1}. ${study.title}`,
       `**NCT ID:** ${study.nctId}`,
-      ``,
-      `**Match Score:** ${study.matchScore}/100`,
       ``,
       `**Why You Match:**`,
       ...study.matchReasons.map((r) => `- ${r}`),

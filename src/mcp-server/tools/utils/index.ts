@@ -26,12 +26,7 @@ export {
 } from './studyExtractors.js';
 
 // Study ranking utilities
-export {
-  getPhaseWeight,
-  rankStudies,
-  calculateMatchScore,
-  type RankableStudy,
-} from './studyRanking.js';
+export { calculateConditionRelevance } from './studyRanking.js';
 
 // Tool definition and handler utilities
 export type {

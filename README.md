@@ -11,25 +11,23 @@
 
 ---
 
-## 🛠️ Tools Overview
+## Tools
 
 Seven tools for working with ClinicalTrials.gov data:
 
-| Tool Name                              | Description                                                                                                                             |
-| :------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------- |
-| `clinicaltrials_search_studies`        | Searches for clinical studies using query terms, filters, pagination, and sorting. Includes geographic and enum-based filtering.        |
-| `clinicaltrials_get_study`             | Fetches one or more clinical studies by their NCT IDs, returning either full data or concise summaries.                                 |
-| `clinicaltrials_get_study_results`     | Fetches trial results data for completed studies — outcomes, adverse events, participant flow, and baseline characteristics.            |
-| `clinicaltrials_get_field_values`      | Discovers valid enum values for any API field with study counts, enabling informed query construction.                                  |
-| `clinicaltrials_analyze_trends`        | Performs statistical analysis on up to 5000 studies by status, country, sponsor, phase, year, month, study type, or intervention type.  |
-| `clinicaltrials_compare_studies`       | Performs a detailed side-by-side comparison of 2-5 clinical studies, highlighting commonalities and differences.                        |
-| `clinicaltrials_find_eligible_studies` | Matches patient profiles to eligible clinical trials with condition relevance scoring, filtering by age, sex, conditions, and location. |
+| Tool Name                              | Description                                                                                                                                 |
+| :------------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------ |
+| `clinicaltrials_search_studies`        | Searches for clinical studies using query terms, filters, pagination, and sorting. Includes geographic and enum-based filtering.            |
+| `clinicaltrials_get_study`             | Fetches one or more clinical studies by their NCT IDs, returning either full data or concise summaries.                                     |
+| `clinicaltrials_get_study_results`     | Fetches trial results data for completed studies — outcomes, adverse events, participant flow, and baseline characteristics.                |
+| `clinicaltrials_get_field_values`      | Discovers valid enum values for any API field with study counts, enabling informed query construction.                                      |
+| `clinicaltrials_analyze_trends`        | Performs statistical analysis on up to 5000 studies by status, country, sponsor, phase, year, month, study type, or intervention type.      |
+| `clinicaltrials_compare_studies`       | Side-by-side comparison of 2-5 clinical studies across eligibility, design, interventions, outcomes, and sponsors.                          |
+| `clinicaltrials_find_eligible_studies` | Matches patient profiles to eligible clinical trials, filtering by age, sex, conditions, and location. Returns studies sorted by proximity. |
 
 ### `clinicaltrials_search_studies`
 
-**Search and discover clinical trials** using free-text queries and advanced filters.
-
-**Key Features:**
+Search for clinical trials using free-text queries and filters.
 
 - Full-text search plus specialized condition, intervention, and sponsor queries targeting specific API indexes
 - Typed enum filters for study status and phase (single value or array)
@@ -37,160 +35,95 @@ Seven tools for working with ClinicalTrials.gov data:
 - Advanced filtering with ClinicalTrials.gov's AREA[] syntax
 - Pagination (up to 200 per page), sorting, and field selection
 
-**Example Use Cases:**
-
-- "Find all Phase 3 diabetes studies currently recruiting"
-- "Show me cancer immunotherapy trials in the United States"
-- "List studies by pharmaceutical companies sorted by size"
-
-📖 **[View detailed examples →](./examples/clinicaltrials_search_studies.md)**
+[View detailed examples](./examples/clinicaltrials_search_studies.md)
 
 ---
 
 ### `clinicaltrials_get_study`
 
-**Retrieve detailed information** for specific clinical trials by their NCT ID.
+Fetch one or more clinical trials by NCT ID, with full data or concise summaries.
 
-**Key Features:**
+- Batch fetch up to 5 studies at once
+- Full data includes protocol sections, results, adverse events, outcome measures, eligibility, and locations
+- Partial success reporting when some studies in a batch fail
 
-- Fetch single or multiple studies (up to 5 at once)
-- Choice between full data (complete protocol, results, documents) or concise summaries
-- Full study data includes: protocol sections, results, adverse events, outcome measures, eligibility criteria, locations, and more
-- Automatic error handling for invalid or non-existent NCT IDs
-- Partial success reporting when fetching multiple studies
-
-**Example Use Cases:**
-
-- "Get the full details for study NCT03372603"
-- "Show me a summary of these three studies: NCT12345678, NCT87654321, NCT11223344"
-- "What were the results and adverse events for NCT04280783?"
-
-📖 **[View detailed examples →](./examples/clinicaltrials_get_study.md)**
+[View detailed examples](./examples/clinicaltrials_get_study.md)
 
 ---
 
 ### `clinicaltrials_analyze_trends`
 
-**Perform statistical analysis** across thousands of clinical trials.
+Aggregate statistics across up to 5,000 studies by status, country, sponsor, phase, year, month, study type, or intervention type.
 
-**Key Features:**
-
-- Aggregate up to 5,000 studies per analysis
-- Multiple analysis types: status, country, sponsor, phase, year, month, study type, intervention type
 - Combine multiple analysis types in a single request
-- Advanced filtering to focus analysis on specific subsets
-- Returns counts, percentages, and top categories
+- Filter to focus on specific subsets
+- Returns counts and top categories (percentages omitted for phase breakdowns, where multi-phase studies make the denominator ambiguous)
 
-**Example Use Cases:**
-
-- "What's the status breakdown of all COVID-19 vaccine Phase 3 trials?"
-- "Which countries have the most Alzheimer's research studies?"
-- "Show me the phase distribution and sponsor types for cancer immunotherapy trials"
-
-📖 **[View detailed examples →](./examples/clinicaltrials_analyze_trends.md)**
+[View detailed examples](./examples/clinicaltrials_analyze_trends.md)
 
 ---
 
 ### `clinicaltrials_compare_studies`
 
-**Compare and contrast multiple studies** to identify key similarities and differences.
+Compare 2-5 studies side-by-side across eligibility, design, interventions, outcomes, sponsors, and locations.
 
-**Key Features:**
+- Configurable comparison fields — compare everything or focus on specific aspects
+- Handles partial failures if some studies can't be fetched
 
-- Side-by-side comparison of 2-5 studies by NCT ID
-- Extracts and contrasts eligibility, design, interventions, outcomes, sponsors, and more
-- Generates a summary of commonalities and differences
-- Handles partial failures gracefully if some studies cannot be fetched
-- Highly configurable to focus on specific fields of interest
-
-**Example Use Cases:**
-
-- "Compare the study design and eligibility criteria for NCT04516746 and NCT04516759"
-- "What are the main differences in interventions and outcomes between these three leading Alzheimer's trials?"
-- "Show me a side-by-side of sponsor and location data for these competitor studies"
-
-📖 **[View detailed examples →](./examples/clinicaltrials-compare-studies.md)**
+[View detailed examples](./examples/clinicaltrials-compare-studies.md)
 
 ---
 
 ### `clinicaltrials_find_eligible_studies`
 
-**Find relevant clinical trials** based on a patient's specific medical profile and demographics.
+Match a patient profile (age, sex, conditions, location) to eligible clinical trials.
 
-**Key Features:**
+- Hard filters on age, sex, healthy volunteer status, and country — ineligible studies are excluded entirely
+- Condition token overlap used as a false-positive gate (studies with zero relevance to the patient's conditions are excluded)
+- Results sorted by location proximity: city match → state match → country-only, then by number of nearby sites
+- Returns a summary of why each study is a potential match
 
-- Matches patients using age, sex, and a list of medical conditions
-- Filters studies by location (country, state, city) to find nearby trials
-- Scores condition relevance via normalized token overlap, excluding false positives
-- Weighted match scoring: condition relevance (60%) + demographic eligibility (40%)
-- Provides a clear summary of why a patient is a potential match for a study
-
-**Example Use Cases:**
-
-- "Find recruiting migraine studies in Canada for a 35-year-old female"
-- "Are there any local clinical trials for a 68-year-old male with Type 2 Diabetes and Hypertension?"
-- "Search for healthy volunteer studies for a 25-year-old in California"
-
-📖 **[View detailed examples →](./examples/clinicaltrials-find-eligible-studies.md)**
+[View detailed examples](./examples/clinicaltrials-find-eligible-studies.md)
 
 ---
 
 ### `clinicaltrials_get_study_results`
 
-**Access trial results data** for completed studies that have posted results.
+Fetch results data (outcomes, adverse events, participant flow, baseline characteristics) for completed studies.
 
-**Key Features:**
-
-- Fetches outcome measures, adverse events, participant flow, and baseline characteristics
-- Section-level filtering — request only the results sections you need
-- Handles multiple studies in a single request (up to 5)
-- Clearly reports which studies lack results and which failed to fetch
-- Statistical analyses (p-values, methods) included with outcome data
-
-**Example Use Cases:**
-
-- "What were the primary outcome results for NCT04280783?"
-- "Show me the adverse events profile for these two completed trials"
-- "Compare baseline characteristics across these three studies"
+- Section-level filtering — request only the sections you need
+- Batch up to 5 studies per request
+- Reports which studies lack results or failed to fetch
+- Includes statistical analyses (p-values, methods) with outcome data
 
 ---
 
 ### `clinicaltrials_get_field_values`
 
-**Discover valid API field values** with study counts for informed query building.
+Look up valid enum values for any ClinicalTrials.gov API field, with study counts per value.
 
-**Key Features:**
+- Sorted by frequency
+- Useful for exploring OverallStatus, Phase, InterventionType, StudyType, and other fields before constructing filters
 
-- Returns all valid values for any ClinicalTrials.gov API field
-- Includes study counts per value, sorted by frequency
-- Useful for exploring OverallStatus, Phase, InterventionType, StudyType, and more
-- Helps construct precise filters without guessing valid enum values
+## Features
 
-**Example Use Cases:**
+Built on [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template):
 
-- "What are the valid OverallStatus values and how many studies have each?"
-- "Show me all intervention types available in the API"
-- "What phases are available and how are studies distributed across them?"
+- Declarative tool definitions — single file per tool, framework handles registration and validation
+- Unified `McpError` error handling across all tools
+- Pluggable auth (`none`, `jwt`, `oauth`)
+- Swappable storage backends: `in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2`
+- Structured logging (Pino) with optional OpenTelemetry tracing
+- Typed DI container with `Token<T>` phantom branding
+- Runs locally (stdio/HTTP) or on Cloudflare Workers from the same codebase
 
-## ✨ Features
+ClinicalTrials.gov-specific:
 
-This server is built on the [`mcp-ts-template`](https://github.com/cyanheads/mcp-ts-template) and inherits its rich feature set:
+- Type-safe client for the ClinicalTrials.gov v2 API
+- Tools for search, filtering, statistical aggregation, and patient matching
+- Automatic cleaning and simplification of API responses for agent consumption
 
-- **Declarative Tools**: Define agent capabilities in single, self-contained files. The framework handles registration, validation, and execution.
-- **Robust Error Handling**: A unified `McpError` system ensures consistent, structured error responses.
-- **Pluggable Authentication**: Secure your server with zero-fuss support for `none`, `jwt`, or `oauth` modes.
-- **Abstracted Storage**: Swap storage backends (`in-memory`, `filesystem`, `Supabase`, `Cloudflare KV/R2`) without changing business logic.
-- **Full-Stack Observability**: Deep insights with structured logging (Pino) and optional, auto-instrumented OpenTelemetry for traces and metrics.
-- **Dependency Injection**: Lightweight custom typed container with `Token<T>` phantom branding for a clean, decoupled, and testable architecture.
-- **Edge-Ready**: Write code once and run it seamlessly on your local machine or at the edge on Cloudflare Workers.
-
-Plus, specialized features for **ClinicalTrials.gov**:
-
-- **Official API Integration**: Type-safe, comprehensive access to the ClinicalTrials.gov v2 API.
-- **Advanced Search & Analysis**: Tools for complex queries, filtering, and statistical aggregation of trial data.
-- **Optimized Data Handling**: Automatic cleaning and simplification of API responses for efficient agent consumption.
-
-## 🚀 Getting Started
+## Getting started
 
 ### Public Hosted Instance
 
@@ -258,7 +191,7 @@ cd clinicaltrialsgov-mcp-server
 bun install
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 All configuration is centralized and validated at startup in `src/config/index.ts`. Key environment variables in your `.env` file include:
 
@@ -273,7 +206,7 @@ All configuration is centralized and validated at startup in `src/config/index.t
 | `MCP_AUTH_SECRET_KEY`   | **Required for `jwt` auth.** A 32+ character secret key.                                                           | `(none)`    |
 | `OAUTH_ISSUER_URL`      | **Required for `oauth` auth.** URL of the OIDC provider.                                                           | `(none)`    |
 
-## ▶️ Running the Server
+## Running the server
 
 ### Local Development
 
@@ -314,7 +247,7 @@ bun deploy:dev
     bun deploy:prod
     ```
 
-## 📂 Project Structure
+## Project structure
 
 | Directory                   | Purpose & Contents                                                               |
 | :-------------------------- | :------------------------------------------------------------------------------- |
@@ -328,15 +261,15 @@ bun deploy:dev
 | `src/config`                | Environment variable parsing and validation with Zod.                            |
 | `tests/`                    | Unit and integration tests, mirroring the `src/` directory structure.            |
 
-## 🧑‍💻 Agent Development Guide
+## Development guide
 
-For development guidelines and architectural rules, refer to **[`CLAUDE.md`](./CLAUDE.md)**. Key principles include:
+See [`CLAUDE.md`](./CLAUDE.md) for development guidelines and architectural rules. The short version:
 
-- **Logic Throws, Handlers Catch**: Never use `try/catch` in your tool `logic`. Throw an `McpError` instead.
-- **Pass the Context**: Always pass the `RequestContext` object through your call stack for logging and tracing.
-- **Use the Barrel Exports**: Register new tools and resources only in the `index.ts` barrel files within their respective `definitions` directories.
+- Logic throws `McpError`, handlers catch — no `try/catch` in tool logic
+- Pass `RequestContext` through the call stack for logging and tracing
+- Register new tools and resources in the `index.ts` barrel files
 
-## 🤝 Contributing
+## Contributing
 
 Issues and pull requests are welcome! If you plan to contribute, please run the local checks and tests before submitting your PR.
 
@@ -345,6 +278,6 @@ bun run devcheck
 bun test
 ```
 
-## 📜 License
+## License
 
 This project is licensed under the Apache 2.0 License. See the [LICENSE](./LICENSE) file for details.

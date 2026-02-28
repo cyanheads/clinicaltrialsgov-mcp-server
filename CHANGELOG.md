@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.0] - 2026-02-28
+
+### Changed
+
+- **`find_eligible_studies` — removed synthetic match scoring**: Dropped the `matchScore` field (0–100 composite of condition relevance × 60% + demographic checks × 40%) from results. Results are now sorted by transparent geographic proximity: city match > state match > country-only, then by number of nearby sites. This surfaces real signal rather than an arbitrary weighted score.
+- **`find_eligible_studies` — condition relevance as hard gate only**: `calculateConditionRelevance` is now used strictly to exclude studies with zero token overlap (false positives from full-text index hits), not to produce a score. Match reasons now show the study's listed conditions instead of a percentage score.
+- **`compare_studies` — removed fabricated commonalities/differences**: Stripped the `commonalities` and `differences` arrays from the summary output and removed the `analyzeSummary` function that computed them. The fields were synthesized from structural comparisons (phase, sponsor, status, location, intervention overlaps) that LLMs can perform directly from the per-study data. Summary now returns only `totalStudies` and `comparedFields`.
+- **`analyze_trends` — suppress misleading percentages for `countByPhase`**: Phase analysis counts can exceed `totalStudies` because multi-phase studies (e.g., Phase 1/Phase 2) contribute to multiple buckets, making percentages nonsensical. Percentages are now omitted for `countByPhase` results.
+- **`get_study_results` — baseline measurements now include per-group values**: The `measurements` field on each baseline measure now exposes `category`, `groupTitle`, `value`, and `spread` per measurement, surfacing the actual data rather than just measure titles and parameter types.
+- **`search_studies` — improved field descriptions**: Clarified that `sponsorQuery` searches the full SponsorsModule (lead sponsor + collaborators) with a tip to use `AREA[LeadSponsorName]` for lead-only filtering. Added a strong recommendation to use `fields` selection, noting that full records are ~70KB each.
+- **`studyRanking.ts`**: Stripped from 133 to 19 lines — removed `RankableStudy`, `getPhaseWeight`, `rankStudies`, `calculateMatchScore`. Only `calculateConditionRelevance` remains.
+
+### Fixed
+
+- **`analyze_trends` phase percentages**: Percentages are now omitted for `countByPhase` to avoid misleading figures from multi-phase study double-counting.
+
 ## [1.8.1] - 2026-02-27
 
 ### Added

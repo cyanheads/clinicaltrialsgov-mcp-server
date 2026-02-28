@@ -1,14 +1,13 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-02-26 17:22:19
+Generated on: 2026-02-28 11:19:05
 
 ```
 clinicaltrialsgov-mcp-server/
 ├── .github/
 │   ├── workflows/
 │   │   ├── claude-code-review.yml
-│   │   ├── claude.yml
-│   │   └── publish.yml
+│   │   └── claude.yml
 │   └── FUNDING.yml
 ├── .husky/
 │   └── pre-commit

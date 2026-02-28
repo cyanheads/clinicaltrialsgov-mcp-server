@@ -453,22 +453,8 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_compare_studies > outputSc
       "additionalProperties": false,
       "description": "Summary of the comparison.",
       "properties": {
-        "commonalities": {
-          "description": "Key commonalities found across studies.",
-          "items": {
-            "type": "string",
-          },
-          "type": "array",
-        },
         "comparedFields": {
           "description": "Fields that were compared.",
-          "items": {
-            "type": "string",
-          },
-          "type": "array",
-        },
-        "differences": {
-          "description": "Key differences found across studies.",
           "items": {
             "type": "string",
           },
@@ -587,7 +573,7 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_find_eligible_studies > ou
   "description": "Response containing eligible clinical trial studies.",
   "properties": {
     "eligibleStudies": {
-      "description": "Array of eligible studies, ranked by relevance",
+      "description": "Eligible studies sorted by location proximity (city > state > country), then number of nearby sites",
       "items": {
         "additionalProperties": false,
         "description": "An eligible clinical trial study with match details.",
@@ -639,7 +625,7 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_find_eligible_studies > ou
             "type": "object",
           },
           "locations": {
-            "description": "Relevant study locations",
+            "description": "Relevant study locations in the patient's country, sorted nearest first",
             "items": {
               "additionalProperties": false,
               "description": "Study location information.",
@@ -670,17 +656,11 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_find_eligible_studies > ou
             "type": "array",
           },
           "matchReasons": {
-            "description": "Reasons why this study matches (e.g., "Age within range", "Accepts females")",
+            "description": "Reasons why this study matches the patient profile (e.g., "Age within range", "Accepts females", "Condition relevance: 80%")",
             "items": {
               "type": "string",
             },
             "type": "array",
-          },
-          "matchScore": {
-            "description": "Confidence score (0-100) for eligibility match",
-            "maximum": 100,
-            "minimum": 0,
-            "type": "number",
           },
           "nctId": {
             "description": "The NCT identifier",
@@ -688,7 +668,7 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_find_eligible_studies > ou
           },
           "studyDetails": {
             "additionalProperties": false,
-            "description": "Study details for ranking and display.",
+            "description": "Study details.",
             "properties": {
               "enrollmentCount": {
                 "description": "Planned enrollment count",
@@ -723,7 +703,6 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_find_eligible_studies > ou
         "required": [
           "nctId",
           "title",
-          "matchScore",
           "matchReasons",
           "eligibilityHighlights",
           "locations",
@@ -838,44 +817,6 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_field_values > outputS
     "fieldName",
     "values",
     "totalValues",
-  ],
-  "type": "object",
-}
-`;
-
-exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_stats > inputSchema JSON output should be stable 1`] = `
-{
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "additionalProperties": false,
-  "description": "No input parameters required.",
-  "properties": {},
-  "type": "object",
-}
-`;
-
-exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_stats > outputSchema JSON output should be stable 1`] = `
-{
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "additionalProperties": false,
-  "description": "Database statistics.",
-  "properties": {
-    "lastUpdated": {
-      "description": "Timestamp of the latest data update",
-      "type": "string",
-    },
-    "totalStudies": {
-      "description": "Total number of studies in the database",
-      "type": "number",
-    },
-    "version": {
-      "description": "ClinicalTrials.gov API version",
-      "type": "string",
-    },
-  },
-  "required": [
-    "totalStudies",
-    "lastUpdated",
-    "version",
   ],
   "type": "object",
 }
@@ -2300,6 +2241,37 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_get_study_results > output
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "measurements": {
+                      "description": "Measurement data per group",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "category": {
+                            "type": "string",
+                          },
+                          "values": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "groupTitle": {
+                                  "type": "string",
+                                },
+                                "spread": {
+                                  "type": "string",
+                                },
+                                "value": {
+                                  "type": "string",
+                                },
+                              },
+                              "type": "object",
+                            },
+                            "type": "array",
+                          },
+                        },
+                        "type": "object",
+                      },
+                      "type": "array",
+                    },
                     "paramType": {
                       "type": "string",
                     },
@@ -2517,7 +2489,7 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_search_studies > inputSche
       "type": "string",
     },
     "fields": {
-      "description": "Specific fields to return (reduces payload size). Example: ["NCTId", "BriefTitle", "OverallStatus"].",
+      "description": "Specific fields to return (reduces payload size). STRONGLY RECOMMENDED — without this, the full study record (~70KB each) is returned. Example: ["NCTId", "BriefTitle", "OverallStatus", "Phase", "LeadSponsorName", "BriefSummary", "Condition", "InterventionName"]. Use full data only when you need detailed eligibility criteria, locations, or results.",
       "items": {
         "type": "string",
       },
@@ -2588,7 +2560,7 @@ exports[`Tool Schema Snapshots > Tool: clinicaltrials_search_studies > inputSche
       "type": "string",
     },
     "sponsorQuery": {
-      "description": "Sponsor-specific search — searches only sponsor name fields (e.g., "Pfizer", "National Cancer Institute").",
+      "description": "Sponsor-specific search — searches the SponsorsModule which includes both lead sponsor and collaborator names (e.g., "Pfizer", "National Cancer Institute"). To filter strictly by lead sponsor, use filter with AREA[LeadSponsorName] instead.",
       "type": "string",
     },
     "state": {

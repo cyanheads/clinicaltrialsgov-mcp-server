@@ -12,9 +12,7 @@ const mockListStudies = vi.fn();
 const mockCheckAgeEligibility = vi.fn();
 const mockCheckSexEligibility = vi.fn();
 const mockCheckHealthyVolunteerEligibility = vi.fn();
-const mockCalculateMatchScore = vi.fn();
 const mockCalculateConditionRelevance = vi.fn();
-const mockRankStudies = vi.fn();
 const mockExtractRelevantLocations = vi.fn();
 const mockExtractContactInfo = vi.fn();
 const mockExtractStudyDetails = vi.fn();
@@ -46,10 +44,8 @@ vi.mock('@/mcp-server/tools/utils/eligibilityCheckers.js', () => ({
 }));
 
 vi.mock('@/mcp-server/tools/utils/studyRanking.js', () => ({
-  calculateMatchScore: (...args: unknown[]) => mockCalculateMatchScore(...args),
   calculateConditionRelevance: (...args: unknown[]) =>
     mockCalculateConditionRelevance(...args),
-  rankStudies: (...args: unknown[]) => mockRankStudies(...args),
 }));
 
 vi.mock('@/mcp-server/tools/utils/studyExtractors.js', () => ({
@@ -160,8 +156,6 @@ describe('findEligibleStudiesTool', () => {
       reason: 'Eligibility status matches study requirements',
     });
     mockCalculateConditionRelevance.mockReturnValue(0.8);
-    mockCalculateMatchScore.mockReturnValue(75);
-    mockRankStudies.mockImplementation((studies: unknown[]) => studies);
     mockExtractRelevantLocations.mockReturnValue([
       {
         facility: 'Test Hospital',
@@ -532,28 +526,7 @@ describe('findEligibleStudiesTool', () => {
       );
     });
 
-    it('should pass condition relevance and demographic checks to calculateMatchScore', async () => {
-      await findEligibleStudiesTool.logic(
-        baseInput,
-        appContext as never,
-        mockSdkContext as never,
-      );
-
-      expect(mockCalculateMatchScore).toHaveBeenCalledWith(
-        0.8, // conditionRelevance from mock
-        [
-          { eligible: true, reason: 'Age within range (18-65)' },
-          { eligible: true, reason: 'Study accepts all sexes' },
-          {
-            eligible: true,
-            reason: 'Eligibility status matches study requirements',
-          },
-          { eligible: true, reason: '1 location(s) in United States' },
-        ],
-      );
-    });
-
-    it('should include match reasons from passing checks and condition relevance', async () => {
+    it('should include match reasons from passing checks and study conditions', async () => {
       const result = await findEligibleStudiesTool.logic(
         baseInput,
         appContext as never,
@@ -565,7 +538,7 @@ describe('findEligibleStudiesTool', () => {
         'Study accepts all sexes',
         'Eligibility status matches study requirements',
         '1 location(s) in United States',
-        'Condition relevance: 80% (Type 2 Diabetes Mellitus)',
+        'Study conditions: Type 2 Diabetes Mellitus',
       ]);
     });
 
@@ -626,21 +599,6 @@ describe('findEligibleStudiesTool', () => {
   // ── Logic: Results ────────────────────────────────────────────
 
   describe('logic — results', () => {
-    it('should call rankStudies on filtered results', async () => {
-      await findEligibleStudiesTool.logic(
-        baseInput,
-        appContext as never,
-        mockSdkContext as never,
-      );
-
-      expect(mockRankStudies).toHaveBeenCalledTimes(1);
-      expect(mockRankStudies).toHaveBeenCalledWith(
-        expect.arrayContaining([
-          expect.objectContaining({ nctId: 'NCT00000001' }),
-        ]),
-      );
-    });
-
     it('should limit results to maxResults', async () => {
       const studies = Array.from({ length: 15 }, (_, i) =>
         makeStudy(`NCT${String(i + 1).padStart(8, '0')}`),
@@ -794,7 +752,6 @@ describe('findEligibleStudiesTool', () => {
       nctId: 'NCT12345678',
       title: 'Diabetes Prevention Trial',
       briefSummary: 'A study of diabetes prevention strategies.',
-      matchScore: 75,
       matchReasons: ['Age within range', 'Study accepts all sexes'],
       eligibilityHighlights: {
         ageRange: '18 Years - 65 Years',
@@ -856,11 +813,6 @@ describe('findEligibleStudiesTool', () => {
       const text = extractText(formatter(sampleResult));
       expect(text).toContain('Diabetes Prevention Trial');
       expect(text).toContain('NCT12345678');
-    });
-
-    it('should include match score', () => {
-      const text = extractText(formatter(sampleResult));
-      expect(text).toContain('75/100');
     });
 
     it('should include match reasons', () => {
@@ -942,7 +894,7 @@ describe('findEligibleStudiesTool', () => {
 
     it('should use singular "result" for one study', () => {
       const text = extractText(formatter(sampleResult));
-      expect(text).toContain('Showing top 1 result:');
+      expect(text).toContain('Showing top 1 result (sorted by proximity):');
     });
 
     it('should use plural "results" for multiple studies', () => {
@@ -953,7 +905,7 @@ describe('findEligibleStudiesTool', () => {
       };
 
       const text = extractText(formatter(multiResult));
-      expect(text).toContain('Showing top 2 results:');
+      expect(text).toContain('Showing top 2 results (sorted by proximity):');
     });
 
     it('should handle empty results', () => {
@@ -969,7 +921,7 @@ describe('findEligibleStudiesTool', () => {
 
       const text = extractText(formatter(emptyResult));
       expect(text).toContain('Found **0** matching studies');
-      expect(text).toContain('Showing top 0 results:');
+      expect(text).toContain('Showing top 0 results (sorted by proximity):');
     });
 
     it('should number studies sequentially', () => {

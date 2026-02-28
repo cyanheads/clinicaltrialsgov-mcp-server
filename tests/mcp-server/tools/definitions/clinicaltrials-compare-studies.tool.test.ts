@@ -927,44 +927,6 @@ describe('clinicaltrials_compare_studies tool', () => {
       expect(text).toContain('**NCT00000001**: No title');
     });
 
-    it('should include commonalities section when present', () => {
-      const output = {
-        comparisons: [
-          { nctId: 'NCT00000001', title: 'A' },
-          { nctId: 'NCT00000002', title: 'B' },
-        ],
-        summary: {
-          totalStudies: 2,
-          comparedFields: ['all'],
-          commonalities: ['All studies have status: Recruiting'],
-        },
-      };
-
-      const blocks = compareStudiesTool.responseFormatter!(output);
-      const text = (blocks[0] as { type: 'text'; text: string }).text;
-      expect(text).toContain('## Commonalities');
-      expect(text).toContain('All studies have status: Recruiting');
-    });
-
-    it('should include differences section when present', () => {
-      const output = {
-        comparisons: [
-          { nctId: 'NCT00000001', title: 'A' },
-          { nctId: 'NCT00000002', title: 'B' },
-        ],
-        summary: {
-          totalStudies: 2,
-          comparedFields: ['all'],
-          differences: ['Studies are in different trial phases'],
-        },
-      };
-
-      const blocks = compareStudiesTool.responseFormatter!(output);
-      const text = (blocks[0] as { type: 'text'; text: string }).text;
-      expect(text).toContain('## Key Differences');
-      expect(text).toContain('Studies are in different trial phases');
-    });
-
     it('should include errors section when present', () => {
       const output = {
         comparisons: [

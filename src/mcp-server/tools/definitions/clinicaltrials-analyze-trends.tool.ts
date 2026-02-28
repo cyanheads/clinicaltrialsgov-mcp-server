@@ -334,10 +334,15 @@ function responseFormatter(result: AnalyzeTrendsOutput): ContentBlock[] {
       .sort((a, b) => b[1] - a[1])
       .slice(0, 10);
 
+    // countByPhase counts can exceed totalStudies (multi-phase studies contribute
+    // to multiple buckets), so percentages would be misleading for that type.
+    const showPct = analysis.analysisType !== 'countByPhase';
     const categoryList = topEntries
       .map(([category, count]) => {
-        const percentage = ((count / analysis.totalStudies) * 100).toFixed(1);
-        return `  • ${category}: ${count} (${percentage}%)`;
+        const pct = showPct
+          ? ` (${((count / analysis.totalStudies) * 100).toFixed(1)}%)`
+          : '';
+        return `  • ${category}: ${count}${pct}`;
       })
       .join('\n');
 

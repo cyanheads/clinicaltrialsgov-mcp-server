@@ -82,7 +82,7 @@ export function createHttpApp<TBindings extends object = HonoNodeBindings>(
   // so the span captures the full lifecycle (CORS, auth, handler).
   // On Bun, Node.js HTTP auto-instrumentation is a no-op; this fills that gap.
   if (config.openTelemetry.enabled) {
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- @hono/otel returns unparameterized MiddlewareHandler
+     
     app.use(
       config.mcpHttpEndpointPath,
       httpInstrumentationMiddleware({

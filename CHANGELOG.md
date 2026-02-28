@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.8.1] - 2026-02-27
+
+### Added
+
+- **OpenTelemetry HTTP request tracing**: Added `@hono/otel` middleware on the MCP endpoint to instrument HTTP request spans, filling the gap left by Node.js auto-instrumentation on Bun. Gated behind `OTEL_ENABLED` — captures `mcp-session-id` request header.
+
 ## [1.8.0] - 2026-02-27
 
 ### Added

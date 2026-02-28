@@ -85,7 +85,7 @@ const InputSchema = z
       .string()
       .optional()
       .describe(
-        'Sponsor-specific search — searches only sponsor name fields (e.g., "Pfizer", "National Cancer Institute").',
+        'Sponsor-specific search — searches the SponsorsModule which includes both lead sponsor and collaborator names (e.g., "Pfizer", "National Cancer Institute"). To filter strictly by lead sponsor, use filter with AREA[LeadSponsorName] instead.',
       ),
     filter: z
       .string()
@@ -140,7 +140,7 @@ const InputSchema = z
       .array(z.string())
       .optional()
       .describe(
-        'Specific fields to return (reduces payload size). Example: ["NCTId", "BriefTitle", "OverallStatus"].',
+        'Specific fields to return (reduces payload size). STRONGLY RECOMMENDED — without this, the full study record (~70KB each) is returned. Example: ["NCTId", "BriefTitle", "OverallStatus", "Phase", "LeadSponsorName", "BriefSummary", "Condition", "InterventionName"]. Use full data only when you need detailed eligibility criteria, locations, or results.',
       ),
     country: z
       .string()

@@ -1,6 +1,6 @@
 {
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "1.8.0",
+  "version": "1.8.1",
   "mcpName": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
   "description": "MCP server for the ClinicalTrials.gov v2 API. Allow LLMs to search trials, retrieve study details, compare studies, analyze trends, and match patients to eligible trials.",
   "main": "dist/index.js",
@@ -122,6 +122,7 @@
   },
   "dependencies": {
     "@hono/node-server": "^1.19.9",
+    "@hono/otel": "^1.1.0",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@opentelemetry/api": "^1.9.0",
     "@opentelemetry/auto-instrumentations-node": "^0.70.1",

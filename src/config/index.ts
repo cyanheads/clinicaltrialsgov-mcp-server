@@ -245,7 +245,7 @@ const parseConfig = () => {
     mcpTransportType: env.MCP_TRANSPORT_TYPE,
     mcpSessionMode: env.MCP_SESSION_MODE,
     mcpResponseVerbosity: env.MCP_RESPONSE_VERBOSITY,
-    mcpHttpPort: env.MCP_HTTP_PORT,
+    mcpHttpPort: env.MCP_HTTP_PORT ?? env.PORT,
     mcpHttpHost: env.MCP_HTTP_HOST,
     mcpHttpEndpointPath: env.MCP_HTTP_ENDPOINT_PATH,
     mcpHttpMaxPortRetries: env.MCP_HTTP_MAX_PORT_RETRIES,

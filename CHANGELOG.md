@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.1] - 2026-03-04
+
+### Added
+
+- **OTel metrics for tool execution**: `measureToolExecution` now records a `mcp.tool.calls` counter and `mcp.tool.duration` histogram via the metrics registry, providing durable aggregates that survive container restarts.
+- **OTel tracing for outbound HTTP**: `fetchWithTimeout` is now wrapped in an `http.client.request` span with `http.request.method`, `url.full`, and `http.response.status_code` attributes.
+- **Active session gauge**: HTTP transport emits an `mcp.sessions.active` observable gauge when OTel is enabled, reporting the current `SessionStore` count.
+
+### Fixed
+
+- **Observable metrics callback wiring**: `createObservableGauge`, `createObservableCounter`, and `createObservableUpDownCounter` now actually register the caller-supplied callback via `addCallback`. Previously the callback parameter was accepted but silently ignored (`_callback`).
+
 ## [1.9.0] - 2026-02-28
 
 ### Changed

@@ -10,6 +10,7 @@ import type { performance as PerfHooksPerformance } from 'node:perf_hooks';
 
 import { config } from '@/config/index.js';
 import { McpError } from '@/types-global/errors.js';
+import { metricsRegistry } from '@/utils/metrics/registry.js';
 import {
   ATTR_CODE_FUNCTION,
   ATTR_CODE_NAMESPACE,
@@ -22,6 +23,7 @@ import {
   ATTR_MCP_TOOL_MEMORY_RSS_AFTER,
   ATTR_MCP_TOOL_MEMORY_RSS_BEFORE,
   ATTR_MCP_TOOL_MEMORY_RSS_DELTA,
+  ATTR_MCP_TOOL_NAME,
   ATTR_MCP_TOOL_OUTPUT_BYTES,
   ATTR_MCP_TOOL_SUCCESS,
 } from '@/utils/telemetry/semconv.js';
@@ -184,6 +186,26 @@ export async function measureToolExecution<T>(
         });
         if (errorCode) span.setAttribute(ATTR_MCP_TOOL_ERROR_CODE, errorCode);
         span.end();
+
+        // Record durable OTel metrics (survives container restarts, unlike logs)
+        const metricAttrs: Record<string, string> = {
+          [ATTR_MCP_TOOL_NAME]: toolName,
+          [ATTR_MCP_TOOL_SUCCESS]: String(ok),
+        };
+        if (errorCode) metricAttrs[ATTR_MCP_TOOL_ERROR_CODE] = errorCode;
+        metricsRegistry.add(
+          'mcp.tool.calls',
+          1,
+          metricAttrs,
+          'Total MCP tool invocations',
+        );
+        metricsRegistry.record(
+          'mcp.tool.duration',
+          durationMs,
+          { [ATTR_MCP_TOOL_NAME]: toolName },
+          'MCP tool execution duration',
+          'ms',
+        );
 
         logger.info('Tool execution finished.', {
           ...context,

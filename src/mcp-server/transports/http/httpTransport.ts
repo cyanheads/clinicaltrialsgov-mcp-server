@@ -13,6 +13,7 @@ import { serve, type ServerType } from '@hono/node-server';
 import { httpInstrumentationMiddleware } from '@hono/otel';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/sdk/types.js';
+import { metrics } from '@opentelemetry/api';
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import http from 'node:http';
@@ -78,6 +79,20 @@ export function createHttpApp<TBindings extends object = HonoNodeBindings>(
     config.mcpSessionMode === 'stateful'
       ? new SessionStore(config.mcpStatefulSessionStaleTimeoutMs)
       : null;
+
+  // Observable gauge for active session count — survives container restarts via OTel metrics pipeline
+  if (sessionStore && config.openTelemetry.enabled) {
+    const meter = metrics.getMeter(
+      config.openTelemetry.serviceName,
+      config.openTelemetry.serviceVersion,
+    );
+    const gauge = meter.createObservableGauge('mcp.sessions.active', {
+      description: 'Number of active MCP sessions',
+    });
+    gauge.addCallback((result) => {
+      result.observe(sessionStore.getSessionCount());
+    });
+  }
 
   // OpenTelemetry request tracing — outermost middleware on the MCP endpoint
   // so the span captures the full lifecycle (CORS, auth, handler).

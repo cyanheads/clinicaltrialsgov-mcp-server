@@ -8,6 +8,12 @@ import { JsonRpcErrorCode, McpError } from '@/types-global/errors.js';
 import { logger } from '@/utils/internal/logger.js';
 // Adjusted import path
 import type { RequestContext } from '@/utils/internal/requestContext.js';
+import {
+  ATTR_HTTP_REQUEST_METHOD,
+  ATTR_HTTP_RESPONSE_STATUS_CODE,
+  ATTR_URL_FULL,
+} from '@/utils/telemetry/semconv.js';
+import { withSpan } from '@/utils/telemetry/trace.js';
 
 /**
  * Options for the fetchWithTimeout utility.
@@ -142,96 +148,113 @@ export async function fetchWithTimeout(
     }
   };
 
-  try {
-    let response = await doFetch();
+  return withSpan('http.client.request', async (span) => {
+    span.setAttributes({
+      [ATTR_HTTP_REQUEST_METHOD]: options?.method ?? 'GET',
+      [ATTR_URL_FULL]: urlString,
+    });
 
-    // Single retry on 429 — parse Retry-After (seconds only), cap at 30s
-    if (response.status === 429 && options?.retryOn429) {
-      const retryAfter = response.headers.get('Retry-After');
-      const parsedSeconds = retryAfter ? Number.parseInt(retryAfter, 10) : NaN;
-      const delaySec = Number.isNaN(parsedSeconds) ? 5 : parsedSeconds;
-      const delayMs = Math.min(delaySec * 1000, 30_000);
-      logger.warning(
-        `Rate limited (429) on ${urlString}, retrying after ${delayMs}ms`,
+    try {
+      let response = await doFetch();
+
+      // Single retry on 429 — parse Retry-After (seconds only), cap at 30s
+      if (response.status === 429 && options?.retryOn429) {
+        const retryAfter = response.headers.get('Retry-After');
+        const parsedSeconds = retryAfter
+          ? Number.parseInt(retryAfter, 10)
+          : NaN;
+        const delaySec = Number.isNaN(parsedSeconds) ? 5 : parsedSeconds;
+        const delayMs = Math.min(delaySec * 1000, 30_000);
+        logger.warning(
+          `Rate limited (429) on ${urlString}, retrying after ${delayMs}ms`,
+          context,
+        );
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        response = await doFetch();
+      }
+
+      span.setAttribute(ATTR_HTTP_RESPONSE_STATUS_CODE, response.status);
+
+      if (!response.ok) {
+        const errorBody = await response
+          .text()
+          .catch(() => 'Could not read response body');
+        logger.error(
+          `Fetch failed for ${urlString} with status ${response.status}.`,
+          {
+            ...context,
+            statusCode: response.status,
+            statusText: response.statusText,
+            responseBody: errorBody,
+            errorSource: 'FetchHttpError',
+          },
+        );
+        const errorCode =
+          response.status === 404
+            ? JsonRpcErrorCode.InvalidParams
+            : JsonRpcErrorCode.ServiceUnavailable;
+        throw new McpError(
+          errorCode,
+          `Fetch failed for ${urlString}. Status: ${response.status}`,
+          {
+            ...context,
+            statusCode: response.status,
+            statusText: response.statusText,
+            responseBody: errorBody,
+          },
+        );
+      }
+
+      logger.debug(
+        `Successfully fetched ${urlString}. Status: ${response.status}`,
         context,
       );
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-      response = await doFetch();
-    }
+      return response;
+    } catch (error: unknown) {
+      if (
+        error instanceof Error &&
+        (error.name === 'TimeoutError' || error.name === 'AbortError')
+      ) {
+        logger.error(
+          `${operationDescription} timed out after ${timeoutMs}ms.`,
+          {
+            ...context,
+            errorSource: 'FetchTimeout',
+          },
+        );
+        throw new McpError(
+          JsonRpcErrorCode.Timeout,
+          `${operationDescription} timed out.`,
+          { ...context, errorSource: 'FetchTimeout' },
+        );
+      }
 
-    if (!response.ok) {
-      const errorBody = await response
-        .text()
-        .catch(() => 'Could not read response body');
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
       logger.error(
-        `Fetch failed for ${urlString} with status ${response.status}.`,
+        `Network error during ${operationDescription}: ${errorMessage}`,
         {
           ...context,
-          statusCode: response.status,
-          statusText: response.statusText,
-          responseBody: errorBody,
-          errorSource: 'FetchHttpError',
+          originalErrorName:
+            error instanceof Error ? error.name : 'UnknownError',
+          errorSource: 'FetchNetworkError',
         },
       );
-      const errorCode =
-        response.status === 404
-          ? JsonRpcErrorCode.InvalidParams
-          : JsonRpcErrorCode.ServiceUnavailable;
+
+      if (error instanceof McpError) {
+        throw error;
+      }
+
       throw new McpError(
-        errorCode,
-        `Fetch failed for ${urlString}. Status: ${response.status}`,
+        JsonRpcErrorCode.ServiceUnavailable,
+        `Network error during ${operationDescription}: ${errorMessage}`,
         {
           ...context,
-          statusCode: response.status,
-          statusText: response.statusText,
-          responseBody: errorBody,
+          originalErrorName:
+            error instanceof Error ? error.name : 'UnknownError',
+          errorSource: 'FetchNetworkErrorWrapper',
         },
       );
     }
-
-    logger.debug(
-      `Successfully fetched ${urlString}. Status: ${response.status}`,
-      context,
-    );
-    return response;
-  } catch (error: unknown) {
-    if (
-      error instanceof Error &&
-      (error.name === 'TimeoutError' || error.name === 'AbortError')
-    ) {
-      logger.error(`${operationDescription} timed out after ${timeoutMs}ms.`, {
-        ...context,
-        errorSource: 'FetchTimeout',
-      });
-      throw new McpError(
-        JsonRpcErrorCode.Timeout,
-        `${operationDescription} timed out.`,
-        { ...context, errorSource: 'FetchTimeout' },
-      );
-    }
-
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.error(
-      `Network error during ${operationDescription}: ${errorMessage}`,
-      {
-        ...context,
-        originalErrorName: error instanceof Error ? error.name : 'UnknownError',
-        errorSource: 'FetchNetworkError',
-      },
-    );
-
-    if (error instanceof McpError) {
-      throw error;
-    }
-
-    throw new McpError(
-      JsonRpcErrorCode.ServiceUnavailable,
-      `Network error during ${operationDescription}: ${errorMessage}`,
-      {
-        ...context,
-        originalErrorName: error instanceof Error ? error.name : 'UnknownError',
-        errorSource: 'FetchNetworkErrorWrapper',
-      },
-    );
-  }
+  });
 }

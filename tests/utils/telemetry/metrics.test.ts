@@ -209,7 +209,9 @@ describe('OpenTelemetry Metrics', () => {
 
     beforeEach(() => {
       mockMeter = {
-        createObservableGauge: vi.fn().mockReturnValue({}),
+        createObservableGauge: vi
+          .fn()
+          .mockReturnValue({ addCallback: vi.fn() }),
       };
       vi.spyOn(metrics, 'getMeter').mockReturnValue(mockMeter);
       createObservableGaugeSpy = mockMeter.createObservableGauge;
@@ -234,7 +236,7 @@ describe('OpenTelemetry Metrics', () => {
     });
 
     test('should create observable gauge with unit', () => {
-      const callback = () => Promise.resolve(100);
+      const callback = () => 100;
       metricsUtils.createObservableGauge(
         'test.temp',
         'Temperature',
@@ -248,15 +250,12 @@ describe('OpenTelemetry Metrics', () => {
       });
     });
 
-    test('should accept async callback', () => {
-      const asyncCallback = async () => 123;
-      const gauge = metricsUtils.createObservableGauge(
-        'test.async',
-        'Async gauge',
-        asyncCallback,
-      );
+    test('should wire callback via addCallback', () => {
+      const callback = () => 42;
+      metricsUtils.createObservableGauge('test.wired', 'Wired gauge', callback);
 
-      expect(gauge).toBeDefined();
+      const mockGauge = createObservableGaugeSpy.mock.results[0]?.value;
+      expect(mockGauge.addCallback).toHaveBeenCalledOnce();
     });
 
     test('should accept sync callback', () => {
@@ -277,7 +276,9 @@ describe('OpenTelemetry Metrics', () => {
 
     beforeEach(() => {
       mockMeter = {
-        createObservableCounter: vi.fn().mockReturnValue({}),
+        createObservableCounter: vi
+          .fn()
+          .mockReturnValue({ addCallback: vi.fn() }),
       };
       vi.spyOn(metrics, 'getMeter').mockReturnValue(mockMeter);
       createObservableCounterSpy = mockMeter.createObservableCounter;
@@ -303,7 +304,7 @@ describe('OpenTelemetry Metrics', () => {
     });
 
     test('should create observable counter with custom unit', () => {
-      const callback = () => Promise.resolve(50);
+      const callback = () => 50;
       metricsUtils.createObservableCounter(
         'test.jobs',
         'Jobs processed',
@@ -338,7 +339,9 @@ describe('OpenTelemetry Metrics', () => {
 
     beforeEach(() => {
       mockMeter = {
-        createObservableUpDownCounter: vi.fn().mockReturnValue({}),
+        createObservableUpDownCounter: vi
+          .fn()
+          .mockReturnValue({ addCallback: vi.fn() }),
       };
       vi.spyOn(metrics, 'getMeter').mockReturnValue(mockMeter);
       createObservableUpDownCounterSpy =
@@ -368,7 +371,7 @@ describe('OpenTelemetry Metrics', () => {
     });
 
     test('should create observable up-down counter with custom unit', () => {
-      const callback = async () => -3;
+      const callback = () => -3;
       metricsUtils.createObservableUpDownCounter(
         'test.items',
         'Item count',

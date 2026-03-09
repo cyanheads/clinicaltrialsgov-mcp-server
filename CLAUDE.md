@@ -1,8 +1,8 @@
 # Agent Protocol
 
-**Version:** 1.9.1
+**Version:** 1.9.2
 **Project:** clinicaltrialsgov-mcp-server
-**Updated:** 2026-03-04
+**Updated:** 2026-03-09
 **npm:** [clinicaltrialsgov-mcp-server](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server)
 **Docker:** [ghcr.io/cyanheads/clinicaltrialsgov-mcp-server](https://ghcr.io/cyanheads/clinicaltrialsgov-mcp-server)
 

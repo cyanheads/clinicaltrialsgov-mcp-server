@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.2] - 2026-03-09
+
+### Fixed
+
+- **`find_eligible_studies` condition query escaping**: Backslashes in condition strings are now escaped before double-quote escaping, preventing malformed API queries.
+
+### Changed
+
+- **Dependencies**: Bumped OpenTelemetry packages (SDK 0.212→0.213, resources/metrics/trace 2.5→2.6), `@hono/otel` 1.1.0→1.1.1, `@hono/node-server` 1.19.9→1.19.11, `hono` 4.12.3→4.12.5, `fast-xml-parser` 5.4.1→5.4.2, `jose` 6.1.3→6.2.0, and various devDependencies. Added `tar` and `express-rate-limit` security resolutions.
+
 ## [1.9.1] - 2026-03-04
 
 ### Added

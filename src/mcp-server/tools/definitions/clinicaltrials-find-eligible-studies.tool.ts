@@ -318,7 +318,7 @@ async function findEligibleStudiesLogic(
   // Escape any embedded double quotes to avoid malformed queries.
   const conditionQuery = input.conditions
     .map((c) => {
-      const escaped = c.replace(/"/g, '\\"');
+      const escaped = c.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       return c.includes(' ') ? `"${escaped}"` : escaped;
     })
     .join(' OR ');

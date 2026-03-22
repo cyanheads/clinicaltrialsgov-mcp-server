@@ -9,6 +9,12 @@
 
 </div>
 
+<div align="center">
+
+**Public Hosted Server:** [https://clinicaltrials.caseyjhand.com/mcp](https://clinicaltrials.caseyjhand.com/mcp)
+
+</div>
+
 ---
 
 ## Tools
@@ -173,19 +179,19 @@ MCP_HTTP_PORT=3017
 
 ### Installation
 
-1.  **Clone the repository:**
+1. **Clone the repository:**
 
 ```sh
 git clone https://github.com/cyanheads/clinicaltrialsgov-mcp-server.git
 ```
 
-2.  **Navigate into the directory:**
+1. **Navigate into the directory:**
 
 ```sh
 cd clinicaltrialsgov-mcp-server
 ```
 
-3.  **Install dependencies:**
+1. **Install dependencies:**
 
 ```sh
 bun install
@@ -223,6 +229,7 @@ All configuration is centralized and validated at startup in `src/config/index.t
   ```
 
 - **Run checks and tests**:
+
   ```sh
   bun devcheck # Lints, formats, type-checks, and more
   bun test # Runs the test suite
@@ -230,19 +237,20 @@ All configuration is centralized and validated at startup in `src/config/index.t
 
 ### Cloudflare Workers
 
-1.  **Build the Worker bundle**:
+1. **Build the Worker bundle**:
 
 ```sh
 bun build:worker
 ```
 
-2.  **Run locally with Wrangler**:
+1. **Run locally with Wrangler**:
 
 ```sh
 bun deploy:dev
 ```
 
-3.  **Deploy to Cloudflare**:
+1. **Deploy to Cloudflare**:
+
     ```sh
     bun deploy:prod
     ```

@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-02-28 11:19:05
+Generated on: 2026-03-23 17:47:10
 
 ```
 clinicaltrialsgov-mcp-server/
@@ -11,7 +11,9 @@ clinicaltrialsgov-mcp-server/
 │   └── FUNDING.yml
 ├── .husky/
 │   └── pre-commit
+├── claude-plans/
 ├── docs/
+│   └── otel-gaps.md
 ├── examples/
 │   ├── clinicaltrials_analyze_trends.md
 │   ├── clinicaltrials_get_study.md

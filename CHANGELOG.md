@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.9.3] - 2026-03-23
+
+### Changed
+
+- **Documentation**: Added tool count badge to README header. Regenerated `docs/tree.md` with updated directory entries (`claude-plans/`, `docs/otel-gaps.md`).
+- **Dependencies**: Updated `hono` 4.12.5→4.12.9, `@hono/node-server` ^1.19.9→^1.19.11, `@supabase/supabase-js` ^2.98.0→^2.100.0, `fast-xml-parser` ^5.4.2→^5.5.9, `jose` ^6.2.0→^6.2.2, `sanitize-html` ^2.17.1→^2.17.2, and devDependencies (`eslint`, `vite`, `vitest`, `typescript-eslint`, `typedoc`, `@cloudflare/workers-types`, `@types/bun`, `@types/node`, `bun-types`, `repomix`). Added `flatted` 3.4.2.
+
 ## [1.9.2] - 2026-03-09
 
 ### Fixed

@@ -7,6 +7,12 @@
     "source": "github"
   },
   "version": "1.9.3",
+  "remotes": [
+    {
+      "type": "streamable-http",
+      "url": "https://clinicaltrials.caseyjhand.com/mcp"
+    }
+  ],
   "packages": [
     {
       "registryType": "npm",

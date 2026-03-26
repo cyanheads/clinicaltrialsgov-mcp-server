@@ -2,6 +2,47 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.0] - 2026-03-26
+
+### Breaking Changes
+
+- **Complete framework migration**: Replaced the custom MCP server implementation with `@cyanheads/mcp-ts-core` v0.2.2. All tool, resource, and prompt definitions use the new `tool()`, `resource()`, and `prompt()` builders with Zod schemas, `format()` functions, and `annotations`.
+- **Entry point rewritten**: `src/index.ts` is now a minimal `createApp()` call — the framework handles transport, lifecycle, logging, and error formatting.
+- **Tool surface redesigned**: 7 tools consolidated to 5 purpose-built tools. Removed `clinicaltrials_get_study` (use the `clinicaltrials://{nctId}` resource), `clinicaltrials_analyze_trends` and `clinicaltrials_compare_studies` (LLMs can compose these from search + count tools).
+
+### Added
+
+- **`@cyanheads/mcp-ts-core` framework**: Declarative MCP server with built-in transport (stdio + HTTP), structured logging, error classification, request context, and schema validation.
+- **`clinicaltrials_find_eligible` tool**: Patient-to-trial matching with age/sex/location filtering, geographic proximity scoring, and post-filter verification. Replaces and improves `clinicaltrials_find_eligible_studies`.
+- **`clinicaltrials_get_study_count` tool**: Lightweight count-only queries (pageSize=0, countTotal=true) for fast statistics and breakdowns.
+- **`clinicaltrials://{nctId}` resource**: Single study lookup as an MCP resource with NCT ID regex validation.
+- **`analyze_trial_landscape` prompt**: 6-step guided workflow for systematic trial landscape analysis using count + search tools.
+- **`ClinicalTrialsService`**: New API client with retry (3 attempts, exponential backoff), rate limiting (1 req/sec), timeout via `AbortSignal.any()`, HTML error detection, and structured error factories.
+- **Server config**: `src/config/server-config.ts` with lazy-parsed Zod schema for CT_* env vars.
+- **Design docs**: `docs/design.md` (MCP surface design, 45-item checklist) and `docs/api-reference.md` (complete v2 API reference).
+- **Skills**: 20 modular skill definitions for scaffolding, testing, debugging, and maintenance workflows.
+- **Build tooling**: `scripts/build.ts` (Bun bundler), `scripts/lint-mcp.ts` (definition linter), `devcheck.config.json`.
+- **GitHub templates**: Bug report and feature request issue templates.
+
+### Changed
+
+- **`clinicaltrials_search_studies`**: Rewritten with `tool()` builder. Status/phase/nctIds accept `string | string[]`. Phase filtering translates to `AREA[Phase]` syntax via `buildAdvancedFilter()`. All 16 input fields have `.describe()`.
+- **`clinicaltrials_get_study_results`**: Rewritten with partial-success pattern (`Promise.all` with per-study catch). Returns `studiesWithoutResults` and `fetchErrors` arrays. Max 5 NCT IDs.
+- **`clinicaltrials_get_field_values`**: Simplified wrapper around the service method with proper Zod output schema.
+- **Dockerfile**: Updated for framework build output structure.
+- **tsconfig.json**: Strict mode with `exactOptionalPropertyTypes`, `@/` path alias, ESNext target.
+
+### Removed
+
+- **Old architecture** (~64K lines): Container/DI system, custom transport layer (HTTP/stdio/auth), storage providers (filesystem, Cloudflare D1/KV/R2, Supabase, in-memory), utility libraries (formatting, parsing, security, telemetry, metrics, scheduling, network), error handler, logger, performance monitoring, request context, worker entry point.
+- **Old tools**: `clinicaltrials_get_study`, `clinicaltrials_analyze_trends`, `clinicaltrials_compare_studies`, `clinicaltrials_find_eligible_studies` (all replaced by redesigned equivalents or composed from primitives).
+- **Old tests** (~200 test files): Replaced by placeholder test stubs pending new test suite.
+- **Old config**: eslint, prettier, husky, bunfig.toml, smithery.yaml, wrangler.toml, mcp.json, repomix.config.json, typedoc.json, tsdoc.json, multiple tsconfig variants.
+- **Old dependencies**: ~40 direct runtime/dev dependencies replaced by single `@cyanheads/mcp-ts-core` framework dependency.
+- **README.md**: Deleted pending recreation via `polish-docs-meta` skill.
+- **LICENSE**: Removed (will be re-added).
+- **Examples**: Removed old example markdown files.
+
 ## [1.9.3] - 2026-03-23
 
 ### Changed

@@ -1,5 +1,10 @@
-#!/usr/bin/env bun
-/// <reference types="bun-types" />
+#!/usr/bin/env tsx
+import { type ChildProcess, spawn, spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import * as path from "node:path";
+import process from "node:process";
+import { fileURLToPath } from "node:url";
+
 /**
  * @fileoverview Comprehensive development script for quality and security checks.
  * @module scripts/devcheck
@@ -9,8 +14,7 @@
  *   Pre-commit hooks analyze only staged files for maximum performance.
  *
  * @performance
- *   - Uses ESLint cache (.eslintcache) for faster linting
- *   - Uses Prettier cache (.prettiercache) for faster formatting
+ *   - Uses Biome for unified linting and formatting
  *   - Uses TypeScript incremental builds (.tsbuildinfo) for faster type checking
  *   - Runs all checks in parallel using Promise.allSettled
  *   - Fast mode (--fast) skips slow network-bound checks
@@ -34,15 +38,10 @@
  * // Run only a single check (case-insensitive partial match):
  * // bun run scripts/devcheck.ts --only lint
  */
-import { spawn, type Subprocess } from 'bun';
-import * as path from 'node:path';
-import process from 'node:process';
-import { fileURLToPath } from 'node:url';
-
 /** Track active child processes for clean shutdown on SIGINT/SIGTERM. */
-const activeProcs = new Set<Subprocess>();
+const activeProcs = new Set<ChildProcess>();
 
-for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.on(signal, () => {
     for (const proc of activeProcs) {
       proc.kill();
@@ -60,25 +59,26 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 // Respects NO_COLOR (https://no-color.org/) and FORCE_COLOR conventions.
 const isColorSupported =
   !process.env.NO_COLOR &&
-  ((!!process.env.FORCE_COLOR && process.env.FORCE_COLOR !== '0') ||
+  ((!!process.env.FORCE_COLOR && process.env.FORCE_COLOR !== "0") ||
     !!process.stdout.isTTY);
 
 const createColor =
   (open: string, close: string, closeRe: RegExp) => (str: string | number) => {
-    if (!isColorSupported) return '' + str;
+    if (!isColorSupported) return `${str}`;
     // Replace any inner close sequences so outer color is restored
-    return open + ('' + str).replace(closeRe, close + open) + close;
+    return open + `${str}`.replace(closeRe, close + open) + close;
   };
 
+const esc = (code: string) => new RegExp(code.replace("[", "\\["), "g");
 const c = {
-  bold: createColor('\x1b[1m', '\x1b[22m', /\x1b\[22m/g),
-  dim: createColor('\x1b[2m', '\x1b[22m', /\x1b\[22m/g),
-  red: createColor('\x1b[31m', '\x1b[39m', /\x1b\[39m/g),
-  green: createColor('\x1b[32m', '\x1b[39m', /\x1b\[39m/g),
-  yellow: createColor('\x1b[33m', '\x1b[39m', /\x1b\[39m/g),
-  blue: createColor('\x1b[34m', '\x1b[39m', /\x1b\[39m/g),
-  magenta: createColor('\x1b[35m', '\x1b[39m', /\x1b\[39m/g),
-  cyan: createColor('\x1b[36m', '\x1b[39m', /\x1b\[39m/g),
+  bold: createColor("\x1b[1m", "\x1b[22m", esc("\x1b[22m")),
+  dim: createColor("\x1b[2m", "\x1b[22m", esc("\x1b[22m")),
+  red: createColor("\x1b[31m", "\x1b[39m", esc("\x1b[39m")),
+  green: createColor("\x1b[32m", "\x1b[39m", esc("\x1b[39m")),
+  yellow: createColor("\x1b[33m", "\x1b[39m", esc("\x1b[39m")),
+  blue: createColor("\x1b[34m", "\x1b[39m", esc("\x1b[39m")),
+  magenta: createColor("\x1b[35m", "\x1b[39m", esc("\x1b[39m")),
+  cyan: createColor("\x1b[36m", "\x1b[39m", esc("\x1b[39m")),
 };
 
 /** A type alias for the picocolors object. */
@@ -88,14 +88,14 @@ type Colors = typeof c;
 // Types & Interfaces
 // =============================================================================
 
-type RunMode = 'check' | 'fix';
-type UIMode = 'Checking' | 'Fixing';
+type RunMode = "check" | "fix";
+type UIMode = "Checking" | "Fixing";
 
 interface AppContext {
-  flags: Set<string>;
-  noFix: boolean;
-  isHuskyHook: boolean;
   fastMode: boolean;
+  flags: Set<string>;
+  isHuskyHook: boolean;
+  noFix: boolean;
   /** When set, only run checks whose name matches (case-insensitive). */
   onlyCheck: string | null;
   rootDir: string;
@@ -105,39 +105,45 @@ interface AppContext {
 
 interface CommandResult {
   checkName: string;
-  exitCode: number;
-  stdout: string;
-  stderr: string;
   duration: number;
-  skipped: boolean;
+  exitCode: number;
   /** Buffered log lines captured during parallel execution. */
   logLines: string[];
+  skipped: boolean;
+  stderr: string;
+  stdout: string;
+  /** If set, check passed but with a warning (e.g., upstream-only vulnerabilities). */
+  warning?: string;
 }
 
 /** Represents the raw result from a shell execution. */
 type ShellResult = Omit<
   CommandResult,
-  'checkName' | 'duration' | 'skipped' | 'logLines'
+  "checkName" | "duration" | "skipped" | "logLines"
 >;
 
 interface Check {
-  name: string;
+  /** Indicates if the check supports auto-fixing. */
+  canFix: boolean;
   /** The flag to skip this check (e.g., '--no-lint'). */
   flag: string;
   /** Function that returns the command array based on the context and mode. Returns null to skip. */
   getCommand: (ctx: AppContext, mode: RunMode) => string[] | null;
-  /** Indicates if the check supports auto-fixing. */
-  canFix: boolean;
-  /** If true, this check is skipped in fast mode (typically network-bound or very slow). */
-  slowCheck?: boolean;
-  /** If true, check is off by default — only runs when its flag is explicitly provided. */
-  requiresFlag?: boolean;
-  tip?: (c: Colors) => string;
   /**
    * Optional predicate to determine success.
    * Useful for tools that signal issues via stdout or have non-standard exit codes.
+   * Return `{ success, warning }` to pass with a visible warning (e.g., upstream-only vulns).
    */
-  isSuccess?: (result: ShellResult, mode: RunMode) => boolean;
+  isSuccess?: (
+    result: ShellResult,
+    mode: RunMode,
+  ) => boolean | { success: boolean; warning?: string };
+  name: string;
+  /** If true, check is off by default — only runs when its flag is explicitly provided. */
+  requiresFlag?: boolean;
+  /** If true, this check is skipped in fast mode (typically network-bound or very slow). */
+  slowCheck?: boolean;
+  tip?: (c: Colors) => string;
 }
 
 // =============================================================================
@@ -146,40 +152,57 @@ interface Check {
 
 const Shell = {
   /**
-   * Executes a shell command using Bun.spawn and returns a structured result.
+   * Executes a shell command using child_process.spawn and returns a structured result.
    */
-  async exec(cmd: string[], options: { cwd: string }): Promise<ShellResult> {
-    try {
-      // Use 'pipe' to capture output for the summary.
-      const proc = spawn(cmd, {
-        cwd: options.cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+  exec(cmd: string[], options: { cwd: string }): Promise<ShellResult> {
+    const [command = "", ...args] = cmd;
+    return new Promise((resolve) => {
+      let proc: ChildProcess;
+      try {
+        proc = spawn(command, args, {
+          cwd: options.cwd,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch (error: unknown) {
+        const errorMessage =
+          error instanceof Error ? error.message : String(error);
+        resolve({
+          exitCode: 127,
+          stdout: "",
+          stderr: `Failed to execute command: ${command}\nError: ${errorMessage}`,
+        });
+        return;
+      }
+
       activeProcs.add(proc);
 
-      const [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      let spawnError: Error | undefined;
 
-      const exitCode = await proc.exited;
-      activeProcs.delete(proc);
+      proc.stdout?.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+      proc.stderr?.on("data", (chunk: Buffer) => stderrChunks.push(chunk));
+      proc.on("error", (err) => {
+        spawnError = err;
+      });
 
-      return {
-        exitCode,
-        stdout: stdout.trim(),
-        stderr: stderr.trim(),
-      };
-    } catch (error: unknown) {
-      // Handle cases where the command itself fails to spawn (e.g., command not found)
-      const errorMessage =
-        error instanceof Error ? error.message : String(error);
-      return {
-        exitCode: 127,
-        stdout: '',
-        stderr: `Failed to execute command: ${cmd[0]}\nError: ${errorMessage}`,
-      };
-    }
+      proc.on("close", (code) => {
+        activeProcs.delete(proc);
+        if (spawnError) {
+          resolve({
+            exitCode: 127,
+            stdout: "",
+            stderr: `Failed to execute command: ${command}\nError: ${spawnError.message}`,
+          });
+        } else {
+          resolve({
+            exitCode: code ?? 1,
+            stdout: Buffer.concat(stdoutChunks).toString("utf-8").trim(),
+            stderr: Buffer.concat(stderrChunks).toString("utf-8").trim(),
+          });
+        }
+      });
+    });
   },
 
   /**
@@ -188,21 +211,21 @@ const Shell = {
   async getStagedFiles(rootDir: string): Promise<string[]> {
     // ACMR = Added, Copied, Modified, Renamed. We exclude D (Deleted).
     const { stdout, exitCode, stderr } = await Shell.exec(
-      ['git', 'diff', '--name-only', '--cached', '--diff-filter=ACMR'],
+      ["git", "diff", "--name-only", "--cached", "--diff-filter=ACMR"],
       { cwd: rootDir },
     );
 
     if (exitCode !== 0) {
       UI.log(
         c.yellow(
-          'Warning: Could not retrieve staged files. Is this a Git repository? Proceeding with full scan.',
+          "Warning: Could not retrieve staged files. Is this a Git repository? Proceeding with full scan.",
         ),
       );
       UI.log(c.dim(stderr));
       return [];
     }
 
-    return stdout.split('\n').filter(Boolean);
+    return stdout.split("\n").filter(Boolean);
   },
 };
 
@@ -210,73 +233,153 @@ const Shell = {
 // Configuration
 // =============================================================================
 
-const ROOT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ROOT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
-// Packages allowed to be outdated without failing the check.
-// zod is pinned due to the MCP SDK's hard version requirement.
-const OUTDATED_ALLOWLIST = new Set(['zod']);
+// ── Project-local config (devcheck.config.json) ─────────────────────
 
-// Define file extensions for linting and formatting
-const LINT_EXTS = ['.ts', '.tsx', '.js', '.jsx'];
-const FORMAT_EXTS = [
-  ...LINT_EXTS,
-  '.json',
-  '.md',
-  '.html',
-  '.css',
-  '.yaml',
-  '.yml',
-];
+interface DevcheckConfig {
+  depcheck?: {
+    ignores?: string[];
+    ignorePatterns?: string[];
+  };
+  outdated?: {
+    allowlist?: string[];
+  };
+}
+
+function loadDevcheckConfig(rootDir: string): DevcheckConfig {
+  try {
+    return JSON.parse(
+      readFileSync(path.join(rootDir, "devcheck.config.json"), "utf-8"),
+    ) as DevcheckConfig;
+  } catch {
+    return {};
+  }
+}
+
+const DEVCHECK_CONFIG = loadDevcheckConfig(ROOT_DIR);
+
+const OUTDATED_ALLOWLIST = new Set(DEVCHECK_CONFIG.outdated?.allowlist ?? []);
+
+/** Use bun for package management commands if available, otherwise npm. */
+const PM_CMD =
+  spawnSync("bun", ["--version"], { stdio: "ignore" }).status === 0
+    ? "bun"
+    : "npm";
 
 /**
- * Optimization Helper: Determines the targets for a command.
- * If running in Husky mode, filters staged files by allowed extensions.
- * If no relevant files are staged, returns an empty array (skipping the check).
- * Otherwise, returns the default target (e.g., ".").
+ * Direct dependencies from package.json, used to classify audit vulnerabilities
+ * as direct (fixable by us) vs transitive/upstream (requires upstream fix).
  */
-const getTargets = (
-  ctx: AppContext,
-  extensions: string[],
-  defaultTarget: string,
-): string[] => {
-  if (ctx.isHuskyHook && ctx.stagedFiles.length > 0) {
-    const filtered = ctx.stagedFiles.filter((file) =>
-      extensions.includes(path.extname(file)),
+const DIRECT_DEPS: ReadonlySet<string> = (() => {
+  try {
+    const pkg = JSON.parse(
+      readFileSync(path.join(ROOT_DIR, "package.json"), "utf-8"),
     );
-    // If we have matching staged files, return them.
-    if (filtered.length > 0) {
-      return filtered;
-    }
-    // If staged files exist, but none match the extensions, we should run nothing.
-    return [];
+    return new Set<string>([
+      ...Object.keys(pkg.dependencies ?? {}),
+      ...Object.keys(pkg.devDependencies ?? {}),
+    ]);
+  } catch {
+    return new Set<string>();
   }
-  // Not a husky hook, or no files staged at all.
-  return [defaultTarget];
-};
+})();
+
+/**
+ * Parses `bun audit` output and classifies high/critical vulnerabilities as
+ * direct (in our package.json) or upstream (transitive dependency we can't fix).
+ *
+ * Bun audit format per vulnerability block:
+ *   <package>  <version-range>        ← header (no indent, 2+ spaces before range)
+ *     <parent> › <child> [› ...]      ← dependency path (indented, › = transitive)
+ *     <severity>: <description>       ← advisory (indented)
+ *
+ * Returns null if parsing yields no results (caller should fall back to default behavior).
+ */
+function classifyAuditVulns(
+  output: string,
+): { direct: string[]; upstream: string[] } | null {
+  try {
+    const lines = output.split("\n");
+    const direct: string[] = [];
+    const upstream: string[] = [];
+    let i = 0;
+
+    while (i < lines.length) {
+      // Package header: non-indented, name followed by 2+ spaces then version constraint
+      const pkgMatch = lines[i]?.match(/^([@\w][\w./-]*)\s{2,}(.+)$/);
+      if (!pkgMatch) {
+        i++;
+        continue;
+      }
+
+      const [, pkg, versionRange] = pkgMatch;
+      i++;
+
+      let hasHighCritical = false;
+      const paths: string[] = [];
+
+      // Collect indented lines belonging to this block
+      while (i < lines.length && (lines[i]?.startsWith("  ") ?? false)) {
+        const trimmed = (lines[i] ?? "").trim();
+        if (/^(critical|high):/i.test(trimmed)) {
+          hasHighCritical = true;
+        } else if (trimmed && !/^(moderate|low):/i.test(trimmed)) {
+          paths.push(trimmed);
+        }
+        i++;
+      }
+
+      if (!hasHighCritical) continue;
+
+      // Direct if: the vulnerable package is in our package.json,
+      // or any dependency path lacks › (meaning it's not pulled in transitively)
+      const pkgName = pkg ?? "";
+      const isDirect =
+        DIRECT_DEPS.has(pkgName) || paths.some((p) => !p.includes("\u203a"));
+      if (isDirect) {
+        direct.push(`${pkgName} ${versionRange}`);
+      } else {
+        const via = paths[0]?.split(/\s*\u203a\s*/)[0] ?? "unknown";
+        upstream.push(`${pkgName} ${versionRange} (via ${via})`);
+      }
+    }
+
+    // If we found nothing despite high/critical text existing, parsing may have failed
+    if (direct.length === 0 && upstream.length === 0) return null;
+
+    return { direct, upstream };
+  } catch {
+    return null;
+  }
+}
+
+// Define file extensions for linting and formatting
+const LINT_EXTS = [".ts", ".tsx", ".js", ".jsx"];
 
 const ALL_CHECKS: Check[] = [
   // Fast checks first (local operations, no network)
   {
-    name: 'TODOs/FIXMEs',
-    flag: '--no-todos',
+    name: "TODOs/FIXMEs",
+    flag: "--no-todos",
     canFix: false,
     getCommand: (ctx) => {
       // git grep -n (line number) -E (extended regex) -i (case-insensitive)
-      const baseCmd = ['git', 'grep', '-nEi', '\\b(TODO|FIXME)\\b'];
+      const baseCmd = ["git", "grep", "-nEi", "\\b(TODO|FIXME)\\b"];
       // Exclude files where TODO/FIXME appears as prose or intentional stubs
       const excludes = [
-        ':!CHANGELOG.md',
-        ':!changelog/',
-        ':!*.lock',
-        ':!scripts/devcheck.ts',
-        ':!tests/',
+        ":!CHANGELOG.md",
+        ":!changelog/",
+        ":!*.lock",
+        ":!scripts/devcheck.ts",
+        ":!tests/",
       ];
       if (ctx.isHuskyHook && ctx.stagedFiles.length > 0) {
         // Check only staged files in the working tree
-        return [...baseCmd, '--', ...excludes, ...ctx.stagedFiles];
+        return [...baseCmd, "--", ...excludes, ...ctx.stagedFiles];
       }
       // Check the entire tracked repository (default behavior of git grep)
-      return [...baseCmd, '--', ...excludes];
+      return [...baseCmd, "--", ...excludes];
     },
     // git grep: exit 0 = matches found, exit 1 = no matches, exit 2+ = error.
     isSuccess: (result) => {
@@ -287,184 +390,190 @@ const ALL_CHECKS: Check[] = [
       return false;
     },
     tip: (c) =>
-      `Resolve ${c.bold('TODO')} or ${c.bold('FIXME')} comments before committing.`,
+      `Resolve ${c.bold("TODO")} or ${c.bold("FIXME")} comments before committing.`,
   },
   {
-    name: 'Tracked Secrets',
-    flag: '--no-secrets',
+    name: "Tracked Secrets",
+    flag: "--no-secrets",
     canFix: false,
     // Check if common sensitive files are tracked by git.
     getCommand: () => [
-      'git',
-      'ls-files',
-      '*.env*',
-      '**/.npmrc',
-      '**/.netrc',
-      '**/credentials.json',
-      '**/*.pem',
-      '**/*.key',
-      '**/secret*',
-      '**/.htpasswd',
+      "git",
+      "ls-files",
+      "*.env*",
+      "**/.npmrc",
+      "**/.netrc",
+      "**/credentials.json",
+      "**/*.pem",
+      "**/*.key",
+      "**/secret*",
+      "**/.htpasswd",
     ],
     // Success if output is empty OR only contains safe patterns.
     isSuccess: (result, _mode) => {
       if (result.exitCode !== 0) return false;
-      const SAFE_PATTERNS = ['.env.example', '.env.template', '.env.sample'];
-      const files = result.stdout.trim().split('\n').filter(Boolean);
+      const SAFE_PATTERNS = [".env.example", ".env.template", ".env.sample"];
+      const files = result.stdout.trim().split("\n").filter(Boolean);
       const dangerous = files.filter(
         (f) => !SAFE_PATTERNS.some((safe) => f.endsWith(safe)),
       );
       return dangerous.length === 0;
     },
     tip: (c) =>
-      `Add sensitive files to ${c.bold('.gitignore')} and run ${c.bold('git rm --cached <file>')}.`,
+      `Add sensitive files to ${c.bold(".gitignore")} and run ${c.bold("git rm --cached <file>")}.`,
   },
   {
-    name: 'ESLint',
-    flag: '--no-lint',
+    name: "MCP Definitions",
+    flag: "--no-mcp-lint",
+    canFix: false,
+    getCommand: () => ["bun", "run", "scripts/lint-mcp.ts"],
+    tip: (c) =>
+      `Fix definition errors reported above. See ${c.bold("validateDefinitions()")} docs for rule details.`,
+  },
+  {
+    name: "Biome",
+    flag: "--no-lint",
     canFix: true,
     getCommand: (ctx, mode) => {
-      const targets = getTargets(ctx, LINT_EXTS, '.');
-      if (targets.length === 0) return null;
-
       const command = [
-        path.join(ctx.rootDir, 'node_modules', '.bin', 'eslint'),
-        ...targets,
-        '--max-warnings',
-        '0',
-        '--cache',
-        '--cache-location',
-        '.eslintcache',
+        path.join(ctx.rootDir, "node_modules", ".bin", "biome"),
+        "check",
       ];
-      if (mode === 'fix') {
-        command.push('--fix');
+      if (mode === "fix") {
+        command.push("--write");
+      }
+      // In husky mode, target only staged files; otherwise let biome.json includes handle it
+      if (ctx.isHuskyHook && ctx.stagedFiles.length > 0) {
+        const relevant = ctx.stagedFiles.filter((file) =>
+          [...LINT_EXTS, ".json"].includes(path.extname(file)),
+        );
+        if (relevant.length === 0) return null;
+        command.push(...relevant);
       }
       return command;
     },
     tip: (c) =>
-      `Run without ${c.bold('--no-fix')} to automatically fix issues.`,
+      `Run without ${c.bold("--no-fix")} to automatically fix issues.`,
   },
   {
-    name: 'Prettier',
-    flag: '--no-format',
-    canFix: true,
-    getCommand: (ctx, mode) => {
-      // We use '.' as the default target, assuming a .prettierignore file is present.
-      const targets = getTargets(ctx, FORMAT_EXTS, '.');
-      if (targets.length === 0) return null;
-
-      const command = [
-        path.join(ctx.rootDir, 'node_modules', '.bin', 'prettier'),
-        '--cache',
-        '--cache-location',
-        '.prettiercache',
-      ];
-      if (mode === 'fix') {
-        command.push('--write');
-      } else {
-        command.push('--check');
-      }
-      command.push(...targets);
-      return command;
-    },
-    tip: (c) => `Run without ${c.bold('--no-fix')} to fix formatting.`,
-  },
-  {
-    name: 'TypeScript',
-    flag: '--no-types',
+    name: "TypeScript",
+    flag: "--no-types",
     canFix: false,
     // TypeScript generally needs the whole project context for accurate checking.
     getCommand: (ctx) => [
-      path.join(ctx.rootDir, 'node_modules', '.bin', 'tsc'),
-      '--noEmit',
+      path.join(ctx.rootDir, "node_modules", ".bin", "tsc"),
+      "--noEmit",
     ],
-    tip: () => 'Check TypeScript errors in your IDE or the console output.',
+    tip: () => "Check TypeScript errors in your IDE or the console output.",
   },
   {
-    name: 'Tests',
-    flag: '--test',
+    name: "Tests",
+    flag: "--test",
     canFix: false,
     requiresFlag: true,
     getCommand: (ctx) => [
-      path.join(ctx.rootDir, 'node_modules', '.bin', 'vitest'),
-      'run',
+      path.join(ctx.rootDir, "node_modules", ".bin", "vitest"),
+      "run",
     ],
-    tip: () => 'Fix failing tests before committing.',
+    tip: () => "Fix failing tests before committing.",
   },
   {
-    name: 'Unused Dependencies',
-    flag: '--no-depcheck',
+    name: "Unused Dependencies",
+    flag: "--no-depcheck",
     canFix: false,
     slowCheck: true,
-    getCommand: (ctx) => [
-      path.join(ctx.rootDir, 'node_modules', '.bin', 'depcheck'),
-      '--ignores=@types/*,pino-pretty,typescript,bun-types,@vitest/coverage-istanbul,repomix,bun',
-    ],
+    getCommand: (ctx) => {
+      const cmd = [path.join(ctx.rootDir, "node_modules", ".bin", "depcheck")];
+      const ignores = DEVCHECK_CONFIG.depcheck?.ignores ?? ["@types/*"];
+      if (ignores.length > 0) cmd.push(`--ignores=${ignores.join(",")}`);
+      const patterns = DEVCHECK_CONFIG.depcheck?.ignorePatterns ?? [];
+      if (patterns.length > 0)
+        cmd.push(`--ignore-patterns=${patterns.join(",")}`);
+      return cmd;
+    },
     tip: (c) =>
-      `Remove unused packages with ${c.bold('bun remove <pkg>')} or add to depcheck ignores.`,
+      `Remove unused packages with ${c.bold(`${PM_CMD} remove <pkg>`)} or add to ${c.bold("devcheck.config.json")} ignores.`,
   },
   // Slow checks last (network-bound operations)
   {
-    name: 'Security Audit',
-    flag: '--no-audit',
-    canFix: false, // 'bun audit --fix' exists but often requires manual review.
+    name: "Security Audit",
+    flag: "--no-audit",
+    canFix: false, // audit --fix exists but often requires manual review.
     slowCheck: true,
-    getCommand: () => ['bun', 'audit'],
+    getCommand: () => [PM_CMD, "audit"],
     isSuccess: (result, _mode) => {
       // If the command exits 0, no vulnerabilities were found.
       if (result.exitCode === 0) return true;
 
-      // 'bun audit' exits with 1 if vulnerabilities are found. We need to check the output.
       const output = result.stdout;
+      if (output.includes("0 vulnerabilities found")) return true;
 
-      // If no vulnerabilities are found, it's a success (defensive check).
-      if (output.includes('0 vulnerabilities found')) return true;
-
-      // Fail only if 'high' or 'critical' vulnerabilities are mentioned.
+      // Pass if only low/moderate severity
       const hasHighOrCritical = /high|critical/i.test(output);
+      if (!hasHighOrCritical) return true;
 
-      // If it doesn't have high or critical vulnerabilities, we consider it a success.
-      return !hasHighOrCritical;
+      // Classify: direct deps we can fix vs transitive deps we can't
+      const classified = classifyAuditVulns(output);
+
+      // If parsing failed, fall back to failing (conservative)
+      if (!classified) return false;
+
+      // Direct dep vulnerabilities — we can and should fix these
+      if (classified.direct.length > 0) return false;
+
+      // All high/critical are upstream/transitive — warn but don't fail
+      if (classified.upstream.length > 0) {
+        const n = classified.upstream.length;
+        return {
+          success: true,
+          warning: [
+            `${n} high/critical vulnerabilit${n === 1 ? "y" : "ies"} in transitive deps (upstream, no direct fix available):`,
+            ...classified.upstream.map((v) => `  - ${v}`),
+          ].join("\n"),
+        };
+      }
+
+      return true;
     },
     tip: (c) =>
-      `High- or critical-severity vulnerabilities found. Review the report and run ${c.bold('bun update')} or ${c.bold('bun audit --fix')}.`,
+      `Direct dependency vulnerabilities found. Run ${c.bold(`${PM_CMD} update`)} or ${c.bold(`${PM_CMD} audit --fix`)} to resolve.`,
   },
   {
-    name: 'Dependencies (Outdated)',
-    flag: '--no-deps',
+    name: "Dependencies (Outdated)",
+    flag: "--no-deps",
     canFix: false,
     slowCheck: true,
-    getCommand: () => ['bun', 'outdated'],
+    getCommand: () => [PM_CMD, "outdated"],
     isSuccess: (result) => {
       // Exit 0 with empty output = everything up to date
-      if (result.exitCode === 0 && result.stdout.trim() === '') return true;
+      if (result.exitCode === 0 && result.stdout.trim() === "") return true;
 
       // Non-zero exit with no tabular output likely means a network/lockfile error — fail hard
       const output = result.stdout.trim();
-      if (result.exitCode !== 0 && !output.includes('|')) return false;
+      if (result.exitCode !== 0 && !output.includes("|")) return false;
 
       // Parse the tabular output. Package lines contain '|' separators.
       // Filter out header/separator rows and allowlisted packages.
-      const lines = output.split('\n');
+      const lines = output.split("\n");
       const packageLines = lines.filter((line) => {
-        if (!line.includes('|')) return false;
+        if (!line.includes("|")) return false;
         // Skip table chrome: header row and separator (e.g., "---")
-        const firstCell = line.split('|')[0]?.trim() ?? '';
-        if (!firstCell || firstCell === 'Package' || /^-+$/.test(firstCell))
+        const firstCell = line.split("|")[0]?.trim() ?? "";
+        if (!firstCell || firstCell === "Package" || /^-+$/.test(firstCell))
           return false;
         return true;
       });
 
       // Check if every outdated package is in the allowlist
       const unexpected = packageLines.filter((line) => {
-        const pkgName = line.split('|')[0]?.trim() ?? '';
+        const pkgName = line.split("|")[0]?.trim() ?? "";
         return !OUTDATED_ALLOWLIST.has(pkgName);
       });
 
       return unexpected.length === 0;
     },
     tip: (c) =>
-      `Run ${c.bold('bun update')} to upgrade dependencies. Allowlisted packages: ${[...OUTDATED_ALLOWLIST].join(', ')}.`,
+      `Run ${c.bold(`${PM_CMD} update`)} to upgrade dependencies. Configure allowlist in ${c.bold("devcheck.config.json")}.`,
   },
 ];
 
@@ -480,26 +589,26 @@ const UI = {
   // ---------------------------------------------------------------------------
 
   formatCheckStart(check: Check, command: string[], mode: UIMode): string {
-    let commandStr = command.join(' ');
+    let commandStr = command.join(" ");
     if (commandStr.length > 150) {
-      commandStr = commandStr.substring(0, 147) + '... (truncated)';
+      commandStr = `${commandStr.substring(0, 147)}... (truncated)`;
     }
     return [
-      `${c.bold(c.blue('🔷'))} ${mode} ${c.yellow(check.name)}${c.blue('...')} `,
+      `${c.bold(c.blue("🔷"))} ${mode} ${c.yellow(check.name)}${c.blue("...")} `,
       c.dim(`   $ ${commandStr}`),
-    ].join('\n');
+    ].join("\n");
   },
 
   formatSkipped(check: Check, reason: string): string {
-    return `${c.bold(c.yellow('🔶 Skipping ' + check.name + '...'))}${c.dim(` (${reason})`)}`;
+    return `${c.bold(c.yellow(`🔶 Skipping ${check.name}...`))}${c.dim(` (${reason})`)}`;
   },
 
   formatCheckResult(result: CommandResult, _mode: UIMode): string {
     const { checkName, exitCode, duration } = result;
     if (exitCode === 0) {
-      return `${c.bold(c.green('✅'))} ${c.yellow(checkName)} ${c.green(`finished successfully in ${duration}ms.`)}`;
+      return `${c.bold(c.green("✅"))} ${c.yellow(checkName)} ${c.green(`finished successfully in ${duration}ms.`)}`;
     }
-    return `${c.bold(c.red('❌'))} ${c.yellow(checkName)} ${c.red(`failed (Code ${exitCode}) in ${duration}ms.`)}`;
+    return `${c.bold(c.red("❌"))} ${c.yellow(checkName)} ${c.red(`failed (Code ${exitCode}) in ${duration}ms.`)}`;
   },
 
   // ---------------------------------------------------------------------------
@@ -517,26 +626,26 @@ const UI = {
     let modeMessage: string;
     if (ctx.isHuskyHook) {
       const fileCount = ctx.stagedFiles.length;
-      const mode = ctx.noFix ? 'Read-only' : 'Auto-fixing';
+      const mode = ctx.noFix ? "Read-only" : "Auto-fixing";
       modeMessage = c.magenta(
-        `(Husky Hook: ${mode} - ${fileCount} file${fileCount === 1 ? '' : 's'} staged)`,
+        `(Husky Hook: ${mode} - ${fileCount} file${fileCount === 1 ? "" : "s"} staged)`,
       );
     } else {
-      const fixMode = ctx.noFix ? 'Read-only' : 'Auto-fixing';
-      const speedMode = ctx.fastMode ? ' - Fast mode' : '';
+      const fixMode = ctx.noFix ? "Read-only" : "Auto-fixing";
+      const speedMode = ctx.fastMode ? " - Fast mode" : "";
       modeMessage = ctx.noFix
         ? c.dim(`(${fixMode} mode${speedMode})`)
         : c.magenta(`(${fixMode} mode${speedMode})`);
     }
 
     UI.log(
-      `${c.bold('🚀 DevCheck: Kicking off comprehensive checks...')} ${modeMessage}\n`,
+      `${c.bold("🚀 DevCheck: Kicking off comprehensive checks...")} ${modeMessage}\n`,
     );
   },
 
   printSummary(results: CommandResult[], ctx: AppContext): boolean {
-    UI.log(`\n${c.bold('📊 Checkup Summary:')}`);
-    UI.log('------------------------------------------------');
+    UI.log(`\n${c.bold("📊 Checkup Summary:")}`);
+    UI.log("------------------------------------------------");
 
     let overallSuccess = true;
     const failedChecks: Check[] = [];
@@ -544,11 +653,13 @@ const UI = {
     for (const result of results) {
       let status: string;
       if (result.skipped) {
-        status = `${c.yellow('⚪ SKIPPED')}`;
+        status = `${c.yellow("⚪ SKIPPED")}`;
+      } else if (result.exitCode === 0 && result.warning) {
+        status = `${c.yellow("⚠️  WARNING")}`;
       } else if (result.exitCode === 0) {
-        status = `${c.green('✅ PASSED')}`;
+        status = `${c.green("✅ PASSED")}`;
       } else {
-        status = `${c.red('❌ FAILED')}`;
+        status = `${c.red("❌ FAILED")}`;
         overallSuccess = false;
         const foundCheck = ALL_CHECKS.find(
           (check) => check.name === result.checkName,
@@ -556,33 +667,34 @@ const UI = {
         if (foundCheck) failedChecks.push(foundCheck);
       }
 
-      const durationStr = result.skipped ? '' : c.dim(`(${result.duration}ms)`);
+      const durationStr = result.skipped ? "" : c.dim(`(${result.duration}ms)`);
       UI.log(`${c.bold(result.checkName.padEnd(25))} ${status} ${durationStr}`);
 
-      // Display output only for failed checks
-      if (result.exitCode !== 0 && !result.skipped) {
-        if (result.stdout) UI.log(c.dim(result.stdout.replace(/^/gm, '   | ')));
-        if (result.stderr) UI.log(c.red(result.stderr.replace(/^/gm, '   | ')));
-        UI.log('');
+      // Display warning details for passing checks with warnings
+      if (result.exitCode === 0 && result.warning) {
+        UI.log(c.yellow(result.warning.replace(/^/gm, "   | ")));
+        UI.log("");
+      }
+
+      // Display check output (dimmed for passing, red stderr for failures)
+      if (!result.skipped && (result.stdout || result.stderr)) {
+        if (result.stdout) UI.log(c.dim(result.stdout.replace(/^/gm, "   | ")));
+        if (result.stderr) {
+          UI.log(
+            result.exitCode !== 0
+              ? c.red(result.stderr.replace(/^/gm, "   | "))
+              : c.dim(result.stderr.replace(/^/gm, "   | ")),
+          );
+        }
+        UI.log("");
       }
     }
 
-    // Highlight the slowest check to help identify bottlenecks
-    const ranChecks = results.filter((r) => !r.skipped);
-    if (ranChecks.length > 1) {
-      const slowest = ranChecks.reduce((a, b) =>
-        a.duration > b.duration ? a : b,
-      );
-      UI.log(
-        c.dim(`\n  Slowest: ${slowest.checkName} (${slowest.duration}ms)`),
-      );
-    }
-
-    UI.log('\n------------------------------------------------');
+    UI.log("\n------------------------------------------------");
 
     if (!overallSuccess) {
       if (ctx.noFix || failedChecks.some((check) => !check.canFix)) {
-        UI.log(`\n${c.bold(c.cyan('💡 Tips & Actions:'))}`);
+        UI.log(`\n${c.bold(c.cyan("💡 Tips & Actions:"))}`);
         for (const check of failedChecks) {
           if (check.tip) {
             UI.log(`   - ${c.bold(check.name)}: ${c.dim(check.tip(c))}`);
@@ -591,7 +703,7 @@ const UI = {
       }
       if (!ctx.noFix) {
         UI.log(
-          `\n${c.yellow('⚠️ Note: Some issues may have been fixed automatically, but others require manual intervention.')}`,
+          `\n${c.yellow("⚠️ Note: Some issues may have been fixed automatically, but others require manual intervention.")}`,
         );
       }
     }
@@ -603,18 +715,18 @@ const UI = {
     const timeStr = c.dim(`(total: ${totalDuration}ms)`);
     if (success) {
       UI.log(
-        `\n${c.bold(c.green('🎉 All checks passed! Ship it!'))} ${timeStr}`,
+        `\n${c.bold(c.green("🎉 All checks passed! Ship it!"))} ${timeStr}`,
       );
     } else {
       UI.log(
-        `\n${c.bold(c.red('🛑 Found issues. Please review the output above.'))} ${timeStr}`,
+        `\n${c.bold(c.red("🛑 Found issues. Please review the output above."))} ${timeStr}`,
       );
     }
   },
 
   printError(error: unknown) {
     console.error(
-      `${c.red('\nAn unexpected error occurred in the check script:')}`,
+      `${c.red("\nAn unexpected error occurred in the check script:")}`,
       error,
     );
   },
@@ -626,11 +738,11 @@ const UI = {
 
 /** Global flags handled separately from per-check skip flags. */
 const GLOBAL_FLAGS = new Set([
-  '--no-fix',
-  '--husky-hook',
-  '--fast',
-  '--help',
-  '--only',
+  "--no-fix",
+  "--husky-hook",
+  "--fast",
+  "--help",
+  "--only",
 ]);
 
 /** All recognized flags (global + per-check skip flags). */
@@ -640,37 +752,37 @@ const KNOWN_FLAGS = new Set([
 ]);
 
 function printHelp() {
-  UI.log(`${c.bold('Usage:')} bun run devcheck [options]\n`);
-  UI.log(`${c.bold('Options:')}`);
+  UI.log(`${c.bold("Usage:")} bun run devcheck [options]\n`);
+  UI.log(`${c.bold("Options:")}`);
   UI.log(
-    `  ${c.yellow('--no-fix')}        Run in read-only mode (no auto-fixing)`,
+    `  ${c.yellow("--no-fix")}        Run in read-only mode (no auto-fixing)`,
   );
   UI.log(
-    `  ${c.yellow('--fast')}          Skip slow network-bound checks (audit, outdated)`,
+    `  ${c.yellow("--fast")}          Skip slow network-bound checks (audit, outdated)`,
   );
   UI.log(
-    `  ${c.yellow('--husky-hook')}    Run in pre-commit hook mode (analyze staged files only)`,
+    `  ${c.yellow("--husky-hook")}    Run in pre-commit hook mode (analyze staged files only)`,
   );
   UI.log(
-    `  ${c.yellow('--only <name>')}   Run only the named check (case-insensitive partial match)`,
+    `  ${c.yellow("--only <name>")}   Run only the named check (case-insensitive partial match)`,
   );
-  UI.log(`  ${c.yellow('--help')}          Show this help message\n`);
+  UI.log(`  ${c.yellow("--help")}          Show this help message\n`);
   const optOutChecks = ALL_CHECKS.filter((ch) => !ch.requiresFlag);
   const optInChecks = ALL_CHECKS.filter((ch) => ch.requiresFlag);
 
-  UI.log(`${c.bold('Skip individual checks:')}`);
+  UI.log(`${c.bold("Skip individual checks:")}`);
   for (const check of optOutChecks) {
-    const slow = check.slowCheck ? c.dim(' (slow)') : '';
+    const slow = check.slowCheck ? c.dim(" (slow)") : "";
     UI.log(`  ${c.yellow(check.flag.padEnd(18))} Skip ${check.name}${slow}`);
   }
 
   if (optInChecks.length > 0) {
-    UI.log(`\n${c.bold('Enable optional checks (off by default):')}`);
+    UI.log(`\n${c.bold("Enable optional checks (off by default):")}`);
     for (const check of optInChecks) {
       UI.log(`  ${c.yellow(check.flag.padEnd(18))} Run ${check.name}`);
     }
   }
-  UI.log('');
+  UI.log("");
 }
 
 /**
@@ -679,7 +791,7 @@ function printHelp() {
  */
 function parseArgs(
   args: string[],
-): Omit<AppContext, 'rootDir' | 'stagedFiles'> | null {
+): Omit<AppContext, "rootDir" | "stagedFiles"> | null {
   const flags = new Set<string>();
   let noFix = false;
   let isHuskyHook = false;
@@ -687,22 +799,22 @@ function parseArgs(
   let onlyCheck: string | null = null;
 
   for (let i = 0; i < args.length; i++) {
-    const arg = args[i]!;
-    if (arg === '--help') {
+    const arg = args[i] as string;
+    if (arg === "--help") {
       printHelp();
       return null;
-    } else if (arg === '--no-fix') {
+    } else if (arg === "--no-fix") {
       noFix = true;
-    } else if (arg === '--husky-hook') {
+    } else if (arg === "--husky-hook") {
       isHuskyHook = true;
-    } else if (arg === '--fast') {
+    } else if (arg === "--fast") {
       fastMode = true;
-    } else if (arg === '--only') {
+    } else if (arg === "--only") {
       const next = args[i + 1];
-      if (!next || next.startsWith('--')) {
-        UI.log(c.red('Error: --only requires a check name argument.'));
-        UI.log(c.dim(`  Example: ${c.bold('bun run devcheck --only lint')}\n`));
-        UI.log(c.dim('Available checks:'));
+      if (!next || next.startsWith("--")) {
+        UI.log(c.red("Error: --only requires a check name argument."));
+        UI.log(c.dim(`  Example: ${c.bold("bun run devcheck --only lint")}\n`));
+        UI.log(c.dim("Available checks:"));
         for (const check of ALL_CHECKS) {
           UI.log(c.dim(`  - ${check.name}`));
         }
@@ -710,11 +822,11 @@ function parseArgs(
       }
       onlyCheck = next;
       i++; // consume the next arg
-    } else if (arg.startsWith('--')) {
+    } else if (arg.startsWith("--")) {
       if (!KNOWN_FLAGS.has(arg)) {
         UI.log(c.yellow(`Warning: Unknown flag '${arg}' — ignoring.`));
         UI.log(
-          c.dim(`  Run with ${c.bold('--help')} to see available options.\n`),
+          c.dim(`  Run with ${c.bold("--help")} to see available options.\n`),
         );
       } else {
         flags.add(arg);
@@ -723,7 +835,7 @@ function parseArgs(
   }
 
   // Also detect if running inside environment set by Husky
-  if (process.env.HUSKY === '1' || process.env.GIT_PARAMS) {
+  if (process.env.HUSKY === "1" || process.env.GIT_PARAMS) {
     isHuskyHook = true;
   }
 
@@ -736,8 +848,8 @@ async function runCheck(check: Check, ctx: AppContext): Promise<CommandResult> {
   const baseResult: CommandResult = {
     checkName: name,
     exitCode: 0,
-    stdout: '',
-    stderr: '',
+    stdout: "",
+    stderr: "",
     duration: 0,
     skipped: false,
     logLines: log,
@@ -771,20 +883,20 @@ async function runCheck(check: Check, ctx: AppContext): Promise<CommandResult> {
 
   // 3. Skip slow checks in fast mode
   if (ctx.fastMode && check.slowCheck) {
-    log.push(UI.formatSkipped(check, 'Skipped in fast mode'));
+    log.push(UI.formatSkipped(check, "Skipped in fast mode"));
     return { ...baseResult, skipped: true };
   }
 
   // 4. Determine command and mode
   const useFixCommand = !ctx.noFix && check.canFix;
-  const runMode: RunMode = useFixCommand ? 'fix' : 'check';
-  const uiMode: UIMode = useFixCommand ? 'Fixing' : 'Checking';
+  const runMode: RunMode = useFixCommand ? "fix" : "check";
+  const uiMode: UIMode = useFixCommand ? "Fixing" : "Checking";
 
   const command = getCommand(ctx, runMode);
 
   // 5. Check if command generation resulted in no action (e.g., no relevant staged files)
   if (!command || command.length === 0) {
-    log.push(UI.formatSkipped(check, 'No relevant files to check'));
+    log.push(UI.formatSkipped(check, "No relevant files to check"));
     return { ...baseResult, skipped: true };
   }
 
@@ -804,7 +916,10 @@ async function runCheck(check: Check, ctx: AppContext): Promise<CommandResult> {
 
   // 7. Determine success (using custom logic if provided)
   if (isSuccess) {
-    const success = isSuccess(result, runMode);
+    const raw = isSuccess(result, runMode);
+    const { success, warning } =
+      typeof raw === "boolean" ? { success: raw, warning: undefined } : raw;
+
     if (!success && finalResult.exitCode === 0) {
       finalResult.exitCode = 1;
     }
@@ -815,6 +930,9 @@ async function runCheck(check: Check, ctx: AppContext): Promise<CommandResult> {
       }
       finalResult.exitCode = 0;
     }
+    if (warning) {
+      finalResult.warning = warning;
+    }
   }
 
   log.push(UI.formatCheckResult(finalResult, uiMode));
@@ -824,7 +942,7 @@ async function runCheck(check: Check, ctx: AppContext): Promise<CommandResult> {
 
 /**
  * Handles the specific logic required for git pre-commit hooks, primarily re-staging
- * files that were modified by auto-fixers (like ESLint or Prettier).
+ * files that were modified by auto-fixers (like Biome).
  * Returns false if re-staging failed (should fail the commit).
  */
 async function handleHuskyReStaging(ctx: AppContext): Promise<boolean> {
@@ -835,13 +953,15 @@ async function handleHuskyReStaging(ctx: AppContext): Promise<boolean> {
   if (ctx.stagedFiles.length === 0) return true;
 
   UI.log(
-    `\n${c.bold(c.cyan('✨ Husky: Checking for modifications by fixers...'))}`,
+    `\n${c.bold(c.cyan("✨ Husky: Checking for modifications by fixers..."))}`,
   );
 
   try {
     const { stdout: gitStatus } = await Shell.exec(
-      ['git', 'status', '--porcelain'],
-      { cwd: ctx.rootDir },
+      ["git", "status", "--porcelain"],
+      {
+        cwd: ctx.rootDir,
+      },
     );
 
     // Identify files modified by fixers after staging.
@@ -849,13 +969,13 @@ async function handleHuskyReStaging(ctx: AppContext): Promise<boolean> {
     // We want files where X is staged (not ' ' or '?') and Y='M' (modified since staging).
     const stagedSet = new Set(ctx.stagedFiles);
     const modifiedStagedFiles = gitStatus
-      .split('\n')
+      .split("\n")
       .filter(
         (line) =>
           line.length > 3 &&
-          line[1] === 'M' &&
-          line[0] !== ' ' &&
-          line[0] !== '?',
+          line[1] === "M" &&
+          line[0] !== " " &&
+          line[0] !== "?",
       )
       .map((line) => line.substring(3).trim())
       // Only re-stage files that were originally staged — avoid pulling in unrelated changes
@@ -868,12 +988,12 @@ async function handleHuskyReStaging(ctx: AppContext): Promise<boolean> {
         ),
       );
 
-      const cmd = ['git', 'add', ...modifiedStagedFiles];
+      const cmd = ["git", "add", ...modifiedStagedFiles];
       const addResult = await Shell.exec(cmd, { cwd: ctx.rootDir });
 
-      let cmdStr = cmd.join(' ');
+      let cmdStr = cmd.join(" ");
       if (cmdStr.length > 100) {
-        cmdStr = cmdStr.substring(0, 97) + '...';
+        cmdStr = `${cmdStr.substring(0, 97)}...`;
       }
       UI.log(c.dim(`     $ ${cmdStr}`));
 
@@ -885,16 +1005,16 @@ async function handleHuskyReStaging(ctx: AppContext): Promise<boolean> {
         return false;
       }
 
-      UI.log(c.green('   ✓ Successfully re-staged files.'));
+      UI.log(c.green("   ✓ Successfully re-staged files."));
     } else {
-      UI.log(c.green('   ✓ No staged files were modified by fixers.'));
+      UI.log(c.green("   ✓ No staged files were modified by fixers."));
     }
 
     return true;
   } catch (error: unknown) {
     UI.log(
       c.red(
-        '🛑 Error during Husky hook file management. Fixes might not be staged.',
+        "🛑 Error during Husky hook file management. Fixes might not be staged.",
       ),
     );
     UI.printError(error);
@@ -920,7 +1040,7 @@ async function main() {
 
   // If it's a husky hook and nothing is staged, we can exit early.
   if (appContext.isHuskyHook && appContext.stagedFiles.length === 0) {
-    UI.log(c.green('\nNo files staged. Skipping pre-commit checks.'));
+    UI.log(c.green("\nNo files staged. Skipping pre-commit checks."));
     process.exit(0);
   }
 
@@ -934,19 +1054,19 @@ async function main() {
 
   // Collect results, then flush buffered output in definition order (no interleaving)
   const results: CommandResult[] = settledResults.map((res, index) => {
-    if (res.status === 'fulfilled') {
+    if (res.status === "fulfilled") {
       return res.value;
     }
-    const checkName = ALL_CHECKS[index]?.name || 'Unknown';
+    const checkName = ALL_CHECKS[index]?.name || "Unknown";
     return {
       checkName,
       exitCode: 1,
-      stdout: '',
+      stdout: "",
       stderr: `Check runner failed: ${String(res.reason)}`,
       duration: 0,
       skipped: false,
       logLines: [
-        `${c.bold(c.red('❌'))} ${c.yellow(checkName)} ${c.red('runner crashed')}`,
+        `${c.bold(c.red("❌"))} ${c.yellow(checkName)} ${c.red("runner crashed")}`,
       ],
     };
   });

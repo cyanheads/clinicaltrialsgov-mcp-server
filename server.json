@@ -1,25 +1,19 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
-  "description": "MCP server for ClinicalTrials.gov v2 API. Search, retrieve, compare, and analyze trials.",
+  "name": "clinicaltrialsgov-mcp-server",
+  "description": "MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details, analyze field values, count studies, and match patients to eligible trials.",
   "repository": {
     "url": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server",
     "source": "github"
   },
-  "version": "1.9.3",
-  "remotes": [
-    {
-      "type": "streamable-http",
-      "url": "https://clinicaltrials.caseyjhand.com/mcp"
-    }
-  ],
+  "version": "2.0.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
-      "version": "1.9.3",
-      "runtimeHint": "bun",
+      "runtimeHint": "node",
+      "version": "2.0.0",
       "packageArguments": [
         {
           "type": "positional",
@@ -33,17 +27,10 @@
       "environmentVariables": [
         {
           "name": "MCP_LOG_LEVEL",
-          "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn', 'error').",
+          "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn').",
           "format": "string",
           "isRequired": false,
           "default": "info"
-        },
-        {
-          "name": "STORAGE_PROVIDER_TYPE",
-          "description": "Storage provider type: 'in-memory', 'filesystem', 'supabase', 'cloudflare-r2', 'cloudflare-kv', or 'cloudflare-d1'.",
-          "format": "string",
-          "isRequired": false,
-          "default": "in-memory"
         }
       ],
       "transport": {
@@ -54,8 +41,8 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
-      "version": "1.9.3",
-      "runtimeHint": "bun",
+      "runtimeHint": "node",
+      "version": "2.0.0",
       "packageArguments": [
         {
           "type": "positional",
@@ -79,7 +66,7 @@
           "description": "The port to run the HTTP server on.",
           "format": "string",
           "isRequired": false,
-          "default": "3017"
+          "default": "3010"
         },
         {
           "name": "MCP_HTTP_ENDPOINT_PATH",
@@ -97,22 +84,15 @@
         },
         {
           "name": "MCP_LOG_LEVEL",
-          "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn', 'error').",
+          "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn').",
           "format": "string",
           "isRequired": false,
           "default": "info"
-        },
-        {
-          "name": "STORAGE_PROVIDER_TYPE",
-          "description": "Storage provider type: 'in-memory', 'filesystem', 'supabase', 'cloudflare-r2', 'cloudflare-kv', or 'cloudflare-d1'.",
-          "format": "string",
-          "isRequired": false,
-          "default": "in-memory"
         }
       ],
       "transport": {
         "type": "streamable-http",
-        "url": "http://localhost:3017/mcp"
+        "url": "http://localhost:3010/mcp"
       }
     }
   ]

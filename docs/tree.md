@@ -1,33 +1,98 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-03-23 17:47:10
+Generated on: 2026-03-26 21:10:33
 
-```
+```text
 clinicaltrialsgov-mcp-server/
+├── .claude/
 ├── .github/
-│   ├── workflows/
-│   │   ├── claude-code-review.yml
-│   │   └── claude.yml
-│   └── FUNDING.yml
+│   └── ISSUE_TEMPLATE/
+│       ├── bug_report.yml
+│       ├── config.yml
+│       └── feature_request.yml
 ├── .husky/
-│   └── pre-commit
+├── .vscode/
+│   ├── extensions.json
+│   └── settings.json
 ├── claude-plans/
 ├── docs/
-│   └── otel-gaps.md
-├── examples/
-│   ├── clinicaltrials_analyze_trends.md
-│   ├── clinicaltrials_get_study.md
-│   ├── clinicaltrials_search_studies.md
-│   ├── clinicaltrials-compare-studies.md
-│   └── clinicaltrials-find-eligible-studies.md
 ├── scripts/
+│   ├── build.ts
 │   ├── clean.ts
 │   ├── devcheck.ts
-│   ├── devdocs.ts
-│   ├── make-executable.ts
-│   ├── tree.ts
-│   └── update-coverage.ts
+│   ├── lint-mcp.ts
+│   └── tree.ts
+├── skills/
+│   ├── add-prompt/
+│   │   └── SKILL.md
+│   ├── add-resource/
+│   │   └── SKILL.md
+│   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-test/
+│   │   └── SKILL.md
+│   ├── add-tool/
+│   │   └── SKILL.md
+│   ├── api-auth/
+│   │   └── SKILL.md
+│   ├── api-config/
+│   │   └── SKILL.md
+│   ├── api-context/
+│   │   └── SKILL.md
+│   ├── api-errors/
+│   │   └── SKILL.md
+│   ├── api-services/
+│   │   ├── references/
+│   │   │   ├── graph.md
+│   │   │   ├── llm.md
+│   │   │   └── speech.md
+│   │   └── SKILL.md
+│   ├── api-testing/
+│   │   └── SKILL.md
+│   ├── api-utils/
+│   │   ├── references/
+│   │   │   ├── formatting.md
+│   │   │   ├── parsing.md
+│   │   │   └── security.md
+│   │   └── SKILL.md
+│   ├── api-workers/
+│   │   └── SKILL.md
+│   ├── design-mcp-server/
+│   │   └── SKILL.md
+│   ├── devcheck/
+│   │   └── SKILL.md
+│   ├── field-test/
+│   │   └── SKILL.md
+│   ├── maintenance/
+│   │   └── SKILL.md
+│   ├── migrate-mcp-ts-template/
+│   │   └── SKILL.md
+│   ├── polish-docs-meta/
+│   │   ├── references/
+│   │   │   ├── agent-protocol.md
+│   │   │   ├── package-meta.md
+│   │   │   ├── readme.md
+│   │   │   └── server-json.md
+│   │   └── SKILL.md
+│   ├── report-issue-framework/
+│   │   └── SKILL.md
+│   ├── report-issue-local/
+│   │   └── SKILL.md
+│   └── setup/
+│       └── SKILL.md
 ├── src/
+│   ├── mcp-server/
+│   │   ├── prompts/
+│   │   │   └── definitions/
+│   │   │       └── echo.prompt.ts
+│   │   ├── resources/
+│   │   │   └── definitions/
+│   │   │       └── echo.resource.ts
+│   │   └── tools/
+│   │       └── definitions/
+│   │           └── echo.tool.ts
+│   └── index.ts
+├── src_old/
 │   ├── config/
 │   │   └── index.ts
 │   ├── container/
@@ -185,208 +250,28 @@ clinicaltrialsgov-mcp-server/
 │   ├── index.ts
 │   └── worker.ts
 ├── tests/
-│   ├── config/
-│   │   ├── index.int.test.ts
-│   │   └── index.test.ts
-│   ├── conformance/
-│   │   ├── helpers/
-│   │   │   ├── assertions.ts
-│   │   │   └── server-harness.ts
-│   │   ├── lifecycle.test.ts
-│   │   ├── prompts.test.ts
-│   │   ├── protocol-init.test.ts
-│   │   ├── resources.test.ts
-│   │   └── tools.test.ts
-│   ├── container/
-│   │   ├── registrations/
-│   │   │   ├── core.test.ts
-│   │   │   └── mcp.test.ts
-│   │   ├── container.test.ts
-│   │   ├── index.test.ts
-│   │   └── tokens.test.ts
-│   ├── fixtures/
-│   │   └── index.ts
-│   ├── mcp-server/
-│   │   ├── resources/
-│   │   │   ├── definitions/
-│   │   │   │   ├── echo.resource.test.ts
-│   │   │   │   └── index.test.ts
-│   │   │   ├── schemas/
-│   │   │   │   ├── __snapshots__/
-│   │   │   │   ├── json-schema-compatibility.test.ts
-│   │   │   │   └── schema-snapshots.test.ts
-│   │   │   ├── utils/
-│   │   │   │   ├── resourceDefinition.test.ts
-│   │   │   │   └── resourceHandlerFactory.test.ts
-│   │   │   └── resource-registration.test.ts
-│   │   ├── tools/
-│   │   │   ├── definitions/
-│   │   │   │   ├── clinicaltrials-analyze-trends.tool.test.ts
-│   │   │   │   ├── clinicaltrials-compare-studies.tool.test.ts
-│   │   │   │   ├── clinicaltrials-find-eligible-studies.tool.test.ts
-│   │   │   │   ├── clinicaltrials-get-study.tool.test.ts
-│   │   │   │   ├── clinicaltrials-search-studies.tool.test.ts
-│   │   │   │   └── index.test.ts
-│   │   │   ├── fuzz/
-│   │   │   ├── schemas/
-│   │   │   │   ├── __snapshots__/
-│   │   │   │   │   └── schema-snapshots.test.ts.snap
-│   │   │   │   ├── json-schema-compatibility.test.ts
-│   │   │   │   ├── schema-snapshots.test.ts
-│   │   │   │   └── zod4-compatibility.test.ts
-│   │   │   ├── utils/
-│   │   │   │   ├── index.test.ts
-│   │   │   │   ├── toolDefinition.test.ts
-│   │   │   │   └── toolHandlerFactory.test.ts
-│   │   │   └── tool-registration.test.ts
-│   │   ├── transports/
-│   │   │   ├── auth/
-│   │   │   │   ├── lib/
-│   │   │   │   │   ├── authContext.test.ts
-│   │   │   │   │   ├── authTypes.test.ts
-│   │   │   │   │   ├── authUtils.test.ts
-│   │   │   │   │   └── withAuth.test.ts
-│   │   │   │   ├── strategies/
-│   │   │   │   │   ├── authStrategy.test.ts
-│   │   │   │   │   ├── jwtStrategy.test.ts
-│   │   │   │   │   └── oauthStrategy.test.ts
-│   │   │   │   ├── authFactory.test.ts
-│   │   │   │   ├── authMiddleware.test.ts
-│   │   │   │   └── index.test.ts
-│   │   │   ├── http/
-│   │   │   │   ├── httpErrorHandler.test.ts
-│   │   │   │   ├── httpTransport.integration.test.ts
-│   │   │   │   ├── httpTransport.test.ts
-│   │   │   │   ├── httpTypes.test.ts
-│   │   │   │   ├── index.test.ts
-│   │   │   │   ├── sessionIdUtils.test.ts
-│   │   │   │   └── sessionStore.test.ts
-│   │   │   ├── stdio/
-│   │   │   │   ├── index.test.ts
-│   │   │   │   └── stdioTransport.test.ts
-│   │   │   ├── ITransport.test.ts
-│   │   │   └── manager.test.ts
-│   │   └── server.test.ts
-│   ├── scripts/
-│   │   └── devdocs.test.ts
-│   ├── services/
-│   │   └── clinical-trials-gov/
-│   │       ├── providers/
-│   │       │   └── clinicaltrials-gov.provider.test.ts
-│   │       └── types.test.ts
-│   ├── storage/
-│   │   ├── core/
-│   │   │   ├── IStorageProvider.test.ts
-│   │   │   ├── storageFactory.test.ts
-│   │   │   └── storageValidation.test.ts
-│   │   ├── providers/
-│   │   │   ├── cloudflare/
-│   │   │   │   ├── d1Provider.test.ts
-│   │   │   │   ├── kvProvider.test.ts
-│   │   │   │   └── r2Provider.test.ts
-│   │   │   ├── fileSystem/
-│   │   │   │   └── fileSystemProvider.test.ts
-│   │   │   ├── inMemory/
-│   │   │   │   └── inMemoryProvider.test.ts
-│   │   │   └── supabase/
-│   │   │       ├── supabase.types.test.ts
-│   │   │       └── supabaseProvider.test.ts
-│   │   ├── index.test.ts
-│   │   ├── storageProviderCompliance.test.ts
-│   │   └── StorageService.test.ts
-│   ├── types-global/
-│   │   └── errors.test.ts
-│   ├── utils/
-│   │   ├── formatting/
-│   │   │   ├── diffFormatter.test.ts
-│   │   │   ├── index.test.ts
-│   │   │   ├── markdownBuilder.test.ts
-│   │   │   ├── tableFormatter.test.ts
-│   │   │   └── treeFormatter.test.ts
-│   │   ├── internal/
-│   │   │   ├── error-handler/
-│   │   │   │   ├── errorHandler.test.ts
-│   │   │   │   ├── helpers.test.ts
-│   │   │   │   ├── index.test.ts
-│   │   │   │   ├── mappings.test.ts
-│   │   │   │   └── types.test.ts
-│   │   │   ├── encoding.test.ts
-│   │   │   ├── errorHandler.int.test.ts
-│   │   │   ├── errorHandler.unit.test.ts
-│   │   │   ├── health.test.ts
-│   │   │   ├── logger.int.test.ts
-│   │   │   ├── logger.test.ts
-│   │   │   ├── performance.init.test.ts
-│   │   │   ├── performance.test.ts
-│   │   │   ├── requestContext.test.ts
-│   │   │   ├── runtime.test.ts
-│   │   │   └── startupBanner.test.ts
-│   │   ├── metrics/
-│   │   │   ├── index.test.ts
-│   │   │   ├── registry.test.ts
-│   │   │   └── tokenCounter.test.ts
-│   │   ├── network/
-│   │   │   ├── fetchWithTimeout.test.ts
-│   │   │   └── index.test.ts
-│   │   ├── pagination/
-│   │   │   └── index.test.ts
-│   │   ├── parsing/
-│   │   │   ├── csvParser.test.ts
-│   │   │   ├── dateParser.test.ts
-│   │   │   ├── frontmatterParser.test.ts
-│   │   │   ├── index.test.ts
-│   │   │   ├── jsonParser.test.ts
-│   │   │   ├── pdfParser.test.ts
-│   │   │   ├── xmlParser.test.ts
-│   │   │   └── yamlParser.test.ts
-│   │   ├── scheduling/
-│   │   │   ├── index.test.ts
-│   │   │   └── scheduler.test.ts
-│   │   ├── security/
-│   │   │   ├── idGenerator.test.ts
-│   │   │   ├── index.test.ts
-│   │   │   ├── rateLimiter.test.ts
-│   │   │   └── sanitization.test.ts
-│   │   ├── telemetry/
-│   │   │   ├── index.test.ts
-│   │   │   ├── instrumentation.test.ts
-│   │   │   ├── metrics.test.ts
-│   │   │   ├── semconv.test.ts
-│   │   │   └── trace.test.ts
-│   │   ├── types/
-│   │   │   └── guards.test.ts
-│   │   └── index.test.ts
-│   ├── index.test.ts
-│   ├── setup.ts
-│   └── worker.test.ts
+│   ├── prompts/
+│   │   └── echo.prompt.test.ts
+│   ├── resources/
+│   │   └── echo.resource.test.ts
+│   └── tools/
+│       └── echo.tool.test.ts
 ├── .dockerignore
 ├── .env.example
-├── .gitattributes
 ├── .gitignore
-├── .prettierignore
-├── .prettierrc.json
 ├── AGENTS.md
+├── biome.json
 ├── bun.lock
-├── bunfig.toml
 ├── CHANGELOG.md
 ├── CLAUDE.md
+├── devcheck.config.json
 ├── Dockerfile
-├── eslint.config.js
-├── LICENSE
-├── mcp.json
+├── package-template.json
 ├── package.json
-├── README.md
-├── repomix.config.json
 ├── server.json
-├── smithery.yaml
+├── tsconfig.build.json
 ├── tsconfig.json
-├── tsconfig.scripts.json
-├── tsconfig.test.json
-├── tsdoc.json
-├── typedoc.json
-├── vitest.config.ts
-├── vitest.conformance.ts
-└── wrangler.toml
+└── vitest.config.ts
 ```
 
 _Note: This tree excludes files and directories matched by .gitignore and default patterns._

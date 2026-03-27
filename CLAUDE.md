@@ -263,6 +263,8 @@ src/
       get-study-count.tool.ts           # clinicaltrials_get_study_count
       find-eligible.tool.ts             # clinicaltrials_find_eligible
       index.ts                          # allToolDefinitions barrel
+    tools/utils/
+      query-helpers.ts                  # toArray, buildAdvancedFilter shared helpers
     resources/definitions/
       study.resource.ts                 # clinicaltrials://{nctId}
       index.ts                          # allResourceDefinitions barrel

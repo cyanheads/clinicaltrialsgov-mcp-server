@@ -27,9 +27,11 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 
-- **`clinicaltrials_search_studies`**: Rewritten with `tool()` builder. Status/phase/nctIds accept `string | string[]`. Phase filtering translates to `AREA[Phase]` syntax via `buildAdvancedFilter()`. All 16 input fields have `.describe()`.
-- **`clinicaltrials_get_study_results`**: Rewritten with partial-success pattern (`Promise.all` with per-study catch). Returns `studiesWithoutResults` and `fetchErrors` arrays. Max 5 NCT IDs.
-- **`clinicaltrials_get_field_values`**: Simplified wrapper around the service method with proper Zod output schema.
+- **`clinicaltrials_search_studies`**: Rewritten with `tool()` builder. Status/phase/nctIds accept `string | string[]`. Phase filtering translates to `AREA[Phase]` syntax via `buildAdvancedFilter()`. All 16 input fields have `.describe()`. Status filter expanded to all 14 valid ClinicalTrials.gov statuses. `pageSize` minimum corrected from 0 to 1.
+- **`clinicaltrials_get_study_results`**: Rewritten with partial-success pattern (`Promise.all` with per-study catch). Returns `studiesWithoutResults` and `fetchErrors` arrays. Max 5 NCT IDs. Removed unnecessary type assertions on outcomes array.
+- **`clinicaltrials_get_field_values`**: Simplified wrapper around the service method with proper Zod output schema. Invalid field names now return a validation error with guidance instead of a generic 404.
+- **Query helpers**: Extracted shared `toArray` and `buildAdvancedFilter` helpers to `src/mcp-server/tools/utils/query-helpers.ts`, removing duplication between `search-studies` and `get-study-count`.
+- **Descriptions**: Converted all tool, resource, and prompt descriptions from `+` string concatenation to template literals.
 - **Dockerfile**: Updated labels, log directory, and image metadata for the new server name.
 - **tsconfig.json**: Strict mode with `exactOptionalPropertyTypes`, `@/` path alias, ESNext target.
 - **server.json**: Rewritten to MCP registry schema with stdio and HTTP transport entries, CT\_\* env vars, and runtime hints.
@@ -40,7 +42,7 @@ All notable changes to this project will be documented in this file.
 
 - **Old architecture** (~64K lines): Container/DI system, custom transport layer (HTTP/stdio/auth), storage providers (filesystem, Cloudflare D1/KV/R2, Supabase, in-memory), utility libraries (formatting, parsing, security, telemetry, metrics, scheduling, network), error handler, logger, performance monitoring, request context, worker entry point.
 - **Old tools**: `clinicaltrials_get_study`, `clinicaltrials_analyze_trends`, `clinicaltrials_compare_studies`, `clinicaltrials_find_eligible_studies` (all replaced by redesigned equivalents or composed from primitives).
-- **Old tests** (~200 test files): Replaced by placeholder test stubs pending new test suite.
+- **Old tests** (~200 test files) and placeholder echo test stubs from initial scaffold.
 - **Old config**: eslint, prettier, husky, bunfig.toml, smithery.yaml, wrangler.toml, mcp.json, repomix.config.json, typedoc.json, tsdoc.json, multiple tsconfig variants.
 - **Old dependencies**: ~40 direct runtime/dev dependencies replaced by single `@cyanheads/mcp-ts-core` framework dependency.
 - **Old README.md**: Deleted and replaced with new version reflecting the v2.0.0 architecture.

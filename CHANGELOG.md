@@ -8,7 +8,7 @@ Ground-up rewrite on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@c
 
 ### Breaking Changes
 
-- **Tool surface redesigned.** 7 tools consolidated to 5. `clinicaltrials_get_study` replaced by the `clinicaltrials://{nctId}` resource. `clinicaltrials_analyze_trends` and `clinicaltrials_compare_studies` removed — LLMs compose these from the search and count primitives.
+- **Tool surface redesigned.** 7 tools consolidated to 6. `clinicaltrials_analyze_trends` and `clinicaltrials_compare_studies` removed — LLMs compose these from the search and count primitives.
 - **Entry point rewritten.** `src/index.ts` is now a single `createApp()` call. The framework handles transport (stdio + HTTP), lifecycle, logging, and error formatting.
 - **All definitions use new builders.** `tool()`, `resource()`, and `prompt()` with Zod input/output schemas, `format()` functions, and MCP annotations.
 - **Dependencies gutted.** ~40 direct dependencies replaced by `@cyanheads/mcp-ts-core`. Removed `hono`, `jose`, `dotenv`, `@modelcontextprotocol/sdk`, `prettier`, and others. Added `@biomejs/biome` for formatting/linting.
@@ -18,6 +18,7 @@ Ground-up rewrite on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@c
 | Tool | Status | Notes |
 |:-----|:-------|:------|
 | `clinicaltrials_search_studies` | Rewritten | Accepts all 14 ClinicalTrials.gov statuses. Status/phase/nctIds accept `string \| string[]`. Phase filtering uses `AREA[Phase]` syntax. |
+| `clinicaltrials_get_study` | **New** | Single study lookup by NCT ID. Tool equivalent of the `clinicaltrials://{nctId}` resource for clients that don't support MCP resources. |
 | `clinicaltrials_get_study_results` | Rewritten | Partial-success pattern — returns results, `studiesWithoutResults`, and `fetchErrors` per study. Max 5 NCT IDs per call. |
 | `clinicaltrials_get_field_values` | Rewritten | Invalid field names now return a validation error with guidance instead of a generic 404. |
 | `clinicaltrials_get_study_count` | **New** | Count-only queries for fast statistics without fetching study data. |

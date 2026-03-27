@@ -3,7 +3,7 @@
   <p>
     <b>MCP server for the ClinicalTrials.gov v2 API. Allow LLMs to search trials, retrieve study details, compare studies, analyze trends, and match patients to eligible trials.</b>
   </p>
-  <p><b>5 Tools · 1 Resource · 1 Prompt</b></p>
+  <p><b>6 Tools · 1 Resource · 1 Prompt</b></p>
 </div>
 
 <div align="center">
@@ -21,11 +21,12 @@
 
 ## Tools
 
-Five tools for searching, analyzing, and matching clinical trials:
+Six tools for searching, analyzing, and matching clinical trials:
 
 | Tool Name                          | Description                                                                                      |
 | :--------------------------------- | :----------------------------------------------------------------------------------------------- |
 | `clinicaltrials_search_studies`    | Search studies with full-text queries, filters, pagination, sorting, and field selection.        |
+| `clinicaltrials_get_study`         | Fetch a single study by NCT ID. Tool equivalent of the `clinicaltrials://{nctId}` resource.     |
 | `clinicaltrials_get_study_count`   | Get total study count for a query without fetching data. Fast statistics and breakdowns.         |
 | `clinicaltrials_get_field_values`  | Discover valid values for API fields (status, phase, study type, etc.) with per-value counts.    |
 | `clinicaltrials_get_study_results` | Extract outcomes, adverse events, participant flow, and baseline from completed studies. Optional summary mode reduces ~200KB payloads to ~5KB. |

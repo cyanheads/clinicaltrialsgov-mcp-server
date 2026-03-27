@@ -19,11 +19,12 @@ MCP server wrapping the [ClinicalTrials.gov REST API v2](https://clinicaltrials.
 
 ## MCP Surface
 
-### Tools (5)
+### Tools (6)
 
 | Name                               | Description                                                                         |
 | :--------------------------------- | :---------------------------------------------------------------------------------- |
 | `clinicaltrials_search_studies`    | Search studies with queries, filters, pagination, field selection. Primary tool.    |
+| `clinicaltrials_get_study`         | Single study by NCT ID. Tool equivalent of the resource for resource-unaware clients. |
 | `clinicaltrials_get_study_results` | Extract outcomes, adverse events, participant flow, baseline for completed studies. |
 | `clinicaltrials_get_field_values`  | Discover valid enum values for API fields with study counts.                        |
 | `clinicaltrials_get_study_count`   | Lightweight study count for a query (no data fetched).                              |
@@ -258,6 +259,7 @@ src/
   mcp-server/
     tools/definitions/
       search-studies.tool.ts            # clinicaltrials_search_studies
+      get-study.tool.ts                 # clinicaltrials_get_study
       get-study-results.tool.ts         # clinicaltrials_get_study_results
       get-field-values.tool.ts          # clinicaltrials_get_field_values
       get-study-count.tool.ts           # clinicaltrials_get_study_count

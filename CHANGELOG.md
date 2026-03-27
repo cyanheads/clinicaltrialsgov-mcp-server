@@ -34,7 +34,7 @@ All notable changes to this project will be documented in this file.
 - **tsconfig.json**: Strict mode with `exactOptionalPropertyTypes`, `@/` path alias, ESNext target.
 - **server.json**: Rewritten to MCP registry schema with stdio and HTTP transport entries, CT\_\* env vars, and runtime hints.
 - **Code style**: Biome formatting applied across the codebase (single quotes, consistent import ordering, formatting).
-- **Dependencies**: Removed ~15 unused direct dependencies (`hono`, `jose`, `dotenv`, `@modelcontextprotocol/sdk`, etc.); added `@biomejs/biome` as dev dependency.
+- **Dependencies**: Removed ~15 unused direct dependencies (`hono`, `jose`, `dotenv`, `@modelcontextprotocol/sdk`, `prettier`, etc.); added `@biomejs/biome` as dev dependency. Upgraded TypeScript to 6.0, OpenTelemetry packages to 0.214.0.
 
 ### Removed
 

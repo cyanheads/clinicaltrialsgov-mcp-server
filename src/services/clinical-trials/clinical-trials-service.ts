@@ -13,7 +13,6 @@ import {
 } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
 import type {
-  EnumInfo,
   FieldNode,
   FieldValueStats,
   PagedStudiesResponse,
@@ -48,12 +47,6 @@ export class ClinicalTrialsService {
   getStudy(nctId: string, ctx: Context): Promise<Study> {
     ctx.log.debug('getStudy', { nctId });
     return this.fetchJson<Study>(`/studies/${encodeURIComponent(nctId)}`, {}, ctx);
-  }
-
-  /** Get all enum type definitions from the data model. */
-  getEnums(ctx: Context): Promise<EnumInfo[]> {
-    ctx.log.debug('getEnums');
-    return this.fetchJson<EnumInfo[]>('/studies/enums', {}, ctx, { jsonFormat: false });
   }
 
   /** Get field definitions (metadata tree) from the data model. */
@@ -169,7 +162,11 @@ export class ClinicalTrialsService {
         }
         if (res.status === 400) {
           const text = await res.text();
-          if (text.includes('filter.ids') && text.includes('incorrect format')) {
+          if (text.includes('incorrect format')) {
+            if (path.startsWith('/studies/')) {
+              const id = path.split('/').pop() ?? path;
+              throw notFound(`Study ${id} not found. Verify the NCT ID exists on ClinicalTrials.gov.`);
+            }
             throw validationError(
               `Invalid NCT ID format. IDs must match NCTxxxxxxxx (NCT + 8 digits). API response: ${text}`,
             );

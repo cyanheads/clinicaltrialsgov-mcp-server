@@ -12,10 +12,6 @@ const ServerConfigSchema = z.object({
     .describe('ClinicalTrials.gov API base URL'),
   requestTimeoutMs: z.coerce.number().default(30_000).describe('Per-request timeout in ms'),
   maxPageSize: z.coerce.number().default(200).describe('Maximum page size cap'),
-  maxEligibleCandidates: z.coerce
-    .number()
-    .default(100)
-    .describe('Max studies to evaluate in find_eligible'),
 });
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;
@@ -28,7 +24,6 @@ export function getServerConfig(): ServerConfig {
     apiBaseUrl: process.env.CT_API_BASE_URL,
     requestTimeoutMs: process.env.CT_REQUEST_TIMEOUT_MS,
     maxPageSize: process.env.CT_MAX_PAGE_SIZE,
-    maxEligibleCandidates: process.env.CT_MAX_ELIGIBLE_CANDIDATES,
   });
   return _config;
 }

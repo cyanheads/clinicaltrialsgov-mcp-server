@@ -4,7 +4,6 @@
  */
 
 import { findEligible } from './find-eligible.tool.js';
-import { getEnums } from './get-enums.tool.js';
 import { getFieldDefinitions } from './get-field-definitions.tool.js';
 import { getFieldValues } from './get-field-values.tool.js';
 import { getStudy } from './get-study.tool.js';
@@ -18,7 +17,6 @@ export const allToolDefinitions = [
   getStudyCount,
   getFieldValues,
   getFieldDefinitions,
-  getEnums,
   getStudyResults,
   findEligible,
 ];

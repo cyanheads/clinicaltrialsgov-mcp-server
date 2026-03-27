@@ -19,7 +19,7 @@ export const getEnums = tool('clinicaltrials_get_enums', {
       .union([z.string(), z.array(z.string())])
       .optional()
       .describe(
-        `Filter to specific enum type names. Common types: Status, Phase, StudyType, InterventionType, Sex, StandardAge, AgencyClass, DesignAllocation, PrimaryPurpose, DesignMasking, ArmGroupType, ObservationalModel. Case-sensitive. Omit for all ~35 types.`,
+        `Filter to specific enum type names. Common types: Status, Phase, StudyType, InterventionType, Sex, StandardAge, AgencyClass, DesignAllocation, PrimaryPurpose, DesignMasking, ArmGroupType, ObservationalModel. Case-sensitive. Omit for all types (~40).`,
       ),
   }),
 

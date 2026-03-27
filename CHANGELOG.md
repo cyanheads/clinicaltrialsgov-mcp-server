@@ -38,7 +38,7 @@ Ground-up rewrite on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@c
 
 ### Improvements
 
-- **Empty-result feedback.** `search_studies` returns contextual `noMatchHints` based on which query and filter params were used. `get_study_count` echoes search criteria on zero-count results. `find_eligible` returns `noMatchHints` with actionable suggestions (broaden conditions, adjust age/sex, widen location, include non-recruiting studies).
+- **Empty-result feedback.** `search_studies` returns contextual `noMatchHints` based on which query and filter params were used. `get_study_count` echoes search criteria and returns `noMatchHints` on zero-count results. `find_eligible` returns `noMatchHints` with actionable suggestions (broaden conditions, adjust age/sex, widen location, include non-recruiting studies).
 - **Better 404 errors.** Service layer extracts the study ID from the request path for clearer error messages (`"Study NCT12345678 not found"` instead of generic `"Not found: /studies/NCT12345678"`).
 - **Results summary mode.** `get_study_results` accepts `summary: true` to return condensed metadata (~5KB) instead of full result data (~200KB per study). Summaries include outcome titles, types, timeframes, group/measure counts, and top-level stats.
 - **Consistent criteria echo.** `get_study_count` always returns `searchCriteria` when query parameters are present (previously only on zero-count results).

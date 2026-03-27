@@ -48,7 +48,9 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
     includeIndexedOnly: z
       .boolean()
       .optional()
-      .describe('Only return indexed (searchable) fields. Default: false.'),
+      .describe(
+        'Only return indexed (searchable) fields. Default: false. Has no visible effect at the top level — use with a path to filter leaf fields.',
+      ),
   }),
 
   output: z.object({

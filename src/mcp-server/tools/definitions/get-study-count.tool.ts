@@ -39,6 +39,10 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       .record(z.string(), z.unknown())
       .optional()
       .describe('Echo of query/filter criteria used.'),
+    noMatchHints: z
+      .array(z.string())
+      .optional()
+      .describe('Suggestions when no studies match (totalCount is 0).'),
   }),
 
   async handler(input, ctx) {
@@ -71,6 +75,9 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     return {
       totalCount,
       ...(Object.keys(criteria).length > 0 ? { searchCriteria: criteria } : {}),
+      ...(totalCount === 0
+        ? { noMatchHints: ['Try broader search terms or fewer filters.'] }
+        : {}),
     };
   },
 

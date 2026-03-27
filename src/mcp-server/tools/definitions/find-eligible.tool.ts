@@ -141,7 +141,7 @@ function formatEligibleStudy(
       status: l.status,
     })),
     studyDetails: {
-      phase: design?.phases?.join(', '),
+      phase: design?.phases?.join(', ') || 'N/A',
       status: status?.overallStatus ?? '',
       enrollment: design?.enrollmentInfo?.count,
       sponsor: sponsor?.name,

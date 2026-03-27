@@ -33,6 +33,12 @@ Ground-up rewrite on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@c
 - **`ClinicalTrialsService`** — new API client with retry (3 attempts, exponential backoff), rate limiting (1 req/sec), request timeout via `AbortSignal`, HTML error detection, and structured error factories.
 - **Server config** — lazy-parsed Zod schema for `CT_*` env vars (`CT_API_BASE_URL`, `CT_REQUEST_TIMEOUT_MS`, `CT_MAX_PAGE_SIZE`, `CT_MAX_ELIGIBLE_CANDIDATES`).
 
+### Improvements
+
+- **Empty-result feedback.** `search_studies` and `get_study_count` echo search criteria back when results are empty, with guidance to broaden the query.
+- **NCT ID validation.** `search_studies` validates nctIds against `NCTxxxxxxxx` format at the schema level. Service layer returns a specific validation error for malformed IDs.
+- **CodeQL workflow.** Added `.github/workflows/codeql.yml` for automated security analysis on push, PR, and weekly schedule.
+
 ### Project
 
 - Biome replaces ESLint + Prettier for formatting and linting.

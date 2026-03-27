@@ -8,7 +8,7 @@ Ground-up rewrite on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@c
 
 ### Breaking Changes
 
-- **Tool surface redesigned.** 7 tools consolidated to 7. `clinicaltrials_analyze_trends` and `clinicaltrials_compare_studies` removed — LLMs compose these from the search and count primitives. New discovery and matching tools added.
+- **Tool surface redesigned.** `clinicaltrials_analyze_trends` and `clinicaltrials_compare_studies` removed — LLMs compose these from the search and count primitives. Four new tools added (`get_study`, `get_study_count`, `get_field_definitions`, `find_eligible`), three rewritten. 7 tools total.
 - **Entry point rewritten.** `src/index.ts` is now a single `createApp()` call. The framework handles transport (stdio + HTTP), lifecycle, logging, and error formatting.
 - **All definitions use new builders.** `tool()`, `resource()`, and `prompt()` with Zod input/output schemas, `format()` functions, and MCP annotations.
 - **Dependencies gutted.** ~40 direct dependencies replaced by `@cyanheads/mcp-ts-core`. Removed `hono`, `jose`, `dotenv`, `@modelcontextprotocol/sdk`, `prettier`, and others. Added `@biomejs/biome` for formatting/linting.

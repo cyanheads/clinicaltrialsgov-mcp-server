@@ -18,6 +18,63 @@ const SECTION_MAP: Record<Section, string> = {
   baseline: 'baselineCharacteristicsModule',
 };
 
+/** Condense a full outcome measure to its essential metadata. */
+function summarizeOutcome(o: Record<string, unknown>) {
+  return {
+    type: o.type,
+    title: o.title,
+    timeFrame: o.timeFrame,
+    paramType: o.paramType,
+    unitOfMeasure: o.unitOfMeasure,
+    reportingStatus: o.reportingStatus,
+    groupCount: Array.isArray(o.groups) ? o.groups.length : undefined,
+    classCount: Array.isArray(o.classes) ? o.classes.length : undefined,
+  };
+}
+
+/** Condense the adverse events module to counts. */
+function summarizeAdverseEvents(ae: Record<string, unknown>) {
+  const freq = ae.frequencyModule as Record<string, unknown> | undefined;
+  const events = ae.eventGroups as Array<Record<string, unknown>> | undefined;
+  return {
+    timeFrame: freq?.timeFrame ?? ae.timeFrame,
+    groupCount: Array.isArray(events) ? events.length : undefined,
+    seriousEventCount: Array.isArray(ae.seriousEvents)
+      ? ae.seriousEvents.length
+      : undefined,
+    otherEventCount: Array.isArray(ae.otherEvents)
+      ? ae.otherEvents.length
+      : undefined,
+  };
+}
+
+/** Condense participant flow to period/group counts. */
+function summarizeParticipantFlow(pf: Record<string, unknown>) {
+  const groups = pf.flowGroups as Array<Record<string, unknown>> | undefined;
+  const periods = pf.flowPeriods as Array<Record<string, unknown>> | undefined;
+  return {
+    groupCount: Array.isArray(groups) ? groups.length : undefined,
+    periodCount: Array.isArray(periods) ? periods.length : undefined,
+  };
+}
+
+/** Condense baseline characteristics to measure count. */
+function summarizeBaseline(bl: Record<string, unknown>) {
+  const groups = bl.baselineGroups as Array<Record<string, unknown>> | undefined;
+  const measures = bl.baselineMeasures as Array<Record<string, unknown>> | undefined;
+  return {
+    groupCount: Array.isArray(groups) ? groups.length : undefined,
+    measureCount: Array.isArray(measures) ? measures.length : undefined,
+    measures: Array.isArray(measures)
+      ? measures.map((m) => ({
+          title: m.title,
+          paramType: m.paramType,
+          unitOfMeasure: m.unitOfMeasure,
+        }))
+      : undefined,
+  };
+}
+
 export const getStudyResults = tool('clinicaltrials_get_study_results', {
   description: `Fetch trial results data for completed studies — outcome measures with statistics, adverse events, participant flow, and baseline characteristics. Only available for studies where hasResults is true. Use search_studies first to find studies with results.`,
   annotations: {
@@ -37,6 +94,12 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       .optional()
       .describe(
         `Filter which sections to return. Values: outcomes, adverseEvents, participantFlow, baseline. Omit for all sections.`,
+      ),
+    summary: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Return condensed summaries instead of full data. Reduces payload from ~200KB to ~5KB per study. Summaries include outcome titles, types, timeframes, group counts, and top-level stats — omitting individual measurements, analyses, and per-group data.',
       ),
   }),
 
@@ -124,8 +187,16 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
             const data = rs[moduleKey];
             if (data) {
               if (section === 'outcomes') {
-                entry.outcomes =
+                const measures =
                   (data.outcomeMeasures as Record<string, unknown>[] | undefined) ?? [];
+                entry.outcomes = input.summary
+                  ? measures.map(summarizeOutcome)
+                  : measures;
+              } else if (input.summary) {
+                if (section === 'adverseEvents') entry.adverseEvents = summarizeAdverseEvents(data);
+                else if (section === 'participantFlow')
+                  entry.participantFlow = summarizeParticipantFlow(data);
+                else if (section === 'baseline') entry.baseline = summarizeBaseline(data);
               } else {
                 entry[section] = data;
               }

@@ -38,7 +38,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     searchCriteria: z
       .record(z.string(), z.unknown())
       .optional()
-      .describe('Echo of query/filter criteria used. Present when count is zero.'),
+      .describe('Echo of query/filter criteria used.'),
   }),
 
   async handler(input, ctx) {
@@ -59,19 +59,19 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     const totalCount = result.totalCount ?? 0;
     ctx.log.info('Count completed', { totalCount });
 
-    if (totalCount === 0) {
-      const criteria: Record<string, unknown> = {};
-      if (input.query) criteria.query = input.query;
-      if (input.conditionQuery) criteria.conditionQuery = input.conditionQuery;
-      if (input.interventionQuery) criteria.interventionQuery = input.interventionQuery;
-      if (input.sponsorQuery) criteria.sponsorQuery = input.sponsorQuery;
-      if (input.statusFilter) criteria.statusFilter = input.statusFilter;
-      if (input.phaseFilter) criteria.phaseFilter = input.phaseFilter;
-      if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
-      return { totalCount, searchCriteria: criteria };
-    }
+    const criteria: Record<string, unknown> = {};
+    if (input.query) criteria.query = input.query;
+    if (input.conditionQuery) criteria.conditionQuery = input.conditionQuery;
+    if (input.interventionQuery) criteria.interventionQuery = input.interventionQuery;
+    if (input.sponsorQuery) criteria.sponsorQuery = input.sponsorQuery;
+    if (input.statusFilter) criteria.statusFilter = input.statusFilter;
+    if (input.phaseFilter) criteria.phaseFilter = input.phaseFilter;
+    if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
 
-    return { totalCount };
+    return {
+      totalCount,
+      ...(Object.keys(criteria).length > 0 ? { searchCriteria: criteria } : {}),
+    };
   },
 
   format: (result) => {

@@ -218,6 +218,10 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         sex: z.string().describe('Patient sex.'),
       })
       .describe('Search criteria used.'),
+    noMatchHints: z
+      .array(z.string())
+      .optional()
+      .describe('Hints about why no studies matched, with suggestions to broaden the search.'),
   }),
 
   async handler(input, ctx) {
@@ -325,6 +329,38 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       returned: eligibleStudies.length,
     });
 
+    // Build hints when no studies matched to help the caller broaden their search
+    let noMatchHints: string[] | undefined;
+    if (scored.length === 0) {
+      noMatchHints = [];
+      const apiTotal = result.totalCount ?? result.studies.length;
+      if (apiTotal === 0) {
+        noMatchHints.push(
+          `No studies found for "${input.conditions.join(', ')}" in ${locationQuery}. Try broader condition terms or a wider location (e.g., country only).`,
+        );
+      } else {
+        noMatchHints.push(
+          `${apiTotal} candidate studies found but none passed eligibility filters.`,
+        );
+        if (input.age <= 1 || input.age >= 100)
+          noMatchHints.push(
+            `Age ${input.age} is at the extreme of typical trial ranges. Few trials enroll this age group.`,
+          );
+        if (input.sex !== 'All')
+          noMatchHints.push(
+            `Try sex="All" to include studies not restricted by sex.`,
+          );
+      }
+      if (input.recruitingOnly)
+        noMatchHints.push(
+          'Set recruitingOnly=false to include completed, active, and not-yet-recruiting studies.',
+        );
+      if (input.location.city || input.location.state)
+        noMatchHints.push(
+          'Try searching with just the country to find studies in other cities/states.',
+        );
+    }
+
     return {
       eligibleStudies,
       totalMatches: scored.length,
@@ -334,6 +370,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         age: input.age,
         sex: input.sex,
       },
+      ...(noMatchHints ? { noMatchHints } : {}),
     };
   },
 
@@ -342,6 +379,10 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     lines.push(
       `Found ${result.totalMatches} eligible studies (showing ${result.eligibleStudies.length})`,
     );
+    if (result.noMatchHints?.length) {
+      lines.push('');
+      for (const hint of result.noMatchHints) lines.push(`- ${hint}`);
+    }
     for (const [i, s] of result.eligibleStudies.entries()) {
       lines.push(`\n${i + 1}. **${s.nctId}**: ${s.title}`);
       lines.push(

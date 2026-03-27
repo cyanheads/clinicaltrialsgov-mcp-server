@@ -5,6 +5,7 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import {
+  JsonRpcErrorCode,
   McpError,
   notFound,
   serviceUnavailable,
@@ -74,7 +75,7 @@ export class ClinicalTrialsService {
         { jsonFormat: false },
       );
     } catch (err) {
-      if (err instanceof McpError && err.message.startsWith('Not found')) {
+      if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
         throw validationError(
           `Invalid field name(s): ${fields.join(', ')}. Use PascalCase piece names like OverallStatus, Phase, StudyType, InterventionType, LeadSponsorClass, Sex, StdAge.`,
         );

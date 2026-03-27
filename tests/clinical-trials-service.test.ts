@@ -125,7 +125,7 @@ describe('ClinicalTrialsService', () => {
       try {
         await service.getStudy('NCT12345678', ctx);
       } catch (err) {
-        expect((err as McpError).message).toContain('Not found');
+        expect((err as McpError).message).toContain('not found');
       }
     });
   });

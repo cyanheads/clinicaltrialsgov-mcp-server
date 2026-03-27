@@ -332,6 +332,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run dev:http`    | Dev mode (HTTP)                      |
 | `bun run start:stdio` | Production mode (stdio)              |
 | `bun run start:http`  | Production mode (HTTP)               |
+| `bun run inspector`   | Launch MCP Inspector                 |
 
 ---
 

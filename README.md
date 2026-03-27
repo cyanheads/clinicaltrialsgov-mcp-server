@@ -1,0 +1,217 @@
+<div align="center">
+  <h1>clinicaltrialsgov-mcp-server</h1>
+  <p>
+    <b>MCP server for the ClinicalTrials.gov v2 API. Allow LLMs to search trials, retrieve study details, compare studies, analyze trends, and match patients to eligible trials.</b>
+  </p>
+  <p><b>5 Tools · 1 Resource · 1 Prompt</b></p>
+</div>
+
+<div align="center">
+
+[![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server)
+[![Version](https://img.shields.io/badge/Version-2.0.0-blue.svg?style=flat-square)](./CHANGELOG.md)
+[![Framework](https://img.shields.io/badge/Built%20on-@cyanheads/mcp--ts--core-259?style=flat-square)](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
+[![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.28.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/)
+[![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/)
+
+</div>
+
+---
+
+## Tools
+
+Five tools for searching, analyzing, and matching clinical trials:
+
+| Tool Name                          | Description                                                                                      |
+| :--------------------------------- | :----------------------------------------------------------------------------------------------- |
+| `clinicaltrials_search_studies`    | Search studies with full-text queries, filters, pagination, sorting, and field selection.        |
+| `clinicaltrials_get_study_count`   | Get total study count for a query without fetching data. Fast statistics and breakdowns.         |
+| `clinicaltrials_get_field_values`  | Discover valid values for API fields (status, phase, study type, etc.) with per-value counts.    |
+| `clinicaltrials_get_study_results` | Extract outcomes, adverse events, participant flow, and baseline from completed studies.         |
+| `clinicaltrials_find_eligible`     | Match patient demographics and conditions to eligible recruiting trials with location proximity. |
+
+### `clinicaltrials_search_studies`
+
+Primary search tool with full ClinicalTrials.gov query capabilities.
+
+- Full-text and field-specific queries (condition, intervention, sponsor, location, title, outcome)
+- Status and phase filters with typed enum values
+- Geographic proximity filtering by coordinates and distance
+- Advanced AREA[] Essie expression support for complex queries
+- Field selection to reduce payload size (full records are ~70KB each)
+- Pagination with cursor tokens, sorting by any field
+
+---
+
+### `clinicaltrials_get_study_results`
+
+Fetch posted results data for completed studies.
+
+- Outcome measures with statistics, adverse events, participant flow, baseline characteristics
+- Section-level filtering (request only the data you need)
+- Batch up to 5 NCT IDs per call with partial-success reporting
+- Separate tracking of studies without results and fetch errors
+
+---
+
+### `clinicaltrials_find_eligible`
+
+Match a patient profile to eligible recruiting trials.
+
+- Takes age, sex, conditions, and location as patient demographics
+- Builds optimized API queries with demographic pre-filters
+- Post-filters results against eligibility criteria (age range, sex, country)
+- Ranks by geographic proximity (city > state > country match)
+- Returns match explanations, eligibility summaries, and nearby study sites
+
+## Resources
+
+| URI Pattern                | Description                                         |
+| :------------------------- | :-------------------------------------------------- |
+| `clinicaltrials://{nctId}` | Fetch a single clinical study by NCT ID. Full JSON. |
+
+## Prompts
+
+| Prompt                    | Description                                                                        |
+| :------------------------ | :--------------------------------------------------------------------------------- |
+| `analyze_trial_landscape` | Guides multi-step landscape analysis using count + search tools across dimensions. |
+
+## Features
+
+Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core):
+
+- Declarative tool/resource/prompt definitions with Zod schemas and format functions
+- Unified error handling — handlers throw, framework catches and classifies
+- Dual transport: stdio and Streamable HTTP from the same codebase
+- Pluggable auth (`none`, `jwt`, `oauth`) for HTTP transport
+- Structured logging with optional OpenTelemetry tracing
+
+ClinicalTrials.gov-specific:
+
+- Type-safe client for the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api)
+- Public API — no authentication or API keys required
+- Retry with exponential backoff (3 attempts) and rate limiting (~1 req/sec)
+- HTML error detection and structured error factories
+
+## Getting Started
+
+### MCP Client Configuration
+
+Add to your MCP client config (e.g., `claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "clinicaltrialsgov": {
+      "type": "stdio",
+      "command": "bunx",
+      "args": ["clinicaltrialsgov-mcp-server@latest"],
+      "env": {
+        "MCP_TRANSPORT_TYPE": "stdio"
+      }
+    }
+  }
+}
+```
+
+### Prerequisites
+
+- [Bun v1.2.0](https://bun.sh/) or higher (or Node.js >= 22.0.0)
+
+### Installation
+
+1. **Clone the repository:**
+
+   ```sh
+   git clone https://github.com/cyanheads/clinicaltrialsgov-mcp-server.git
+   ```
+
+2. **Navigate into the directory:**
+
+   ```sh
+   cd clinicaltrialsgov-mcp-server
+   ```
+
+3. **Install dependencies:**
+   ```sh
+   bun install
+   ```
+
+## Configuration
+
+All configuration is optional — the server works with defaults and no API keys.
+
+| Variable                     | Description                                 | Default                             |
+| :--------------------------- | :------------------------------------------ | :---------------------------------- |
+| `CT_API_BASE_URL`            | ClinicalTrials.gov API base URL.            | `https://clinicaltrials.gov/api/v2` |
+| `CT_REQUEST_TIMEOUT_MS`      | Per-request timeout in milliseconds.        | `30000`                             |
+| `CT_MAX_PAGE_SIZE`           | Maximum page size cap.                      | `200`                               |
+| `CT_MAX_ELIGIBLE_CANDIDATES` | Max studies to evaluate in `find_eligible`. | `100`                               |
+| `MCP_TRANSPORT_TYPE`         | Transport: `stdio` or `http`.               | `stdio`                             |
+| `MCP_HTTP_PORT`              | Port for HTTP server.                       | `3010`                              |
+| `MCP_AUTH_MODE`              | Auth mode: `none`, `jwt`, or `oauth`.       | `none`                              |
+| `MCP_LOG_LEVEL`              | Log level (RFC 5424).                       | `info`                              |
+| `OTEL_ENABLED`               | Enable OpenTelemetry tracing.               | `false`                             |
+
+## Running the Server
+
+### Local Development
+
+- **Build and run the production version:**
+
+  ```sh
+  bun run build
+  bun run start:http   # or start:stdio
+  ```
+
+- **Run in dev mode (with watch):**
+
+  ```sh
+  bun run dev:http     # or dev:stdio
+  ```
+
+- **Run checks and tests:**
+  ```sh
+  bun run devcheck     # Lints, formats, type-checks
+  bun run test         # Runs test suite
+  ```
+
+### Docker
+
+```sh
+docker build -t clinicaltrialsgov-mcp-server .
+docker run -p 3010:3010 clinicaltrialsgov-mcp-server
+```
+
+## Project Structure
+
+| Directory                       | Purpose                                               |
+| :------------------------------ | :---------------------------------------------------- |
+| `src/mcp-server/tools/`         | Tool definitions (`*.tool.ts`).                       |
+| `src/mcp-server/resources/`     | Resource definitions (`*.resource.ts`).               |
+| `src/mcp-server/prompts/`       | Prompt definitions (`*.prompt.ts`).                   |
+| `src/services/clinical-trials/` | ClinicalTrials.gov API client and types.              |
+| `src/config/`                   | Environment variable parsing and validation with Zod. |
+| `tests/`                        | Unit and integration tests.                           |
+
+## Development Guide
+
+See [`CLAUDE.md`](./CLAUDE.md) for development guidelines and architectural rules. The short version:
+
+- Handlers throw, framework catches — no `try/catch` in tool logic
+- Use `ctx.log` for request-scoped logging, no `console` calls
+- Register new tools and resources in the `index.ts` barrel files
+
+## Contributing
+
+Issues and pull requests are welcome. Run checks before submitting:
+
+```sh
+bun run devcheck
+bun run test
+```
+
+## License
+
+Apache-2.0 — see [LICENSE](LICENSE) for details.

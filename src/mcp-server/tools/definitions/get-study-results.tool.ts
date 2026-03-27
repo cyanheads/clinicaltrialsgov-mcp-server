@@ -5,6 +5,7 @@
 
 import { tool, z } from "@cyanheads/mcp-ts-core";
 import { getClinicalTrialsService } from "@/services/clinical-trials/clinical-trials-service.js";
+import type { RawStudyShape } from "@/services/clinical-trials/types.js";
 
 const VALID_SECTIONS = [
   "outcomes",
@@ -118,10 +119,7 @@ export const getStudyResults = tool("clinicaltrials_get_study_results", {
     await Promise.all(
       nctIds.map(async (nctId) => {
         try {
-          const study = (await service.getStudy(nctId, ctx)) as Record<
-            string,
-            any
-          >;
+          const study = (await service.getStudy(nctId, ctx)) as RawStudyShape;
           const title =
             study.protocolSection?.identificationModule?.briefTitle ??
             "Unknown";
@@ -140,7 +138,10 @@ export const getStudyResults = tool("clinicaltrials_get_study_results", {
             const data = rs[moduleKey];
             if (data) {
               if (section === "outcomes") {
-                entry.outcomes = data.outcomeMeasures ?? [];
+                entry.outcomes =
+                  (data.outcomeMeasures as
+                    | Record<string, unknown>[]
+                    | undefined) ?? [];
               } else {
                 entry[section] = data;
               }

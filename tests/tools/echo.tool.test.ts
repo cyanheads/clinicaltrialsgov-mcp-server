@@ -3,8 +3,8 @@
  * @module tests/tools/echo.tool.test
  */
 
-import { describe, expect, it } from "vitest";
 import { createMockContext } from "@cyanheads/mcp-ts-core/testing";
+import { describe, expect, it } from "vitest";
 import { echoTool } from "@/mcp-server/tools/definitions/echo.tool.js";
 
 describe("echoTool", () => {

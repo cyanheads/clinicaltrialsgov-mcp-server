@@ -8,7 +8,7 @@ import { getClinicalTrialsService } from "@/services/clinical-trials/clinical-tr
 
 /** Normalize string | string[] to string[]. */
 function toArray(v: string | string[] | undefined): string[] | undefined {
-  if (v === undefined) return undefined;
+  if (v === undefined) return;
   return Array.isArray(v) ? v : [v];
 }
 

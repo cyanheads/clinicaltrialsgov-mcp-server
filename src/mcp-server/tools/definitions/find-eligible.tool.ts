@@ -4,8 +4,9 @@
  */
 
 import { tool, z } from "@cyanheads/mcp-ts-core";
-import { getClinicalTrialsService } from "@/services/clinical-trials/clinical-trials-service.js";
 import { getServerConfig } from "@/config/server-config.js";
+import { getClinicalTrialsService } from "@/services/clinical-trials/clinical-trials-service.js";
+import type { RawStudyShape } from "@/services/clinical-trials/types.js";
 
 /** Fields requested for eligibility evaluation. */
 const ELIGIBLE_FIELDS = [
@@ -31,28 +32,28 @@ const ELIGIBLE_FIELDS = [
 
 /** Parse an age string like "18 Years" or "6 Months" to years. */
 function parseAgeYears(ageStr: string | undefined): number | undefined {
-  if (!ageStr) return undefined;
+  if (!ageStr) return;
   const match = ageStr.match(/^(\d+)\s*(year|month|week|day)/i);
-  if (!match?.[1] || !match[2]) return undefined;
+  if (!match?.[1] || !match[2]) return;
   const value = parseInt(match[1], 10);
   const unit = match[2].toLowerCase();
   if (unit.startsWith("year")) return value;
   if (unit.startsWith("month")) return value / 12;
   if (unit.startsWith("week")) return value / 52;
   if (unit.startsWith("day")) return value / 365;
-  return undefined;
+  return;
 }
 
 /** Score a study's location proximity to the patient. Higher = better match. */
 function locationScore(
-  study: Record<string, any>,
+  study: RawStudyShape,
   location: {
     country: string;
     state: string | undefined;
     city: string | undefined;
   },
 ): number {
-  const locations: any[] =
+  const locations =
     study.protocolSection?.contactsLocationsModule?.locations ?? [];
   let best = 0;
   for (const loc of locations) {
@@ -77,7 +78,7 @@ function locationScore(
 
 /** Check if a study's eligibility matches the patient profile. */
 function passesPostFilter(
-  study: Record<string, any>,
+  study: RawStudyShape,
   age: number,
   sex: string,
   country: string,
@@ -95,11 +96,11 @@ function passesPostFilter(
     if (elig.sex !== sex.toUpperCase()) return false;
   }
 
-  const locations: any[] =
+  const locations =
     study.protocolSection?.contactsLocationsModule?.locations ?? [];
   if (locations.length > 0) {
     const hasCountry = locations.some(
-      (l: any) => l.country?.toLowerCase() === country.toLowerCase(),
+      (l) => l.country?.toLowerCase() === country.toLowerCase(),
     );
     if (!hasCountry) return false;
   }
@@ -109,7 +110,7 @@ function passesPostFilter(
 
 /** Extract a structured eligible study record from raw API data. */
 function formatEligibleStudy(
-  study: Record<string, any>,
+  study: RawStudyShape,
   matchReasons: string[],
   patientLocation: {
     country: string;
@@ -117,32 +118,31 @@ function formatEligibleStudy(
     city: string | undefined;
   },
 ) {
-  const proto = study.protocolSection ?? {};
-  const ident = proto.identificationModule ?? {};
-  const status = proto.statusModule ?? {};
-  const design = proto.designModule ?? {};
-  const sponsor = proto.sponsorCollaboratorsModule?.leadSponsor ?? {};
-  const elig = proto.eligibilityModule ?? {};
-  const allLocations: any[] = proto.contactsLocationsModule?.locations ?? [];
+  const proto = study.protocolSection;
+  const ident = proto?.identificationModule;
+  const status = proto?.statusModule;
+  const design = proto?.designModule;
+  const sponsor = proto?.sponsorCollaboratorsModule?.leadSponsor;
+  const elig = proto?.eligibilityModule;
+  const allLocations = proto?.contactsLocationsModule?.locations ?? [];
 
   const countryLocations = allLocations.filter(
-    (l: any) =>
-      l.country?.toLowerCase() === patientLocation.country.toLowerCase(),
+    (l) => l.country?.toLowerCase() === patientLocation.country.toLowerCase(),
   );
 
   return {
-    nctId: ident.nctId ?? "",
-    title: ident.briefTitle ?? "",
-    briefSummary: proto.descriptionModule?.briefSummary,
+    nctId: ident?.nctId ?? "",
+    title: ident?.briefTitle ?? "",
+    briefSummary: proto?.descriptionModule?.briefSummary,
     matchReasons,
     eligibility: {
-      ageRange: [elig.minimumAge ?? "N/A", elig.maximumAge ?? "N/A"].join(
+      ageRange: [elig?.minimumAge ?? "N/A", elig?.maximumAge ?? "N/A"].join(
         " to ",
       ),
-      sex: elig.sex ?? "ALL",
-      healthyVolunteers: elig.healthyVolunteers,
+      sex: elig?.sex ?? "ALL",
+      healthyVolunteers: elig?.healthyVolunteers,
     },
-    locations: countryLocations.slice(0, 5).map((l: any) => ({
+    locations: countryLocations.slice(0, 5).map((l) => ({
       facility: l.facility,
       city: l.city,
       state: l.state,
@@ -150,10 +150,10 @@ function formatEligibleStudy(
       status: l.status,
     })),
     studyDetails: {
-      phase: design.phases?.join(", "),
-      status: status.overallStatus ?? "",
-      enrollment: design.enrollmentInfo?.count,
-      sponsor: sponsor.name,
+      phase: design?.phases?.join(", "),
+      status: status?.overallStatus ?? "",
+      enrollment: design?.enrollmentInfo?.count,
+      sponsor: sponsor?.name,
     },
   };
 }
@@ -322,13 +322,13 @@ export const findEligible = tool("clinicaltrials_find_eligible", {
 
     // Post-filter and score
     const scored: Array<{
-      study: Record<string, any>;
+      study: RawStudyShape;
       score: number;
       reasons: string[];
     }> = [];
 
     for (const raw of result.studies) {
-      const study = raw as Record<string, any>;
+      const study = raw as RawStudyShape;
       if (!passesPostFilter(study, input.age, input.sex, patientLoc.country))
         continue;
 

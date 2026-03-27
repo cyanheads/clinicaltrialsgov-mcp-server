@@ -5,10 +5,11 @@
 
 import { tool, z } from "@cyanheads/mcp-ts-core";
 import { getClinicalTrialsService } from "@/services/clinical-trials/clinical-trials-service.js";
+import type { RawStudyShape } from "@/services/clinical-trials/types.js";
 
 /** Normalize string | string[] to string[]. */
 function toArray(v: string | string[] | undefined): string[] | undefined {
-  if (v === undefined) return undefined;
+  if (v === undefined) return;
   return Array.isArray(v) ? v : [v];
 }
 
@@ -198,7 +199,7 @@ export const searchStudies = tool("clinicaltrials_search_studies", {
       lines.push(`Found ${count} studies`);
     }
     for (const study of result.studies.slice(0, 5)) {
-      const s = study as Record<string, any>;
+      const s = study as RawStudyShape;
       const nctId = s.protocolSection?.identificationModule?.nctId ?? "Unknown";
       const title =
         s.protocolSection?.identificationModule?.briefTitle ?? "Untitled";

@@ -3,19 +3,19 @@
  * @module services/clinical-trials/clinical-trials-service
  */
 
-import { type Context } from "@cyanheads/mcp-ts-core";
+import type { Context } from "@cyanheads/mcp-ts-core";
 import {
   McpError,
   notFound,
-  validationError,
   serviceUnavailable,
+  validationError,
 } from "@cyanheads/mcp-ts-core/errors";
 import { getServerConfig, type ServerConfig } from "@/config/server-config.js";
 import type {
-  SearchParams,
-  PagedStudiesResponse,
-  Study,
   FieldValueStats,
+  PagedStudiesResponse,
+  SearchParams,
+  Study,
 } from "./types.js";
 
 const MAX_RETRIES = 3;
@@ -35,7 +35,7 @@ export class ClinicalTrialsService {
   }
 
   /** Search studies with query, filters, pagination, and field selection. */
-  async searchStudies(
+  searchStudies(
     params: SearchParams,
     ctx: Context,
   ): Promise<PagedStudiesResponse> {
@@ -45,7 +45,7 @@ export class ClinicalTrialsService {
   }
 
   /** Fetch a single study by NCT ID. */
-  async getStudy(nctId: string, ctx: Context): Promise<Study> {
+  getStudy(nctId: string, ctx: Context): Promise<Study> {
     ctx.log.debug("getStudy", { nctId });
     return this.fetchJson<Study>(
       `/studies/${encodeURIComponent(nctId)}`,
@@ -55,10 +55,7 @@ export class ClinicalTrialsService {
   }
 
   /** Get field value statistics for the specified fields. */
-  async getFieldValues(
-    fields: string[],
-    ctx: Context,
-  ): Promise<FieldValueStats[]> {
+  getFieldValues(fields: string[], ctx: Context): Promise<FieldValueStats[]> {
     ctx.log.debug("getFieldValues", { fields });
     return this.fetchJson<FieldValueStats[]>(
       "/stats/field/values",

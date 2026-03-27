@@ -60,8 +60,9 @@ describe('getStudy', () => {
     it('renders study with title', () => {
       const blocks = getStudy.format!({
         study: {
-          nctId: 'NCT12345678',
-          protocolSection: { identificationModule: { briefTitle: 'My Study' } },
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'My Study' },
+          },
         },
       });
       expect(blocks).toEqual([{ type: 'text', text: '**NCT12345678**: My Study' }]);
@@ -70,15 +71,20 @@ describe('getStudy', () => {
     it('falls back to officialTitle when briefTitle missing', () => {
       const blocks = getStudy.format!({
         study: {
-          nctId: 'NCT12345678',
-          protocolSection: { identificationModule: { officialTitle: 'Official Title' } },
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', officialTitle: 'Official Title' },
+          },
         },
       });
       expect(blocks[0].text).toBe('**NCT12345678**: Official Title');
     });
 
     it('falls back to Unknown when no title', () => {
-      const blocks = getStudy.format!({ study: { nctId: 'NCT12345678' } });
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: { identificationModule: { nctId: 'NCT12345678' } },
+        },
+      });
       expect(blocks[0].text).toBe('**NCT12345678**: Unknown');
     });
 

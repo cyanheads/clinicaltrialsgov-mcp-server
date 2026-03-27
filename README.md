@@ -1,7 +1,7 @@
 <div align="center">
   <h1>clinicaltrialsgov-mcp-server</h1>
   <p>
-    <b>MCP server for the ClinicalTrials.gov v2 API. Allow LLMs to search trials, retrieve study details, compare studies, analyze trends, and match patients to eligible trials.</b>
+    <b>MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details and results, and match patients to eligible trials.</b>
   </p>
   <p><b>6 Tools · 1 Resource · 1 Prompt</b></p>
 </div>

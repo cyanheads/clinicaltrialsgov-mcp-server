@@ -38,7 +38,7 @@ ENV NODE_ENV=production
 
 # OCI image metadata (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 LABEL org.opencontainers.image.title="clinicaltrialsgov-mcp-server"
-LABEL org.opencontainers.image.description="MCP server for the ClinicalTrials.gov v2 API. Allow LLMs to search trials, retrieve study details, compare studies, analyze trends, and match patients to eligible trials."
+LABEL org.opencontainers.image.description="MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details and results, and match patients to eligible trials."
 LABEL org.opencontainers.image.source="https://github.com/cyanheads/clinicaltrialsgov-mcp-server"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 

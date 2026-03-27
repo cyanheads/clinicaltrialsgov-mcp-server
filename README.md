@@ -9,13 +9,18 @@
 <div align="center">
 
 [![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server)
+[![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server)
 [![Version](https://img.shields.io/badge/Version-2.0.0-blue.svg?style=flat-square)](./CHANGELOG.md)
 [![Framework](https://img.shields.io/badge/Built%20on-@cyanheads/mcp--ts--core-259?style=flat-square)](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
-
-
 [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.28.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/)
+
+</div>
+
+<div align="center">
+
+**Public Hosted Server:** [https://clinicaltrials.caseyjhand.com/mcp](https://clinicaltrials.caseyjhand.com/mcp)
 
 </div>
 
@@ -101,7 +106,22 @@ ClinicalTrials.gov-specific:
 
 ## Getting Started
 
-### MCP Client Configuration
+### Public Hosted Instance
+
+A public instance is available at `https://clinicaltrials.caseyjhand.com/mcp` — no installation required. Point any MCP client at it via Streamable HTTP:
+
+```json
+{
+  "mcpServers": {
+    "clinicaltrialsgov": {
+      "type": "streamable-http",
+      "url": "https://clinicaltrials.caseyjhand.com/mcp"
+    }
+  }
+}
+```
+
+### Self-Hosted / Local
 
 Add to your MCP client config (e.g., `claude_desktop_config.json`):
 
@@ -118,6 +138,13 @@ Add to your MCP client config (e.g., `claude_desktop_config.json`):
     }
   }
 }
+```
+
+Or for Streamable HTTP:
+
+```sh
+MCP_TRANSPORT_TYPE=http
+MCP_HTTP_PORT=3010
 ```
 
 ### Prerequisites

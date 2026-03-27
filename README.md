@@ -3,7 +3,7 @@
   <p>
     <b>MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details and results, and match patients to eligible trials.</b>
   </p>
-  <p><b>6 Tools · 1 Resource · 1 Prompt</b></p>
+  <p><b>8 Tools · 1 Resource · 1 Prompt</b></p>
 </div>
 
 <div align="center">
@@ -21,16 +21,18 @@
 
 ## Tools
 
-Six tools for searching, analyzing, and matching clinical trials:
+Eight tools for searching, discovering, analyzing, and matching clinical trials:
 
-| Tool Name                          | Description                                                                                      |
-| :--------------------------------- | :----------------------------------------------------------------------------------------------- |
-| `clinicaltrials_search_studies`    | Search studies with full-text queries, filters, pagination, sorting, and field selection.        |
-| `clinicaltrials_get_study`         | Fetch a single study by NCT ID. Tool equivalent of the `clinicaltrials://{nctId}` resource.     |
-| `clinicaltrials_get_study_count`   | Get total study count for a query without fetching data. Fast statistics and breakdowns.         |
-| `clinicaltrials_get_field_values`  | Discover valid values for API fields (status, phase, study type, etc.) with per-value counts.    |
-| `clinicaltrials_get_study_results` | Extract outcomes, adverse events, participant flow, and baseline from completed studies. Optional summary mode reduces ~200KB payloads to ~5KB. |
-| `clinicaltrials_find_eligible`     | Match patient demographics and conditions to eligible recruiting trials with location proximity. Returns hints when no studies match. |
+| Tool Name                              | Description                                                                                      |
+| :------------------------------------- | :----------------------------------------------------------------------------------------------- |
+| `clinicaltrials_search_studies`        | Search studies with full-text queries, filters, pagination, sorting, and field selection.        |
+| `clinicaltrials_get_study`             | Fetch a single study by NCT ID. Tool equivalent of the `clinicaltrials://{nctId}` resource.     |
+| `clinicaltrials_get_study_count`       | Get total study count for a query without fetching data. Fast statistics and breakdowns.         |
+| `clinicaltrials_get_field_values`      | Discover valid values for API fields (status, phase, study type, etc.) with per-value counts.    |
+| `clinicaltrials_get_field_definitions` | Browse the study data model field tree — piece names, types, nesting. Supports subtree navigation and keyword search. |
+| `clinicaltrials_get_enums`             | Get canonical enum type definitions and all valid values from the data model. Complements `get_field_values`. |
+| `clinicaltrials_get_study_results`     | Extract outcomes, adverse events, participant flow, and baseline from completed studies. Optional summary mode reduces ~200KB payloads to ~5KB. |
+| `clinicaltrials_find_eligible`         | Match patient demographics and conditions to eligible recruiting trials with location proximity. Returns hints when no studies match. |
 
 ### `clinicaltrials_search_studies`
 

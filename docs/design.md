@@ -10,6 +10,8 @@
 | `clinicaltrials_get_study_results` | Extract outcomes, adverse events, participant flow, and baseline characteristics for completed studies with results.                                              | `nctIds`, `sections`                                                                                                                                                                     | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_get_field_values`  | Discover valid values for any ClinicalTrials.gov field with study counts per value. Use before constructing searches to find valid filter options.                | `fields`                                                                                                                                                                                 | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_get_study_count`   | Get total study count matching a query without fetching study data. Use for quick stats and building breakdowns by calling multiple times with different filters. | `query`, `conditionQuery`, `interventionQuery`, `statusFilter`, `phaseFilter`, `advancedFilter`                                                                                          | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
+| `clinicaltrials_get_enums`         | Get all valid enum types and their canonical values from the data model. Exhaustive — complements `get_field_values` (frequency stats).                           | `enumTypes`                                                                                                                                                                              | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
+| `clinicaltrials_get_field_definitions` | Get field definitions from the study data model — piece names, types, nesting. For discovering available fields and AREA[] filter targets.                   | `path`, `search`, `includeIndexedOnly`                                                                                                                                                   | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_find_eligible`     | Match patient demographics to recruiting clinical trials. Takes a patient profile and returns ranked eligible studies with match explanations.                    | `age`, `sex`, `conditions`, `location`, `recruitingOnly`, `maxResults`                                                                                                                   | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 
 ### Resources
@@ -166,7 +168,85 @@ InterventionType, StudyType, or LeadSponsorClass values.
 
 ---
 
-### 4. `clinicaltrials_get_study_count`
+### 4. `clinicaltrials_get_enums`
+
+Discovery tool for enum field values. Wraps `GET /studies/enums`.
+
+**Description:**
+
+```
+Get all valid enum types and their values from the ClinicalTrials.gov data model. Returns
+the canonical, exhaustive set of allowed values for enum fields — useful for understanding
+all valid filter options and their legacy display names. For value frequency distributions
+(how many studies use each value), use clinicaltrials_get_field_values instead.
+```
+
+**Input schema:**
+
+| Parameter   | Type                  | Description                                                                                                                                                       |
+| :---------- | :-------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `enumTypes` | `string \| string[]?` | Filter to specific enum type names (e.g., `"Status"`, `"Phase"`, `"StudyType"`, `"InterventionType"`). Case-sensitive. Omit to return all ~35 enum types.         |
+
+**Output schema:**
+
+| Field        | Type         | Description                                                                                     |
+| :----------- | :----------- | :---------------------------------------------------------------------------------------------- |
+| `enums`      | `EnumDef[]`  | Enum definitions. Each: `{ type, pieces, values: { value, legacyValue? }[] }`.                 |
+| `totalTypes` | `number`     | Number of enum types returned (after filtering).                                                |
+
+**Error messages:**
+
+- Unknown type: `"No enum type matching 'X'. Call without enumTypes to see all available types, or check exact names: Status, Phase, StudyType, InterventionType, Sex, StandardAge, AgencyClass, etc."`
+
+**Format function:** For each type: type name + applicable piece names, then values as `VALUE → Legacy Display` pairs.
+
+---
+
+### 5. `clinicaltrials_get_field_definitions`
+
+Discovery tool for the study data model. Wraps `GET /studies/metadata`. Supports subtree browsing via `path` and keyword search via `search`.
+
+**Description:**
+
+```
+Get field definitions from the ClinicalTrials.gov study data model. Returns the field
+tree with piece names (used in the fields parameter and AREA[] filters), data types,
+and nesting structure. Use to discover available fields for search results, find piece
+names for AREA[] filter expressions, or explore the study data model structure.
+```
+
+**Input schema:**
+
+| Parameter          | Type        | Description                                                                                                                                                           |
+| :----------------- | :---------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `path`             | `string?`   | Dot-notation path to get a subtree (e.g., `"protocolSection.designModule"`). Omit for top-level overview (sections + direct children, not full tree).                 |
+| `search`           | `string?`   | Keyword search across field names, piece names, and descriptions. Returns matching fields with full paths. Case-insensitive. E.g., `"enrollment"` finds EnrollmentCount. |
+| `includeIndexedOnly` | `boolean?` | Only return indexed (searchable) fields. Default: false.                                                                                                             |
+
+**Output schema:**
+
+| Field          | Type            | Description                                                               |
+| :------------- | :-------------- | :------------------------------------------------------------------------ |
+| `fields`       | `FieldDef[]`    | Field definitions with name, piece, sourceType, type, isEnum, path.       |
+| `totalFields`  | `number`        | Total fields returned (including nested).                                 |
+| `resolvedPath` | `string?`       | The resolved path (when `path` was provided).                             |
+
+**Behavior:**
+
+- No params: returns top-level overview (2 levels deep) — sections and their direct children. Prevents context bloat.
+- `path`: navigates to that subtree and flattens all descendants.
+- `search`: searches all fields recursively, returns matching fields with full dot-notation paths.
+
+**Error messages:**
+
+- Invalid path: `"Path 'X' not found. Top-level sections: protocolSection, resultsSection, annotationSection, documentSection, derivedSection, hasResults."`
+- No search results: `"No fields matching 'X'. Try broader terms or browse via the path parameter."`
+
+**Format function:** Tree-style display for browsing, flat list with paths for search results.
+
+---
+
+### 6. `clinicaltrials_get_study_count`
 
 Lightweight count-only tool. Uses `GET /studies?countTotal=true&pageSize=0` to get a total without fetching any study data. Replaces the heavy `analyze_trends` tool — the LLM can call this multiple times with different filters to build breakdowns.
 
@@ -200,7 +280,7 @@ Use for quick statistics or to build breakdowns by calling multiple times with d
 
 ---
 
-### 5. `clinicaltrials_find_eligible`
+### 7. `clinicaltrials_find_eligible`
 
 Patient-matching workflow tool. Takes a patient profile and translates it to the right API queries — the LLM doesn't need to know AREA[] syntax for demographic filtering.
 
@@ -328,6 +408,8 @@ Single service wrapping all API interactions. Init/accessor pattern.
 | `searchStudies(params)`  | `GET /studies`            | Search with query, filters, pagination, field selection |
 | `getStudy(nctId)`        | `GET /studies/{nctId}`    | Fetch single study by NCT ID                            |
 | `getFieldValues(fields)` | `GET /stats/field/values` | Get value frequency stats for fields                    |
+| `getEnums()`             | `GET /studies/enums`      | Get all enum type definitions                           |
+| `getMetadata(indexed)`   | `GET /studies/metadata`   | Get field tree (optional indexed-only filter)           |
 
 **No separate `getStudyCount` method** — it uses `searchStudies` with `pageSize=0, countTotal=true`.
 
@@ -388,6 +470,8 @@ Each step is independently testable via `dev:stdio`.
 | Study        | get results          | `GET /studies/{nctId}` (extract resultsSection) | Tool: `get_study_results`            |
 | Study        | count                | `GET /studies?countTotal=true&pageSize=0`       | Tool: `get_study_count`              |
 | Field Values | list values          | `GET /stats/field/values`                       | Tool: `get_field_values`             |
+| Enums        | list enum types      | `GET /studies/enums`                            | Tool: `get_enums`                    |
+| Metadata     | field definitions    | `GET /studies/metadata`                         | Tool: `get_field_definitions`        |
 | Patient      | find eligible trials | `GET /studies` (composite query)                | Tool: `find_eligible`                |
 | Analysis     | landscape analysis   | Multi-call orchestration                        | Prompt: `analyze_trial_landscape`    |
 
@@ -395,9 +479,7 @@ Each step is independently testable via `dev:stdio`.
 
 | Operation                   | Reason                                                                                                                                                         |
 | :-------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /studies/metadata`     | Internal reference — field tree. Not useful as an LLM-facing tool. Could be a resource in a future version if agents need to discover field names dynamically. |
-| `GET /studies/search-areas` | Internal reference — search area weights.                                                                                                                      |
-| `GET /studies/enums`        | Subsumed by `get_field_values` which provides the same info with study counts.                                                                                 |
+| `GET /studies/search-areas` | Internal reference — search area weights. Low value for LLM workflows.                                                                                         |
 | `GET /stats/size`           | JSON payload size distribution — operational/devops concern, not useful for LLM workflows.                                                                     |
 | `GET /stats/field/sizes`    | Array cardinality stats — not useful for LLM workflows.                                                                                                        |
 | `GET /version`              | API version. Could be a resource, but low value.                                                                                                               |
@@ -434,6 +516,22 @@ Each step is independently testable via `dev:stdio`.
 
 1. `get_field_values(fields="Phase")`
 2. Agent sees values with counts, uses in next search
+
+### "What are ALL valid study statuses including rare ones?"
+
+1. `get_enums(enumTypes="Status")`
+2. Agent sees exhaustive list with legacy display names
+
+### "What fields can I use in the fields parameter?"
+
+1. `get_field_definitions()` — top-level overview
+2. `get_field_definitions(path="protocolSection.designModule")` — drill into design fields
+3. Agent discovers piece names like `DesignAllocation`, `DesignMasking`, uses in search
+
+### "What fields relate to enrollment?"
+
+1. `get_field_definitions(search="enrollment")`
+2. Agent finds `EnrollmentCount`, `EnrollmentType` with paths and types
 
 ### "Get me full details on NCT03722472"
 
@@ -500,6 +598,8 @@ See [docs/api-reference.md](api-reference.md) for the complete ClinicalTrials.go
 - [ ] `searchStudies(params)` method — `GET /studies` with full param mapping
 - [ ] `getStudy(nctId)` method — `GET /studies/{nctId}`
 - [ ] `getFieldValues(fields)` method — `GET /stats/field/values`
+- [x] `getEnums()` method — `GET /studies/enums`
+- [x] `getMetadata(indexedOnly)` method — `GET /studies/metadata`
 - [ ] Retry logic — retryable status codes (429, 5xx), exponential backoff, 1s base delay
 - [ ] Request timeout — 30s via AbortSignal
 - [ ] Rate limit awareness — minimum inter-request delay
@@ -540,6 +640,24 @@ See [docs/api-reference.md](api-reference.md) for the complete ClinicalTrials.go
 - [ ] Handler: call service `getFieldValues`
 - [ ] Format: field name → values list with counts
 - [ ] Register in `definitions/index.ts`
+
+### Tool: `clinicaltrials_get_enums`
+
+- [x] `src/mcp-server/tools/definitions/get-enums.tool.ts`
+- [x] Input schema: `enumTypes` (optional string or string array) with `.describe()`
+- [x] Output schema: `enums[]` with type, pieces, values; `totalTypes`
+- [x] Handler: call service `getEnums`, client-side filter by `enumTypes`
+- [x] Format: type name + pieces, then value → legacy pairs
+- [x] Register in `definitions/index.ts`
+
+### Tool: `clinicaltrials_get_field_definitions`
+
+- [x] `src/mcp-server/tools/definitions/get-field-definitions.tool.ts`
+- [x] Input schema: `path`, `search`, `includeIndexedOnly` with `.describe()`
+- [x] Output schema: `fields[]` with name, piece, types, path; `totalFields`, `resolvedPath`
+- [x] Handler: call service `getMetadata`, then path navigation / keyword search / top-level overview
+- [x] Format: tree-style for browsing, flat list for search
+- [x] Register in `definitions/index.ts`
 
 ### Tool: `clinicaltrials_get_study_results`
 

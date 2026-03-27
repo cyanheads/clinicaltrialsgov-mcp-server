@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-03-27 07:08:24
+Generated on: 2026-03-27 07:47:20
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -101,6 +101,8 @@ clinicaltrialsgov-mcp-server/
 │   │   └── tools/
 │   │       ├── definitions/
 │   │       │   ├── find-eligible.tool.ts
+│   │       │   ├── get-enums.tool.ts
+│   │       │   ├── get-field-definitions.tool.ts
 │   │       │   ├── get-field-values.tool.ts
 │   │       │   ├── get-study-count.tool.ts
 │   │       │   ├── get-study-results.tool.ts
@@ -114,10 +116,12 @@ clinicaltrialsgov-mcp-server/
 │   │       ├── clinical-trials-service.ts
 │   │       └── types.ts
 │   └── index.ts
-├── src_old/
 ├── tests/
+│   ├── clinical-trials-service.test.ts
+│   ├── find-eligible.tool.test.ts
 │   ├── get-field-values.tool.test.ts
 │   ├── get-study-count.tool.test.ts
+│   ├── get-study-results.tool.test.ts
 │   ├── get-study.tool.test.ts
 │   ├── query-helpers.test.ts
 │   ├── search-studies.tool.test.ts
@@ -138,6 +142,7 @@ clinicaltrialsgov-mcp-server/
 ├── server.json
 ├── tsconfig.build.json
 ├── tsconfig.json
+├── tsconfig.test.json
 └── vitest.config.ts
 ```
 

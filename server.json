@@ -1,7 +1,7 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "clinicaltrialsgov-mcp-server",
-  "description": "MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details, analyze field values, count studies, and match patients to eligible trials.",
+  "name": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
+  "description": "MCP server for the ClinicalTrials.gov v2 API. Allow LLMs to search trials, retrieve study details, compare studies, analyze trends, and match patients to eligible trials.",
   "repository": {
     "url": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server",
     "source": "github"
@@ -12,7 +12,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
-      "runtimeHint": "node",
+      "runtimeHint": "bun",
       "version": "2.0.0",
       "packageArguments": [
         {
@@ -25,6 +25,34 @@
         }
       ],
       "environmentVariables": [
+        {
+          "name": "CT_API_BASE_URL",
+          "description": "ClinicalTrials.gov API base URL.",
+          "format": "string",
+          "isRequired": false,
+          "default": "https://clinicaltrials.gov/api/v2"
+        },
+        {
+          "name": "CT_REQUEST_TIMEOUT_MS",
+          "description": "Per-request timeout in milliseconds.",
+          "format": "string",
+          "isRequired": false,
+          "default": "30000"
+        },
+        {
+          "name": "CT_MAX_PAGE_SIZE",
+          "description": "Maximum page size cap.",
+          "format": "string",
+          "isRequired": false,
+          "default": "200"
+        },
+        {
+          "name": "CT_MAX_ELIGIBLE_CANDIDATES",
+          "description": "Max studies to evaluate in find_eligible.",
+          "format": "string",
+          "isRequired": false,
+          "default": "100"
+        },
         {
           "name": "MCP_LOG_LEVEL",
           "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn').",
@@ -41,7 +69,7 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
-      "runtimeHint": "node",
+      "runtimeHint": "bun",
       "version": "2.0.0",
       "packageArguments": [
         {
@@ -54,6 +82,34 @@
         }
       ],
       "environmentVariables": [
+        {
+          "name": "CT_API_BASE_URL",
+          "description": "ClinicalTrials.gov API base URL.",
+          "format": "string",
+          "isRequired": false,
+          "default": "https://clinicaltrials.gov/api/v2"
+        },
+        {
+          "name": "CT_REQUEST_TIMEOUT_MS",
+          "description": "Per-request timeout in milliseconds.",
+          "format": "string",
+          "isRequired": false,
+          "default": "30000"
+        },
+        {
+          "name": "CT_MAX_PAGE_SIZE",
+          "description": "Maximum page size cap.",
+          "format": "string",
+          "isRequired": false,
+          "default": "200"
+        },
+        {
+          "name": "CT_MAX_ELIGIBLE_CANDIDATES",
+          "description": "Max studies to evaluate in find_eligible.",
+          "format": "string",
+          "isRequired": false,
+          "default": "100"
+        },
         {
           "name": "MCP_HTTP_HOST",
           "description": "The hostname for the HTTP server.",

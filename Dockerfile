@@ -37,8 +37,9 @@ WORKDIR /usr/src/app
 ENV NODE_ENV=production
 
 # OCI image metadata (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
-LABEL org.opencontainers.image.title="clinicaltrials-2"
-LABEL org.opencontainers.image.description=""
+LABEL org.opencontainers.image.title="clinicaltrialsgov-mcp-server"
+LABEL org.opencontainers.image.description="MCP server for the ClinicalTrials.gov v2 API. Allow LLMs to search trials, retrieve study details, compare studies, analyze trends, and match patients to eligible trials."
+LABEL org.opencontainers.image.source="https://github.com/cyanheads/clinicaltrialsgov-mcp-server"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
 
 # Copy dependency manifests
@@ -72,7 +73,7 @@ COPY --from=build /usr/src/app/dist ./dist
 # We will use this existing user for enhanced security.
 
 # Create and set permissions for the log directory, assigning ownership to the 'bun' user.
-RUN mkdir -p /var/log/clinicaltrials-2 && chown -R bun:bun /var/log/clinicaltrials-2
+RUN mkdir -p /var/log/clinicaltrialsgov-mcp-server && chown -R bun:bun /var/log/clinicaltrialsgov-mcp-server
 
 # Switch to the non-root user
 USER bun
@@ -88,7 +89,7 @@ ENV MCP_HTTP_HOST="0.0.0.0"
 ENV MCP_TRANSPORT_TYPE="http"
 ENV MCP_SESSION_MODE="stateless"
 ENV MCP_LOG_LEVEL="info"
-ENV LOGS_DIR="/var/log/clinicaltrials-2"
+ENV LOGS_DIR="/var/log/clinicaltrialsgov-mcp-server"
 ENV MCP_FORCE_CONSOLE_LOGGING="true"
 
 # Expose the port the server listens on

@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-03-27 00:48:31
+Generated on: 2026-03-27 07:08:24
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -104,6 +104,7 @@ clinicaltrialsgov-mcp-server/
 │   │       │   ├── get-field-values.tool.ts
 │   │       │   ├── get-study-count.tool.ts
 │   │       │   ├── get-study-results.tool.ts
+│   │       │   ├── get-study.tool.ts
 │   │       │   ├── index.ts
 │   │       │   └── search-studies.tool.ts
 │   │       └── utils/
@@ -115,6 +116,12 @@ clinicaltrialsgov-mcp-server/
 │   └── index.ts
 ├── src_old/
 ├── tests/
+│   ├── get-field-values.tool.test.ts
+│   ├── get-study-count.tool.test.ts
+│   ├── get-study.tool.test.ts
+│   ├── query-helpers.test.ts
+│   ├── search-studies.tool.test.ts
+│   └── study.resource.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore

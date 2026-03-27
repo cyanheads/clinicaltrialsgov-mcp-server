@@ -42,6 +42,12 @@ Ground-up rewrite on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@c
 - **NCT ID validation.** `search_studies` validates nctIds against `NCTxxxxxxxx` format at the schema level. Service layer returns a specific validation error for malformed IDs.
 - **CodeQL workflow.** Added `.github/workflows/codeql.yml` for automated security analysis on push, PR, and weekly schedule.
 
+### Testing
+
+- Full test suite with 9 test files covering all tools, the resource, the service layer, and shared query helpers.
+- Tests use `createMockContext()` from `@cyanheads/mcp-ts-core/testing` with mocked service layer via `vi.mock`.
+- Separate `tsconfig.test.json` for test type checking; `bun run typecheck` now validates both source and test configs.
+
 ### Project
 
 - Biome replaces ESLint + Prettier for formatting and linting.

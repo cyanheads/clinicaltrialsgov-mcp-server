@@ -39,12 +39,8 @@ function summarizeAdverseEvents(ae: Record<string, unknown>) {
   return {
     timeFrame: freq?.timeFrame ?? ae.timeFrame,
     groupCount: Array.isArray(events) ? events.length : undefined,
-    seriousEventCount: Array.isArray(ae.seriousEvents)
-      ? ae.seriousEvents.length
-      : undefined,
-    otherEventCount: Array.isArray(ae.otherEvents)
-      ? ae.otherEvents.length
-      : undefined,
+    seriousEventCount: Array.isArray(ae.seriousEvents) ? ae.seriousEvents.length : undefined,
+    otherEventCount: Array.isArray(ae.otherEvents) ? ae.otherEvents.length : undefined,
   };
 }
 
@@ -189,9 +185,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
               if (section === 'outcomes') {
                 const measures =
                   (data.outcomeMeasures as Record<string, unknown>[] | undefined) ?? [];
-                entry.outcomes = input.summary
-                  ? measures.map(summarizeOutcome)
-                  : measures;
+                entry.outcomes = input.summary ? measures.map(summarizeOutcome) : measures;
               } else if (input.summary) {
                 if (section === 'adverseEvents') entry.adverseEvents = summarizeAdverseEvents(data);
                 else if (section === 'participantFlow')

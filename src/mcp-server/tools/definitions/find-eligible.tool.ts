@@ -303,7 +303,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
 
     for (const raw of result.studies) {
       const study = raw as RawStudyShape;
-      if (!passesPostFilter(study, input.age, input.sex, patientLoc.country, input.healthyVolunteer))
+      if (
+        !passesPostFilter(study, input.age, input.sex, patientLoc.country, input.healthyVolunteer)
+      )
         continue;
 
       const score = locationScore(study, patientLoc);
@@ -358,9 +360,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
             `Age ${input.age} is at the extreme of typical trial ranges. Few trials enroll this age group.`,
           );
         if (input.sex !== 'All')
-          noMatchHints.push(
-            `Try sex="All" to include studies not restricted by sex.`,
-          );
+          noMatchHints.push(`Try sex="All" to include studies not restricted by sex.`);
         if (input.healthyVolunteer)
           noMatchHints.push(
             'Many studies do not accept healthy volunteers. Set healthyVolunteer=false if the patient has a relevant condition.',

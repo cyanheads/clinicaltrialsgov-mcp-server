@@ -44,7 +44,7 @@
     "depcheck": "bunx depcheck",
     "lint": "bunx eslint .",
     "lint:fix": "bunx eslint . --fix",
-    "typecheck": "bunx tsc --noEmit",
+    "typecheck": "bunx tsc --noEmit && bunx tsc --noEmit -p tsconfig.test.json",
     "tree": "bun run scripts/tree.ts",
     "fetch-spec": "bun run scripts/fetch-openapi-spec.ts",
     "format": "bunx biome check --write",

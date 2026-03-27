@@ -3,35 +3,33 @@
  * @module mcp-server/prompts/definitions/analyze-trial-landscape.prompt
  */
 
-import { prompt, z } from "@cyanheads/mcp-ts-core";
+import { prompt, z } from '@cyanheads/mcp-ts-core';
 
-export const analyzeTrialLandscape = prompt("analyze_trial_landscape", {
+export const analyzeTrialLandscape = prompt('analyze_trial_landscape', {
   description:
-    "Guides systematic analysis of a clinical trial landscape using study counts and search. " +
-    "Teaches the multi-call workflow for building breakdowns by phase, status, year, sponsor type, etc.",
+    'Guides systematic analysis of a clinical trial landscape using study counts and search. ' +
+    'Teaches the multi-call workflow for building breakdowns by phase, status, year, sponsor type, etc.',
 
   args: z.object({
-    topic: z
-      .string()
-      .describe("Disease, condition, or research area to analyze."),
+    topic: z.string().describe('Disease, condition, or research area to analyze.'),
     focusAreas: z
       .array(z.string())
       .optional()
       .describe(
-        "Specific aspects to analyze: status, phases, sponsors, geography, timeline, interventions.",
+        'Specific aspects to analyze: status, phases, sponsors, geography, timeline, interventions.',
       ),
   }),
 
   generate: (args) => {
     const focus = args.focusAreas?.length
-      ? args.focusAreas.join(", ")
-      : "all aspects (status, phases, sponsors, geography, timeline, interventions)";
+      ? args.focusAreas.join(', ')
+      : 'all aspects (status, phases, sponsors, geography, timeline, interventions)';
 
     return [
       {
-        role: "user",
+        role: 'user',
         content: {
-          type: "text",
+          type: 'text',
           text: `You are analyzing the clinical trial landscape for: **${args.topic}**
 
 Use the ClinicalTrials.gov MCP tools to build a comprehensive analysis. Follow this workflow:

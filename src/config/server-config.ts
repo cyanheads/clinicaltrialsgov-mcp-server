@@ -3,22 +3,19 @@
  * @module config/server-config
  */
 
-import { z } from "@cyanheads/mcp-ts-core";
+import { z } from '@cyanheads/mcp-ts-core';
 
 const ServerConfigSchema = z.object({
   apiBaseUrl: z
     .string()
-    .default("https://clinicaltrials.gov/api/v2")
-    .describe("ClinicalTrials.gov API base URL"),
-  requestTimeoutMs: z.coerce
-    .number()
-    .default(30_000)
-    .describe("Per-request timeout in ms"),
-  maxPageSize: z.coerce.number().default(200).describe("Maximum page size cap"),
+    .default('https://clinicaltrials.gov/api/v2')
+    .describe('ClinicalTrials.gov API base URL'),
+  requestTimeoutMs: z.coerce.number().default(30_000).describe('Per-request timeout in ms'),
+  maxPageSize: z.coerce.number().default(200).describe('Maximum page size cap'),
   maxEligibleCandidates: z.coerce
     .number()
     .default(100)
-    .describe("Max studies to evaluate in find_eligible"),
+    .describe('Max studies to evaluate in find_eligible'),
 });
 
 export type ServerConfig = z.infer<typeof ServerConfigSchema>;

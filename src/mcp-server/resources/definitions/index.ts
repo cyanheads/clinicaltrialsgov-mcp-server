@@ -3,6 +3,6 @@
  * @module mcp-server/resources/definitions
  */
 
-import { studyResource } from "./study.resource.js";
+import { studyResource } from './study.resource.js';
 
 export const allResourceDefinitions = [studyResource];

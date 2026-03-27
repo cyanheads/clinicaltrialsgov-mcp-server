@@ -21,38 +21,24 @@
  * // Preview tree without writing to disk:
  * // bun run scripts/tree.ts --dry-run
  */
-import type { Dirent } from "node:fs";
-import {
-  mkdir,
-  readdir,
-  readFile,
-  realpath,
-  writeFile,
-} from "node:fs/promises";
-import {
-  basename,
-  dirname,
-  join,
-  posix,
-  relative,
-  resolve,
-  sep,
-} from "node:path";
-import ignore from "ignore";
+import type { Dirent } from 'node:fs';
+import { mkdir, readdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, posix, relative, resolve, sep } from 'node:path';
+import ignore from 'ignore';
 
 type Ignore = ReturnType<typeof ignore>;
 
-const KNOWN_FLAGS = ["--depth", "--ignore", "--help", "--dry-run"] as const;
+const KNOWN_FLAGS = ['--depth', '--ignore', '--help', '--dry-run'] as const;
 
 const DEFAULT_IGNORE_PATTERNS: string[] = [
-  ".git",
-  "node_modules",
-  ".DS_Store",
-  "dist",
-  "build",
-  "coverage",
-  "logs",
-  ".husky/_",
+  '.git',
+  'node_modules',
+  '.DS_Store',
+  'dist',
+  'build',
+  'coverage',
+  'logs',
+  '.husky/_',
 ];
 
 interface ParsedArgs {
@@ -64,29 +50,29 @@ interface ParsedArgs {
 
 function parseArgs(argv: string[]): ParsedArgs {
   const result: ParsedArgs = {
-    outputPath: "docs/tree.md",
+    outputPath: 'docs/tree.md',
     maxDepth: Infinity,
     extraIgnorePatterns: [],
     dryRun: false,
   };
 
   for (const arg of argv) {
-    if (arg === "--dry-run") {
+    if (arg === '--dry-run') {
       result.dryRun = true;
-    } else if (arg.startsWith("--depth=")) {
-      const depthValue = parseInt(arg.split("=")[1] ?? "", 10);
+    } else if (arg.startsWith('--depth=')) {
+      const depthValue = parseInt(arg.split('=')[1] ?? '', 10);
       if (!Number.isNaN(depthValue) && depthValue >= 0) {
         result.maxDepth = depthValue;
       } else {
         console.warn(`Invalid depth value: "${arg}". Using unlimited depth.`);
       }
-    } else if (arg.startsWith("--ignore=")) {
-      const pattern = arg.slice("--ignore=".length);
+    } else if (arg.startsWith('--ignore=')) {
+      const pattern = arg.slice('--ignore='.length);
       if (pattern) {
         result.extraIgnorePatterns.push(pattern);
       }
-    } else if (arg.startsWith("--")) {
-      const flagName = arg.includes("=") ? arg.slice(0, arg.indexOf("=")) : arg;
+    } else if (arg.startsWith('--')) {
+      const flagName = arg.includes('=') ? arg.slice(0, arg.indexOf('=')) : arg;
       if (!KNOWN_FLAGS.some((known) => flagName === known)) {
         console.warn(`Unknown flag: "${arg}". Ignoring.`);
       }
@@ -101,15 +87,11 @@ function parseArgs(argv: string[]): ParsedArgs {
 function validateOutputPath(outputPath: string, root: string): string {
   const resolved = resolve(root, outputPath);
   if (!resolved.startsWith(root + sep)) {
-    throw new Error(
-      `Output path "${outputPath}" resolves outside project root: ${resolved}`,
-    );
+    throw new Error(`Output path "${outputPath}" resolves outside project root: ${resolved}`);
   }
   const resolvedDir = dirname(resolved);
   if (resolvedDir !== root && !resolvedDir.startsWith(root + sep)) {
-    throw new Error(
-      `Output directory "${resolvedDir}" is outside project root`,
-    );
+    throw new Error(`Output directory "${resolvedDir}" is outside project root`);
   }
   return resolved;
 }
@@ -131,12 +113,12 @@ async function loadIgnoreHandler(
   ig.add(outputRelative);
 
   try {
-    const gitignoreContent = await readFile(join(root, ".gitignore"), "utf-8");
+    const gitignoreContent = await readFile(join(root, '.gitignore'), 'utf-8');
     ig.add(gitignoreContent);
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
       console.warn(
-        "Info: No .gitignore file found at project root. Using default ignore patterns only.",
+        'Info: No .gitignore file found at project root. Using default ignore patterns only.',
       );
     } else {
       const msg = error instanceof Error ? error.message : String(error);
@@ -161,20 +143,18 @@ async function generateTree(
   root: string,
   ig: Ignore,
   maxDepth: number,
-  prefix = "",
+  prefix = '',
   currentDepth = 0,
   visited = new Set<string>(),
 ): Promise<string> {
   const resolvedDir = resolve(dir);
   if (!resolvedDir.startsWith(root + sep) && resolvedDir !== root) {
-    console.warn(
-      `Security: Skipping directory outside project root: ${resolvedDir}`,
-    );
-    return "";
+    console.warn(`Security: Skipping directory outside project root: ${resolvedDir}`);
+    return '';
   }
 
   if (currentDepth > maxDepth) {
-    return "";
+    return '';
   }
 
   // Resolve symlinks and detect cycles
@@ -182,10 +162,10 @@ async function generateTree(
   try {
     realDir = await realpath(resolvedDir);
   } catch {
-    return "";
+    return '';
   }
   if (visited.has(realDir)) {
-    return "";
+    return '';
   }
   visited.add(realDir);
 
@@ -195,7 +175,7 @@ async function generateTree(
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : String(error);
     console.error(`Error reading directory ${resolvedDir}: ${msg}`);
-    return "";
+    return '';
   }
 
   const filteredEntries = entries
@@ -207,12 +187,12 @@ async function generateTree(
     });
 
   // Sequential traversal — prevents unbounded concurrent readdir calls
-  let result = "";
+  let result = '';
   for (let i = 0; i < filteredEntries.length; i++) {
     const entry = filteredEntries[i];
     const isLast = i === filteredEntries.length - 1;
-    const connector = isLast ? "\u2514\u2500\u2500 " : "\u251C\u2500\u2500 ";
-    const newPrefix = prefix + (isLast ? "    " : "\u2502   ");
+    const connector = isLast ? '\u2514\u2500\u2500 ' : '\u251C\u2500\u2500 ';
+    const newPrefix = prefix + (isLast ? '    ' : '\u2502   ');
     const displayName = entry.isDirectory() ? `${entry.name}/` : entry.name;
 
     result += `${prefix + connector + displayName}\n`;
@@ -237,59 +217,43 @@ async function generateTree(
  * Extracts the raw tree body from an existing output file for diffing.
  * Returns null if the file doesn't exist or the tree block can't be parsed.
  */
-async function readExistingTree(
-  outputFile: string,
-  projectName: string,
-): Promise<string | null> {
+async function readExistingTree(outputFile: string, projectName: string): Promise<string | null> {
   let content: string;
   try {
-    content = await readFile(outputFile, "utf-8");
+    content = await readFile(outputFile, 'utf-8');
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException)?.code === "ENOENT") return null;
+    if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
     const msg = error instanceof Error ? error.message : String(error);
-    console.warn(
-      `Warning: Could not read existing output file for comparison: ${msg}`,
-    );
+    console.warn(`Warning: Could not read existing output file for comparison: ${msg}`);
     return null;
   }
 
-  const escaped = projectName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escaped = projectName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const regex = new RegExp(
     `^\\s*\`\`\`(?:[^\\n]*)\\n${escaped}/?\\n([\\s\\S]*?)\\n\`\`\`\\s*$`,
-    "m",
+    'm',
   );
   const match = content.match(regex);
-  return match && typeof match[1] === "string" ? match[1] : null;
+  return match && typeof match[1] === 'string' ? match[1] : null;
 }
 
-function buildOutputContent(
-  projectName: string,
-  treeContent: string,
-  maxDepth: number,
-): string {
-  const timestamp = new Date()
-    .toISOString()
-    .replace(/T/, " ")
-    .replace(/\..+/, "");
+function buildOutputContent(projectName: string, treeContent: string, maxDepth: number): string {
+  const timestamp = new Date().toISOString().replace(/T/, ' ').replace(/\..+/, '');
   const header = `# ${projectName} - Directory Structure\n\nGenerated on: ${timestamp}\n`;
-  const depthInfo =
-    maxDepth !== Infinity
-      ? `\n_Depth limited to ${maxDepth} levels_\n\n`
-      : "\n";
+  const depthInfo = maxDepth !== Infinity ? `\n_Depth limited to ${maxDepth} levels_\n\n` : '\n';
   const treeBlock = `\`\`\`text\n${projectName}/\n${treeContent}\`\`\`\n`;
   const footer = `\n_Note: This tree excludes files and directories matched by .gitignore and default patterns._\n`;
   return header + depthInfo + treeBlock + footer;
 }
 
-const normalize = (str: string | null) =>
-  str?.replace(/\r\n/g, "\n").trimEnd() ?? null;
+const normalize = (str: string | null) => str?.replace(/\r\n/g, '\n').trimEnd() ?? null;
 
 const generateDirectoryTree = async (): Promise<void> => {
   try {
     const root = process.cwd();
     const args = process.argv.slice(2);
 
-    if (args.includes("--help")) {
+    if (args.includes('--help')) {
       console.log(`
 Generate Tree - Project directory structure visualization tool
 
@@ -323,17 +287,10 @@ Options:
       console.log(`Maximum depth set to: ${parsed.maxDepth}`);
     }
     if (parsed.extraIgnorePatterns.length > 0) {
-      console.log(
-        `Additional ignore patterns: ${parsed.extraIgnorePatterns.join(", ")}`,
-      );
+      console.log(`Additional ignore patterns: ${parsed.extraIgnorePatterns.join(', ')}`);
     }
 
-    const treeContent = await generateTree(
-      root,
-      root,
-      ignoreHandler,
-      parsed.maxDepth,
-    );
+    const treeContent = await generateTree(root, root, ignoreHandler, parsed.maxDepth);
 
     if (parsed.dryRun) {
       console.log(`\n${projectName}/`);
@@ -341,10 +298,7 @@ Options:
       return;
     }
 
-    const existingTree = await readExistingTree(
-      resolvedOutputFile,
-      projectName,
-    );
+    const existingTree = await readExistingTree(resolvedOutputFile, projectName);
 
     if (normalize(existingTree) === normalize(treeContent)) {
       console.log(
@@ -358,9 +312,7 @@ Options:
       resolvedOutputFile,
       buildOutputContent(projectName, treeContent, parsed.maxDepth),
     );
-    console.log(
-      `Successfully generated and updated tree structure in: ${resolvedOutputFile}`,
-    );
+    console.log(`Successfully generated and updated tree structure in: ${resolvedOutputFile}`);
   } catch (error: unknown) {
     console.error(
       `Error generating tree: ${error instanceof Error ? error.message : String(error)}`,

@@ -3,6 +3,6 @@
  * @module mcp-server/prompts/definitions
  */
 
-import { analyzeTrialLandscape } from "./analyze-trial-landscape.prompt.js";
+import { analyzeTrialLandscape } from './analyze-trial-landscape.prompt.js';
 
 export const allPromptDefinitions = [analyzeTrialLandscape];

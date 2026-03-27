@@ -13,14 +13,14 @@
  * // bun run scripts/build.ts --project tsconfig.custom.json
  */
 
-import { execFile } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { execFile } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { readdir, stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
-const DIST_DIR = join(ROOT_DIR, "dist");
+const ROOT_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');
+const DIST_DIR = join(ROOT_DIR, 'dist');
 
 async function exec(
   cmd: string[],
@@ -34,10 +34,10 @@ async function exec(
     stderr: string;
     exitCode: number;
   }>((resolve) => {
-    execFile(bin ?? "", args, { cwd: ROOT_DIR }, (error, stdout, stderr) => {
+    execFile(bin ?? '', args, { cwd: ROOT_DIR }, (error, stdout, stderr) => {
       resolve({
-        stdout: (stdout ?? "").trim(),
-        stderr: (stderr ?? "").trim(),
+        stdout: (stdout ?? '').trim(),
+        stderr: (stderr ?? '').trim(),
         exitCode: error ? Number(error.code) || 1 : 0,
       });
     });
@@ -57,9 +57,7 @@ async function exec(
 }
 
 /** Recursively count files and total size under a directory. */
-async function dirStats(
-  dir: string,
-): Promise<{ files: number; bytes: number }> {
+async function dirStats(dir: string): Promise<{ files: number; bytes: number }> {
   let files = 0;
   let bytes = 0;
   try {
@@ -93,12 +91,12 @@ function formatBytes(bytes: number): string {
 
 async function main() {
   // Read package info
-  const pkg = JSON.parse(readFileSync(join(ROOT_DIR, "package.json"), "utf-8"));
-  const projectIdx = process.argv.indexOf("--project");
+  const pkg = JSON.parse(readFileSync(join(ROOT_DIR, 'package.json'), 'utf-8'));
+  const projectIdx = process.argv.indexOf('--project');
   const project =
     projectIdx !== -1
-      ? (process.argv[projectIdx + 1] ?? "tsconfig.build.json")
-      : "tsconfig.build.json";
+      ? (process.argv[projectIdx + 1] ?? 'tsconfig.build.json')
+      : 'tsconfig.build.json';
 
   console.log(`\x1b[1mBuilding ${pkg.name}@${pkg.version}\x1b[0m`);
   console.log(`\x1b[2m  tsconfig: ${project}\x1b[0m`);
@@ -106,16 +104,13 @@ async function main() {
   const totalStart = performance.now();
 
   // Step 1: tsc
-  const tsc = await exec(
-    [join(ROOT_DIR, "node_modules", ".bin", "tsc"), "-p", project],
-    "tsc",
-  );
+  const tsc = await exec([join(ROOT_DIR, 'node_modules', '.bin', 'tsc'), '-p', project], 'tsc');
   if (!tsc.ok) process.exit(1);
 
   // Step 2: tsc-alias
   const alias = await exec(
-    [join(ROOT_DIR, "node_modules", ".bin", "tsc-alias"), "-p", project],
-    "tsc-alias",
+    [join(ROOT_DIR, 'node_modules', '.bin', 'tsc-alias'), '-p', project],
+    'tsc-alias',
   );
   if (!alias.ok) process.exit(1);
 
@@ -129,6 +124,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("\x1b[31mBuild script failed:\x1b[0m", err);
+  console.error('\x1b[31mBuild script failed:\x1b[0m', err);
   process.exit(1);
 });

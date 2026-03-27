@@ -3,31 +3,26 @@
  * @module mcp-server/tools/definitions/get-study-results.tool
  */
 
-import { tool, z } from "@cyanheads/mcp-ts-core";
-import { getClinicalTrialsService } from "@/services/clinical-trials/clinical-trials-service.js";
-import type { RawStudyShape } from "@/services/clinical-trials/types.js";
+import { tool, z } from '@cyanheads/mcp-ts-core';
+import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
+import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 
-const VALID_SECTIONS = [
-  "outcomes",
-  "adverseEvents",
-  "participantFlow",
-  "baseline",
-] as const;
+const VALID_SECTIONS = ['outcomes', 'adverseEvents', 'participantFlow', 'baseline'] as const;
 type Section = (typeof VALID_SECTIONS)[number];
 
 /** Map section names to resultsSection module keys. */
 const SECTION_MAP: Record<Section, string> = {
-  outcomes: "outcomeMeasuresModule",
-  adverseEvents: "adverseEventsModule",
-  participantFlow: "participantFlowModule",
-  baseline: "baselineCharacteristicsModule",
+  outcomes: 'outcomeMeasuresModule',
+  adverseEvents: 'adverseEventsModule',
+  participantFlow: 'participantFlowModule',
+  baseline: 'baselineCharacteristicsModule',
 };
 
-export const getStudyResults = tool("clinicaltrials_get_study_results", {
+export const getStudyResults = tool('clinicaltrials_get_study_results', {
   description:
-    "Fetch trial results data for completed studies — outcome measures with statistics, adverse " +
-    "events, participant flow, and baseline characteristics. Only available for studies where " +
-    "hasResults is true. Use search_studies first to find studies with results.",
+    'Fetch trial results data for completed studies — outcome measures with statistics, adverse ' +
+    'events, participant flow, and baseline characteristics. Only available for studies where ' +
+    'hasResults is true. Use search_studies first to find studies with results.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -44,8 +39,8 @@ export const getStudyResults = tool("clinicaltrials_get_study_results", {
       .union([z.string(), z.array(z.string())])
       .optional()
       .describe(
-        "Filter which sections to return. Values: outcomes, adverseEvents, participantFlow, baseline. " +
-          "Omit for all sections.",
+        'Filter which sections to return. Values: outcomes, adverseEvents, participantFlow, baseline. ' +
+          'Omit for all sections.',
       ),
   }),
 
@@ -53,52 +48,49 @@ export const getStudyResults = tool("clinicaltrials_get_study_results", {
     results: z
       .array(
         z.object({
-          nctId: z.string().describe("NCT identifier."),
-          title: z.string().describe("Study title."),
-          hasResults: z.boolean().describe("Whether study has posted results."),
+          nctId: z.string().describe('NCT identifier.'),
+          title: z.string().describe('Study title.'),
+          hasResults: z.boolean().describe('Whether study has posted results.'),
           outcomes: z
             .array(z.record(z.string(), z.unknown()))
             .optional()
-            .describe("Outcome measures with statistics."),
+            .describe('Outcome measures with statistics.'),
           adverseEvents: z
             .record(z.string(), z.unknown())
             .optional()
-            .describe("Adverse events data."),
+            .describe('Adverse events data.'),
           participantFlow: z
             .record(z.string(), z.unknown())
             .optional()
-            .describe("Participant flow data."),
+            .describe('Participant flow data.'),
           baseline: z
             .record(z.string(), z.unknown())
             .optional()
-            .describe("Baseline characteristics."),
+            .describe('Baseline characteristics.'),
         }),
       )
-      .describe("Results per study."),
+      .describe('Results per study.'),
     studiesWithoutResults: z
       .array(z.string())
       .optional()
-      .describe("NCT IDs that do not have results data."),
+      .describe('NCT IDs that do not have results data.'),
     fetchErrors: z
       .array(
         z.object({
-          nctId: z.string().describe("NCT ID."),
-          error: z.string().describe("Error message."),
+          nctId: z.string().describe('NCT ID.'),
+          error: z.string().describe('Error message.'),
         }),
       )
       .optional()
-      .describe("Studies that could not be fetched."),
+      .describe('Studies that could not be fetched.'),
   }),
 
   async handler(input, ctx) {
-    const nctIds = (
-      Array.isArray(input.nctIds) ? input.nctIds : [input.nctIds]
-    ).slice(0, 5);
+    const nctIds = (Array.isArray(input.nctIds) ? input.nctIds : [input.nctIds]).slice(0, 5);
     const sections: Section[] = input.sections
-      ? (Array.isArray(input.sections)
-          ? input.sections
-          : [input.sections]
-        ).filter((s): s is Section => VALID_SECTIONS.includes(s as Section))
+      ? (Array.isArray(input.sections) ? input.sections : [input.sections]).filter(
+          (s): s is Section => VALID_SECTIONS.includes(s as Section),
+        )
       : [...VALID_SECTIONS];
 
     interface StudyResult {
@@ -120,9 +112,7 @@ export const getStudyResults = tool("clinicaltrials_get_study_results", {
       nctIds.map(async (nctId) => {
         try {
           const study = (await service.getStudy(nctId, ctx)) as RawStudyShape;
-          const title =
-            study.protocolSection?.identificationModule?.briefTitle ??
-            "Unknown";
+          const title = study.protocolSection?.identificationModule?.briefTitle ?? 'Unknown';
           const hasResults = study.hasResults === true;
 
           if (!hasResults) {
@@ -137,11 +127,9 @@ export const getStudyResults = tool("clinicaltrials_get_study_results", {
             const moduleKey = SECTION_MAP[section];
             const data = rs[moduleKey];
             if (data) {
-              if (section === "outcomes") {
+              if (section === 'outcomes') {
                 entry.outcomes =
-                  (data.outcomeMeasures as
-                    | Record<string, unknown>[]
-                    | undefined) ?? [];
+                  (data.outcomeMeasures as Record<string, unknown>[] | undefined) ?? [];
               } else {
                 entry[section] = data;
               }
@@ -156,11 +144,11 @@ export const getStudyResults = tool("clinicaltrials_get_study_results", {
 
     if (results.length === 0 && fetchErrors.length > 0) {
       throw new Error(
-        `All studies failed to fetch: ${fetchErrors.map((e) => `${e.nctId}: ${e.error}`).join("; ")}`,
+        `All studies failed to fetch: ${fetchErrors.map((e) => `${e.nctId}: ${e.error}`).join('; ')}`,
       );
     }
 
-    ctx.log.info("Results extracted", {
+    ctx.log.info('Results extracted', {
       resultCount: results.length,
       withoutResults: studiesWithoutResults.length,
       errors: fetchErrors.length,
@@ -178,23 +166,21 @@ export const getStudyResults = tool("clinicaltrials_get_study_results", {
     for (const r of result.results) {
       lines.push(`## ${r.nctId}: ${r.title}`);
       if (!r.hasResults) {
-        lines.push("No results available.");
+        lines.push('No results available.');
         continue;
       }
       if (r.outcomes && (r.outcomes as unknown[]).length > 0)
         lines.push(`- Outcomes: ${(r.outcomes as unknown[]).length} measures`);
-      if (r.adverseEvents) lines.push("- Adverse Events: data available");
-      if (r.participantFlow) lines.push("- Participant Flow: data available");
-      if (r.baseline) lines.push("- Baseline Characteristics: data available");
+      if (r.adverseEvents) lines.push('- Adverse Events: data available');
+      if (r.participantFlow) lines.push('- Participant Flow: data available');
+      if (r.baseline) lines.push('- Baseline Characteristics: data available');
     }
     if (result.studiesWithoutResults?.length)
-      lines.push(
-        `\nWithout results: ${result.studiesWithoutResults.join(", ")}`,
-      );
+      lines.push(`\nWithout results: ${result.studiesWithoutResults.join(', ')}`);
     if (result.fetchErrors?.length)
       lines.push(
-        `\nFetch errors: ${result.fetchErrors.map((e) => `${e.nctId}: ${e.error}`).join(", ")}`,
+        `\nFetch errors: ${result.fetchErrors.map((e) => `${e.nctId}: ${e.error}`).join(', ')}`,
       );
-    return [{ type: "text", text: lines.join("\n") }];
+    return [{ type: 'text', text: lines.join('\n') }];
   },
 });

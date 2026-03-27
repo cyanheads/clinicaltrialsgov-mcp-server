@@ -16,22 +16,22 @@
  *
  * @module scripts/lint-mcp
  */
-import { existsSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readdirSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Import validateDefinitions — resolve from package or local source
 // ---------------------------------------------------------------------------
 
-let validateDefinitions: typeof import("../src/linter/validate.js").validateDefinitions;
+let validateDefinitions: typeof import('../src/linter/validate.js').validateDefinitions;
 
 try {
   // Consumer path: installed as a dependency
-  const pkg = await import("@cyanheads/mcp-ts-core/linter");
+  const pkg = await import('@cyanheads/mcp-ts-core/linter');
   validateDefinitions = pkg.validateDefinitions;
 } catch {
   // Framework path: running from the framework repo itself
-  const local = await import("../src/linter/validate.js");
+  const local = await import('../src/linter/validate.js');
   validateDefinitions = local.validateDefinitions;
 }
 
@@ -40,42 +40,37 @@ try {
 // ---------------------------------------------------------------------------
 
 function isToolLike(v: unknown): boolean {
-  if (!v || typeof v !== "object") return false;
+  if (!v || typeof v !== 'object') return false;
   const o = v as Record<string, unknown>;
-  const hasHandler = typeof o.handler === "function";
-  const hasTaskHandlers =
-    o.taskHandlers != null && typeof o.taskHandlers === "object";
+  const hasHandler = typeof o.handler === 'function';
+  const hasTaskHandlers = o.taskHandlers != null && typeof o.taskHandlers === 'object';
   return (hasHandler || hasTaskHandlers) && o.input != null && o.output != null;
 }
 
 function isResourceLike(v: unknown): boolean {
-  if (!v || typeof v !== "object") return false;
+  if (!v || typeof v !== 'object') return false;
   const o = v as Record<string, unknown>;
-  return typeof o.uriTemplate === "string" && typeof o.handler === "function";
+  return typeof o.uriTemplate === 'string' && typeof o.handler === 'function';
 }
 
 function isPromptLike(v: unknown): boolean {
-  if (!v || typeof v !== "object") return false;
+  if (!v || typeof v !== 'object') return false;
   const o = v as Record<string, unknown>;
-  return (
-    typeof o.generate === "function" &&
-    typeof o.name === "string" &&
-    !("handler" in o)
-  );
+  return typeof o.generate === 'function' && typeof o.name === 'string' && !('handler' in o);
 }
 
 // ---------------------------------------------------------------------------
 // File discovery (no bun dependency — uses Node.js fs)
 // ---------------------------------------------------------------------------
 
-const SEARCH_DIRS = ["examples/mcp-server", "src/mcp-server"];
+const SEARCH_DIRS = ['examples/mcp-server', 'src/mcp-server'];
 
 const DEFINITION_SUFFIXES = [
-  ".tool.ts",
-  ".resource.ts",
-  ".prompt.ts",
-  ".app-tool.ts",
-  ".app-resource.ts",
+  '.tool.ts',
+  '.resource.ts',
+  '.prompt.ts',
+  '.app-tool.ts',
+  '.app-resource.ts',
 ];
 
 function walkDir(dir: string): string[] {
@@ -83,13 +78,11 @@ function walkDir(dir: string): string[] {
   if (!existsSync(dir)) return results;
 
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    if (entry.name === "node_modules" || entry.name === ".DS_Store") continue;
+    if (entry.name === 'node_modules' || entry.name === '.DS_Store') continue;
     const full = join(dir, entry.name);
     if (entry.isDirectory()) {
       results.push(...walkDir(full));
-    } else if (
-      DEFINITION_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))
-    ) {
+    } else if (DEFINITION_SUFFIXES.some((suffix) => entry.name.endsWith(suffix))) {
       results.push(full);
     }
   }
@@ -113,7 +106,7 @@ async function main(): Promise<void> {
   const files = discoverFiles();
 
   if (files.length === 0) {
-    console.log("No MCP definition files found. Skipping lint.");
+    console.log('No MCP definition files found. Skipping lint.');
     process.exit(0);
   }
 
@@ -138,9 +131,7 @@ async function main(): Promise<void> {
 
   const total = tools.length + resources.length + prompts.length;
   if (total === 0) {
-    console.log(
-      `Scanned ${files.length} files but found no definitions. Skipping lint.`,
-    );
+    console.log(`Scanned ${files.length} files but found no definitions. Skipping lint.`);
     process.exit(0);
   }
 
@@ -161,7 +152,7 @@ async function main(): Promise<void> {
     if (report.warnings.length > 0) {
       console.log(`\nPassed with ${report.warnings.length} warning(s).`);
     } else {
-      console.log("\nAll definitions valid.");
+      console.log('\nAll definitions valid.');
     }
     process.exit(0);
   } else {
@@ -173,6 +164,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((err) => {
-  console.error("lint-mcp failed:", err);
+  console.error('lint-mcp failed:', err);
   process.exit(1);
 });

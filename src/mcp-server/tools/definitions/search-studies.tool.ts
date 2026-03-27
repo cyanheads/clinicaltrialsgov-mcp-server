@@ -6,32 +6,10 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
-
-/** Normalize string | string[] to string[]. */
-function toArray(v: string | string[] | undefined): string[] | undefined {
-  if (v === undefined) return;
-  return Array.isArray(v) ? v : [v];
-}
-
-/** Build AREA[] phase filter and combine with user's advancedFilter. */
-function buildAdvancedFilter(phaseFilter?: string[], advancedFilter?: string): string | undefined {
-  const parts: string[] = [];
-  if (phaseFilter?.length) {
-    const expr =
-      phaseFilter.length === 1
-        ? `AREA[Phase]${phaseFilter[0]}`
-        : `(${phaseFilter.map((p) => `AREA[Phase]${p}`).join(' OR ')})`;
-    parts.push(expr);
-  }
-  if (advancedFilter) parts.push(advancedFilter);
-  return parts.length > 0 ? parts.join(' AND ') : undefined;
-}
+import { buildAdvancedFilter, toArray } from '../utils/query-helpers.js';
 
 export const searchStudies = tool('clinicaltrials_search_studies', {
-  description:
-    'Search for clinical trial studies from ClinicalTrials.gov. Supports full-text and ' +
-    'field-specific queries, status/phase/geographic filters, pagination, sorting, and field ' +
-    'selection. Use the fields parameter to reduce payload size — full study records are ~70KB each.',
+  description: `Search for clinical trial studies from ClinicalTrials.gov. Supports full-text and field-specific queries, status/phase/geographic filters, pagination, sorting, and field selection. Use the fields parameter to reduce payload size — full study records are ~70KB each.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -63,8 +41,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .union([z.string(), z.array(z.string())])
       .optional()
       .describe(
-        'Filter by study status. Values: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, ' +
-          'NOT_YET_RECRUITING, ENROLLING_BY_INVITATION, SUSPENDED, TERMINATED, WITHDRAWN.',
+        `Filter by study status. Values: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, NOT_YET_RECRUITING, ENROLLING_BY_INVITATION, SUSPENDED, TERMINATED, WITHDRAWN, UNKNOWN, WITHHELD, NO_LONGER_AVAILABLE, AVAILABLE, APPROVED_FOR_MARKETING, TEMPORARILY_NOT_AVAILABLE.`,
       ),
     phaseFilter: z
       .union([z.string(), z.array(z.string())])
@@ -74,15 +51,13 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        'Advanced filter using AREA[] Essie syntax. E.g., "AREA[StudyType]INTERVENTIONAL", ' +
-          '"AREA[EnrollmentCount]RANGE[100, 1000]". Combine with AND/OR/NOT and parentheses.',
+        `Advanced filter using AREA[] Essie syntax. E.g., "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]". Combine with AND/OR/NOT and parentheses.`,
       ),
     geoFilter: z
       .string()
       .optional()
       .describe(
-        'Geographic proximity filter. Format: distance(lat,lon,radius). ' +
-          'E.g., "distance(47.6062,-122.3321,50mi)" for studies within 50 miles of Seattle.',
+        `Geographic proximity filter. Format: distance(lat,lon,radius). E.g., "distance(47.6062,-122.3321,50mi)" for studies within 50 miles of Seattle.`,
       ),
     nctIds: z
       .union([z.string(), z.array(z.string())])
@@ -92,18 +67,15 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .array(z.string())
       .optional()
       .describe(
-        'Fields to return (PascalCase piece names). Strongly recommended to reduce payload. ' +
-          'Common: NCTId, BriefTitle, OverallStatus, Phase, LeadSponsorName, Condition, ' +
-          'InterventionName, BriefSummary, EnrollmentCount, StartDate.',
+        `Fields to return (PascalCase piece names). Strongly recommended to reduce payload. Common: NCTId, BriefTitle, OverallStatus, Phase, LeadSponsorName, Condition, InterventionName, BriefSummary, EnrollmentCount, StartDate.`,
       ),
     sort: z
       .string()
       .optional()
       .describe(
-        'Sort order. Format: FieldName:asc or FieldName:desc. ' +
-          'E.g., "LastUpdatePostDate:desc", "EnrollmentCount:desc". Max 2 fields comma-separated.',
+        `Sort order. Format: FieldName:asc or FieldName:desc. E.g., "LastUpdatePostDate:desc", "EnrollmentCount:desc". Max 2 fields comma-separated.`,
       ),
-    pageSize: z.number().int().min(0).max(1000).default(10).describe('Results per page, 0–1000.'),
+    pageSize: z.number().int().min(1).max(1000).default(10).describe('Results per page, 1–1000.'),
     pageToken: z.string().optional().describe('Pagination cursor from a previous response.'),
     countTotal: z
       .boolean()

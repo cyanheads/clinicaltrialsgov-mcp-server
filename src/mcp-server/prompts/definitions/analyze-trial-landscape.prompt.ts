@@ -6,9 +6,7 @@
 import { prompt, z } from '@cyanheads/mcp-ts-core';
 
 export const analyzeTrialLandscape = prompt('analyze_trial_landscape', {
-  description:
-    'Guides systematic analysis of a clinical trial landscape using study counts and search. ' +
-    'Teaches the multi-call workflow for building breakdowns by phase, status, year, sponsor type, etc.',
+  description: `Guides systematic analysis of a clinical trial landscape using study counts and search. Teaches the multi-call workflow for building breakdowns by phase, status, year, sponsor type, etc.`,
 
   args: z.object({
     topic: z.string().describe('Disease, condition, or research area to analyze.'),

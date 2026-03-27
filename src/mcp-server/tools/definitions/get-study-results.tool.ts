@@ -19,10 +19,7 @@ const SECTION_MAP: Record<Section, string> = {
 };
 
 export const getStudyResults = tool('clinicaltrials_get_study_results', {
-  description:
-    'Fetch trial results data for completed studies — outcome measures with statistics, adverse ' +
-    'events, participant flow, and baseline characteristics. Only available for studies where ' +
-    'hasResults is true. Use search_studies first to find studies with results.',
+  description: `Fetch trial results data for completed studies — outcome measures with statistics, adverse events, participant flow, and baseline characteristics. Only available for studies where hasResults is true. Use search_studies first to find studies with results.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -39,8 +36,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       .union([z.string(), z.array(z.string())])
       .optional()
       .describe(
-        'Filter which sections to return. Values: outcomes, adverseEvents, participantFlow, baseline. ' +
-          'Omit for all sections.',
+        `Filter which sections to return. Values: outcomes, adverseEvents, participantFlow, baseline. Omit for all sections.`,
       ),
   }),
 
@@ -169,8 +165,8 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
         lines.push('No results available.');
         continue;
       }
-      if (r.outcomes && (r.outcomes as unknown[]).length > 0)
-        lines.push(`- Outcomes: ${(r.outcomes as unknown[]).length} measures`);
+      if (r.outcomes && r.outcomes.length > 0)
+        lines.push(`- Outcomes: ${r.outcomes.length} measures`);
       if (r.adverseEvents) lines.push('- Adverse Events: data available');
       if (r.participantFlow) lines.push('- Participant Flow: data available');
       if (r.baseline) lines.push('- Baseline Characteristics: data available');

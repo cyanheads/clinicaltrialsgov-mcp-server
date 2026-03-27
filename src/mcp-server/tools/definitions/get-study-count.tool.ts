@@ -5,32 +5,10 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
-
-/** Normalize string | string[] to string[]. */
-function toArray(v: string | string[] | undefined): string[] | undefined {
-  if (v === undefined) return;
-  return Array.isArray(v) ? v : [v];
-}
-
-/** Build AREA[] phase filter and combine with user's advancedFilter. */
-function buildAdvancedFilter(phaseFilter?: string[], advancedFilter?: string): string | undefined {
-  const parts: string[] = [];
-  if (phaseFilter?.length) {
-    const expr =
-      phaseFilter.length === 1
-        ? `AREA[Phase]${phaseFilter[0]}`
-        : `(${phaseFilter.map((p) => `AREA[Phase]${p}`).join(' OR ')})`;
-    parts.push(expr);
-  }
-  if (advancedFilter) parts.push(advancedFilter);
-  return parts.length > 0 ? parts.join(' AND ') : undefined;
-}
+import { buildAdvancedFilter, toArray } from '../utils/query-helpers.js';
 
 export const getStudyCount = tool('clinicaltrials_get_study_count', {
-  description:
-    'Get total study count matching a query without fetching study data. Fast and lightweight. ' +
-    'Use for quick statistics or to build breakdowns by calling multiple times with different filters ' +
-    '(e.g., count by phase, count by status, count recruiting vs completed for a condition).',
+  description: `Get total study count matching a query without fetching study data. Fast and lightweight. Use for quick statistics or to build breakdowns by calling multiple times with different filters (e.g., count by phase, count by status, count recruiting vs completed for a condition).`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -46,8 +24,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       .union([z.string(), z.array(z.string())])
       .optional()
       .describe(
-        'Filter by study status. Values: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, ' +
-          'NOT_YET_RECRUITING, ENROLLING_BY_INVITATION, SUSPENDED, TERMINATED, WITHDRAWN.',
+        `Filter by study status. Values: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, NOT_YET_RECRUITING, ENROLLING_BY_INVITATION, SUSPENDED, TERMINATED, WITHDRAWN, UNKNOWN, WITHHELD, NO_LONGER_AVAILABLE, AVAILABLE, APPROVED_FOR_MARKETING, TEMPORARILY_NOT_AVAILABLE.`,
       ),
     phaseFilter: z
       .union([z.string(), z.array(z.string())])

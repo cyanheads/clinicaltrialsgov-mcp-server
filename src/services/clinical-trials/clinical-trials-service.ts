@@ -43,14 +43,23 @@ export class ClinicalTrialsService {
   }
 
   /** Get field value statistics for the specified fields. */
-  getFieldValues(fields: string[], ctx: Context): Promise<FieldValueStats[]> {
+  async getFieldValues(fields: string[], ctx: Context): Promise<FieldValueStats[]> {
     ctx.log.debug('getFieldValues', { fields });
-    return this.fetchJson<FieldValueStats[]>(
-      '/stats/field/values',
-      { fields: fields.join('|') },
-      ctx,
-      { jsonFormat: false },
-    );
+    try {
+      return await this.fetchJson<FieldValueStats[]>(
+        '/stats/field/values',
+        { fields: fields.join('|') },
+        ctx,
+        { jsonFormat: false },
+      );
+    } catch (err) {
+      if (err instanceof McpError && err.message.startsWith('Not found')) {
+        throw validationError(
+          `Invalid field name(s): ${fields.join(', ')}. Use PascalCase piece names like OverallStatus, Phase, StudyType, InterventionType, LeadSponsorClass, Sex, StdAge.`,
+        );
+      }
+      throw err;
+    }
   }
 
   /* ------------------------------------------------------------------ */

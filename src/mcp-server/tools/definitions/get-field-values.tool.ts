@@ -7,10 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 
 export const getFieldValues = tool('clinicaltrials_get_field_values', {
-  description:
-    'Discover valid values for ClinicalTrials.gov fields with study counts per value. Use to ' +
-    'explore available filter options before building a search — e.g., valid OverallStatus, Phase, ' +
-    'InterventionType, StudyType, or LeadSponsorClass values.',
+  description: `Discover valid values for ClinicalTrials.gov fields with study counts per value. Use to explore available filter options before building a search — e.g., valid OverallStatus, Phase, InterventionType, StudyType, or LeadSponsorClass values.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -21,9 +18,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
     fields: z
       .union([z.string(), z.array(z.string())])
       .describe(
-        'PascalCase piece name(s) to get values for. Common fields: OverallStatus, Phase, ' +
-          'StudyType, InterventionType, LeadSponsorClass, Sex, StdAge, DesignAllocation, ' +
-          'DesignPrimaryPurpose, DesignMasking.',
+        `PascalCase piece name(s) to get values for. Common fields: OverallStatus, Phase, StudyType, InterventionType, LeadSponsorClass, Sex, StdAge, DesignAllocation, DesignPrimaryPurpose, DesignMasking.`,
       ),
   }),
 

@@ -147,10 +147,7 @@ function formatEligibleStudy(
 }
 
 export const findEligible = tool('clinicaltrials_find_eligible', {
-  description:
-    'Match patient demographics and conditions to eligible recruiting clinical trials. Takes a ' +
-    'patient profile (age, sex, conditions, location) and returns studies the patient may qualify ' +
-    'for, with match explanations. Internally builds optimized queries with demographic filters.',
+  description: `Match patient demographics and conditions to eligible recruiting clinical trials. Takes a patient profile (age, sex, conditions, location) and returns studies the patient may qualify for, with match explanations. Internally builds optimized queries with demographic filters.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,

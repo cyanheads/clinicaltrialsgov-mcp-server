@@ -11,7 +11,14 @@ import {
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
-import type { FieldValueStats, PagedStudiesResponse, SearchParams, Study } from './types.js';
+import type {
+  EnumInfo,
+  FieldNode,
+  FieldValueStats,
+  PagedStudiesResponse,
+  SearchParams,
+  Study,
+} from './types.js';
 
 const MAX_RETRIES = 3;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
@@ -40,6 +47,20 @@ export class ClinicalTrialsService {
   getStudy(nctId: string, ctx: Context): Promise<Study> {
     ctx.log.debug('getStudy', { nctId });
     return this.fetchJson<Study>(`/studies/${encodeURIComponent(nctId)}`, {}, ctx);
+  }
+
+  /** Get all enum type definitions from the data model. */
+  getEnums(ctx: Context): Promise<EnumInfo[]> {
+    ctx.log.debug('getEnums');
+    return this.fetchJson<EnumInfo[]>('/studies/enums', {}, ctx, { jsonFormat: false });
+  }
+
+  /** Get field definitions (metadata tree) from the data model. */
+  getMetadata(includeIndexedOnly: boolean, ctx: Context): Promise<FieldNode[]> {
+    ctx.log.debug('getMetadata', { includeIndexedOnly });
+    const params: Record<string, string> = {};
+    if (includeIndexedOnly) params.includeIndexedOnly = 'true';
+    return this.fetchJson<FieldNode[]>('/studies/metadata', params, ctx, { jsonFormat: false });
   }
 
   /** Get field value statistics for the specified fields. */
@@ -140,7 +161,11 @@ export class ClinicalTrialsService {
           return (await res.json()) as T;
         }
 
-        if (res.status === 404) throw notFound(`Not found: ${path}`);
+        if (res.status === 404) {
+          // Extract meaningful identifier from path (e.g. "/studies/NCT12345678" → "NCT12345678")
+          const id = path.split('/').pop() ?? path;
+          throw notFound(`Study ${id} not found`);
+        }
         if (res.status === 400) {
           const text = await res.text();
           if (text.includes('filter.ids') && text.includes('incorrect format')) {

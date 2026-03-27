@@ -99,6 +99,10 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .record(z.string(), z.unknown())
       .optional()
       .describe('Echo of query/filter criteria used. Present when results are empty.'),
+    noMatchHints: z
+      .array(z.string())
+      .optional()
+      .describe('Suggestions for broadening the search when no results are found.'),
   }),
 
   async handler(input, ctx) {
@@ -144,7 +148,32 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
       if (input.geoFilter) criteria.geoFilter = input.geoFilter;
       if (input.nctIds) criteria.nctIds = input.nctIds;
-      return { ...result, searchCriteria: criteria };
+
+      const hints: string[] = [];
+      const hasQuery =
+        input.query ||
+        input.conditionQuery ||
+        input.interventionQuery ||
+        input.titleQuery ||
+        input.outcomeQuery ||
+        input.sponsorQuery;
+      const hasFilter =
+        input.statusFilter ||
+        input.phaseFilter ||
+        input.advancedFilter ||
+        input.geoFilter ||
+        input.locationQuery;
+      if (hasQuery && hasFilter)
+        hints.push('Try removing filters to broaden results, or use broader search terms.');
+      else if (hasQuery) hints.push('Try broader or alternative search terms.');
+      else if (hasFilter) hints.push('Try removing or broadening filters.');
+      if (input.statusFilter)
+        hints.push(
+          'Remove statusFilter to include studies in all statuses (completed, terminated, etc.).',
+        );
+      if (input.phaseFilter) hints.push('Remove phaseFilter to include all trial phases.');
+
+      return { ...result, searchCriteria: criteria, noMatchHints: hints };
     }
 
     return result;
@@ -159,7 +188,11 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         const parts = Object.entries(result.searchCriteria).map(([k, v]) => `${k}=${v}`);
         lines.push(`Criteria: ${parts.join(', ')}`);
       }
-      lines.push('Try broader search terms or fewer filters.');
+      if (result.noMatchHints?.length) {
+        for (const hint of result.noMatchHints) lines.push(hint);
+      } else {
+        lines.push('Try broader search terms or fewer filters.');
+      }
       return [{ type: 'text', text: lines.join('\n') }];
     }
     if (result.totalCount !== undefined) {

@@ -75,3 +75,27 @@ export interface FieldValueStats {
   type: string;
   uniqueValuesCount: number;
 }
+
+/** Enum value with optional legacy display name from GET /studies/enums. */
+export interface EnumValue {
+  legacyValue?: string;
+  value: string;
+}
+
+/** Enum type definition from GET /studies/enums. */
+export interface EnumInfo {
+  pieces: string[];
+  type: string;
+  values: EnumValue[];
+}
+
+/** Field node from GET /studies/metadata. */
+export interface FieldNode {
+  children?: FieldNode[];
+  description?: string;
+  isEnum?: boolean;
+  name: string;
+  piece?: string;
+  sourceType?: string;
+  type?: string;
+}

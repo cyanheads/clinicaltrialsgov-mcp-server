@@ -19,7 +19,7 @@ MCP server wrapping the [ClinicalTrials.gov REST API v2](https://clinicaltrials.
 
 ## MCP Surface
 
-### Tools (8)
+### Tools (7)
 
 | Name                                   | Description                                                                         |
 | :------------------------------------- | :---------------------------------------------------------------------------------- |
@@ -28,7 +28,6 @@ MCP server wrapping the [ClinicalTrials.gov REST API v2](https://clinicaltrials.
 | `clinicaltrials_get_study_results`     | Extract outcomes, adverse events, participant flow, baseline for completed studies. |
 | `clinicaltrials_get_field_values`      | Discover valid enum values for API fields with study counts.                        |
 | `clinicaltrials_get_field_definitions` | Browse the study data model field tree — piece names, types, nesting.               |
-| `clinicaltrials_get_enums`             | Get canonical enum type definitions and all valid values from the data model.       |
 | `clinicaltrials_get_study_count`       | Lightweight study count for a query (no data fetched).                              |
 | `clinicaltrials_find_eligible`         | Match patient demographics to recruiting trials.                                    |
 
@@ -182,10 +181,6 @@ const ServerConfigSchema = z.object({
     .default(30000)
     .describe("Per-request timeout in ms"),
   maxPageSize: z.coerce.number().default(200).describe("Maximum page size cap"),
-  maxEligibleCandidates: z.coerce
-    .number()
-    .default(100)
-    .describe("Max studies to evaluate in find_eligible"),
 });
 
 let _config: z.infer<typeof ServerConfigSchema> | undefined;
@@ -194,7 +189,6 @@ export function getServerConfig() {
     apiBaseUrl: process.env.CT_API_BASE_URL,
     requestTimeoutMs: process.env.CT_REQUEST_TIMEOUT_MS,
     maxPageSize: process.env.CT_MAX_PAGE_SIZE,
-    maxEligibleCandidates: process.env.CT_MAX_ELIGIBLE_CANDIDATES,
   });
   return _config;
 }
@@ -257,7 +251,7 @@ src/
   services/
     clinical-trials/
       clinical-trials-service.ts        # API client (init/accessor pattern)
-      types.ts                          # Study, PagedStudies, FieldValueStats, EnumInfo, FieldNode types
+      types.ts                          # Study, PagedStudies, FieldValueStats, FieldNode types
   mcp-server/
     tools/definitions/
       search-studies.tool.ts            # clinicaltrials_search_studies
@@ -265,7 +259,6 @@ src/
       get-study-results.tool.ts         # clinicaltrials_get_study_results
       get-field-values.tool.ts          # clinicaltrials_get_field_values
       get-field-definitions.tool.ts     # clinicaltrials_get_field_definitions
-      get-enums.tool.ts                 # clinicaltrials_get_enums
       get-study-count.tool.ts           # clinicaltrials_get_study_count
       find-eligible.tool.ts             # clinicaltrials_find_eligible
       index.ts                          # allToolDefinitions barrel
@@ -366,7 +359,6 @@ import { getServerConfig } from "@/config/server-config.js";
 | `CT_API_BASE_URL`            | No       | `https://clinicaltrials.gov/api/v2` | API base URL override                    |
 | `CT_REQUEST_TIMEOUT_MS`      | No       | `30000`                             | Per-request timeout in ms                |
 | `CT_MAX_PAGE_SIZE`           | No       | `200`                               | Maximum page size cap                    |
-| `CT_MAX_ELIGIBLE_CANDIDATES` | No       | `100`                               | Max studies to evaluate in find_eligible |
 
 ---
 

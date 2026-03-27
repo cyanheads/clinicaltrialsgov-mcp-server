@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-03-27 07:47:20
+Generated on: 2026-03-27 16:01:31
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -101,7 +101,6 @@ clinicaltrialsgov-mcp-server/
 │   │   └── tools/
 │   │       ├── definitions/
 │   │       │   ├── find-eligible.tool.ts
-│   │       │   ├── get-enums.tool.ts
 │   │       │   ├── get-field-definitions.tool.ts
 │   │       │   ├── get-field-values.tool.ts
 │   │       │   ├── get-study-count.tool.ts

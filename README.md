@@ -3,7 +3,7 @@
   <p>
     <b>MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details and results, and match patients to eligible trials.</b>
   </p>
-  <p><b>8 Tools · 1 Resource · 1 Prompt</b></p>
+  <p><b>7 Tools · 1 Resource · 1 Prompt</b></p>
 </div>
 
 <div align="center">
@@ -30,7 +30,7 @@
 
 ## Overview
 
-Eight tools for searching, discovering, analyzing, and matching clinical trials:
+Seven tools for searching, discovering, analyzing, and matching clinical trials:
 
 | Tool Name                              | Description                                                                                      |
 | :------------------------------------- | :----------------------------------------------------------------------------------------------- |
@@ -39,9 +39,8 @@ Eight tools for searching, discovering, analyzing, and matching clinical trials:
 | `clinicaltrials_get_study_count`       | Get total study count for a query without fetching data. Fast statistics and breakdowns.         |
 | `clinicaltrials_get_field_values`      | Discover valid values for API fields (status, phase, study type, etc.) with per-value counts.    |
 | `clinicaltrials_get_field_definitions` | Browse the study data model field tree — piece names, types, nesting. Supports subtree navigation and keyword search. |
-| `clinicaltrials_get_enums`             | Get canonical enum type definitions and all valid values from the data model. Complements `get_field_values`. |
 | `clinicaltrials_get_study_results`     | Extract outcomes, adverse events, participant flow, and baseline from completed studies. Optional summary mode reduces ~200KB payloads to ~5KB. |
-| `clinicaltrials_find_eligible`         | Match patient demographics and conditions to eligible recruiting trials with location proximity. Returns hints when no studies match. |
+| `clinicaltrials_find_eligible`         | Match patient demographics and conditions to eligible recruiting trials. Builds optimized queries from a patient profile and returns studies with eligibility/location fields. |
 
 | Resource                   | Description                                         |
 | :------------------------- | :-------------------------------------------------- |
@@ -49,7 +48,7 @@ Eight tools for searching, discovering, analyzing, and matching clinical trials:
 
 | Prompt                    | Description                                                                        |
 | :------------------------ | :--------------------------------------------------------------------------------- |
-| `analyze_trial_landscape` | Guides multi-step landscape analysis using count + search tools across dimensions. |
+| `analyze_trial_landscape` | Adaptable workflow for data-driven trial landscape analysis using count + search tools. |
 
 ## Tools
 
@@ -83,10 +82,8 @@ Fetch posted results data for completed studies.
 Match a patient profile to eligible recruiting trials.
 
 - Takes age, sex, conditions, and location as patient demographics
-- Builds optimized API queries with demographic pre-filters
-- Post-filters results against eligibility criteria (age range, sex, country)
-- Ranks by geographic proximity (city > state > country match)
-- Returns match explanations, eligibility summaries, and nearby study sites
+- Builds optimized API queries with demographic filters (age range, sex, healthy volunteers)
+- Returns studies with eligibility and location fields for the caller to evaluate
 - Provides actionable hints when no studies match (broaden conditions, adjust filters)
 
 ## Features
@@ -181,7 +178,6 @@ All configuration is optional — the server works with defaults and no API keys
 | `CT_API_BASE_URL`            | ClinicalTrials.gov API base URL.            | `https://clinicaltrials.gov/api/v2` |
 | `CT_REQUEST_TIMEOUT_MS`      | Per-request timeout in milliseconds.        | `30000`                             |
 | `CT_MAX_PAGE_SIZE`           | Maximum page size cap.                      | `200`                               |
-| `CT_MAX_ELIGIBLE_CANDIDATES` | Max studies to evaluate in `find_eligible`. | `100`                               |
 | `MCP_TRANSPORT_TYPE`         | Transport: `stdio` or `http`.               | `stdio`                             |
 | `MCP_HTTP_PORT`              | Port for HTTP server.                       | `3010`                              |
 | `MCP_AUTH_MODE`              | Auth mode: `none`, `jwt`, or `oauth`.       | `none`                              |

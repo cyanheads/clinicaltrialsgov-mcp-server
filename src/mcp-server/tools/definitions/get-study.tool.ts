@@ -38,6 +38,6 @@ export const getStudy = tool('clinicaltrials_get_study', {
     const proto = result.study.protocolSection as Record<string, unknown> | undefined;
     const id = proto?.identificationModule as Record<string, unknown> | undefined;
     const title = (id?.briefTitle as string) ?? (id?.officialTitle as string) ?? 'Unknown';
-    return [{ type: 'text', text: `**${result.study.nctId ?? 'Study'}**: ${title}` }];
+    return [{ type: 'text', text: `**${(id?.nctId as string) ?? 'Study'}**: ${title}` }];
   },
 });

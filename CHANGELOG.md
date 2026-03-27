@@ -8,7 +8,7 @@ Ground-up rewrite on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@c
 
 ### Breaking Changes
 
-- **Tool surface redesigned.** 7 tools consolidated to 8. `clinicaltrials_analyze_trends` and `clinicaltrials_compare_studies` removed — LLMs compose these from the search and count primitives. Three new discovery and matching tools added.
+- **Tool surface redesigned.** 7 tools consolidated to 7. `clinicaltrials_analyze_trends` and `clinicaltrials_compare_studies` removed — LLMs compose these from the search and count primitives. New discovery and matching tools added.
 - **Entry point rewritten.** `src/index.ts` is now a single `createApp()` call. The framework handles transport (stdio + HTTP), lifecycle, logging, and error formatting.
 - **All definitions use new builders.** `tool()`, `resource()`, and `prompt()` with Zod input/output schemas, `format()` functions, and MCP annotations.
 - **Dependencies gutted.** ~40 direct dependencies replaced by `@cyanheads/mcp-ts-core`. Removed `hono`, `jose`, `dotenv`, `@modelcontextprotocol/sdk`, `prettier`, and others. Added `@biomejs/biome` for formatting/linting.
@@ -22,19 +22,18 @@ Ground-up rewrite on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@c
 | `clinicaltrials_get_study_results` | Rewritten | Partial-success pattern — returns results, `studiesWithoutResults`, and `fetchErrors` per study. Max 5 NCT IDs per call. |
 | `clinicaltrials_get_field_values` | Rewritten | Invalid field names now return a validation error with guidance instead of a generic 404. |
 | `clinicaltrials_get_study_count` | **New** | Count-only queries for fast statistics without fetching study data. |
-| `clinicaltrials_get_enums` | **New** | Get canonical enum type definitions and values from the data model. Complements `get_field_values` (frequency stats) with the exhaustive allowed-value set. |
 | `clinicaltrials_get_field_definitions` | **New** | Browse the study data model field tree — piece names, types, nesting. Supports subtree navigation via dot-notation `path` and keyword `search`. |
-| `clinicaltrials_find_eligible` | **New** | Patient-to-trial matching with age/sex/location filtering and geographic proximity scoring. Replaces `clinicaltrials_find_eligible_studies`. |
+| `clinicaltrials_find_eligible` | **New** | Patient-to-trial matching. Builds optimized API queries from a patient profile (age, sex, conditions, location) and returns studies with eligibility/location fields for the caller to evaluate. |
 
 ### Resources & Prompts
 
 - **`clinicaltrials://{nctId}`** — single study lookup by NCT ID.
-- **`analyze_trial_landscape`** — guided 6-step workflow for systematic trial landscape analysis.
+- **`analyze_trial_landscape`** — adaptable workflow for data-driven trial landscape analysis using count + search tools.
 
 ### Service Layer
 
-- **`ClinicalTrialsService`** — new API client with retry (3 attempts, exponential backoff), rate limiting (1 req/sec), request timeout via `AbortSignal`, HTML error detection, and structured error factories. Methods: `searchStudies`, `getStudy`, `getFieldValues`, `getEnums`, `getMetadata`.
-- **Server config** — lazy-parsed Zod schema for `CT_*` env vars (`CT_API_BASE_URL`, `CT_REQUEST_TIMEOUT_MS`, `CT_MAX_PAGE_SIZE`, `CT_MAX_ELIGIBLE_CANDIDATES`).
+- **`ClinicalTrialsService`** — new API client with retry (3 attempts, exponential backoff), rate limiting (1 req/sec), request timeout via `AbortSignal`, HTML error detection, and structured error factories. Methods: `searchStudies`, `getStudy`, `getFieldValues`, `getMetadata`.
+- **Server config** — lazy-parsed Zod schema for `CT_*` env vars (`CT_API_BASE_URL`, `CT_REQUEST_TIMEOUT_MS`, `CT_MAX_PAGE_SIZE`).
 
 ### Improvements
 

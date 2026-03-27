@@ -19,7 +19,6 @@ const testConfig: ServerConfig = {
   apiBaseUrl: 'https://test.api/v2',
   requestTimeoutMs: 5000,
   maxPageSize: 100,
-  maxEligibleCandidates: 50,
 };
 
 function jsonResponse(body: unknown, status = 200) {

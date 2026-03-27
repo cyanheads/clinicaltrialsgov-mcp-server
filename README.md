@@ -11,6 +11,8 @@
 [![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server)
 [![Version](https://img.shields.io/badge/Version-2.0.0-blue.svg?style=flat-square)](./CHANGELOG.md)
 [![Framework](https://img.shields.io/badge/Built%20on-@cyanheads/mcp--ts--core-259?style=flat-square)](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
+
+
 [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.28.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/)
 [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/)
@@ -19,7 +21,7 @@
 
 ---
 
-## Tools
+## Overview
 
 Eight tools for searching, discovering, analyzing, and matching clinical trials:
 
@@ -33,6 +35,16 @@ Eight tools for searching, discovering, analyzing, and matching clinical trials:
 | `clinicaltrials_get_enums`             | Get canonical enum type definitions and all valid values from the data model. Complements `get_field_values`. |
 | `clinicaltrials_get_study_results`     | Extract outcomes, adverse events, participant flow, and baseline from completed studies. Optional summary mode reduces ~200KB payloads to ~5KB. |
 | `clinicaltrials_find_eligible`         | Match patient demographics and conditions to eligible recruiting trials with location proximity. Returns hints when no studies match. |
+
+| Resource                   | Description                                         |
+| :------------------------- | :-------------------------------------------------- |
+| `clinicaltrials://{nctId}` | Fetch a single clinical study by NCT ID. Full JSON. |
+
+| Prompt                    | Description                                                                        |
+| :------------------------ | :--------------------------------------------------------------------------------- |
+| `analyze_trial_landscape` | Guides multi-step landscape analysis using count + search tools across dimensions. |
+
+## Tools
 
 ### `clinicaltrials_search_studies`
 
@@ -69,18 +81,6 @@ Match a patient profile to eligible recruiting trials.
 - Ranks by geographic proximity (city > state > country match)
 - Returns match explanations, eligibility summaries, and nearby study sites
 - Provides actionable hints when no studies match (broaden conditions, adjust filters)
-
-## Resources
-
-| URI Pattern                | Description                                         |
-| :------------------------- | :-------------------------------------------------- |
-| `clinicaltrials://{nctId}` | Fetch a single clinical study by NCT ID. Full JSON. |
-
-## Prompts
-
-| Prompt                    | Description                                                                        |
-| :------------------------ | :--------------------------------------------------------------------------------- |
-| `analyze_trial_landscape` | Guides multi-step landscape analysis using count + search tools across dimensions. |
 
 ## Features
 

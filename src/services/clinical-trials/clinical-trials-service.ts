@@ -3,20 +3,15 @@
  * @module services/clinical-trials/clinical-trials-service
  */
 
-import type { Context } from "@cyanheads/mcp-ts-core";
+import type { Context } from '@cyanheads/mcp-ts-core';
 import {
   McpError,
   notFound,
   serviceUnavailable,
   validationError,
-} from "@cyanheads/mcp-ts-core/errors";
-import { getServerConfig, type ServerConfig } from "@/config/server-config.js";
-import type {
-  FieldValueStats,
-  PagedStudiesResponse,
-  SearchParams,
-  Study,
-} from "./types.js";
+} from '@cyanheads/mcp-ts-core/errors';
+import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
+import type { FieldValueStats, PagedStudiesResponse, SearchParams, Study } from './types.js';
 
 const MAX_RETRIES = 3;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
@@ -35,32 +30,26 @@ export class ClinicalTrialsService {
   }
 
   /** Search studies with query, filters, pagination, and field selection. */
-  searchStudies(
-    params: SearchParams,
-    ctx: Context,
-  ): Promise<PagedStudiesResponse> {
+  searchStudies(params: SearchParams, ctx: Context): Promise<PagedStudiesResponse> {
     const q = this.buildSearchQuery(params);
-    ctx.log.debug("searchStudies", { paramKeys: Object.keys(q) });
-    return this.fetchJson<PagedStudiesResponse>("/studies", q, ctx);
+    ctx.log.debug('searchStudies', { paramKeys: Object.keys(q) });
+    return this.fetchJson<PagedStudiesResponse>('/studies', q, ctx);
   }
 
   /** Fetch a single study by NCT ID. */
   getStudy(nctId: string, ctx: Context): Promise<Study> {
-    ctx.log.debug("getStudy", { nctId });
-    return this.fetchJson<Study>(
-      `/studies/${encodeURIComponent(nctId)}`,
-      {},
-      ctx,
-    );
+    ctx.log.debug('getStudy', { nctId });
+    return this.fetchJson<Study>(`/studies/${encodeURIComponent(nctId)}`, {}, ctx);
   }
 
   /** Get field value statistics for the specified fields. */
   getFieldValues(fields: string[], ctx: Context): Promise<FieldValueStats[]> {
-    ctx.log.debug("getFieldValues", { fields });
+    ctx.log.debug('getFieldValues', { fields });
     return this.fetchJson<FieldValueStats[]>(
-      "/stats/field/values",
-      { fields: fields.join("|") },
+      '/stats/field/values',
+      { fields: fields.join('|') },
       ctx,
+      { jsonFormat: false },
     );
   }
 
@@ -70,22 +59,21 @@ export class ClinicalTrialsService {
 
   private buildSearchQuery(params: SearchParams): Record<string, string> {
     const q: Record<string, string> = {};
-    if (params.queryTerm) q["query.term"] = params.queryTerm;
-    if (params.queryCond) q["query.cond"] = params.queryCond;
-    if (params.queryIntr) q["query.intr"] = params.queryIntr;
-    if (params.queryLocn) q["query.locn"] = params.queryLocn;
-    if (params.querySpons) q["query.spons"] = params.querySpons;
-    if (params.queryTitles) q["query.titles"] = params.queryTitles;
-    if (params.queryOutc) q["query.outc"] = params.queryOutc;
+    if (params.queryTerm) q['query.term'] = params.queryTerm;
+    if (params.queryCond) q['query.cond'] = params.queryCond;
+    if (params.queryIntr) q['query.intr'] = params.queryIntr;
+    if (params.queryLocn) q['query.locn'] = params.queryLocn;
+    if (params.querySpons) q['query.spons'] = params.querySpons;
+    if (params.queryTitles) q['query.titles'] = params.queryTitles;
+    if (params.queryOutc) q['query.outc'] = params.queryOutc;
     if (params.filterOverallStatus?.length)
-      q["filter.overallStatus"] = params.filterOverallStatus.join("|");
-    if (params.filterGeo) q["filter.geo"] = params.filterGeo;
-    if (params.filterIds?.length) q["filter.ids"] = params.filterIds.join("|");
-    if (params.filterAdvanced) q["filter.advanced"] = params.filterAdvanced;
-    if (params.fields?.length) q.fields = params.fields.join("|");
+      q['filter.overallStatus'] = params.filterOverallStatus.join('|');
+    if (params.filterGeo) q['filter.geo'] = params.filterGeo;
+    if (params.filterIds?.length) q['filter.ids'] = params.filterIds.join('|');
+    if (params.filterAdvanced) q['filter.advanced'] = params.filterAdvanced;
+    if (params.fields?.length) q.fields = params.fields.join('|');
     if (params.sort) q.sort = params.sort;
-    if (params.countTotal !== undefined)
-      q.countTotal = String(params.countTotal);
+    if (params.countTotal !== undefined) q.countTotal = String(params.countTotal);
     if (params.pageSize !== undefined)
       q.pageSize = String(Math.min(params.pageSize, this.maxPageSize));
     if (params.pageToken) q.pageToken = params.pageToken;
@@ -102,9 +90,10 @@ export class ClinicalTrialsService {
     path: string,
     params: Record<string, string>,
     ctx: Context,
+    { jsonFormat = true }: { jsonFormat?: boolean } = {},
   ): Promise<T> {
-    const url = new URL(path, this.baseUrl);
-    url.searchParams.set("format", "json");
+    const url = new URL(`${this.baseUrl}${path}`);
+    if (jsonFormat) url.searchParams.set('format', 'json');
     for (const [k, v] of Object.entries(params)) {
       if (v) url.searchParams.set(k, v);
     }
@@ -112,33 +101,29 @@ export class ClinicalTrialsService {
     let lastError: unknown;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      if (ctx.signal.aborted) throw new Error("Request cancelled");
+      if (ctx.signal.aborted) throw new Error('Request cancelled');
 
       if (attempt > 0) {
-        const delay =
-          Math.min(1000 * 2 ** (attempt - 1), 8000) + Math.random() * 500;
-        ctx.log.debug("Retrying", { attempt, delay: Math.round(delay), path });
+        const delay = Math.min(1000 * 2 ** (attempt - 1), 8000) + Math.random() * 500;
+        ctx.log.debug('Retrying', { attempt, delay: Math.round(delay), path });
         await new Promise((r) => setTimeout(r, delay));
       }
 
       await this.throttle();
 
       try {
-        const signal = AbortSignal.any([
-          ctx.signal,
-          AbortSignal.timeout(this.timeoutMs),
-        ]);
+        const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(this.timeoutMs)]);
         const res = await fetch(url, {
           signal,
-          headers: { Accept: "application/json" },
+          headers: { Accept: 'application/json' },
         });
 
         if (res.ok) {
-          const ct = res.headers.get("content-type") ?? "";
-          if (!ct.includes("json")) {
+          const ct = res.headers.get('content-type') ?? '';
+          if (!ct.includes('json')) {
             const text = await res.text();
-            if (text.includes("<html") || text.includes("<!DOCTYPE")) {
-              lastError = new Error("API returned HTML instead of JSON");
+            if (text.includes('<html') || text.includes('<!DOCTYPE')) {
+              lastError = new Error('API returned HTML instead of JSON');
               continue;
             }
             return JSON.parse(text) as T;
@@ -160,13 +145,13 @@ export class ClinicalTrialsService {
         throw new Error(`HTTP ${res.status}: ${res.statusText}`);
       } catch (err) {
         if (err instanceof McpError) throw err;
-        const name = (err as Error).name ?? "";
+        const name = (err as Error).name ?? '';
         const code = (err as NodeJS.ErrnoException).code;
         if (
-          name === "AbortError" ||
-          name === "TimeoutError" ||
-          code === "ECONNRESET" ||
-          code === "ETIMEDOUT"
+          name === 'AbortError' ||
+          name === 'TimeoutError' ||
+          code === 'ECONNRESET' ||
+          code === 'ETIMEDOUT'
         ) {
           lastError = err;
           continue;
@@ -175,13 +160,10 @@ export class ClinicalTrialsService {
       }
     }
 
-    throw serviceUnavailable(
-      "ClinicalTrials.gov API unavailable after retries",
-      {
-        path,
-        lastError: String(lastError),
-      },
-    );
+    throw serviceUnavailable('ClinicalTrials.gov API unavailable after retries', {
+      path,
+      lastError: String(lastError),
+    });
   }
 }
 
@@ -200,7 +182,7 @@ export function initClinicalTrialsService(): void {
 export function getClinicalTrialsService(): ClinicalTrialsService {
   if (!_service)
     throw new Error(
-      "ClinicalTrialsService not initialized — call initClinicalTrialsService() in setup()",
+      'ClinicalTrialsService not initialized — call initClinicalTrialsService() in setup()',
     );
   return _service;
 }

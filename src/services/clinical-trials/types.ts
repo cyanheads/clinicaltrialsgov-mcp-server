@@ -47,7 +47,7 @@ export interface RawStudyShape {
       phases?: string[];
     };
     eligibilityModule?: {
-      healthyVolunteers?: string;
+      healthyVolunteers?: boolean;
       maximumAge?: string;
       minimumAge?: string;
       sex?: string;

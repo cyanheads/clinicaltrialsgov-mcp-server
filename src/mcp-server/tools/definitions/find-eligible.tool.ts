@@ -3,31 +3,31 @@
  * @module mcp-server/tools/definitions/find-eligible.tool
  */
 
-import { tool, z } from "@cyanheads/mcp-ts-core";
-import { getServerConfig } from "@/config/server-config.js";
-import { getClinicalTrialsService } from "@/services/clinical-trials/clinical-trials-service.js";
-import type { RawStudyShape } from "@/services/clinical-trials/types.js";
+import { tool, z } from '@cyanheads/mcp-ts-core';
+import { getServerConfig } from '@/config/server-config.js';
+import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
+import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 
 /** Fields requested for eligibility evaluation. */
 const ELIGIBLE_FIELDS = [
-  "NCTId",
-  "BriefTitle",
-  "BriefSummary",
-  "OverallStatus",
-  "Phase",
-  "LeadSponsorName",
-  "EnrollmentCount",
-  "Condition",
-  "InterventionName",
-  "MinimumAge",
-  "MaximumAge",
-  "Sex",
-  "HealthyVolunteers",
-  "LocationFacility",
-  "LocationCity",
-  "LocationState",
-  "LocationCountry",
-  "LocationStatus",
+  'NCTId',
+  'BriefTitle',
+  'BriefSummary',
+  'OverallStatus',
+  'Phase',
+  'LeadSponsorName',
+  'EnrollmentCount',
+  'Condition',
+  'InterventionName',
+  'MinimumAge',
+  'MaximumAge',
+  'Sex',
+  'HealthyVolunteers',
+  'LocationFacility',
+  'LocationCity',
+  'LocationState',
+  'LocationCountry',
+  'LocationStatus',
 ];
 
 /** Parse an age string like "18 Years" or "6 Months" to years. */
@@ -37,10 +37,10 @@ function parseAgeYears(ageStr: string | undefined): number | undefined {
   if (!match?.[1] || !match[2]) return;
   const value = parseInt(match[1], 10);
   const unit = match[2].toLowerCase();
-  if (unit.startsWith("year")) return value;
-  if (unit.startsWith("month")) return value / 12;
-  if (unit.startsWith("week")) return value / 52;
-  if (unit.startsWith("day")) return value / 365;
+  if (unit.startsWith('year')) return value;
+  if (unit.startsWith('month')) return value / 12;
+  if (unit.startsWith('week')) return value / 52;
+  if (unit.startsWith('day')) return value / 365;
   return;
 }
 
@@ -53,21 +53,14 @@ function locationScore(
     city: string | undefined;
   },
 ): number {
-  const locations =
-    study.protocolSection?.contactsLocationsModule?.locations ?? [];
+  const locations = study.protocolSection?.contactsLocationsModule?.locations ?? [];
   let best = 0;
   for (const loc of locations) {
     if (loc.country?.toLowerCase() !== location.country.toLowerCase()) continue;
     let score = 1;
-    if (
-      location.state &&
-      loc.state?.toLowerCase() === location.state.toLowerCase()
-    ) {
+    if (location.state && loc.state?.toLowerCase() === location.state.toLowerCase()) {
       score = 2;
-      if (
-        location.city &&
-        loc.city?.toLowerCase() === location.city.toLowerCase()
-      ) {
+      if (location.city && loc.city?.toLowerCase() === location.city.toLowerCase()) {
         score = 3;
       }
     }
@@ -92,16 +85,13 @@ function passesPostFilter(
   const maxAge = parseAgeYears(elig.maximumAge);
   if (maxAge !== undefined && age > maxAge) return false;
 
-  if (elig.sex && elig.sex !== "ALL" && sex !== "All") {
+  if (elig.sex && elig.sex !== 'ALL' && sex !== 'All') {
     if (elig.sex !== sex.toUpperCase()) return false;
   }
 
-  const locations =
-    study.protocolSection?.contactsLocationsModule?.locations ?? [];
+  const locations = study.protocolSection?.contactsLocationsModule?.locations ?? [];
   if (locations.length > 0) {
-    const hasCountry = locations.some(
-      (l) => l.country?.toLowerCase() === country.toLowerCase(),
-    );
+    const hasCountry = locations.some((l) => l.country?.toLowerCase() === country.toLowerCase());
     if (!hasCountry) return false;
   }
 
@@ -131,15 +121,13 @@ function formatEligibleStudy(
   );
 
   return {
-    nctId: ident?.nctId ?? "",
-    title: ident?.briefTitle ?? "",
+    nctId: ident?.nctId ?? '',
+    title: ident?.briefTitle ?? '',
     briefSummary: proto?.descriptionModule?.briefSummary,
     matchReasons,
     eligibility: {
-      ageRange: [elig?.minimumAge ?? "N/A", elig?.maximumAge ?? "N/A"].join(
-        " to ",
-      ),
-      sex: elig?.sex ?? "ALL",
+      ageRange: [elig?.minimumAge ?? 'N/A', elig?.maximumAge ?? 'N/A'].join(' to '),
+      sex: elig?.sex ?? 'ALL',
       healthyVolunteers: elig?.healthyVolunteers,
     },
     locations: countryLocations.slice(0, 5).map((l) => ({
@@ -150,19 +138,19 @@ function formatEligibleStudy(
       status: l.status,
     })),
     studyDetails: {
-      phase: design?.phases?.join(", "),
-      status: status?.overallStatus ?? "",
+      phase: design?.phases?.join(', '),
+      status: status?.overallStatus ?? '',
       enrollment: design?.enrollmentInfo?.count,
       sponsor: sponsor?.name,
     },
   };
 }
 
-export const findEligible = tool("clinicaltrials_find_eligible", {
+export const findEligible = tool('clinicaltrials_find_eligible', {
   description:
-    "Match patient demographics and conditions to eligible recruiting clinical trials. Takes a " +
-    "patient profile (age, sex, conditions, location) and returns studies the patient may qualify " +
-    "for, with match explanations. Internally builds optimized queries with demographic filters.",
+    'Match patient demographics and conditions to eligible recruiting clinical trials. Takes a ' +
+    'patient profile (age, sex, conditions, location) and returns studies the patient may qualify ' +
+    'for, with match explanations. Internally builds optimized queries with demographic filters.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -170,89 +158,69 @@ export const findEligible = tool("clinicaltrials_find_eligible", {
   },
 
   input: z.object({
-    age: z.number().int().min(0).max(120).describe("Patient age in years."),
-    sex: z.enum(["Female", "Male", "All"]).describe("Biological sex."),
+    age: z.number().int().min(0).max(120).describe('Patient age in years.'),
+    sex: z.enum(['Female', 'Male', 'All']).describe('Biological sex.'),
     conditions: z
       .array(z.string())
       .min(1)
-      .describe(
-        'Medical conditions or diagnoses. E.g., ["Type 2 Diabetes", "Hypertension"].',
-      ),
+      .describe('Medical conditions or diagnoses. E.g., ["Type 2 Diabetes", "Hypertension"].'),
     location: z
       .object({
         country: z.string().describe('Country name. E.g., "United States".'),
-        state: z.string().optional().describe("State or province."),
-        city: z.string().optional().describe("City name."),
+        state: z.string().optional().describe('State or province.'),
+        city: z.string().optional().describe('City name.'),
       })
-      .describe("Patient location."),
-    recruitingOnly: z
-      .boolean()
-      .default(true)
-      .describe("Only include actively recruiting studies."),
-    maxResults: z
-      .number()
-      .int()
-      .min(1)
-      .max(50)
-      .default(10)
-      .describe("Maximum results to return."),
+      .describe('Patient location.'),
+    recruitingOnly: z.boolean().default(true).describe('Only include actively recruiting studies.'),
+    maxResults: z.number().int().min(1).max(50).default(10).describe('Maximum results to return.'),
   }),
 
   output: z.object({
     eligibleStudies: z
       .array(
         z.object({
-          nctId: z.string().describe("NCT identifier."),
-          title: z.string().describe("Brief study title."),
-          briefSummary: z.string().optional().describe("Study summary."),
-          matchReasons: z
-            .array(z.string())
-            .describe("Why the patient may qualify."),
+          nctId: z.string().describe('NCT identifier.'),
+          title: z.string().describe('Brief study title.'),
+          briefSummary: z.string().optional().describe('Study summary.'),
+          matchReasons: z.array(z.string()).describe('Why the patient may qualify.'),
           eligibility: z
             .object({
-              ageRange: z
-                .string()
-                .describe('Age range, e.g., "18 Years to 65 Years".'),
-              sex: z.string().describe("Sex eligibility."),
-              healthyVolunteers: z
-                .string()
-                .optional()
-                .describe("Accepts healthy volunteers."),
+              ageRange: z.string().describe('Age range, e.g., "18 Years to 65 Years".'),
+              sex: z.string().describe('Sex eligibility.'),
+              healthyVolunteers: z.boolean().optional().describe('Accepts healthy volunteers.'),
             })
-            .describe("Eligibility criteria summary."),
+            .describe('Eligibility criteria summary.'),
           locations: z
             .array(
               z.object({
-                facility: z.string().optional().describe("Facility name."),
-                city: z.string().optional().describe("City."),
-                state: z.string().optional().describe("State/province."),
-                country: z.string().optional().describe("Country."),
-                status: z.string().optional().describe("Recruitment status."),
+                facility: z.string().optional().describe('Facility name.'),
+                city: z.string().optional().describe('City.'),
+                state: z.string().optional().describe('State/province.'),
+                country: z.string().optional().describe('Country.'),
+                status: z.string().optional().describe('Recruitment status.'),
               }),
             )
-            .describe("Study locations in patient region."),
+            .describe('Study locations in patient region.'),
           studyDetails: z
             .object({
-              phase: z.string().optional().describe("Trial phase."),
-              status: z.string().describe("Overall status."),
-              enrollment: z.number().optional().describe("Target enrollment."),
-              sponsor: z.string().optional().describe("Lead sponsor."),
+              phase: z.string().optional().describe('Trial phase.'),
+              status: z.string().describe('Overall status.'),
+              enrollment: z.number().optional().describe('Target enrollment.'),
+              sponsor: z.string().optional().describe('Lead sponsor.'),
             })
-            .describe("Study details."),
+            .describe('Study details.'),
         }),
       )
-      .describe("Matching eligible studies ranked by location proximity."),
-    totalMatches: z
-      .number()
-      .describe("Total eligible studies found before maxResults cap."),
+      .describe('Matching eligible studies ranked by location proximity.'),
+    totalMatches: z.number().describe('Total eligible studies found before maxResults cap.'),
     searchCriteria: z
       .object({
-        conditions: z.array(z.string()).describe("Conditions searched."),
-        location: z.string().describe("Location searched."),
-        age: z.number().describe("Patient age."),
-        sex: z.string().describe("Patient sex."),
+        conditions: z.array(z.string()).describe('Conditions searched.'),
+        location: z.string().describe('Location searched.'),
+        age: z.number().describe('Patient age.'),
+        sex: z.string().describe('Patient sex.'),
       })
-      .describe("Search criteria used."),
+      .describe('Search criteria used.'),
   }),
 
   async handler(input, ctx) {
@@ -261,8 +229,8 @@ export const findEligible = tool("clinicaltrials_find_eligible", {
 
     // Build condition query — quote multi-word terms, join with OR
     const conditionQuery = input.conditions
-      .map((c) => (c.includes(" ") ? `"${c}"` : c))
-      .join(" OR ");
+      .map((c) => (c.includes(' ') ? `"${c}"` : c))
+      .join(' OR ');
 
     // Build location query
     const locationParts = [
@@ -270,26 +238,22 @@ export const findEligible = tool("clinicaltrials_find_eligible", {
       input.location.state,
       input.location.country,
     ].filter(Boolean);
-    const locationQuery = locationParts.join(", ");
+    const locationQuery = locationParts.join(', ');
 
     // Build status filter
-    const statusFilter = input.recruitingOnly
-      ? ["RECRUITING", "NOT_YET_RECRUITING"]
-      : undefined;
+    const statusFilter = input.recruitingOnly ? ['RECRUITING', 'NOT_YET_RECRUITING'] : undefined;
 
     // Build advanced filter for age and sex
     const advancedParts: string[] = [
       `AREA[MinimumAge]RANGE[MIN, ${input.age} years]`,
       `AREA[MaximumAge]RANGE[${input.age} years, MAX]`,
     ];
-    if (input.sex !== "All") {
-      advancedParts.push(
-        `(AREA[Sex]ALL OR AREA[Sex]${input.sex.toUpperCase()})`,
-      );
+    if (input.sex !== 'All') {
+      advancedParts.push(`(AREA[Sex]ALL OR AREA[Sex]${input.sex.toUpperCase()})`);
     }
-    const advancedFilter = advancedParts.join(" AND ");
+    const advancedFilter = advancedParts.join(' AND ');
 
-    ctx.log.info("Finding eligible studies", {
+    ctx.log.info('Finding eligible studies', {
       conditions: input.conditions,
       location: locationQuery,
       age: input.age,
@@ -329,29 +293,23 @@ export const findEligible = tool("clinicaltrials_find_eligible", {
 
     for (const raw of result.studies) {
       const study = raw as RawStudyShape;
-      if (!passesPostFilter(study, input.age, input.sex, patientLoc.country))
-        continue;
+      if (!passesPostFilter(study, input.age, input.sex, patientLoc.country)) continue;
 
       const score = locationScore(study, patientLoc);
       const reasons: string[] = [];
 
-      const conditions =
-        study.protocolSection?.conditionsModule?.conditions ?? [];
-      if (conditions.length > 0)
-        reasons.push(`Conditions: ${conditions.join(", ")}`);
+      const conditions = study.protocolSection?.conditionsModule?.conditions ?? [];
+      if (conditions.length > 0) reasons.push(`Conditions: ${conditions.join(', ')}`);
 
       const elig = study.protocolSection?.eligibilityModule ?? {};
       reasons.push(
-        `Age ${input.age} within range (${elig.minimumAge ?? "any"} to ${elig.maximumAge ?? "any"})`,
+        `Age ${input.age} within range (${elig.minimumAge ?? 'any'} to ${elig.maximumAge ?? 'any'})`,
       );
-      if (input.sex !== "All") reasons.push(`Sex: ${input.sex} eligible`);
+      if (input.sex !== 'All') reasons.push(`Sex: ${input.sex} eligible`);
 
-      if (score >= 3)
-        reasons.push(`Location: study site in ${patientLoc.city}`);
-      else if (score >= 2)
-        reasons.push(`Location: study site in ${patientLoc.state}`);
-      else if (score >= 1)
-        reasons.push(`Location: study site in ${patientLoc.country}`);
+      if (score >= 3) reasons.push(`Location: study site in ${patientLoc.city}`);
+      else if (score >= 2) reasons.push(`Location: study site in ${patientLoc.state}`);
+      else if (score >= 1) reasons.push(`Location: study site in ${patientLoc.country}`);
 
       scored.push({ study, score, reasons });
     }
@@ -364,7 +322,7 @@ export const findEligible = tool("clinicaltrials_find_eligible", {
       formatEligibleStudy(study, reasons, patientLoc),
     );
 
-    ctx.log.info("Eligibility matching complete", {
+    ctx.log.info('Eligibility matching complete', {
       evaluated: result.studies.length,
       passed: scored.length,
       returned: eligibleStudies.length,
@@ -390,19 +348,17 @@ export const findEligible = tool("clinicaltrials_find_eligible", {
     for (const [i, s] of result.eligibleStudies.entries()) {
       lines.push(`\n${i + 1}. **${s.nctId}**: ${s.title}`);
       lines.push(
-        `   Status: ${s.studyDetails.status} | Phase: ${s.studyDetails.phase ?? "N/A"} | Sponsor: ${s.studyDetails.sponsor ?? "N/A"}`,
+        `   Status: ${s.studyDetails.status} | Phase: ${s.studyDetails.phase ?? 'N/A'} | Sponsor: ${s.studyDetails.sponsor ?? 'N/A'}`,
       );
-      lines.push(
-        `   Eligibility: ${s.eligibility.ageRange}, ${s.eligibility.sex}`,
-      );
-      lines.push(`   Match: ${s.matchReasons.join("; ")}`);
+      lines.push(`   Eligibility: ${s.eligibility.ageRange}, ${s.eligibility.sex}`);
+      lines.push(`   Match: ${s.matchReasons.join('; ')}`);
       const loc = s.locations[0];
       if (loc) {
         lines.push(
-          `   Location: ${[loc.facility, loc.city, loc.state, loc.country].filter(Boolean).join(", ")}`,
+          `   Location: ${[loc.facility, loc.city, loc.state, loc.country].filter(Boolean).join(', ')}`,
         );
       }
     }
-    return [{ type: "text", text: lines.join("\n") }];
+    return [{ type: 'text', text: lines.join('\n') }];
   },
 });

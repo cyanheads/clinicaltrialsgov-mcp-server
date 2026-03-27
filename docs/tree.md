@@ -1,15 +1,17 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-03-27 00:28:16
+Generated on: 2026-03-27 00:48:31
 
 ```text
 clinicaltrialsgov-mcp-server/
 ├── .claude/
 ├── .github/
-│   └── ISSUE_TEMPLATE/
-│       ├── bug_report.yml
-│       ├── config.yml
-│       └── feature_request.yml
+│   ├── ISSUE_TEMPLATE/
+│   │   ├── bug_report.yml
+│   │   ├── config.yml
+│   │   └── feature_request.yml
+│   └── workflows/
+│       └── codeql.yml
 ├── .husky/
 ├── .vscode/
 │   ├── extensions.json
@@ -97,13 +99,15 @@ clinicaltrialsgov-mcp-server/
 │   │   │       ├── index.ts
 │   │   │       └── study.resource.ts
 │   │   └── tools/
-│   │       └── definitions/
-│   │           ├── find-eligible.tool.ts
-│   │           ├── get-field-values.tool.ts
-│   │           ├── get-study-count.tool.ts
-│   │           ├── get-study-results.tool.ts
-│   │           ├── index.ts
-│   │           └── search-studies.tool.ts
+│   │       ├── definitions/
+│   │       │   ├── find-eligible.tool.ts
+│   │       │   ├── get-field-values.tool.ts
+│   │       │   ├── get-study-count.tool.ts
+│   │       │   ├── get-study-results.tool.ts
+│   │       │   ├── index.ts
+│   │       │   └── search-studies.tool.ts
+│   │       └── utils/
+│   │           └── query-helpers.ts
 │   ├── services/
 │   │   └── clinical-trials/
 │   │       ├── clinical-trials-service.ts

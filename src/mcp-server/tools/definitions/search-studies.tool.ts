@@ -60,7 +60,12 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         `Geographic proximity filter. Format: distance(lat,lon,radius). E.g., "distance(47.6062,-122.3321,50mi)" for studies within 50 miles of Seattle.`,
       ),
     nctIds: z
-      .union([z.string(), z.array(z.string())])
+      .union([
+        z.string().regex(/^NCT\d{8}$/, 'NCT IDs must match format NCTxxxxxxxx (8 digits).'),
+        z.array(
+          z.string().regex(/^NCT\d{8}$/, 'NCT IDs must match format NCTxxxxxxxx (8 digits).'),
+        ),
+      ])
       .optional()
       .describe('Filter to specific NCT IDs for batch lookups.'),
     fields: z
@@ -90,6 +95,10 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .optional()
       .describe('Total matching studies (first page only when countTotal=true).'),
     nextPageToken: z.string().optional().describe('Token for the next page. Absent on last page.'),
+    searchCriteria: z
+      .record(z.string(), z.unknown())
+      .optional()
+      .describe('Echo of query/filter criteria used. Present when results are empty.'),
   }),
 
   async handler(input, ctx) {
@@ -119,12 +128,40 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       count: result.studies.length,
       totalCount: result.totalCount,
     });
+
+    // Echo search criteria on empty results so callers know what produced zero matches
+    if (result.studies.length === 0) {
+      const criteria: Record<string, unknown> = {};
+      if (input.query) criteria.query = input.query;
+      if (input.conditionQuery) criteria.conditionQuery = input.conditionQuery;
+      if (input.interventionQuery) criteria.interventionQuery = input.interventionQuery;
+      if (input.locationQuery) criteria.locationQuery = input.locationQuery;
+      if (input.sponsorQuery) criteria.sponsorQuery = input.sponsorQuery;
+      if (input.titleQuery) criteria.titleQuery = input.titleQuery;
+      if (input.outcomeQuery) criteria.outcomeQuery = input.outcomeQuery;
+      if (input.statusFilter) criteria.statusFilter = input.statusFilter;
+      if (input.phaseFilter) criteria.phaseFilter = input.phaseFilter;
+      if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
+      if (input.geoFilter) criteria.geoFilter = input.geoFilter;
+      if (input.nctIds) criteria.nctIds = input.nctIds;
+      return { ...result, searchCriteria: criteria };
+    }
+
     return result;
   },
 
   format: (result) => {
     const lines: string[] = [];
     const count = result.studies.length;
+    if (count === 0) {
+      lines.push('No studies matched the search criteria.');
+      if (result.searchCriteria && Object.keys(result.searchCriteria).length > 0) {
+        const parts = Object.entries(result.searchCriteria).map(([k, v]) => `${k}=${v}`);
+        lines.push(`Criteria: ${parts.join(', ')}`);
+      }
+      lines.push('Try broader search terms or fewer filters.');
+      return [{ type: 'text', text: lines.join('\n') }];
+    }
     if (result.totalCount !== undefined) {
       lines.push(`Found ${count} studies (${result.totalCount} total matching)`);
     } else {

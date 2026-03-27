@@ -143,6 +143,11 @@ export class ClinicalTrialsService {
         if (res.status === 404) throw notFound(`Not found: ${path}`);
         if (res.status === 400) {
           const text = await res.text();
+          if (text.includes('filter.ids') && text.includes('incorrect format')) {
+            throw validationError(
+              `Invalid NCT ID format. IDs must match NCTxxxxxxxx (NCT + 8 digits). API response: ${text}`,
+            );
+          }
           throw validationError(text || `Bad request: ${path}`);
         }
 

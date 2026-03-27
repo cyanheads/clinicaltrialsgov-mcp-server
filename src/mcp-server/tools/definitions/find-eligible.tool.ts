@@ -75,6 +75,7 @@ function passesPostFilter(
   age: number,
   sex: string,
   country: string,
+  healthyVolunteer: boolean,
 ): boolean {
   const elig = study.protocolSection?.eligibilityModule;
   if (!elig) return true;
@@ -88,6 +89,8 @@ function passesPostFilter(
   if (elig.sex && elig.sex !== 'ALL' && sex !== 'All') {
     if (elig.sex !== sex.toUpperCase()) return false;
   }
+
+  if (healthyVolunteer && elig.healthyVolunteers === false) return false;
 
   const locations = study.protocolSection?.contactsLocationsModule?.locations ?? [];
   if (locations.length > 0) {
@@ -168,6 +171,12 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         city: z.string().optional().describe('City name.'),
       })
       .describe('Patient location.'),
+    healthyVolunteer: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Whether the patient is a healthy volunteer (no relevant medical conditions). Studies that do not accept healthy volunteers will be excluded.',
+      ),
     recruitingOnly: z.boolean().default(true).describe('Only include actively recruiting studies.'),
     maxResults: z.number().int().min(1).max(50).default(10).describe('Maximum results to return.'),
   }),
@@ -294,7 +303,8 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
 
     for (const raw of result.studies) {
       const study = raw as RawStudyShape;
-      if (!passesPostFilter(study, input.age, input.sex, patientLoc.country)) continue;
+      if (!passesPostFilter(study, input.age, input.sex, patientLoc.country, input.healthyVolunteer))
+        continue;
 
       const score = locationScore(study, patientLoc);
       const reasons: string[] = [];
@@ -307,6 +317,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         `Age ${input.age} within range (${elig.minimumAge ?? 'any'} to ${elig.maximumAge ?? 'any'})`,
       );
       if (input.sex !== 'All') reasons.push(`Sex: ${input.sex} eligible`);
+      if (input.healthyVolunteer) reasons.push('Accepts healthy volunteers');
 
       if (score >= 3) reasons.push(`Location: study site in ${patientLoc.city}`);
       else if (score >= 2) reasons.push(`Location: study site in ${patientLoc.state}`);
@@ -349,6 +360,10 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         if (input.sex !== 'All')
           noMatchHints.push(
             `Try sex="All" to include studies not restricted by sex.`,
+          );
+        if (input.healthyVolunteer)
+          noMatchHints.push(
+            'Many studies do not accept healthy volunteers. Set healthyVolunteer=false if the patient has a relevant condition.',
           );
       }
       if (input.recruitingOnly)

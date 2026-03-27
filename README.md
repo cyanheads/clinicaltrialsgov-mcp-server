@@ -28,8 +28,8 @@ Five tools for searching, analyzing, and matching clinical trials:
 | `clinicaltrials_search_studies`    | Search studies with full-text queries, filters, pagination, sorting, and field selection.        |
 | `clinicaltrials_get_study_count`   | Get total study count for a query without fetching data. Fast statistics and breakdowns.         |
 | `clinicaltrials_get_field_values`  | Discover valid values for API fields (status, phase, study type, etc.) with per-value counts.    |
-| `clinicaltrials_get_study_results` | Extract outcomes, adverse events, participant flow, and baseline from completed studies.         |
-| `clinicaltrials_find_eligible`     | Match patient demographics and conditions to eligible recruiting trials with location proximity. |
+| `clinicaltrials_get_study_results` | Extract outcomes, adverse events, participant flow, and baseline from completed studies. Summary mode reduces ~200KB payloads to ~5KB. |
+| `clinicaltrials_find_eligible`     | Match patient demographics and conditions to eligible recruiting trials with location proximity. Returns hints when no studies match. |
 
 ### `clinicaltrials_search_studies`
 
@@ -50,6 +50,7 @@ Fetch posted results data for completed studies.
 
 - Outcome measures with statistics, adverse events, participant flow, baseline characteristics
 - Section-level filtering (request only the data you need)
+- Summary mode condenses full results (~200KB) to essential metadata (~5KB per study)
 - Batch up to 5 NCT IDs per call with partial-success reporting
 - Separate tracking of studies without results and fetch errors
 
@@ -64,6 +65,7 @@ Match a patient profile to eligible recruiting trials.
 - Post-filters results against eligibility criteria (age range, sex, country)
 - Ranks by geographic proximity (city > state > country match)
 - Returns match explanations, eligibility summaries, and nearby study sites
+- Provides actionable hints when no studies match (broaden conditions, adjust filters)
 
 ## Resources
 

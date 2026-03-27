@@ -35,7 +35,9 @@ Ground-up rewrite on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@c
 
 ### Improvements
 
-- **Empty-result feedback.** `search_studies` and `get_study_count` echo search criteria back when results are empty, with guidance to broaden the query.
+- **Empty-result feedback.** `search_studies` and `get_study_count` echo search criteria back when results are empty, with guidance to broaden the query. `find_eligible` returns `noMatchHints` with actionable suggestions (broaden conditions, adjust age/sex, widen location, include non-recruiting studies).
+- **Results summary mode.** `get_study_results` accepts `summary: true` to return condensed metadata (~5KB) instead of full result data (~200KB per study). Summaries include outcome titles, types, timeframes, group/measure counts, and top-level stats.
+- **Consistent criteria echo.** `get_study_count` always returns `searchCriteria` when query parameters are present (previously only on zero-count results).
 - **NCT ID validation.** `search_studies` validates nctIds against `NCTxxxxxxxx` format at the schema level. Service layer returns a specific validation error for malformed IDs.
 - **CodeQL workflow.** Added `.github/workflows/codeql.yml` for automated security analysis on push, PR, and weekly schedule.
 

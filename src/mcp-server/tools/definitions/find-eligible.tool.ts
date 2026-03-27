@@ -88,9 +88,11 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       .map((c) => (c.includes(' ') ? `"${c}"` : c))
       .join(' OR ');
 
-    const locationParts = [input.location.city, input.location.state, input.location.country].filter(
-      Boolean,
-    );
+    const locationParts = [
+      input.location.city,
+      input.location.state,
+      input.location.country,
+    ].filter(Boolean);
     const locationQuery = locationParts.join(', ');
 
     const statusFilter = input.recruitingOnly ? ['RECRUITING', 'NOT_YET_RECRUITING'] : undefined;

@@ -75,9 +75,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     return {
       totalCount,
       ...(Object.keys(criteria).length > 0 ? { searchCriteria: criteria } : {}),
-      ...(totalCount === 0
-        ? { noMatchHints: ['Try broader search terms or fewer filters.'] }
-        : {}),
+      ...(totalCount === 0 ? { noMatchHints: ['Try broader search terms or fewer filters.'] } : {}),
     };
   },
 

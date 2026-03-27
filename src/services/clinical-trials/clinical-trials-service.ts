@@ -165,7 +165,9 @@ export class ClinicalTrialsService {
           if (text.includes('incorrect format')) {
             if (path.startsWith('/studies/')) {
               const id = path.split('/').pop() ?? path;
-              throw notFound(`Study ${id} not found. Verify the NCT ID exists on ClinicalTrials.gov.`);
+              throw notFound(
+                `Study ${id} not found. Verify the NCT ID exists on ClinicalTrials.gov.`,
+              );
             }
             throw validationError(
               `Invalid NCT ID format. IDs must match NCTxxxxxxxx (NCT + 8 digits). API response: ${text}`,

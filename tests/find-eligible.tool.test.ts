@@ -147,10 +147,7 @@ describe('findEligible', () => {
     it('uses maxResults as pageSize', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      await findEligible.handler(
-        findEligible.input.parse({ ...baseInput, maxResults: 25 }),
-        ctx,
-      );
+      await findEligible.handler(findEligible.input.parse({ ...baseInput, maxResults: 25 }), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
         expect.objectContaining({ pageSize: 25 }),

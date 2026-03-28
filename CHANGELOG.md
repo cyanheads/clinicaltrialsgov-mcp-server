@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.2] - 2026-03-28
+
+### Fixed
+
+- **`clinicaltrials_get_study_results`** — Corrected field name references in `summarizeParticipantFlow` (`flowGroups`→`groups`, `flowPeriods`→`periods`) and `summarizeBaseline` (`baselineGroups`→`groups`, `baselineMeasures`→`measures`) to match the actual ClinicalTrials.gov API response shape.
+- **`clinicaltrials_get_study_results`** — Removed `frequencyModule` indirection in `summarizeAdverseEvents` and the format function; `timeFrame` is now read directly from `ae.timeFrame`.
+- **`clinicaltrials_get_study_results`** — Added `truncatedIds` output field that surfaces any NCT IDs silently dropped when more than 5 are passed; format output now includes a notice listing the dropped IDs.
+- **`clinicaltrials_get_study_results`** — Extended format fallback chains for participant flow and baseline group/period counts (`numFlowGroups`, `numFlowPeriods`, `numBaselineGroups`) to improve resilience against API field shape variations.
+
 ## [2.0.1] - 2026-03-28
 
 ### Changed

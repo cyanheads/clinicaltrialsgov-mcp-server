@@ -111,7 +111,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     nctIds: z
       .union([z.string(), z.array(z.string())])
       .describe(
-        'One or more NCT IDs (max 5). E.g., "NCT12345678" or ["NCT12345678", "NCT87654321"].',
+        'One or more NCT IDs. E.g., "NCT12345678" or ["NCT12345678", "NCT87654321"]. Use summary=true for large batches to avoid large payloads.',
       ),
     sections: z
       .union([z.string(), z.array(z.string())])
@@ -166,16 +166,10 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       )
       .optional()
       .describe('Studies that could not be fetched.'),
-    truncatedIds: z
-      .array(z.string())
-      .optional()
-      .describe('NCT IDs that were dropped because the max of 5 was exceeded.'),
   }),
 
   async handler(input, ctx) {
-    const allIds = Array.isArray(input.nctIds) ? input.nctIds : [input.nctIds];
-    const nctIds = allIds.slice(0, 5);
-    const truncatedIds = allIds.length > 5 ? allIds.slice(5) : undefined;
+    const nctIds = Array.isArray(input.nctIds) ? input.nctIds : [input.nctIds];
     const sections: Section[] = input.sections
       ? (Array.isArray(input.sections) ? input.sections : [input.sections]).filter(
           (s): s is Section => VALID_SECTIONS.includes(s as Section),
@@ -197,45 +191,51 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     const studiesWithoutResults: string[] = [];
     const fetchErrors: Array<{ nctId: string; error: string }> = [];
 
-    await Promise.all(
-      nctIds.map(async (nctId) => {
-        try {
-          const study = (await service.getStudy(nctId, ctx)) as RawStudyShape;
-          const title = study.protocolSection?.identificationModule?.briefTitle ?? 'Unknown';
-          const hasResults = study.hasResults === true;
-
-          if (!hasResults) {
-            studiesWithoutResults.push(nctId);
-            results.push({ nctId, title, hasResults: false });
-            return;
-          }
-
-          const rs = study.resultsSection ?? {};
-          const entry: StudyResult = { nctId, title, hasResults: true };
-          for (const section of sections) {
-            const moduleKey = SECTION_MAP[section];
-            const data = rs[moduleKey];
-            if (data) {
-              if (section === 'outcomes') {
-                const measures =
-                  (data.outcomeMeasures as Record<string, unknown>[] | undefined) ?? [];
-                entry.outcomes = input.summary ? measures.map(summarizeOutcome) : measures;
-              } else if (input.summary) {
-                if (section === 'adverseEvents') entry.adverseEvents = summarizeAdverseEvents(data);
-                else if (section === 'participantFlow')
-                  entry.participantFlow = summarizeParticipantFlow(data);
-                else if (section === 'baseline') entry.baseline = summarizeBaseline(data);
-              } else {
-                entry[section] = data;
-              }
-            }
-          }
-          results.push(entry);
-        } catch (err) {
-          fetchErrors.push({ nctId, error: (err as Error).message });
-        }
-      }),
+    const fetched = (await service.getStudiesBatch(nctIds, ctx)) as RawStudyShape[];
+    const studyMap = new Map(
+      fetched
+        .map((s) => [s.protocolSection?.identificationModule?.nctId, s])
+        .filter((e): e is [string, RawStudyShape] => e[0] != null),
     );
+
+    for (const nctId of nctIds) {
+      const study = studyMap.get(nctId);
+      if (!study) {
+        fetchErrors.push({ nctId, error: 'Study not found' });
+        continue;
+      }
+
+      const title = study.protocolSection?.identificationModule?.briefTitle ?? 'Unknown';
+      const hasResults = study.hasResults === true;
+
+      if (!hasResults) {
+        studiesWithoutResults.push(nctId);
+        results.push({ nctId, title, hasResults: false });
+        continue;
+      }
+
+      const rs = study.resultsSection ?? {};
+      const entry: StudyResult = { nctId, title, hasResults: true };
+      for (const section of sections) {
+        const moduleKey = SECTION_MAP[section];
+        const data = rs[moduleKey];
+        if (data) {
+          if (section === 'outcomes') {
+            const measures =
+              (data.outcomeMeasures as Record<string, unknown>[] | undefined) ?? [];
+            entry.outcomes = input.summary ? measures.map(summarizeOutcome) : measures;
+          } else if (input.summary) {
+            if (section === 'adverseEvents') entry.adverseEvents = summarizeAdverseEvents(data);
+            else if (section === 'participantFlow')
+              entry.participantFlow = summarizeParticipantFlow(data);
+            else if (section === 'baseline') entry.baseline = summarizeBaseline(data);
+          } else {
+            entry[section] = data;
+          }
+        }
+      }
+      results.push(entry);
+    }
 
     if (results.length === 0 && fetchErrors.length > 0) {
       throw new Error(
@@ -253,7 +253,6 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       results,
       ...(studiesWithoutResults.length > 0 ? { studiesWithoutResults } : {}),
       ...(fetchErrors.length > 0 ? { fetchErrors } : {}),
-      ...(truncatedIds ? { truncatedIds } : {}),
     };
   },
 
@@ -376,8 +375,6 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       lines.push(
         `Fetch errors: ${result.fetchErrors.map((e) => `${e.nctId}: ${e.error}`).join(', ')}`,
       );
-    if (result.truncatedIds?.length)
-      lines.push(`Note: ${result.truncatedIds.length} IDs exceeded the max of 5 and were not fetched: ${result.truncatedIds.join(', ')}`);
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });

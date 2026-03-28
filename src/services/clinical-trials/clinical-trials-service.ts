@@ -49,6 +49,20 @@ export class ClinicalTrialsService {
     return this.fetchJson<Study>(`/studies/${encodeURIComponent(nctId)}`, {}, ctx);
   }
 
+  /** Fetch multiple studies by NCT IDs in a single request. Returns identification and results section data. */
+  async getStudiesBatch(nctIds: string[], ctx: Context): Promise<Study[]> {
+    ctx.log.debug('getStudiesBatch', { count: nctIds.length });
+    const response = await this.searchStudies(
+      {
+        filterIds: nctIds,
+        fields: ['NCTId', 'BriefTitle', 'HasResults', 'ResultsSection'],
+        pageSize: nctIds.length,
+      },
+      ctx,
+    );
+    return response.studies;
+  }
+
   /** Get field definitions (metadata tree) from the data model. */
   getMetadata(includeIndexedOnly: boolean, ctx: Context): Promise<FieldNode[]> {
     ctx.log.debug('getMetadata', { includeIndexedOnly });

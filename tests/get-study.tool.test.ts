@@ -1,5 +1,5 @@
 /**
- * @fileoverview Tests for clinicaltrials_get_study tool.
+ * @fileoverview Tests for clinicaltrials_get_study_record tool.
  * @module tests/get-study.tool
  */
 

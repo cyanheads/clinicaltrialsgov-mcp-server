@@ -7,7 +7,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 
-export const getStudy = tool('clinicaltrials_get_study', {
+export const getStudy = tool('clinicaltrials_get_study_record', {
   description:
     'Fetch a single clinical study by NCT ID. Returns the full study record. Equivalent to the clinicaltrials://{nctId} resource for clients that do not support MCP resources.',
   annotations: {

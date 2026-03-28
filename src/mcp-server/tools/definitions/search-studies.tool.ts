@@ -4,9 +4,12 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { getServerConfig } from '@/config/server-config.js';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 import { buildAdvancedFilter, toArray } from '../utils/query-helpers.js';
+
+const { maxPageSize } = getServerConfig();
 
 export const searchStudies = tool('clinicaltrials_search_studies', {
   description: `Search for clinical trial studies from ClinicalTrials.gov. Supports full-text and field-specific queries, status/phase/geographic filters, pagination, sorting, and field selection. Use the fields parameter to reduce payload size — full study records are ~70KB each.`,
@@ -80,7 +83,13 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .describe(
         `Sort order. Format: FieldName:asc or FieldName:desc. E.g., "LastUpdatePostDate:desc", "EnrollmentCount:desc". Max 2 fields comma-separated.`,
       ),
-    pageSize: z.number().int().min(1).max(1000).default(10).describe('Results per page, 1–1000.'),
+    pageSize: z
+      .number()
+      .int()
+      .min(1)
+      .max(maxPageSize)
+      .default(10)
+      .describe(`Results per page, 1–${maxPageSize}.`),
     pageToken: z.string().optional().describe('Pagination cursor from a previous response.'),
     countTotal: z
       .boolean()

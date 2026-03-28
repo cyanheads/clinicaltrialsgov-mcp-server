@@ -27,6 +27,9 @@ const ELIGIBLE_FIELDS = [
   'LocationState',
   'LocationCountry',
   'LocationStatus',
+  'CentralContactName',
+  'CentralContactPhone',
+  'CentralContactEMail',
 ];
 
 export const findEligible = tool('clinicaltrials_find_eligible', {
@@ -186,14 +189,50 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
           ? `Found ${result.totalCount} eligible studies (showing ${count})`
           : `Found ${count} eligible studies`,
       );
-      for (const study of result.studies.slice(0, 5)) {
+      lines.push('');
+      for (const study of result.studies) {
         const s = study as RawStudyShape;
         const nctId = s.protocolSection?.identificationModule?.nctId ?? 'Unknown';
         const title = s.protocolSection?.identificationModule?.briefTitle ?? 'Untitled';
         const status = s.protocolSection?.statusModule?.overallStatus ?? '';
-        lines.push(`- ${nctId}: ${title}${status ? ` [${status}]` : ''}`);
+        const elig = s.protocolSection?.eligibilityModule ?? {};
+        const locs = s.protocolSection?.contactsLocationsModule?.locations ?? [];
+
+        lines.push(`**${nctId}**: ${title} [${status}]`);
+
+        // Eligibility criteria summary
+        const eligParts: string[] = [];
+        if (elig.minimumAge && elig.maximumAge)
+          eligParts.push(`Age: ${elig.minimumAge}–${elig.maximumAge}`);
+        else if (elig.minimumAge) eligParts.push(`Age: ≥${elig.minimumAge}`);
+        else if (elig.maximumAge) eligParts.push(`Age: ≤${elig.maximumAge}`);
+        if (elig.sex) eligParts.push(`Sex: ${elig.sex}`);
+        if (elig.healthyVolunteers != null)
+          eligParts.push(`Healthy Volunteers: ${elig.healthyVolunteers ? 'Yes' : 'No'}`);
+        if (eligParts.length) lines.push(`  Eligibility: ${eligParts.join(' | ')}`);
+
+        // Recruiting locations (up to 3)
+        if (locs.length > 0) {
+          const recruiting = locs.filter((l) => l.status === 'RECRUITING');
+          const toShow = (recruiting.length > 0 ? recruiting : locs).slice(0, 3);
+          const locStr = toShow
+            .map((l) => [l.facility, l.city, l.state, l.country].filter(Boolean).join(', '))
+            .join(' | ');
+          const remaining =
+            (recruiting.length > 0 ? recruiting.length : locs.length) - toShow.length;
+          lines.push(`  Locations: ${locStr}${remaining > 0 ? ` (+${remaining} more)` : ''}`);
+        }
+
+        // Central contacts
+        const centralContacts = s.protocolSection?.contactsLocationsModule?.centralContacts ?? [];
+        if (centralContacts.length > 0) {
+          const contactStr = centralContacts
+            .slice(0, 2)
+            .map((c) => [c.name, c.phone, c.email].filter(Boolean).join(', '))
+            .join(' | ');
+          lines.push(`  Contact: ${contactStr}`);
+        }
       }
-      if (count > 5) lines.push(`... and ${count - 5} more`);
     }
 
     return [{ type: 'text', text: lines.join('\n') }];

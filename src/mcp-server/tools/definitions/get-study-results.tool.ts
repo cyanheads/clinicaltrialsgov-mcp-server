@@ -18,8 +18,36 @@ const SECTION_MAP: Record<Section, string> = {
   baseline: 'baselineCharacteristicsModule',
 };
 
-/** Condense a full outcome measure to its essential metadata. */
+/**
+ * Extract top-line per-group stats from a raw outcome object (full mode).
+ * Returns undefined if no measurement values are present.
+ */
+function extractTopStats(
+  o: Record<string, unknown>,
+): Array<{ group: string; value: string; spread?: string }> | undefined {
+  const groups = o.groups as Array<Record<string, unknown>> | undefined;
+  const classes = o.classes as Array<Record<string, unknown>> | undefined;
+  if (!groups?.length || !classes?.length) return;
+  const firstClass = classes[0] as Record<string, unknown>;
+  const categories = firstClass.categories as Array<Record<string, unknown>> | undefined;
+  const measurements = categories?.[0]?.measurements as Array<Record<string, unknown>> | undefined;
+  if (!measurements?.length) return;
+  const groupMap = new Map(groups.map((g) => [g.id as string, (g.title ?? g.id) as string]));
+  const stats = measurements
+    .filter((m) => m.value != null && m.value !== 'NA' && m.value !== 'NR')
+    .map((m) => ({
+      group: groupMap.get(m.groupId as string) ?? (m.groupId as string),
+      value: m.value as string,
+      ...(m.spread != null ? { spread: m.spread as string } : {}),
+    }));
+  return stats.length ? stats : undefined;
+}
+
+/** Condense a full outcome measure to its essential metadata plus top-line per-group stats. */
 function summarizeOutcome(o: Record<string, unknown>) {
+  const groups = o.groups as Array<Record<string, unknown>> | undefined;
+  const classes = o.classes as Array<Record<string, unknown>> | undefined;
+  const topStats = extractTopStats(o);
   return {
     type: o.type,
     title: o.title,
@@ -27,8 +55,9 @@ function summarizeOutcome(o: Record<string, unknown>) {
     paramType: o.paramType,
     unitOfMeasure: o.unitOfMeasure,
     reportingStatus: o.reportingStatus,
-    groupCount: Array.isArray(o.groups) ? o.groups.length : undefined,
-    classCount: Array.isArray(o.classes) ? o.classes.length : undefined,
+    groupCount: groups?.length,
+    classCount: classes?.length,
+    ...(topStats ? { topStats } : {}),
   };
 }
 
@@ -228,19 +257,119 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       lines.push(`## ${r.nctId}: ${r.title}`);
       if (!r.hasResults) {
         lines.push('No results available.');
+        lines.push('');
         continue;
       }
-      if (r.outcomes && r.outcomes.length > 0)
-        lines.push(`- Outcomes: ${r.outcomes.length} measures`);
-      if (r.adverseEvents) lines.push('- Adverse Events: data available');
-      if (r.participantFlow) lines.push('- Participant Flow: data available');
-      if (r.baseline) lines.push('- Baseline Characteristics: data available');
+
+      // Outcomes — render title, type, timeframe, and per-group top-line stats
+      if (r.outcomes && r.outcomes.length > 0) {
+        lines.push(`\n### Outcomes (${r.outcomes.length} measures)`);
+        for (const o of r.outcomes) {
+          const type = (o.type as string) ?? '';
+          const title = (o.title as string) ?? 'Untitled';
+          const timeFrame = (o.timeFrame as string) ?? '';
+          const paramType = (o.paramType as string) ?? '';
+          const unitOfMeasure = (o.unitOfMeasure as string) ?? '';
+          const groupCount =
+            (o.groupCount as number | undefined) ??
+            (Array.isArray(o.groups) ? (o.groups as unknown[]).length : undefined);
+          const meta = [
+            type,
+            paramType,
+            unitOfMeasure,
+            groupCount != null ? `${groupCount} groups` : '',
+          ]
+            .filter(Boolean)
+            .join(', ');
+          const tf = timeFrame ? ` [${timeFrame}]` : '';
+          lines.push(`- **${title}**${meta ? ` (${meta})` : ''}${tf}`);
+
+          // Top-line stats: from summary shape (topStats) or extracted from full shape
+          const topStats =
+            (o.topStats as Array<{ group: string; value: string; spread?: string }> | undefined) ??
+            extractTopStats(o as Record<string, unknown>);
+          if (topStats?.length) {
+            const statsStr = topStats
+              .map((s) => `${s.group}: ${s.value}${s.spread ? ` ±${s.spread}` : ''}`)
+              .join(' | ');
+            lines.push(`  ${statsStr}`);
+          }
+        }
+      }
+
+      // Adverse events — render time frame and event counts
+      if (r.adverseEvents) {
+        const ae = r.adverseEvents;
+        lines.push('\n### Adverse Events');
+        // Works for both summary shape (groupCount, seriousEventCount) and full shape (eventGroups[], seriousEvents[])
+        const timeFrame =
+          (ae.timeFrame as string | undefined) ??
+          ((ae.frequencyModule as Record<string, unknown> | undefined)?.timeFrame as
+            | string
+            | undefined);
+        const groupCount =
+          (ae.groupCount as number | undefined) ??
+          (Array.isArray(ae.eventGroups) ? (ae.eventGroups as unknown[]).length : undefined);
+        const seriousCount =
+          (ae.seriousEventCount as number | undefined) ??
+          (Array.isArray(ae.seriousEvents) ? (ae.seriousEvents as unknown[]).length : undefined);
+        const otherCount =
+          (ae.otherEventCount as number | undefined) ??
+          (Array.isArray(ae.otherEvents) ? (ae.otherEvents as unknown[]).length : undefined);
+        const parts = [
+          timeFrame ? `Assessment: ${timeFrame}` : '',
+          groupCount != null ? `${groupCount} groups` : '',
+          seriousCount != null ? `${seriousCount} serious events` : '',
+          otherCount != null ? `${otherCount} other events` : '',
+        ].filter(Boolean);
+        if (parts.length) lines.push(parts.join(' | '));
+      }
+
+      // Participant flow — group and period counts
+      if (r.participantFlow) {
+        const pf = r.participantFlow;
+        lines.push('\n### Participant Flow');
+        const groupCount =
+          (pf.groupCount as number | undefined) ??
+          (Array.isArray(pf.flowGroups) ? (pf.flowGroups as unknown[]).length : undefined);
+        const periodCount =
+          (pf.periodCount as number | undefined) ??
+          (Array.isArray(pf.flowPeriods) ? (pf.flowPeriods as unknown[]).length : undefined);
+        const parts = [
+          groupCount != null ? `${groupCount} groups` : '',
+          periodCount != null ? `${periodCount} periods` : '',
+        ].filter(Boolean);
+        if (parts.length) lines.push(parts.join(' | '));
+      }
+
+      // Baseline characteristics — measure list
+      if (r.baseline) {
+        const bl = r.baseline;
+        lines.push('\n### Baseline Characteristics');
+        const measureList =
+          (bl.measures as Record<string, unknown>[] | undefined) ??
+          (bl.baselineMeasures as Record<string, unknown>[] | undefined);
+        const groupCount =
+          (bl.groupCount as number | undefined) ??
+          (Array.isArray(bl.baselineGroups) ? (bl.baselineGroups as unknown[]).length : undefined);
+        if (groupCount != null) lines.push(`${groupCount} groups`);
+        if (measureList?.length) {
+          for (const m of measureList.slice(0, 10)) {
+            const unit = (m.unitOfMeasure as string) ? ` (${m.unitOfMeasure as string})` : '';
+            lines.push(`- ${(m.title as string) ?? (m.paramType as string) ?? 'Measure'}${unit}`);
+          }
+          if (measureList.length > 10) lines.push(`... and ${measureList.length - 10} more`);
+        }
+      }
+
+      lines.push('');
     }
+
     if (result.studiesWithoutResults?.length)
-      lines.push(`\nWithout results: ${result.studiesWithoutResults.join(', ')}`);
+      lines.push(`Without results: ${result.studiesWithoutResults.join(', ')}`);
     if (result.fetchErrors?.length)
       lines.push(
-        `\nFetch errors: ${result.fetchErrors.map((e) => `${e.nctId}: ${e.error}`).join(', ')}`,
+        `Fetch errors: ${result.fetchErrors.map((e) => `${e.nctId}: ${e.error}`).join(', ')}`,
       );
     return [{ type: 'text', text: lines.join('\n') }];
   },

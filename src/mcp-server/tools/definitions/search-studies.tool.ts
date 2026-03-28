@@ -209,16 +209,28 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     } else {
       lines.push(`Found ${count} studies`);
     }
-    for (const study of result.studies.slice(0, 5)) {
+    for (const study of result.studies) {
       const s = study as RawStudyShape;
       const nctId = s.protocolSection?.identificationModule?.nctId ?? 'Unknown';
       const title = s.protocolSection?.identificationModule?.briefTitle ?? 'Untitled';
       const status = s.protocolSection?.statusModule?.overallStatus ?? '';
-      lines.push(`- ${nctId}: ${title}${status ? ` [${status}]` : ''}`);
+      const phases = s.protocolSection?.designModule?.phases;
+      const enrollment = s.protocolSection?.designModule?.enrollmentInfo?.count;
+      const sponsor = s.protocolSection?.sponsorCollaboratorsModule?.leadSponsor?.name;
+      const conditions = s.protocolSection?.conditionsModule?.conditions;
+
+      const meta: string[] = [];
+      if (phases?.length) meta.push(phases.join('/'));
+      if (enrollment != null) meta.push(`N=${enrollment}`);
+      if (sponsor) meta.push(sponsor);
+      if (conditions?.length) meta.push(conditions.slice(0, 2).join(', '));
+
+      const statusStr = status ? ` [${status}]` : '';
+      const metaStr = meta.length ? `\n  ${meta.join(' | ')}` : '';
+      lines.push(`- **${nctId}**: ${title}${statusStr}${metaStr}`);
     }
-    if (count > 5) lines.push(`... and ${count - 5} more`);
     if (result.nextPageToken)
-      lines.push('(More results available — use nextPageToken to paginate)');
+      lines.push('\n(More results available — use nextPageToken to paginate)');
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });

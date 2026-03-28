@@ -39,22 +39,49 @@ export interface StudyLocation {
 export interface RawStudyShape {
   hasResults?: boolean;
   protocolSection?: {
-    conditionsModule?: { conditions?: string[] };
-    contactsLocationsModule?: { locations?: StudyLocation[] };
+    armsInterventionsModule?: {
+      armGroups?: Array<{ description?: string; label?: string; type?: string }>;
+      interventions?: Array<{ description?: string; name?: string; type?: string }>;
+    };
+    conditionsModule?: { conditions?: string[]; keywords?: string[] };
+    contactsLocationsModule?: {
+      centralContacts?: Array<{ email?: string; name?: string; phone?: string; role?: string }>;
+      locations?: StudyLocation[];
+    };
     descriptionModule?: { briefSummary?: string };
     designModule?: {
       enrollmentInfo?: { count?: number };
       phases?: string[];
+      studyType?: string;
     };
     eligibilityModule?: {
+      eligibilityCriteria?: string;
       healthyVolunteers?: boolean;
       maximumAge?: string;
       minimumAge?: string;
       sex?: string;
+      stdAges?: string[];
     };
-    identificationModule?: { briefTitle?: string; nctId?: string };
-    sponsorCollaboratorsModule?: { leadSponsor?: { name?: string } };
-    statusModule?: { overallStatus?: string };
+    identificationModule?: {
+      acronym?: string;
+      briefTitle?: string;
+      nctId?: string;
+      officialTitle?: string;
+    };
+    outcomesModule?: {
+      primaryOutcomes?: Array<{ measure?: string; timeFrame?: string }>;
+      secondaryOutcomes?: Array<{ measure?: string; timeFrame?: string }>;
+    };
+    sponsorCollaboratorsModule?: {
+      collaborators?: Array<{ class?: string; name?: string }>;
+      leadSponsor?: { class?: string; name?: string };
+    };
+    statusModule?: {
+      completionDateStruct?: { date?: string };
+      overallStatus?: string;
+      primaryCompletionDateStruct?: { date?: string };
+      startDateStruct?: { date?: string };
+    };
   };
   resultsSection?: Record<string, Record<string, unknown>>;
 }

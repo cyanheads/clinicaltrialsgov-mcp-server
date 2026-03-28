@@ -63,10 +63,9 @@ function summarizeOutcome(o: Record<string, unknown>) {
 
 /** Condense the adverse events module to counts. */
 function summarizeAdverseEvents(ae: Record<string, unknown>) {
-  const freq = ae.frequencyModule as Record<string, unknown> | undefined;
   const events = ae.eventGroups as Array<Record<string, unknown>> | undefined;
   return {
-    timeFrame: freq?.timeFrame ?? ae.timeFrame,
+    timeFrame: ae.timeFrame,
     groupCount: Array.isArray(events) ? events.length : undefined,
     seriousEventCount: Array.isArray(ae.seriousEvents) ? ae.seriousEvents.length : undefined,
     otherEventCount: Array.isArray(ae.otherEvents) ? ae.otherEvents.length : undefined,
@@ -75,8 +74,8 @@ function summarizeAdverseEvents(ae: Record<string, unknown>) {
 
 /** Condense participant flow to period/group counts. */
 function summarizeParticipantFlow(pf: Record<string, unknown>) {
-  const groups = pf.flowGroups as Array<Record<string, unknown>> | undefined;
-  const periods = pf.flowPeriods as Array<Record<string, unknown>> | undefined;
+  const groups = pf.groups as Array<Record<string, unknown>> | undefined;
+  const periods = pf.periods as Array<Record<string, unknown>> | undefined;
   return {
     groupCount: Array.isArray(groups) ? groups.length : undefined,
     periodCount: Array.isArray(periods) ? periods.length : undefined,
@@ -85,8 +84,8 @@ function summarizeParticipantFlow(pf: Record<string, unknown>) {
 
 /** Condense baseline characteristics to measure count. */
 function summarizeBaseline(bl: Record<string, unknown>) {
-  const groups = bl.baselineGroups as Array<Record<string, unknown>> | undefined;
-  const measures = bl.baselineMeasures as Array<Record<string, unknown>> | undefined;
+  const groups = bl.groups as Array<Record<string, unknown>> | undefined;
+  const measures = bl.measures as Array<Record<string, unknown>> | undefined;
   return {
     groupCount: Array.isArray(groups) ? groups.length : undefined,
     measureCount: Array.isArray(measures) ? measures.length : undefined,
@@ -167,10 +166,16 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       )
       .optional()
       .describe('Studies that could not be fetched.'),
+    truncatedIds: z
+      .array(z.string())
+      .optional()
+      .describe('NCT IDs that were dropped because the max of 5 was exceeded.'),
   }),
 
   async handler(input, ctx) {
-    const nctIds = (Array.isArray(input.nctIds) ? input.nctIds : [input.nctIds]).slice(0, 5);
+    const allIds = Array.isArray(input.nctIds) ? input.nctIds : [input.nctIds];
+    const nctIds = allIds.slice(0, 5);
+    const truncatedIds = allIds.length > 5 ? allIds.slice(5) : undefined;
     const sections: Section[] = input.sections
       ? (Array.isArray(input.sections) ? input.sections : [input.sections]).filter(
           (s): s is Section => VALID_SECTIONS.includes(s as Section),
@@ -248,6 +253,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       results,
       ...(studiesWithoutResults.length > 0 ? { studiesWithoutResults } : {}),
       ...(fetchErrors.length > 0 ? { fetchErrors } : {}),
+      ...(truncatedIds ? { truncatedIds } : {}),
     };
   },
 
@@ -302,11 +308,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
         const ae = r.adverseEvents;
         lines.push('\n### Adverse Events');
         // Works for both summary shape (groupCount, seriousEventCount) and full shape (eventGroups[], seriousEvents[])
-        const timeFrame =
-          (ae.timeFrame as string | undefined) ??
-          ((ae.frequencyModule as Record<string, unknown> | undefined)?.timeFrame as
-            | string
-            | undefined);
+        const timeFrame = ae.timeFrame as string | undefined;
         const groupCount =
           (ae.groupCount as number | undefined) ??
           (Array.isArray(ae.eventGroups) ? (ae.eventGroups as unknown[]).length : undefined);
@@ -331,10 +333,12 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
         lines.push('\n### Participant Flow');
         const groupCount =
           (pf.groupCount as number | undefined) ??
-          (Array.isArray(pf.flowGroups) ? (pf.flowGroups as unknown[]).length : undefined);
+          (pf.numFlowGroups as number | undefined) ??
+          (Array.isArray(pf.groups) ? (pf.groups as unknown[]).length : undefined);
         const periodCount =
           (pf.periodCount as number | undefined) ??
-          (Array.isArray(pf.flowPeriods) ? (pf.flowPeriods as unknown[]).length : undefined);
+          (pf.numFlowPeriods as number | undefined) ??
+          (Array.isArray(pf.periods) ? (pf.periods as unknown[]).length : undefined);
         const parts = [
           groupCount != null ? `${groupCount} groups` : '',
           periodCount != null ? `${periodCount} periods` : '',
@@ -351,7 +355,8 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
           (bl.baselineMeasures as Record<string, unknown>[] | undefined);
         const groupCount =
           (bl.groupCount as number | undefined) ??
-          (Array.isArray(bl.baselineGroups) ? (bl.baselineGroups as unknown[]).length : undefined);
+          (bl.numBaselineGroups as number | undefined) ??
+          (Array.isArray(bl.groups) ? (bl.groups as unknown[]).length : undefined);
         if (groupCount != null) lines.push(`${groupCount} groups`);
         if (measureList?.length) {
           for (const m of measureList.slice(0, 10)) {
@@ -371,6 +376,8 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       lines.push(
         `Fetch errors: ${result.fetchErrors.map((e) => `${e.nctId}: ${e.error}`).join(', ')}`,
       );
+    if (result.truncatedIds?.length)
+      lines.push(`Note: ${result.truncatedIds.length} IDs exceeded the max of 5 and were not fetched: ${result.truncatedIds.join(', ')}`);
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });

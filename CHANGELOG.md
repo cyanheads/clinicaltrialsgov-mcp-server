@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.3] - 2026-03-28
+
+### Changed
+
+- **`clinicaltrials_get_field_values`** — Added BOOLEAN field support: output schema now includes `trueCount` and `falseCount` fields; `uniqueValuesCount` and `topValues` are optional (present for ENUM/STRING fields only). Added `missingStudiesCount` to report studies where the field is absent. `format` updated to render true/false counts for boolean fields and missing-study count when non-zero.
+- **`clinicaltrials_get_study_results`** — Added NCT ID format validation (`/^NCT\d{8}$/`) to the `nctIds` input (both single and array variants). Array variant now enforces `min(1)`/`max(20)`. Input description updated to reflect the 20-ID cap. `sections` input changed from `z.string()` to `z.enum(VALID_SECTIONS)` for compile-time type safety.
+
+### Chores
+
+- **`devcheck.config.json`** — Added `pino` to the security audit ignore list.
+
 ## [2.0.2] - 2026-03-28
 
 ### Changed

@@ -28,8 +28,13 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
         z.object({
           field: z.string().describe('Full dot-notation field path.'),
           piece: z.string().describe('PascalCase piece name.'),
-          type: z.string().describe('Field data type (ENUM, STRING, DATE, etc.).'),
-          uniqueValuesCount: z.number().describe('Number of distinct values.'),
+          type: z.string().describe('Field data type (ENUM, BOOLEAN, STRING, DATE, etc.).'),
+          missingStudiesCount: z
+            .number()
+            .optional()
+            .describe('Number of studies where this field is absent.'),
+          // ENUM / STRING fields
+          uniqueValuesCount: z.number().optional().describe('Number of distinct values.'),
           topValues: z
             .array(
               z.object({
@@ -37,7 +42,17 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
                 studiesCount: z.number().describe('Number of studies with this value.'),
               }),
             )
-            .describe('Values ranked by frequency.'),
+            .optional()
+            .describe('Values ranked by frequency. Present for ENUM/STRING fields.'),
+          // BOOLEAN fields
+          trueCount: z
+            .number()
+            .optional()
+            .describe('Studies where field is true. Present for BOOLEAN fields.'),
+          falseCount: z
+            .number()
+            .optional()
+            .describe('Studies where field is false. Present for BOOLEAN fields.'),
         }),
       )
       .describe('Statistics per requested field.'),
@@ -54,10 +69,20 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
   format: (result) => {
     const lines: string[] = [];
     for (const stat of result.fieldStats) {
-      lines.push(`**${stat.piece}** (${stat.uniqueValuesCount} unique values):`);
-      for (const tv of stat.topValues.slice(0, 15)) {
-        lines.push(`  ${tv.value}: ${tv.studiesCount.toLocaleString()} studies`);
+      if (stat.type === 'BOOLEAN') {
+        lines.push(`**${stat.piece}** (boolean):`);
+        if (stat.trueCount != null)
+          lines.push(`  true: ${stat.trueCount.toLocaleString()} studies`);
+        if (stat.falseCount != null)
+          lines.push(`  false: ${stat.falseCount.toLocaleString()} studies`);
+      } else {
+        lines.push(`**${stat.piece}** (${stat.uniqueValuesCount ?? '?'} unique values):`);
+        for (const tv of (stat.topValues ?? []).slice(0, 15)) {
+          lines.push(`  ${tv.value}: ${tv.studiesCount.toLocaleString()} studies`);
+        }
       }
+      if (stat.missingStudiesCount != null && stat.missingStudiesCount > 0)
+        lines.push(`  (missing in ${stat.missingStudiesCount.toLocaleString()} studies)`);
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

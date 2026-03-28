@@ -109,12 +109,20 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
 
   input: z.object({
     nctIds: z
-      .union([z.string(), z.array(z.string())])
+      .union([
+        z.string().regex(/^NCT\d{8}$/, 'NCT IDs must match format NCTxxxxxxxx (8 digits).'),
+        z
+          .array(
+            z.string().regex(/^NCT\d{8}$/, 'NCT IDs must match format NCTxxxxxxxx (8 digits).'),
+          )
+          .min(1)
+          .max(20),
+      ])
       .describe(
-        'One or more NCT IDs. E.g., "NCT12345678" or ["NCT12345678", "NCT87654321"]. Use summary=true for large batches to avoid large payloads.',
+        'One or more NCT IDs (max 20). E.g., "NCT12345678" or ["NCT12345678", "NCT87654321"]. Use summary=true for large batches to avoid large payloads.',
       ),
     sections: z
-      .union([z.string(), z.array(z.string())])
+      .union([z.enum(VALID_SECTIONS), z.array(z.enum(VALID_SECTIONS))])
       .optional()
       .describe(
         `Filter which sections to return. Values: outcomes, adverseEvents, participantFlow, baseline. Omit for all sections.`,
@@ -171,9 +179,9 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
   async handler(input, ctx) {
     const nctIds = Array.isArray(input.nctIds) ? input.nctIds : [input.nctIds];
     const sections: Section[] = input.sections
-      ? (Array.isArray(input.sections) ? input.sections : [input.sections]).filter(
-          (s): s is Section => VALID_SECTIONS.includes(s as Section),
-        )
+      ? Array.isArray(input.sections)
+        ? input.sections
+        : [input.sections]
       : [...VALID_SECTIONS];
 
     interface StudyResult {
@@ -221,8 +229,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
         const data = rs[moduleKey];
         if (data) {
           if (section === 'outcomes') {
-            const measures =
-              (data.outcomeMeasures as Record<string, unknown>[] | undefined) ?? [];
+            const measures = (data.outcomeMeasures as Record<string, unknown>[] | undefined) ?? [];
             entry.outcomes = input.summary ? measures.map(summarizeOutcome) : measures;
           } else if (input.summary) {
             if (section === 'adverseEvents') entry.adverseEvents = summarizeAdverseEvents(data);

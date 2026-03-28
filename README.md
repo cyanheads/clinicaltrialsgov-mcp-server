@@ -72,7 +72,7 @@ Fetch posted results data for completed studies.
 - Outcome measures with statistics, adverse events, participant flow, baseline characteristics
 - Section-level filtering (request only the data you need)
 - Optional summary mode condenses full results (~200KB) to essential metadata (~5KB per study)
-- Batch up to 5 NCT IDs per call with partial-success reporting
+- Batch multiple NCT IDs per call with partial-success reporting
 - Separate tracking of studies without results and fetch errors
 
 ---

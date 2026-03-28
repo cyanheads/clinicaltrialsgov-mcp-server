@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.4] - 2026-03-28
+
+### Changed
+
+- **`clinicaltrials_get_study_results`** — Refactored `format` function: extracted inline formatting into dedicated helpers (`formatOutcomes`, `formatAdverseEvents`, `formatParticipantFlow`, `formatBaseline`). Full-shape results now render richer detail — outcome analyses with p-values and CIs, adverse events with per-group affected/at-risk counts, participant flow milestones and drop/withdraw reasons, and baseline characteristics with per-group measurement values.
+
 ## [2.0.3] - 2026-03-28
 
 ### Changed

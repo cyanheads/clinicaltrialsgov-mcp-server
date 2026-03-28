@@ -27,7 +27,7 @@
   },
   "homepage": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server#readme",
   "scripts": {
-    "build": "bun build ./src/index.ts --outdir ./dist --target node --external pino --external pino-pretty",
+    "build": "bun run scripts/build.ts",
     "build:worker": "bun build ./src/worker.ts --outdir ./dist --target bun --no-external",
     "deploy:dev": "MCP_TRANSPORT_TYPE=http bunx wrangler dev",
     "deploy:prod": "MCP_TRANSPORT_TYPE=http bunx wrangler deploy",
@@ -138,6 +138,7 @@
     "husky": "^9.1.7",
     "ignore": "^7.0.5",
     "repomix": "^1.13.1",
+    "tsc-alias": "^1.8.16",
     "typedoc": "^0.28.18",
     "typescript": "^6.0.2",
     "vite": "8.0.3",

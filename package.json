@@ -1,6 +1,6 @@
 {
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "mcpName": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
   "description": "MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details and results, and match patients to eligible trials.",
   "main": "dist/index.js",
@@ -117,7 +117,7 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
-    "@cyanheads/mcp-ts-core": "^0.2.2",
+    "@cyanheads/mcp-ts-core": "^0.2.3",
     "pino": "^10.3.1",
     "pino-pretty": "^13.1.3"
   },

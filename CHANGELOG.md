@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.1] - 2026-03-28
+
+### Changed
+
+- **`clinicaltrials_get_study_record`** — Rewrote `format` to produce a full structured markdown report: header, status/design, dates, sponsor, conditions, summary, eligibility (with criteria text), interventions, arms, primary/secondary outcomes, contacts, and locations.
+- **`clinicaltrials_get_study_results`** — Rewrote `format` to render structured sections for each study: outcomes with per-group top-line stats (via new `extractTopStats` helper), adverse events with group/event counts, participant flow, and baseline characteristics with measure list.
+- **`clinicaltrials_search_studies`** — Enhanced `format` to show all returned studies (removed 5-result cap) with per-study metadata: phase, enrollment count, sponsor, and conditions.
+- **`clinicaltrials_find_eligible`** — Enhanced `format` to show all returned studies (removed 5-result cap) with per-study eligibility summary (age range, sex, healthy volunteers), recruiting locations (up to 3), and central contacts. Added `CentralContactName`, `CentralContactPhone`, `CentralContactEMail` to the fetched fields list.
+- **`RawStudyShape`** — Expanded type with `armsInterventionsModule`, `outcomesModule`, `statusModule` date structs, `identificationModule` `acronym`/`officialTitle`, `conditionsModule` keywords, `eligibilityModule` `eligibilityCriteria`/`stdAges`, `contactsLocationsModule` `centralContacts`, and `sponsorCollaboratorsModule` `collaborators`.
+
+### Dependencies
+
+- Bumped `@cyanheads/mcp-ts-core` from `^0.2.2` to `^0.2.3`.
+
 ## [2.0.0] - 2026-03-27
 
 Ground-up rewrite on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@cyanheads/mcp-ts-core). The custom MCP implementation (~64K lines — DI container, transport layer, storage providers, telemetry, and utility libraries) has been replaced by the framework. What remains is a focused ClinicalTrials.gov API client with a clean MCP surface.

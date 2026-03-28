@@ -182,6 +182,7 @@ All configuration is optional — the server works with defaults and no API keys
 | `MCP_HTTP_PORT`              | Port for HTTP server.                       | `3010`                              |
 | `MCP_AUTH_MODE`              | Auth mode: `none`, `jwt`, or `oauth`.       | `none`                              |
 | `MCP_LOG_LEVEL`              | Log level (RFC 5424).                       | `info`                              |
+| `LOGS_DIR`                   | Directory for log files (Node.js only).     | `<project-root>/logs`               |
 | `OTEL_ENABLED`               | Enable OpenTelemetry tracing.               | `false`                             |
 
 ## Running the Server

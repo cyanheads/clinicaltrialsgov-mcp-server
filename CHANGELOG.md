@@ -8,7 +8,10 @@ Ground-up rewrite on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@c
 
 ### Breaking Changes
 
-- **Tool surface redesigned.** `clinicaltrials_analyze_trends` and `clinicaltrials_compare_studies` removed — LLMs compose these from the search and count primitives. Four new tools added (`get_study`, `get_study_count`, `get_field_definitions`, `find_eligible`), three rewritten. 7 tools total.
+- **Tool surface redesigned.** 7 tools total, all with breaking changes from v1:
+  - **Removed:** `clinicaltrials_analyze_trends`, `clinicaltrials_compare_studies`, `clinicaltrials_find_eligible_studies` — LLMs compose trend and comparison analysis from the search and count primitives.
+  - **New:** `clinicaltrials_get_study_count`, `clinicaltrials_get_field_definitions`.
+  - **Rewritten:** `clinicaltrials_search_studies`, `clinicaltrials_get_study_record` (batch→single), `clinicaltrials_get_study_results`, `clinicaltrials_get_field_values`, `clinicaltrials_find_eligible_studies`→`clinicaltrials_find_eligible`.
 - **Entry point rewritten.** `src/index.ts` is now a single `createApp()` call. The framework handles transport (stdio + HTTP), lifecycle, logging, and error formatting.
 - **All definitions use new builders.** `tool()`, `resource()`, and `prompt()` with Zod input/output schemas, `format()` functions, and MCP annotations.
 - **Dependencies consolidated.** Removed `hono`, `jose`, `dotenv`, `@modelcontextprotocol/sdk`, `prettier`, and others from this package's direct deps. Added `@biomejs/biome` for formatting/linting.
@@ -17,13 +20,13 @@ Ground-up rewrite on [`@cyanheads/mcp-ts-core`](https://www.npmjs.com/package/@c
 
 | Tool | Status | Notes |
 |:-----|:-------|:------|
-| `clinicaltrials_search_studies` | Rewritten | Accepts all 14 ClinicalTrials.gov statuses. Status/phase/nctIds accept `string \| string[]`. Phase filtering uses `AREA[Phase]` syntax. Returns contextual `noMatchHints` when results are empty. |
-| `clinicaltrials_get_study` | **New** | Single study lookup by NCT ID. Tool equivalent of the `clinicaltrials://{nctId}` resource for clients that don't support MCP resources. |
-| `clinicaltrials_get_study_results` | Rewritten | Partial-success pattern — returns results, `studiesWithoutResults`, and `fetchErrors` per study. Max 5 NCT IDs per call. |
-| `clinicaltrials_get_field_values` | Rewritten | Invalid field names now return a validation error with guidance instead of a generic 404. |
+| `clinicaltrials_search_studies` | **Rewritten** | Accepts all 14 ClinicalTrials.gov statuses. Status/phase/nctIds accept `string \| string[]`. Phase filtering uses `AREA[Phase]` syntax. Cursor-based pagination (`pageToken`) replaces page-number pagination. `pageSize` capped at 200 (configurable via `CT_MAX_PAGE_SIZE`). Returns contextual `noMatchHints` when results are empty. |
+| `clinicaltrials_get_study_record` | **Rewritten** | Redesigned from batch-fetch (up to 5 NCT IDs) to single-study lookup. Returns the full study record including protocol and results sections. Batch protocol lookups migrate to `search_studies` with the `nctIds` filter — use the `fields` param to select only the fields you need. Tool equivalent of the `clinicaltrials://{nctId}` resource for clients that don't support MCP resources. |
+| `clinicaltrials_get_study_results` | **Rewritten** | Partial-success pattern — returns results, `studiesWithoutResults`, and `fetchErrors` per study. Max 5 NCT IDs per call. |
+| `clinicaltrials_get_field_values` | **Rewritten** | Invalid field names now return a validation error with guidance instead of a generic 404. |
 | `clinicaltrials_get_study_count` | **New** | Count-only queries for fast statistics without fetching study data. |
 | `clinicaltrials_get_field_definitions` | **New** | Browse the study data model field tree — piece names, types, nesting. Supports subtree navigation via dot-notation `path` and keyword `search`. |
-| `clinicaltrials_find_eligible` | **New** | Patient-to-trial matching. Builds optimized API queries from a patient profile (age, sex, conditions, location) and returns studies with eligibility/location fields for the caller to evaluate. |
+| `clinicaltrials_find_eligible` | **Rewritten** | Replaces `clinicaltrials_find_eligible_studies`. Redesigned from client-side filtering and proximity sorting to an API-query-first approach — builds an optimized query from a patient profile (age, sex, conditions, location) and returns studies with eligibility/location fields for the caller to evaluate. |
 
 ### Resources & Prompts
 

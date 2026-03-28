@@ -35,7 +35,7 @@ Seven tools for searching, discovering, analyzing, and matching clinical trials:
 | Tool Name                              | Description                                                                                      |
 | :------------------------------------- | :----------------------------------------------------------------------------------------------- |
 | `clinicaltrials_search_studies`        | Search studies with full-text queries, filters, pagination, sorting, and field selection.        |
-| `clinicaltrials_get_study`             | Fetch a single study by NCT ID. Tool equivalent of the `clinicaltrials://{nctId}` resource.     |
+| `clinicaltrials_get_study_record`      | Fetch a single study by NCT ID. Tool equivalent of the `clinicaltrials://{nctId}` resource.     |
 | `clinicaltrials_get_study_count`       | Get total study count for a query without fetching data. Fast statistics and breakdowns.         |
 | `clinicaltrials_get_field_values`      | Discover valid values for API fields (status, phase, study type, etc.) with per-value counts.    |
 | `clinicaltrials_get_field_definitions` | Browse the study data model field tree — piece names, types, nesting. Supports subtree navigation and keyword search. |

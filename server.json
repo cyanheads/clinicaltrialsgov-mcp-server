@@ -1,25 +1,19 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
-  "description": "MCP server for ClinicalTrials.gov v2 API. Search, retrieve, compare, and analyze trials.",
+  "description": "MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details and results, and match patients to eligible trials.",
   "repository": {
     "url": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server",
     "source": "github"
   },
-  "version": "1.9.3",
-  "remotes": [
-    {
-      "type": "streamable-http",
-      "url": "https://clinicaltrials.caseyjhand.com/mcp"
-    }
-  ],
+  "version": "2.0.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
-      "version": "1.9.3",
       "runtimeHint": "bun",
+      "version": "2.0.0",
       "packageArguments": [
         {
           "type": "positional",
@@ -32,18 +26,39 @@
       ],
       "environmentVariables": [
         {
+          "name": "CT_API_BASE_URL",
+          "description": "ClinicalTrials.gov API base URL.",
+          "format": "string",
+          "isRequired": false,
+          "default": "https://clinicaltrials.gov/api/v2"
+        },
+        {
+          "name": "CT_REQUEST_TIMEOUT_MS",
+          "description": "Per-request timeout in milliseconds.",
+          "format": "string",
+          "isRequired": false,
+          "default": "30000"
+        },
+        {
+          "name": "CT_MAX_PAGE_SIZE",
+          "description": "Maximum page size cap.",
+          "format": "string",
+          "isRequired": false,
+          "default": "200"
+        },
+        {
+          "name": "CT_MAX_ELIGIBLE_CANDIDATES",
+          "description": "Max studies to evaluate in find_eligible.",
+          "format": "string",
+          "isRequired": false,
+          "default": "100"
+        },
+        {
           "name": "MCP_LOG_LEVEL",
-          "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn', 'error').",
+          "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn').",
           "format": "string",
           "isRequired": false,
           "default": "info"
-        },
-        {
-          "name": "STORAGE_PROVIDER_TYPE",
-          "description": "Storage provider type: 'in-memory', 'filesystem', 'supabase', 'cloudflare-r2', 'cloudflare-kv', or 'cloudflare-d1'.",
-          "format": "string",
-          "isRequired": false,
-          "default": "in-memory"
         }
       ],
       "transport": {
@@ -54,8 +69,8 @@
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
-      "version": "1.9.3",
       "runtimeHint": "bun",
+      "version": "2.0.0",
       "packageArguments": [
         {
           "type": "positional",
@@ -68,6 +83,34 @@
       ],
       "environmentVariables": [
         {
+          "name": "CT_API_BASE_URL",
+          "description": "ClinicalTrials.gov API base URL.",
+          "format": "string",
+          "isRequired": false,
+          "default": "https://clinicaltrials.gov/api/v2"
+        },
+        {
+          "name": "CT_REQUEST_TIMEOUT_MS",
+          "description": "Per-request timeout in milliseconds.",
+          "format": "string",
+          "isRequired": false,
+          "default": "30000"
+        },
+        {
+          "name": "CT_MAX_PAGE_SIZE",
+          "description": "Maximum page size cap.",
+          "format": "string",
+          "isRequired": false,
+          "default": "200"
+        },
+        {
+          "name": "CT_MAX_ELIGIBLE_CANDIDATES",
+          "description": "Max studies to evaluate in find_eligible.",
+          "format": "string",
+          "isRequired": false,
+          "default": "100"
+        },
+        {
           "name": "MCP_HTTP_HOST",
           "description": "The hostname for the HTTP server.",
           "format": "string",
@@ -79,7 +122,7 @@
           "description": "The port to run the HTTP server on.",
           "format": "string",
           "isRequired": false,
-          "default": "3017"
+          "default": "3010"
         },
         {
           "name": "MCP_HTTP_ENDPOINT_PATH",
@@ -97,22 +140,15 @@
         },
         {
           "name": "MCP_LOG_LEVEL",
-          "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn', 'error').",
+          "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn').",
           "format": "string",
           "isRequired": false,
           "default": "info"
-        },
-        {
-          "name": "STORAGE_PROVIDER_TYPE",
-          "description": "Storage provider type: 'in-memory', 'filesystem', 'supabase', 'cloudflare-r2', 'cloudflare-kv', or 'cloudflare-d1'.",
-          "format": "string",
-          "isRequired": false,
-          "default": "in-memory"
         }
       ],
       "transport": {
         "type": "streamable-http",
-        "url": "http://localhost:3017/mcp"
+        "url": "http://localhost:3010/mcp"
       }
     }
   ]

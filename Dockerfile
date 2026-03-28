@@ -38,10 +38,9 @@ ENV NODE_ENV=production
 
 # OCI image metadata (https://github.com/opencontainers/image-spec/blob/main/annotations.md)
 LABEL org.opencontainers.image.title="clinicaltrialsgov-mcp-server"
-LABEL org.opencontainers.image.description="MCP server for ClinicalTrials.gov API v2"
+LABEL org.opencontainers.image.description="MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details and results, and match patients to eligible trials."
 LABEL org.opencontainers.image.source="https://github.com/cyanheads/clinicaltrialsgov-mcp-server"
 LABEL org.opencontainers.image.licenses="Apache-2.0"
-LABEL io.modelcontextprotocol.server.name="io.github.cyanheads/clinicaltrialsgov-mcp-server"
 
 # Copy dependency manifests
 COPY package.json bun.lock ./
@@ -49,6 +48,23 @@ COPY package.json bun.lock ./
 # Install only production dependencies, ignoring any lifecycle scripts (like 'prepare')
 # that are not needed in the final production image.
 RUN bun install --production --frozen-lockfile --ignore-scripts
+
+# Conditionally install OpenTelemetry optional peer dependencies (Tier 3).
+# These are not bundled by default to keep the base image lean. Enable at build time
+# with: docker build --build-arg OTEL_ENABLED=true
+ARG OTEL_ENABLED=true
+RUN if [ "$OTEL_ENABLED" = "true" ]; then \
+      bun add @hono/otel \
+        @opentelemetry/instrumentation-http \
+        @opentelemetry/exporter-metrics-otlp-http \
+        @opentelemetry/exporter-trace-otlp-http \
+        @opentelemetry/instrumentation-pino \
+        @opentelemetry/resources \
+        @opentelemetry/sdk-metrics \
+        @opentelemetry/sdk-node \
+        @opentelemetry/sdk-trace-node \
+        @opentelemetry/semantic-conventions; \
+    fi
 
 # Copy the compiled application code from the build stage
 COPY --from=build /usr/src/app/dist ./dist
@@ -68,7 +84,7 @@ ARG PORT
 
 # Set runtime environment variables
 # Note: PORT is an automatic variable in many cloud environments (e.g., Cloud Run)
-ENV MCP_HTTP_PORT=${PORT:-3017}
+ENV MCP_HTTP_PORT=${PORT:-3010}
 ENV MCP_HTTP_HOST="0.0.0.0"
 ENV MCP_TRANSPORT_TYPE="http"
 ENV MCP_SESSION_MODE="stateless"

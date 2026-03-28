@@ -1,0 +1,15 @@
+{
+  "extends": ["@cyanheads/mcp-ts-core/biome"],
+  "overrides": [
+    {
+      "includes": ["src/mcp-server/tools/definitions/**"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noExplicitAny": "warn"
+          }
+        }
+      }
+    }
+  ]
+}

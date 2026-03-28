@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.0.5] - 2026-03-28
+
+### Changed
+
+- Upgraded `@cyanheads/mcp-ts-core` from `^0.2.3` to `^0.2.8`.
+
 ## [2.0.4] - 2026-03-28
 
 ### Changed

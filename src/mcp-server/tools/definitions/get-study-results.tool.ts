@@ -253,7 +253,11 @@ function formatBaseline(bl: RO, lines: string[]) {
 
   // Summary shape — just titles (no classes array on first measure means summarized)
   const firstMeasure = measures?.[0];
-  if (measures?.length && firstMeasure && !((firstMeasure.classes as Array<RO> | undefined)?.length)) {
+  if (
+    measures?.length &&
+    firstMeasure &&
+    !(firstMeasure.classes as Array<RO> | undefined)?.length
+  ) {
     if (gm.size) lines.push(`${gm.size} groups`);
     for (const m of measures.slice(0, 10)) {
       const unit = (m.unitOfMeasure as string) ? ` (${m.unitOfMeasure as string})` : '';

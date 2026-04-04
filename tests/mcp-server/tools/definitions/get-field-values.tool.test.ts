@@ -1,24 +1,43 @@
 /**
  * @fileoverview Tests for clinicaltrials_get_field_values tool.
- * @module tests/get-field-values.tool
+ * @module tests/mcp-server/tools/definitions/get-field-values.tool
  */
 
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { mockGetService } = vi.hoisted(() => ({
+  mockGetService: vi.fn(),
+}));
+
 vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
-  getClinicalTrialsService: vi.fn(),
+  getClinicalTrialsService: mockGetService,
 }));
 
 import { getFieldValues } from '@/mcp-server/tools/definitions/get-field-values.tool.js';
-import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 
 describe('getFieldValues', () => {
   const mockService = { getFieldValues: vi.fn() };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getClinicalTrialsService).mockReturnValue(mockService as never);
+    mockGetService.mockReturnValue(mockService as never);
+  });
+
+  describe('input validation', () => {
+    it('accepts a single field string', () => {
+      const input = getFieldValues.input.parse({ fields: 'OverallStatus' });
+      expect(input.fields).toBe('OverallStatus');
+    });
+
+    it('accepts an array of fields', () => {
+      const input = getFieldValues.input.parse({ fields: ['OverallStatus', 'Phase'] });
+      expect(input.fields).toEqual(['OverallStatus', 'Phase']);
+    });
+
+    it('requires fields parameter', () => {
+      expect(() => getFieldValues.input.parse({})).toThrow();
+    });
   });
 
   describe('handler', () => {
@@ -69,7 +88,7 @@ describe('getFieldValues', () => {
   });
 
   describe('format', () => {
-    it('renders field stats with top values', () => {
+    it('renders ENUM field stats with top values', () => {
       const blocks = getFieldValues.format!({
         fieldStats: [
           {
@@ -89,6 +108,58 @@ describe('getFieldValues', () => {
       expect(blocks[0].text).toContain('COMPLETED:');
     });
 
+    it('renders BOOLEAN field stats', () => {
+      const blocks = getFieldValues.format!({
+        fieldStats: [
+          {
+            field: 'HasResults',
+            piece: 'HasResults',
+            type: 'BOOLEAN',
+            trueCount: 50000,
+            falseCount: 400000,
+          },
+        ],
+      });
+      const text = blocks[0].text;
+      expect(text).toContain('**HasResults** (boolean)');
+      expect(text).toContain('true:');
+      expect(text).toContain('50,000');
+      expect(text).toContain('false:');
+      expect(text).toContain('400,000');
+    });
+
+    it('shows missing studies count', () => {
+      const blocks = getFieldValues.format!({
+        fieldStats: [
+          {
+            field: 'Phase',
+            piece: 'Phase',
+            type: 'ENUM',
+            uniqueValuesCount: 6,
+            missingStudiesCount: 100000,
+            topValues: [{ value: 'PHASE3', studiesCount: 50000 }],
+          },
+        ],
+      });
+      expect(blocks[0].text).toContain('missing in 100,000 studies');
+    });
+
+    it('does not show missing count when zero', () => {
+      const blocks = getFieldValues.format!({
+        fieldStats: [
+          {
+            field: 'Phase',
+            piece: 'Phase',
+            type: 'ENUM',
+            uniqueValuesCount: 6,
+            missingStudiesCount: 0,
+            topValues: [{ value: 'PHASE3', studiesCount: 50000 }],
+          },
+        ],
+      });
+      expect(blocks[0].text).not.toContain('missing');
+    });
+
     it('truncates to 15 values per field', () => {
       const topValues = Array.from({ length: 20 }, (_, i) => ({
         value: `Value${i}`,
@@ -100,6 +171,30 @@ describe('getFieldValues', () => {
       const lines = blocks[0].text.split('\n');
       // 1 header + 15 values = 16 lines
       expect(lines).toHaveLength(16);
+    });
+
+    it('renders multiple fields', () => {
+      const blocks = getFieldValues.format!({
+        fieldStats: [
+          {
+            field: 'OverallStatus',
+            piece: 'OverallStatus',
+            type: 'ENUM',
+            uniqueValuesCount: 3,
+            topValues: [{ value: 'RECRUITING', studiesCount: 50000 }],
+          },
+          {
+            field: 'Phase',
+            piece: 'Phase',
+            type: 'ENUM',
+            uniqueValuesCount: 6,
+            topValues: [{ value: 'PHASE3', studiesCount: 40000 }],
+          },
+        ],
+      });
+      const text = blocks[0].text;
+      expect(text).toContain('**OverallStatus**');
+      expect(text).toContain('**Phase**');
     });
   });
 });

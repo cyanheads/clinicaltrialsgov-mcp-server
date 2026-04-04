@@ -1,24 +1,27 @@
 /**
  * @fileoverview Tests for clinicaltrials_get_study_count tool.
- * @module tests/get-study-count.tool
+ * @module tests/mcp-server/tools/definitions/get-study-count.tool
  */
 
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { mockGetService } = vi.hoisted(() => ({
+  mockGetService: vi.fn(),
+}));
+
 vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
-  getClinicalTrialsService: vi.fn(),
+  getClinicalTrialsService: mockGetService,
 }));
 
 import { getStudyCount } from '@/mcp-server/tools/definitions/get-study-count.tool.js';
-import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 
 describe('getStudyCount', () => {
   const mockService = { searchStudies: vi.fn() };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getClinicalTrialsService).mockReturnValue(mockService as never);
+    mockGetService.mockReturnValue(mockService as never);
   });
 
   describe('handler', () => {
@@ -65,6 +68,31 @@ describe('getStudyCount', () => {
       });
     });
 
+    it('echoes all provided criteria', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 1 });
+      const ctx = createMockContext();
+      const input = getStudyCount.input.parse({
+        query: 'test',
+        conditionQuery: 'cancer',
+        interventionQuery: 'chemo',
+        sponsorQuery: 'NIH',
+        statusFilter: 'RECRUITING',
+        phaseFilter: 'PHASE3',
+        advancedFilter: 'AREA[StudyType]INTERVENTIONAL',
+      });
+      const result = await getStudyCount.handler(input, ctx);
+
+      expect(result.searchCriteria).toEqual({
+        query: 'test',
+        conditionQuery: 'cancer',
+        interventionQuery: 'chemo',
+        sponsorQuery: 'NIH',
+        statusFilter: 'RECRUITING',
+        phaseFilter: 'PHASE3',
+        advancedFilter: 'AREA[StudyType]INTERVENTIONAL',
+      });
+    });
+
     it('omits searchCriteria when no criteria provided', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 100 });
       const ctx = createMockContext();
@@ -88,6 +116,40 @@ describe('getStudyCount', () => {
         ctx,
       );
     });
+
+    it('provides noMatchHints when totalCount is 0', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext();
+      const result = await getStudyCount.handler(
+        getStudyCount.input.parse({ conditionQuery: 'xyz' }),
+        ctx,
+      );
+
+      expect(result.noMatchHints).toBeDefined();
+      expect(result.noMatchHints).toContain('Try broader search terms or fewer filters.');
+    });
+
+    it('omits noMatchHints when totalCount > 0', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 5 });
+      const ctx = createMockContext();
+      const result = await getStudyCount.handler(
+        getStudyCount.input.parse({ conditionQuery: 'diabetes' }),
+        ctx,
+      );
+
+      expect(result.noMatchHints).toBeUndefined();
+    });
+
+    it('converts statusFilter string to array', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext();
+      await getStudyCount.handler(getStudyCount.input.parse({ statusFilter: 'RECRUITING' }), ctx);
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterOverallStatus: ['RECRUITING'] }),
+        ctx,
+      );
+    });
   });
 
   describe('format', () => {
@@ -108,6 +170,11 @@ describe('getStudyCount', () => {
         searchCriteria: { conditionQuery: 'rare disease' },
       });
       expect(blocks[0].text).toContain('conditionQuery=rare disease');
+    });
+
+    it('omits criteria line when searchCriteria absent', () => {
+      const blocks = getStudyCount.format!({ totalCount: 0 });
+      expect(blocks[0].text).not.toContain('Criteria:');
     });
   });
 });

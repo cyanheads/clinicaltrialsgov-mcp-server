@@ -1,17 +1,20 @@
 /**
  * @fileoverview Tests for clinicaltrials_find_eligible tool.
- * @module tests/find-eligible.tool
+ * @module tests/mcp-server/tools/definitions/find-eligible.tool
  */
 
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { mockGetService } = vi.hoisted(() => ({
+  mockGetService: vi.fn(),
+}));
+
 vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
-  getClinicalTrialsService: vi.fn(),
+  getClinicalTrialsService: mockGetService,
 }));
 
 import { findEligible } from '@/mcp-server/tools/definitions/find-eligible.tool.js';
-import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 
 const baseInput = {
   age: 30,
@@ -25,7 +28,7 @@ describe('findEligible', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getClinicalTrialsService).mockReturnValue(mockService as never);
+    mockGetService.mockReturnValue(mockService as never);
   });
 
   describe('input validation', () => {
@@ -38,14 +41,35 @@ describe('findEligible', () => {
       expect(() => findEligible.input.parse({ ...baseInput, age: 121 })).toThrow();
     });
 
+    it('accepts boundary ages', () => {
+      expect(() => findEligible.input.parse({ ...baseInput, age: 0 })).not.toThrow();
+      expect(() => findEligible.input.parse({ ...baseInput, age: 120 })).not.toThrow();
+    });
+
     it('rejects invalid sex', () => {
       expect(() => findEligible.input.parse({ ...baseInput, sex: 'Other' })).toThrow();
     });
 
-    it('applies defaults for recruitingOnly and maxResults', () => {
+    it('accepts all valid sex values', () => {
+      for (const sex of ['Female', 'Male', 'All'] as const) {
+        expect(() => findEligible.input.parse({ ...baseInput, sex })).not.toThrow();
+      }
+    });
+
+    it('applies defaults for recruitingOnly, healthyVolunteer, and maxResults', () => {
       const input = findEligible.input.parse(baseInput);
       expect(input.recruitingOnly).toBe(true);
+      expect(input.healthyVolunteer).toBe(false);
       expect(input.maxResults).toBe(10);
+    });
+
+    it('rejects maxResults outside 1-50', () => {
+      expect(() => findEligible.input.parse({ ...baseInput, maxResults: 0 })).toThrow();
+      expect(() => findEligible.input.parse({ ...baseInput, maxResults: 51 })).toThrow();
+    });
+
+    it('requires location.country', () => {
+      expect(() => findEligible.input.parse({ ...baseInput, location: { state: 'WA' } })).toThrow();
     });
   });
 
@@ -75,6 +99,20 @@ describe('findEligible', () => {
       );
     });
 
+    it('does not quote single-word conditions', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext();
+      await findEligible.handler(
+        findEligible.input.parse({ ...baseInput, conditions: ['Asthma'] }),
+        ctx,
+      );
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ queryCond: 'Asthma' }),
+        ctx,
+      );
+    });
+
     it('builds location query from city, state, country', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
@@ -82,6 +120,23 @@ describe('findEligible', () => {
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
         expect.objectContaining({ queryLocn: 'Seattle, Washington, United States' }),
+        ctx,
+      );
+    });
+
+    it('builds location from country only', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext();
+      await findEligible.handler(
+        findEligible.input.parse({
+          ...baseInput,
+          location: { country: 'United States' },
+        }),
+        ctx,
+      );
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ queryLocn: 'United States' }),
         ctx,
       );
     });
@@ -120,6 +175,15 @@ describe('findEligible', () => {
 
       const call = mockService.searchStudies.mock.calls[0][0];
       expect(call.filterAdvanced).toContain('AREA[Sex]ALL OR AREA[Sex]FEMALE');
+    });
+
+    it('omits sex filter when sex is All', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext();
+      await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+
+      const call = mockService.searchStudies.mock.calls[0][0];
+      expect(call.filterAdvanced).not.toContain('AREA[Sex]');
     });
 
     it('includes healthy volunteer filter when set', async () => {
@@ -165,6 +229,7 @@ describe('findEligible', () => {
       expect(call.fields).toContain('MinimumAge');
       expect(call.fields).toContain('LocationCity');
       expect(call.fields).toContain('HealthyVolunteers');
+      expect(call.fields).toContain('CentralContactEMail');
     });
 
     it('echoes search criteria in output', async () => {
@@ -200,6 +265,46 @@ describe('findEligible', () => {
       expect(result.noMatchHints!.some((h: string) => h.includes('extreme'))).toBe(true);
     });
 
+    it('hints about sex restriction', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext();
+      const result = await findEligible.handler(
+        findEligible.input.parse({ ...baseInput, sex: 'Male' }),
+        ctx,
+      );
+
+      expect(result.noMatchHints!.some((h: string) => h.includes('sex="All"'))).toBe(true);
+    });
+
+    it('hints about healthy volunteer restriction', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext();
+      const result = await findEligible.handler(
+        findEligible.input.parse({ ...baseInput, healthyVolunteer: true }),
+        ctx,
+      );
+
+      expect(result.noMatchHints!.some((h: string) => h.includes('healthy volunteers'))).toBe(true);
+    });
+
+    it('hints about recruiting-only restriction', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext();
+      const result = await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+
+      expect(result.noMatchHints!.some((h: string) => h.includes('recruitingOnly=false'))).toBe(
+        true,
+      );
+    });
+
+    it('hints about narrowing location', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext();
+      const result = await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+
+      expect(result.noMatchHints!.some((h: string) => h.includes('just the country'))).toBe(true);
+    });
+
     it('omits noMatchHints when studies are found', async () => {
       const study = { protocolSection: { identificationModule: { nctId: 'NCT12345678' } } };
       mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
@@ -212,22 +317,77 @@ describe('findEligible', () => {
   });
 
   describe('format', () => {
-    it('renders study list', () => {
+    it('renders study list with eligibility', () => {
       const blocks = findEligible.format!({
         studies: [
           {
             protocolSection: {
               identificationModule: { nctId: 'NCT12345678', briefTitle: 'Test Study' },
               statusModule: { overallStatus: 'RECRUITING' },
+              eligibilityModule: {
+                minimumAge: '18 Years',
+                maximumAge: '65 Years',
+                sex: 'ALL',
+                healthyVolunteers: false,
+              },
             },
           },
         ],
         totalCount: 1,
         searchCriteria: { conditions: ['Diabetes'], location: 'US', age: 30, sex: 'All' },
       });
-      expect(blocks[0].text).toContain('Found 1 eligible studies');
-      expect(blocks[0].text).toContain('NCT12345678');
-      expect(blocks[0].text).toContain('RECRUITING');
+      const text = blocks[0].text;
+      expect(text).toContain('Found 1 eligible studies');
+      expect(text).toContain('NCT12345678');
+      expect(text).toContain('RECRUITING');
+      expect(text).toContain('18 Years');
+      expect(text).toContain('65 Years');
+      expect(text).toContain('Healthy Volunteers: No');
+    });
+
+    it('renders locations for studies', () => {
+      const blocks = findEligible.format!({
+        studies: [
+          {
+            protocolSection: {
+              identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+              statusModule: { overallStatus: 'RECRUITING' },
+              contactsLocationsModule: {
+                locations: [
+                  { facility: 'Hospital A', city: 'Seattle', country: 'US', status: 'RECRUITING' },
+                  { facility: 'Hospital B', city: 'Portland', country: 'US', status: 'RECRUITING' },
+                ],
+              },
+            },
+          },
+        ],
+        totalCount: 1,
+        searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'All' },
+      });
+      expect(blocks[0].text).toContain('Hospital A');
+      expect(blocks[0].text).toContain('Locations:');
+    });
+
+    it('renders central contacts', () => {
+      const blocks = findEligible.format!({
+        studies: [
+          {
+            protocolSection: {
+              identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+              statusModule: { overallStatus: 'RECRUITING' },
+              contactsLocationsModule: {
+                centralContacts: [
+                  { name: 'Dr. Smith', phone: '555-1234', email: 'smith@test.com' },
+                ],
+              },
+            },
+          },
+        ],
+        totalCount: 1,
+        searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'All' },
+      });
+      expect(blocks[0].text).toContain('Contact:');
+      expect(blocks[0].text).toContain('Dr. Smith');
     });
 
     it('renders no-match hints', () => {

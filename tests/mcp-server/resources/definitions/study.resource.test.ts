@@ -1,24 +1,27 @@
 /**
  * @fileoverview Tests for clinicaltrials://{nctId} resource.
- * @module tests/study.resource
+ * @module tests/mcp-server/resources/definitions/study.resource
  */
 
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { mockGetService } = vi.hoisted(() => ({
+  mockGetService: vi.fn(),
+}));
+
 vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
-  getClinicalTrialsService: vi.fn(),
+  getClinicalTrialsService: mockGetService,
 }));
 
 import { studyResource } from '@/mcp-server/resources/definitions/study.resource.js';
-import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 
 describe('studyResource', () => {
   const mockService = { getStudy: vi.fn() };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getClinicalTrialsService).mockReturnValue(mockService as never);
+    mockGetService.mockReturnValue(mockService as never);
   });
 
   describe('params validation', () => {
@@ -29,6 +32,14 @@ describe('studyResource', () => {
     it('rejects invalid NCT ID', () => {
       expect(() => studyResource.params.parse({ nctId: 'bad' })).toThrow();
       expect(() => studyResource.params.parse({ nctId: 'NCT1234' })).toThrow();
+    });
+
+    it('rejects lowercase nct prefix', () => {
+      expect(() => studyResource.params.parse({ nctId: 'nct03722472' })).toThrow();
+    });
+
+    it('rejects NCT ID with wrong digit count', () => {
+      expect(() => studyResource.params.parse({ nctId: 'NCT123456789' })).toThrow();
     });
   });
 
@@ -51,6 +62,16 @@ describe('studyResource', () => {
       const params = studyResource.params.parse({ nctId: 'NCT03722472' });
 
       await expect(studyResource.handler(params, ctx)).rejects.toThrow('Not found');
+    });
+  });
+
+  describe('metadata', () => {
+    it('has correct MIME type', () => {
+      expect(studyResource.mimeType).toBe('application/json');
+    });
+
+    it('has description', () => {
+      expect(studyResource.description).toBeTruthy();
     });
   });
 });

@@ -1,17 +1,20 @@
 /**
  * @fileoverview Tests for clinicaltrials_get_study_results tool.
- * @module tests/get-study-results.tool
+ * @module tests/mcp-server/tools/definitions/get-study-results.tool
  */
 
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+const { mockGetService } = vi.hoisted(() => ({
+  mockGetService: vi.fn(),
+}));
+
 vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
-  getClinicalTrialsService: vi.fn(),
+  getClinicalTrialsService: mockGetService,
 }));
 
 import { getStudyResults } from '@/mcp-server/tools/definitions/get-study-results.tool.js';
-import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 
 function makeStudy(
@@ -29,11 +32,68 @@ function makeStudy(
 }
 
 describe('getStudyResults', () => {
-  const mockService = { getStudy: vi.fn() };
+  const mockService = { getStudiesBatch: vi.fn() };
 
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(getClinicalTrialsService).mockReturnValue(mockService as never);
+    mockGetService.mockReturnValue(mockService as never);
+  });
+
+  describe('input validation', () => {
+    it('accepts a single NCT ID string', () => {
+      const input = getStudyResults.input.parse({ nctIds: 'NCT12345678' });
+      expect(input.nctIds).toBe('NCT12345678');
+    });
+
+    it('accepts an array of NCT IDs', () => {
+      const input = getStudyResults.input.parse({
+        nctIds: ['NCT12345678', 'NCT87654321'],
+      });
+      expect(input.nctIds).toEqual(['NCT12345678', 'NCT87654321']);
+    });
+
+    it('rejects invalid NCT ID', () => {
+      expect(() => getStudyResults.input.parse({ nctIds: 'INVALID' })).toThrow();
+    });
+
+    it('rejects array with invalid NCT ID', () => {
+      expect(() => getStudyResults.input.parse({ nctIds: ['NCT12345678', 'BAD'] })).toThrow();
+    });
+
+    it('rejects more than 20 NCT IDs', () => {
+      const ids = Array.from({ length: 21 }, (_, i) => `NCT${String(i).padStart(8, '0')}`);
+      expect(() => getStudyResults.input.parse({ nctIds: ids })).toThrow();
+    });
+
+    it('accepts valid sections enum', () => {
+      const input = getStudyResults.input.parse({
+        nctIds: 'NCT12345678',
+        sections: 'outcomes',
+      });
+      expect(input.sections).toBe('outcomes');
+    });
+
+    it('accepts array of sections', () => {
+      const input = getStudyResults.input.parse({
+        nctIds: 'NCT12345678',
+        sections: ['outcomes', 'adverseEvents'],
+      });
+      expect(input.sections).toEqual(['outcomes', 'adverseEvents']);
+    });
+
+    it('rejects invalid section names', () => {
+      expect(() =>
+        getStudyResults.input.parse({
+          nctIds: 'NCT12345678',
+          sections: 'invalidSection',
+        }),
+      ).toThrow();
+    });
+
+    it('defaults summary to false', () => {
+      const input = getStudyResults.input.parse({ nctIds: 'NCT12345678' });
+      expect(input.summary).toBe(false);
+    });
   });
 
   describe('handler', () => {
@@ -43,10 +103,10 @@ describe('getStudyResults', () => {
           outcomeMeasures: [{ type: 'PRIMARY', title: 'Outcome 1' }],
         },
         adverseEventsModule: { timeFrame: '12 months' },
-        participantFlowModule: { flowGroups: [] },
-        baselineCharacteristicsModule: { baselineGroups: [] },
+        participantFlowModule: { groups: [] },
+        baselineCharacteristicsModule: { groups: [] },
       });
-      mockService.getStudy.mockResolvedValue(study);
+      mockService.getStudiesBatch.mockResolvedValue([study]);
 
       const ctx = createMockContext();
       const input = getStudyResults.input.parse({ nctIds: 'NCT12345678' });
@@ -61,7 +121,7 @@ describe('getStudyResults', () => {
     });
 
     it('tracks studies without results', async () => {
-      mockService.getStudy.mockResolvedValue(makeStudy('NCT12345678', false));
+      mockService.getStudiesBatch.mockResolvedValue([makeStudy('NCT12345678', false)]);
 
       const ctx = createMockContext();
       const input = getStudyResults.input.parse({ nctIds: 'NCT12345678' });
@@ -75,10 +135,10 @@ describe('getStudyResults', () => {
       const study = makeStudy('NCT12345678', true, {
         outcomeMeasuresModule: { outcomeMeasures: [{ title: 'X' }] },
         adverseEventsModule: { timeFrame: '6 months' },
-        participantFlowModule: { flowGroups: [] },
-        baselineCharacteristicsModule: { baselineGroups: [] },
+        participantFlowModule: { groups: [] },
+        baselineCharacteristicsModule: { groups: [] },
       });
-      mockService.getStudy.mockResolvedValue(study);
+      mockService.getStudiesBatch.mockResolvedValue([study]);
 
       const ctx = createMockContext();
       const input = getStudyResults.input.parse({
@@ -93,20 +153,26 @@ describe('getStudyResults', () => {
       expect(result.results[0].baseline).toBeUndefined();
     });
 
-    it('ignores invalid section names', async () => {
+    it('handles multiple sections filter', async () => {
       const study = makeStudy('NCT12345678', true, {
         outcomeMeasuresModule: { outcomeMeasures: [{ title: 'X' }] },
+        adverseEventsModule: { timeFrame: '6 months' },
+        participantFlowModule: { groups: [] },
+        baselineCharacteristicsModule: { groups: [] },
       });
-      mockService.getStudy.mockResolvedValue(study);
+      mockService.getStudiesBatch.mockResolvedValue([study]);
 
       const ctx = createMockContext();
       const input = getStudyResults.input.parse({
         nctIds: 'NCT12345678',
-        sections: ['outcomes', 'invalidSection'],
+        sections: ['outcomes', 'baseline'],
       });
       const result = await getStudyResults.handler(input, ctx);
 
       expect(result.results[0].outcomes).toBeDefined();
+      expect(result.results[0].baseline).toBeDefined();
+      expect(result.results[0].adverseEvents).toBeUndefined();
+      expect(result.results[0].participantFlow).toBeUndefined();
     });
 
     it('summarizes outcomes in summary mode', async () => {
@@ -126,7 +192,7 @@ describe('getStudyResults', () => {
           ],
         },
       });
-      mockService.getStudy.mockResolvedValue(study);
+      mockService.getStudiesBatch.mockResolvedValue([study]);
 
       const ctx = createMockContext();
       const input = getStudyResults.input.parse({
@@ -141,6 +207,9 @@ describe('getStudyResults', () => {
       expect(outcome.title).toBe('Overall Survival');
       expect(outcome.groupCount).toBe(2);
       expect(outcome.classCount).toBe(1);
+      // Full data arrays should NOT be present in summary
+      expect(outcome.groups).toBeUndefined();
+      expect(outcome.classes).toBeUndefined();
     });
 
     it('summarizes adverse events in summary mode', async () => {
@@ -152,7 +221,7 @@ describe('getStudyResults', () => {
           otherEvents: [{ term: 'Headache' }, { term: 'Nausea' }],
         },
       });
-      mockService.getStudy.mockResolvedValue(study);
+      mockService.getStudiesBatch.mockResolvedValue([study]);
 
       const ctx = createMockContext();
       const input = getStudyResults.input.parse({
@@ -169,70 +238,234 @@ describe('getStudyResults', () => {
       expect(ae.otherEventCount).toBe(2);
     });
 
-    it('caps nctIds at 5', async () => {
-      const ids = [
-        'NCT00000001',
-        'NCT00000002',
-        'NCT00000003',
-        'NCT00000004',
-        'NCT00000005',
-        'NCT00000006',
-      ];
-      mockService.getStudy.mockResolvedValue(makeStudy('NCT00000001', false));
+    it('summarizes participant flow in summary mode', async () => {
+      const study = makeStudy('NCT12345678', true, {
+        participantFlowModule: {
+          groups: [{ id: 'G1' }, { id: 'G2' }],
+          periods: [{ title: 'Overall' }, { title: 'Follow-up' }],
+        },
+      });
+      mockService.getStudiesBatch.mockResolvedValue([study]);
 
       const ctx = createMockContext();
-      const input = getStudyResults.input.parse({ nctIds: ids });
-      await getStudyResults.handler(input, ctx);
+      const input = getStudyResults.input.parse({
+        nctIds: 'NCT12345678',
+        sections: 'participantFlow',
+        summary: true,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      const pf = result.results[0].participantFlow!;
 
-      expect(mockService.getStudy).toHaveBeenCalledTimes(5);
+      expect(pf.groupCount).toBe(2);
+      expect(pf.periodCount).toBe(2);
     });
 
-    it('collects fetch errors without failing', async () => {
-      mockService.getStudy
-        .mockResolvedValueOnce(makeStudy('NCT12345678', false))
-        .mockRejectedValueOnce(new Error('Network error'));
+    it('summarizes baseline in summary mode', async () => {
+      const study = makeStudy('NCT12345678', true, {
+        baselineCharacteristicsModule: {
+          groups: [{ id: 'G1' }],
+          measures: [
+            { title: 'Age', paramType: 'MEAN', unitOfMeasure: 'years' },
+            { title: 'Sex', paramType: 'COUNT' },
+          ],
+        },
+      });
+      mockService.getStudiesBatch.mockResolvedValue([study]);
 
       const ctx = createMockContext();
-      const input = getStudyResults.input.parse({ nctIds: ['NCT12345678', 'NCT87654321'] });
+      const input = getStudyResults.input.parse({
+        nctIds: 'NCT12345678',
+        sections: 'baseline',
+        summary: true,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      const bl = result.results[0].baseline!;
+
+      expect(bl.groupCount).toBe(1);
+      expect(bl.measureCount).toBe(2);
+    });
+
+    it('returns full data in non-summary mode', async () => {
+      const study = makeStudy('NCT12345678', true, {
+        adverseEventsModule: {
+          timeFrame: '12 months',
+          eventGroups: [{ id: 'G1' }],
+          seriousEvents: [{ term: 'Death' }],
+        },
+      });
+      mockService.getStudiesBatch.mockResolvedValue([study]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input.parse({
+        nctIds: 'NCT12345678',
+        sections: 'adverseEvents',
+        summary: false,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      const ae = result.results[0].adverseEvents!;
+
+      // Full data should be preserved
+      expect(ae.timeFrame).toBe('12 months');
+      expect(ae.seriousEvents).toBeDefined();
+    });
+
+    it('handles batch of studies', async () => {
+      mockService.getStudiesBatch.mockResolvedValue([
+        makeStudy('NCT12345678', true, {
+          outcomeMeasuresModule: { outcomeMeasures: [{ title: 'X' }] },
+        }),
+        makeStudy('NCT87654321', false),
+      ]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input.parse({
+        nctIds: ['NCT12345678', 'NCT87654321'],
+      });
+      const result = await getStudyResults.handler(input, ctx);
+
+      expect(result.results).toHaveLength(2);
+      expect(result.results[0].hasResults).toBe(true);
+      expect(result.results[1].hasResults).toBe(false);
+      expect(result.studiesWithoutResults).toEqual(['NCT87654321']);
+    });
+
+    it('records fetch errors for missing studies in batch', async () => {
+      mockService.getStudiesBatch.mockResolvedValue([makeStudy('NCT12345678', false)]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input.parse({
+        nctIds: ['NCT12345678', 'NCT87654321'],
+      });
       const result = await getStudyResults.handler(input, ctx);
 
       expect(result.results).toHaveLength(1);
-      expect(result.fetchErrors).toEqual([{ nctId: 'NCT87654321', error: 'Network error' }]);
+      expect(result.fetchErrors).toEqual([{ nctId: 'NCT87654321', error: 'Study not found' }]);
     });
 
     it('throws when all studies fail to fetch', async () => {
-      mockService.getStudy.mockRejectedValue(new Error('Down'));
+      mockService.getStudiesBatch.mockResolvedValue([]);
 
       const ctx = createMockContext();
       const input = getStudyResults.input.parse({ nctIds: 'NCT12345678' });
 
       await expect(getStudyResults.handler(input, ctx)).rejects.toThrow('All studies failed');
     });
+
+    it('handles study with empty resultsSection', async () => {
+      mockService.getStudiesBatch.mockResolvedValue([makeStudy('NCT12345678', true, {})]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input.parse({ nctIds: 'NCT12345678' });
+      const result = await getStudyResults.handler(input, ctx);
+
+      expect(result.results[0].hasResults).toBe(true);
+      expect(result.results[0].outcomes).toBeUndefined();
+      expect(result.results[0].adverseEvents).toBeUndefined();
+    });
+
+    it('handles study with missing resultsSection', async () => {
+      mockService.getStudiesBatch.mockResolvedValue([makeStudy('NCT12345678', true)]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input.parse({ nctIds: 'NCT12345678' });
+      const result = await getStudyResults.handler(input, ctx);
+
+      expect(result.results[0].hasResults).toBe(true);
+      expect(result.results[0].outcomes).toBeUndefined();
+    });
   });
 
   describe('format', () => {
-    it('renders study with results', () => {
+    it('renders study without results', () => {
+      const blocks = getStudyResults.format!({
+        results: [{ nctId: 'NCT12345678', title: 'No Data', hasResults: false }],
+      });
+      expect(blocks[0].text).toContain('No results available.');
+    });
+
+    it('renders outcomes section', () => {
       const blocks = getStudyResults.format!({
         results: [
           {
             nctId: 'NCT12345678',
             title: 'Test Study',
             hasResults: true,
-            outcomes: [{ type: 'PRIMARY' }],
-            adverseEvents: { timeFrame: '12 months' },
+            outcomes: [
+              {
+                type: 'PRIMARY',
+                title: 'Overall Survival',
+                timeFrame: '24 months',
+                paramType: 'MEDIAN',
+                unitOfMeasure: 'months',
+              },
+            ],
           },
         ],
       });
-      expect(blocks[0].text).toContain('## NCT12345678: Test Study');
-      expect(blocks[0].text).toContain('Outcomes: 1 measures');
-      expect(blocks[0].text).toContain('Adverse Events: data available');
+      const text = blocks[0].text;
+      expect(text).toContain('## NCT12345678: Test Study');
+      expect(text).toContain('Outcomes');
+      expect(text).toContain('Overall Survival');
+      expect(text).toContain('24 months');
     });
 
-    it('renders study without results', () => {
+    it('renders adverse events with summary data', () => {
       const blocks = getStudyResults.format!({
-        results: [{ nctId: 'NCT12345678', title: 'No Data', hasResults: false }],
+        results: [
+          {
+            nctId: 'NCT12345678',
+            title: 'AE Study',
+            hasResults: true,
+            adverseEvents: {
+              timeFrame: '12 months',
+              seriousEventCount: 3,
+              otherEventCount: 15,
+            },
+          },
+        ],
       });
-      expect(blocks[0].text).toContain('No results available.');
+      const text = blocks[0].text;
+      expect(text).toContain('Adverse Events');
+      expect(text).toContain('12 months');
+    });
+
+    it('renders participant flow with summary data', () => {
+      const blocks = getStudyResults.format!({
+        results: [
+          {
+            nctId: 'NCT12345678',
+            title: 'PF Study',
+            hasResults: true,
+            participantFlow: {
+              groupCount: 3,
+              periodCount: 2,
+            },
+          },
+        ],
+      });
+      const text = blocks[0].text;
+      expect(text).toContain('Participant Flow');
+      expect(text).toContain('3 groups');
+      expect(text).toContain('2 periods');
+    });
+
+    it('renders baseline with summary data', () => {
+      const blocks = getStudyResults.format!({
+        results: [
+          {
+            nctId: 'NCT12345678',
+            title: 'BL Study',
+            hasResults: true,
+            baseline: {
+              groupCount: 2,
+              measures: [{ title: 'Age', unitOfMeasure: 'years' }, { title: 'Sex' }],
+            },
+          },
+        ],
+      });
+      const text = blocks[0].text;
+      expect(text).toContain('Baseline');
+      expect(text).toContain('Age');
     });
 
     it('renders fetch errors', () => {
@@ -243,12 +476,29 @@ describe('getStudyResults', () => {
       expect(blocks[0].text).toContain('NCT12345678: timeout');
     });
 
-    it('renders studies without results list', () => {
+    it('renders studiesWithoutResults', () => {
       const blocks = getStudyResults.format!({
         results: [{ nctId: 'NCT12345678', title: 'X', hasResults: false }],
         studiesWithoutResults: ['NCT12345678'],
       });
       expect(blocks[0].text).toContain('Without results: NCT12345678');
+    });
+
+    it('renders multiple studies', () => {
+      const blocks = getStudyResults.format!({
+        results: [
+          { nctId: 'NCT12345678', title: 'Study A', hasResults: false },
+          {
+            nctId: 'NCT87654321',
+            title: 'Study B',
+            hasResults: true,
+            outcomes: [{ type: 'PRIMARY', title: 'OS' }],
+          },
+        ],
+      });
+      const text = blocks[0].text;
+      expect(text).toContain('## NCT12345678: Study A');
+      expect(text).toContain('## NCT87654321: Study B');
     });
   });
 });

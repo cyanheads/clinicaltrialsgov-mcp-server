@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-03-27 16:01:31
+Generated on: 2026-04-04 22:16:55
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -109,6 +109,7 @@ clinicaltrialsgov-mcp-server/
 │   │       │   ├── index.ts
 │   │       │   └── search-studies.tool.ts
 │   │       └── utils/
+│   │           ├── format-helpers.ts
 │   │           └── query-helpers.ts
 │   ├── services/
 │   │   └── clinical-trials/
@@ -116,15 +117,29 @@ clinicaltrialsgov-mcp-server/
 │   │       └── types.ts
 │   └── index.ts
 ├── tests/
-│   ├── clinical-trials-service.test.ts
-│   ├── find-eligible.tool.test.ts
-│   ├── get-field-values.tool.test.ts
-│   ├── get-study-count.tool.test.ts
-│   ├── get-study-results.tool.test.ts
-│   ├── get-study.tool.test.ts
-│   ├── query-helpers.test.ts
-│   ├── search-studies.tool.test.ts
-│   └── study.resource.test.ts
+│   ├── config/
+│   │   └── server-config.test.ts
+│   ├── mcp-server/
+│   │   ├── prompts/
+│   │   │   └── definitions/
+│   │   │       └── analyze-trial-landscape.prompt.test.ts
+│   │   ├── resources/
+│   │   │   └── definitions/
+│   │   │       └── study.resource.test.ts
+│   │   └── tools/
+│   │       ├── definitions/
+│   │       │   ├── find-eligible.tool.test.ts
+│   │       │   ├── get-field-definitions.tool.test.ts
+│   │       │   ├── get-field-values.tool.test.ts
+│   │       │   ├── get-study-count.tool.test.ts
+│   │       │   ├── get-study-results.tool.test.ts
+│   │       │   ├── get-study.tool.test.ts
+│   │       │   └── search-studies.tool.test.ts
+│   │       └── utils/
+│   │           └── query-helpers.test.ts
+│   └── services/
+│       └── clinical-trials/
+│           └── clinical-trials-service.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore

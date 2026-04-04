@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.0] - 2026-04-04
+
+### Added
+
+- **`format-helpers.ts`** — New shared formatting utility (`formatRemainingStudyFields`) that renders study fields not already covered by a tool's primary formatter. Prevents data loss in format output when the API returns fields beyond the hardcoded set.
+- **Tests** — Added `server-config.test.ts` (config defaults, env var parsing, caching), `analyze-trial-landscape.prompt.test.ts` (args validation, generate output, tool references), and `get-field-definitions.tool.test.ts` (comprehensive handler and format coverage).
+
+### Changed
+
+- **`clinicaltrials_find_eligible`** — Format output now includes study metadata (phase, enrollment, sponsor, conditions, interventions, brief summary) and remaining fields via `formatRemainingStudyFields`. Improved `sex` input description.
+- **`clinicaltrials_search_studies`** — Format output now renders remaining study fields via `formatRemainingStudyFields`, surfacing data beyond the standard metadata line.
+- **`clinicaltrials_get_study_count`** — Improved input descriptions with concrete examples for `conditionQuery`, `interventionQuery`, `sponsorQuery`, and `advancedFilter`.
+- **`ClinicalTrialsService`** — `filter.ids` rejection now throws `notFound` with the specific ID list instead of a generic validation error, improving debuggability for batch lookups.
+- **Test suite** — Restructured test directory from flat `tests/` to mirror source layout (`tests/config/`, `tests/mcp-server/...`, `tests/services/...`). Expanded all existing test files with comprehensive coverage: input validation edge cases, handler behavior variants, format rendering, error paths, retry logic, HTML response handling, and batch operations. Improved mock pattern using `vi.hoisted()` for cleaner service mocking.
+
+### Dependencies
+
+- Upgraded `@cyanheads/mcp-ts-core` from `^0.2.10` to `^0.2.12`.
+- Upgraded `@cloudflare/workers-types` from `^4.20260329.1` to `^4.20260404.1`.
+- Upgraded `@types/node` from `^25.5.0` to `^25.5.2`.
+
 ## [2.0.6] - 2026-03-30
 
 ### Changed

@@ -183,9 +183,17 @@ export class ClinicalTrialsService {
                 `Study ${id} not found. Verify the NCT ID exists on ClinicalTrials.gov.`,
               );
             }
-            throw validationError(
-              `Invalid NCT ID format. IDs must match NCTxxxxxxxx (NCT + 8 digits). API response: ${text}`,
-            );
+            // filter.ids rejection — the API may reject IDs that match the
+            // regex but don't exist (e.g. NCT00000000). Surface the actual
+            // IDs so the caller knows which ones failed.
+            const ids = params['filter.ids'];
+            if (ids) {
+              const idList = ids.split('|').join(', ');
+              throw notFound(
+                `Study ID(s) not found or rejected by API: ${idList}. Verify the NCT IDs exist on ClinicalTrials.gov.`,
+              );
+            }
+            throw validationError(`Invalid request format. API response: ${text}`);
           }
           throw validationError(text || `Bad request: ${path}`);
         }

@@ -6,6 +6,20 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
+import { formatRemainingStudyFields } from '../utils/format-helpers.js';
+
+/** Dot-notation prefixes already rendered by the eligible formatter. */
+const ELIGIBLE_RENDERED = new Set([
+  'protocolSection.identificationModule',
+  'protocolSection.statusModule.overallStatus',
+  'protocolSection.designModule',
+  'protocolSection.sponsorCollaboratorsModule.leadSponsor',
+  'protocolSection.conditionsModule',
+  'protocolSection.armsInterventionsModule',
+  'protocolSection.descriptionModule.briefSummary',
+  'protocolSection.eligibilityModule',
+  'protocolSection.contactsLocationsModule',
+]);
 
 /** Fields requested for eligibility evaluation. */
 const ELIGIBLE_FIELDS = [
@@ -43,7 +57,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
 
   input: z.object({
     age: z.number().int().min(0).max(120).describe('Patient age in years.'),
-    sex: z.enum(['Female', 'Male', 'All']).describe('Biological sex.'),
+    sex: z
+      .enum(['Female', 'Male', 'All'])
+      .describe("Patient's biological sex. Use 'All' to include studies regardless of sex restrictions."),
     conditions: z
       .array(z.string())
       .min(1)
@@ -200,6 +216,27 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
 
         lines.push(`**${nctId}**: ${title} [${status}]`);
 
+        // Study metadata
+        const phases = s.protocolSection?.designModule?.phases;
+        const enrollment = s.protocolSection?.designModule?.enrollmentInfo?.count;
+        const sponsor = s.protocolSection?.sponsorCollaboratorsModule?.leadSponsor?.name;
+        const conditions = s.protocolSection?.conditionsModule?.conditions;
+        const interventions = s.protocolSection?.armsInterventionsModule?.interventions;
+        const studyMeta: string[] = [];
+        if (phases?.length) studyMeta.push(phases.join('/'));
+        if (enrollment != null) studyMeta.push(`N=${enrollment}`);
+        if (sponsor) studyMeta.push(sponsor);
+        if (conditions?.length) studyMeta.push(conditions.slice(0, 3).join(', '));
+        if (studyMeta.length) lines.push(`  ${studyMeta.join(' | ')}`);
+        if (interventions?.length) {
+          const names = interventions.map((i) => i.name).filter(Boolean).slice(0, 3);
+          if (names.length) lines.push(`  Interventions: ${names.join(', ')}`);
+        }
+        const summary = s.protocolSection?.descriptionModule?.briefSummary;
+        if (summary) {
+          lines.push(`  Summary: ${summary.length > 200 ? `${summary.slice(0, 200)}...` : summary}`);
+        }
+
         // Eligibility criteria summary
         const eligParts: string[] = [];
         if (elig.minimumAge && elig.maximumAge)
@@ -232,6 +269,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
             .join(' | ');
           lines.push(`  Contact: ${contactStr}`);
         }
+        lines.push(
+          ...formatRemainingStudyFields(study as Record<string, unknown>, ELIGIBLE_RENDERED),
+        );
       }
     }
 

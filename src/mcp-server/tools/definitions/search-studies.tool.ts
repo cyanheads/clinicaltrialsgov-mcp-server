@@ -7,9 +7,21 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { getServerConfig } from '@/config/server-config.js';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
+import { formatRemainingStudyFields } from '../utils/format-helpers.js';
 import { buildAdvancedFilter, toArray } from '../utils/query-helpers.js';
 
 const { maxPageSize } = getServerConfig();
+
+/** Dot-notation prefixes already rendered by the search formatter. */
+const SEARCH_RENDERED = new Set([
+  'protocolSection.identificationModule.nctId',
+  'protocolSection.identificationModule.briefTitle',
+  'protocolSection.statusModule.overallStatus',
+  'protocolSection.designModule.phases',
+  'protocolSection.designModule.enrollmentInfo',
+  'protocolSection.sponsorCollaboratorsModule.leadSponsor',
+  'protocolSection.conditionsModule.conditions',
+]);
 
 export const searchStudies = tool('clinicaltrials_search_studies', {
   description: `Search for clinical trial studies from ClinicalTrials.gov. Supports full-text and field-specific queries, status/phase/geographic filters, pagination, sorting, and field selection. Use the fields parameter to reduce payload size — full study records are ~70KB each.`,
@@ -228,6 +240,9 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       const statusStr = status ? ` [${status}]` : '';
       const metaStr = meta.length ? `\n  ${meta.join(' | ')}` : '';
       lines.push(`- **${nctId}**: ${title}${statusStr}${metaStr}`);
+      lines.push(
+        ...formatRemainingStudyFields(study as Record<string, unknown>, SEARCH_RENDERED),
+      );
     }
     if (result.nextPageToken)
       lines.push('\n(More results available — use nextPageToken to paginate)');

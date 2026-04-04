@@ -16,10 +16,20 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
   },
 
   input: z.object({
-    query: z.string().optional().describe('General full-text search.'),
-    conditionQuery: z.string().optional().describe('Condition/disease search.'),
-    interventionQuery: z.string().optional().describe('Intervention/treatment search.'),
-    sponsorQuery: z.string().optional().describe('Sponsor search.'),
+    query: z.string().optional().describe('General full-text search across all fields.'),
+    conditionQuery: z
+      .string()
+      .optional()
+      .describe(
+        'Condition/disease-specific search. E.g., "Type 2 Diabetes", "non-small cell lung cancer".',
+      ),
+    interventionQuery: z
+      .string()
+      .optional()
+      .describe(
+        'Intervention/treatment search. E.g., "pembrolizumab", "cognitive behavioral therapy".',
+      ),
+    sponsorQuery: z.string().optional().describe('Sponsor/collaborator name search.'),
     statusFilter: z
       .union([z.string(), z.array(z.string())])
       .optional()
@@ -30,7 +40,12 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       .union([z.string(), z.array(z.string())])
       .optional()
       .describe('Filter by trial phase. Values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA.'),
-    advancedFilter: z.string().optional().describe('Advanced AREA[] filter expression.'),
+    advancedFilter: z
+      .string()
+      .optional()
+      .describe(
+        'Advanced filter using AREA[] Essie syntax. E.g., "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]". Combine with AND/OR/NOT and parentheses.',
+      ),
   }),
 
   output: z.object({

@@ -140,7 +140,7 @@
     "tsc-alias": "^1.8.16",
     "typedoc": "^0.28.18",
     "typescript": "^6.0.2",
-    "vite": "8.0.3",
+    "vite": "8.0.5",
     "vitest": "^4.1.2"
   },
   "publishConfig": {

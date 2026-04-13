@@ -1,6 +1,6 @@
 /**
- * @fileoverview Single study lookup by NCT ID. Mirrors the clinicaltrials://{nctId}
- * resource as a tool for clients that don't support MCP resources.
+ * @fileoverview Single study lookup by NCT ID. Returns the full study record including
+ * protocol details, eligibility criteria, outcomes, arms, interventions, contacts, and locations.
  * @module mcp-server/tools/definitions/get-study.tool
  */
 

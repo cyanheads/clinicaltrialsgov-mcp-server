@@ -122,39 +122,39 @@ The manifest uses the official MCP schema. A typical server has two package entr
 
 ### Top-Level
 
-| Field         | Required | Description                                                                                 |
-| :------------ | :------- | :------------------------------------------------------------------------------------------ |
-| `$schema`     | Yes      | Always `"https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"`     |
-| `name`        | Yes      | Reverse-domain identifier: `io.github.{owner}/{repo}`. Matches `mcpName` in `package.json`. |
-| `description` | Yes      | One-line description of the server.                                                         |
-| `repository`  | No       | `{ "url": "https://github.com/...", "source": "github" }`                                   |
-| `version`     | Yes      | Semver version. Must match `package.json` version.                                          |
-| `packages`    | Yes      | Array of package entries — one per transport/runtime combo.                                 |
+| Field | Required | Description |
+|:------|:---------|:------------|
+| `$schema` | Yes | Always `"https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json"` |
+| `name` | Yes | Reverse-domain identifier: `io.github.{owner}/{repo}`. Matches `mcpName` in `package.json`. |
+| `description` | Yes | One-line description of the server. |
+| `repository` | No | `{ "url": "https://github.com/...", "source": "github" }` |
+| `version` | Yes | Semver version. Must match `package.json` version. |
+| `packages` | Yes | Array of package entries — one per transport/runtime combo. |
 
 ### Package Entry
 
 Each entry in `packages[]` describes one way to install and run the server:
 
-| Field                  | Required | Description                                                                                |
-| :--------------------- | :------- | :----------------------------------------------------------------------------------------- |
-| `registryType`         | Yes      | `"npm"` for npm packages.                                                                  |
-| `registryBaseUrl`      | Yes      | `"https://registry.npmjs.org"` for npm.                                                    |
-| `identifier`           | Yes      | The npm package name (e.g., `@org/my-server`).                                             |
-| `runtimeHint`          | No       | `"bun"` or `"node"`. Tells clients which runtime to use.                                   |
-| `version`              | Yes      | Package version. Must match top-level `version`.                                           |
-| `packageArguments`     | No       | Array of `{ "type": "positional", "value": "..." }` args passed after the package command. |
-| `environmentVariables` | No       | Array of env var descriptors (see below).                                                  |
-| `transport`            | Yes      | `{ "type": "stdio" }` or `{ "type": "streamable-http", "url": "..." }`                     |
+| Field | Required | Description |
+|:------|:---------|:------------|
+| `registryType` | Yes | `"npm"` for npm packages. |
+| `registryBaseUrl` | Yes | `"https://registry.npmjs.org"` for npm. |
+| `identifier` | Yes | The npm package name (e.g., `@org/my-server`). |
+| `runtimeHint` | No | `"bun"` or `"node"`. Tells clients which runtime to use. |
+| `version` | Yes | Package version. Must match top-level `version`. |
+| `packageArguments` | No | Array of `{ "type": "positional", "value": "..." }` args passed after the package command. |
+| `environmentVariables` | No | Array of env var descriptors (see below). |
+| `transport` | Yes | `{ "type": "stdio" }` or `{ "type": "streamable-http", "url": "..." }` |
 
 ### Environment Variable
 
-| Field         | Required | Description                                  |
-| :------------ | :------- | :------------------------------------------- |
-| `name`        | Yes      | The env var name (e.g., `ACME_API_KEY`).     |
-| `description` | Yes      | Human-readable purpose.                      |
-| `format`      | No       | `"string"` (default).                        |
-| `isRequired`  | No       | `true` if the server won't start without it. |
-| `default`     | No       | Default value if not set.                    |
+| Field | Required | Description |
+|:------|:---------|:------------|
+| `name` | Yes | The env var name (e.g., `ACME_API_KEY`). |
+| `description` | Yes | Human-readable purpose. |
+| `format` | No | `"string"` (default). |
+| `isRequired` | No | `true` if the server won't start without it. |
+| `default` | No | Default value if not set. |
 
 ### Package Arguments
 

@@ -27,46 +27,37 @@ Badges row                             ← npm, Docker, Version, MCP Spec, SDK, 
 
 ### Title Block
 
-Centered HTML. The `<h1>` is the server name — use the scoped package name if published under a scope (e.g., `@cyanheads/my-mcp-server`). The `<p>` is a bold one-liner: what the server wraps, key capabilities, transport/deployment options. Follow with a count line summarizing the MCP surface (tools, resources, prompts) separated by `·`, then a badge row.
+Centered HTML. The `<h1>` is the server name — use the scoped package name if published under a scope (e.g., `@cyanheads/my-mcp-server`). The `<p>` is a bold one-liner: what the server wraps, key capabilities, transport/deployment options. Follow with a count line summarizing the MCP surface (tools, resources, prompts) separated by ` · `, then a badge row.
 
 ```html
 <div align="center">
   <h1>@cyanheads/my-mcp-server</h1>
-  <p>
-    <b
-      >MCP server for the Acme API. Search projects, manage tasks, track teams.
-      STDIO & Streamable HTTP</b
-    >
-  </p>
+  <p><b>MCP server for the Acme API. Search projects, manage tasks, track teams. STDIO & Streamable HTTP</b></p>
   <p><b>7 Tools · 2 Resources · 1 Prompt</b></p>
 </div>
 
 <div align="center">
-  [![npm](https://img.shields.io/npm/v/my-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/my-mcp-server)
-  [![Version](https://img.shields.io/badge/Version-1.0.0-blue.svg?style=flat-square)](./CHANGELOG.md)
-  [![Framework](https://img.shields.io/badge/Built%20on-@cyanheads/mcp--ts--core-259?style=flat-square)](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
-  [![MCP
-  SDK](https://img.shields.io/badge/MCP%20SDK-^1.27.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/)
-  [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE)
-  [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/)
+
+[![npm](https://img.shields.io/npm/v/my-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/my-mcp-server) [![Version](https://img.shields.io/badge/Version-1.0.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![Framework](https://img.shields.io/badge/Built%20on-@cyanheads/mcp--ts--core-259?style=flat-square)](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.27.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![TypeScript](https://img.shields.io/badge/TypeScript-^5.9.3-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/)
+
 </div>
 ```
 
 **Badge selection:** All badges use `style=flat-square`. Include what applies — don't add badges for things the server doesn't have:
 
-| Badge         | When to include                                       |
-| :------------ | :---------------------------------------------------- |
-| npm           | Published to npm                                      |
-| Docker        | Published to ghcr.io or Docker Hub                    |
-| Version       | Always — link to CHANGELOG.md                         |
-| Framework     | Always — links to `@cyanheads/mcp-ts-core` on npm     |
-| MCP Spec      | Always — link to the spec version implemented         |
-| MCP SDK       | Always — show the `@modelcontextprotocol/sdk` version |
-| License       | Always                                                |
-| Status        | Optional — Stable, Beta, etc.                         |
-| TypeScript    | Always                                                |
-| Bun           | If using Bun                                          |
-| Code Coverage | If coverage is tracked                                |
+| Badge | When to include |
+|:------|:----------------|
+| npm | Published to npm |
+| Docker | Published to ghcr.io or Docker Hub |
+| Version | Always — link to CHANGELOG.md |
+| Framework | Always — links to `@cyanheads/mcp-ts-core` on npm |
+| MCP Spec | Always — link to the spec version implemented |
+| MCP SDK | Always — show the `@modelcontextprotocol/sdk` version |
+| License | Always |
+| Status | Optional — Stable, Beta, etc. |
+| TypeScript | Always |
+| Bun | If using Bun |
+| Code Coverage | If coverage is tracked |
 
 Add a `---` horizontal rule after the badge block.
 
@@ -81,11 +72,11 @@ This is the most important section — it tells humans and LLMs exactly what the
 
 Seven tools for working with Acme data:
 
-| Tool Name         | Description                                               |
-| :---------------- | :-------------------------------------------------------- |
-| `search_projects` | Search projects by name, status, or team.                 |
-| `create_task`     | Create a new task in a project.                           |
-| `get_task`        | Fetch one or more tasks by ID, with full or summary data. |
+| Tool Name | Description |
+|:----------|:------------|
+| `search_projects` | Search projects by name, status, or team. |
+| `create_task` | Create a new task in a project. |
+| `get_task` | Fetch one or more tasks by ID, with full or summary data. |
 ```
 
 Lead with a one-line count: "Seven tools for working with X data:" (or "Three tools", etc.).
@@ -130,10 +121,10 @@ Skip the per-tool subsection for simple tools where the table description says e
 ```markdown
 ## Resources
 
-| URI Pattern                   | Description           |
-| :---------------------------- | :-------------------- |
+| URI Pattern | Description |
+|:------------|:------------|
 | `acme://projects/{projectId}` | Project details by ID |
-| `acme://tasks/{taskId}`       | Task details by ID    |
+| `acme://tasks/{taskId}` | Task details by ID |
 ```
 
 ### Prompts (if any)
@@ -141,8 +132,8 @@ Skip the per-tool subsection for simple tools where the table description says e
 ```markdown
 ## Prompts
 
-| Prompt            | Description                                 |
-| :---------------- | :------------------------------------------ |
+| Prompt | Description |
+|:-------|:------------|
 | `project_summary` | Summarize a project's status and open tasks |
 ```
 
@@ -183,12 +174,12 @@ A public instance is available at `https://my-server.example.com/mcp` — no ins
 
 \`\`\`json
 {
-"mcpServers": {
-"my-server": {
-"type": "streamable-http",
-"url": "https://my-server.example.com/mcp"
-}
-}
+  "mcpServers": {
+    "my-server": {
+      "type": "streamable-http",
+      "url": "https://my-server.example.com/mcp"
+    }
+  }
 }
 \`\`\`
 
@@ -198,17 +189,17 @@ Add to your MCP client config (e.g., `claude_desktop_config.json`):
 
 \`\`\`json
 {
-"mcpServers": {
-"my-mcp-server": {
-"type": "stdio",
-"command": "bunx",
-"args": ["my-mcp-server@latest"],
-"env": {
-"ACME_API_KEY": "your-api-key",
-"MCP_TRANSPORT_TYPE": "stdio"
-}
-}
-}
+  "mcpServers": {
+    "my-mcp-server": {
+      "type": "stdio",
+      "command": "bunx",
+      "args": ["my-mcp-server@latest"],
+      "env": {
+        "ACME_API_KEY": "your-api-key",
+        "MCP_TRANSPORT_TYPE": "stdio"
+      }
+    }
+  }
 }
 \`\`\`
 
@@ -219,19 +210,19 @@ Add to your MCP client config (e.g., `claude_desktop_config.json`):
 ### Installation
 
 1. **Clone the repository:**
-   \`\`\`sh
-   git clone https://github.com/cyanheads/my-mcp-server.git
-   \`\`\`
+\`\`\`sh
+git clone https://github.com/cyanheads/my-mcp-server.git
+\`\`\`
 
 2. **Navigate into the directory:**
-   \`\`\`sh
-   cd my-mcp-server
-   \`\`\`
+\`\`\`sh
+cd my-mcp-server
+\`\`\`
 
 3. **Install dependencies:**
-   \`\`\`sh
-   bun install
-   \`\`\`
+\`\`\`sh
+bun install
+\`\`\`
 ```
 
 Omit the hosted instance subsection if there isn't one. Omit the clone/install steps if the server is npm-only (not meant to be cloned).
@@ -243,16 +234,17 @@ Table of environment variables. Include framework vars only if the server uses n
 ```markdown
 ## Configuration
 
-| Variable                | Description                                 | Default                |
-| :---------------------- | :------------------------------------------ | :--------------------- |
-| `ACME_API_KEY`          | **Required.** API key for the Acme service. | —                      |
-| `ACME_BASE_URL`         | API base URL.                               | `https://api.acme.com` |
-| `MCP_TRANSPORT_TYPE`    | Transport: `stdio` or `http`.               | `stdio`                |
-| `MCP_HTTP_PORT`         | Port for HTTP server.                       | `3010`                 |
-| `MCP_AUTH_MODE`         | Auth mode: `none`, `jwt`, or `oauth`.       | `none`                 |
-| `MCP_LOG_LEVEL`         | Log level (RFC 5424).                       | `info`                 |
-| `STORAGE_PROVIDER_TYPE` | Storage backend.                            | `in-memory`            |
-| `OTEL_ENABLED`          | Enable OpenTelemetry.                       | `false`                |
+| Variable | Description | Default |
+|:---------|:------------|:--------|
+| `ACME_API_KEY` | **Required.** API key for the Acme service. | — |
+| `ACME_BASE_URL` | API base URL. | `https://api.acme.com` |
+| `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
+| `MCP_HTTP_PORT` | Port for HTTP server. | `3010` |
+| `MCP_AUTH_MODE` | Auth mode: `none`, `jwt`, or `oauth`. | `none` |
+| `MCP_LOG_LEVEL` | Log level (RFC 5424). | `info` |
+| `LOGS_DIR` | Directory for log files (Node.js only). | `<project-root>/logs` |
+| `STORAGE_PROVIDER_TYPE` | Storage backend. | `in-memory` |
+| `OTEL_ENABLED` | Enable OpenTelemetry. | `false` |
 ```
 
 Source from the server config Zod schema and `.env.example`. Mark required vars with bold **Required.** in the description rather than a separate column.
@@ -269,26 +261,26 @@ Separate from Getting Started. Show build + run commands, and Workers/Docker dep
 - **Build and run the production version:**
   \`\`\`sh
   bun run build
-  bun run start:http # or start:stdio
+  bun run start:http   # or start:stdio
   \`\`\`
 
 - **Run checks and tests:**
   \`\`\`sh
-  bun run devcheck # Lints, formats, type-checks
-  bun run test # Runs test suite
+  bun run devcheck     # Lints, formats, type-checks
+  bun run test         # Runs test suite
   \`\`\`
 
 ### Cloudflare Workers
 
 1. **Build the Worker bundle:**
-   \`\`\`sh
-   bun run build:worker
-   \`\`\`
+\`\`\`sh
+bun run build:worker
+\`\`\`
 
 2. **Deploy:**
-   \`\`\`sh
-   bun run deploy:prod
-   \`\`\`
+\`\`\`sh
+bun run deploy:prod
+\`\`\`
 ```
 
 Include the Docker or Workers subsection only if the server supports it.
@@ -300,13 +292,13 @@ Directory/purpose table orienting contributors to the codebase.
 ```markdown
 ## Project Structure
 
-| Directory                  | Purpose                                               |
-| :------------------------- | :---------------------------------------------------- |
-| `src/mcp-server/tools`     | Tool definitions (`*.tool.ts`).                       |
-| `src/mcp-server/resources` | Resource definitions (`*.resource.ts`).               |
-| `src/services`             | Domain service integrations.                          |
-| `src/config`               | Environment variable parsing and validation with Zod. |
-| `tests/`                   | Unit and integration tests mirroring `src/`.          |
+| Directory | Purpose |
+|:----------|:--------|
+| `src/mcp-server/tools` | Tool definitions (`*.tool.ts`). |
+| `src/mcp-server/resources` | Resource definitions (`*.resource.ts`). |
+| `src/services` | Domain service integrations. |
+| `src/config` | Environment variable parsing and validation with Zod. |
+| `tests/` | Unit and integration tests mirroring `src/`. |
 ```
 
 ### Development Guide

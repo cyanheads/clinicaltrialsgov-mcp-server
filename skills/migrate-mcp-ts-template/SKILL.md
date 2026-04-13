@@ -4,7 +4,7 @@ description: >
   Migrate an existing mcp-ts-template fork to use @cyanheads/mcp-ts-core as a package dependency. Use when a project was cloned/forked from github.com/cyanheads/mcp-ts-template and carries framework source code in its own src/ — this skill rewrites those internal imports to package subpath imports and removes the bundled framework files.
 metadata:
   author: cyanheads
-  version: "2.1"
+  version: "2.2"
   audience: external
   type: workflow
 ---
@@ -23,7 +23,7 @@ For the full exports catalog, see `CLAUDE.md` → Exports Reference.
 2. **Search for all `@/` imports** across `src/` that reference framework internals
 3. **Rewrite each import** using the mapping table below
 4. **Identify framework source files** now provided by the package (see candidates below) — review each for server-specific additions before cleaning up
-5. **Update entry point** (`src/index.ts`) to use `createApp()` from the package
+5. **Update entry point** (`src/index.ts`) to use `createApp()` from the package and the project's chosen registration pattern (fresh scaffold default: direct imports in `src/index.ts`)
 6. **Update build configs**:
    - `tsconfig.json` extends `@cyanheads/mcp-ts-core/tsconfig.base.json`
    - `biome.json` extends `@cyanheads/mcp-ts-core/biome`
@@ -37,52 +37,52 @@ These are the actual `@/` import paths used in framework source. Rewrite any tha
 
 ### Core
 
-| Old `@/` import                                   | New package import                     |
-| :------------------------------------------------ | :------------------------------------- |
-| `@/config/index.js`                               | `@cyanheads/mcp-ts-core/config`        |
-| `@/context.js` or `@/core/context.js`             | `@cyanheads/mcp-ts-core`               |
-| `@/core/worker.js`                                | `@cyanheads/mcp-ts-core/worker`        |
-| `@/types-global/errors.js`                        | `@cyanheads/mcp-ts-core/errors`        |
-| `@/storage/core/StorageService.js`                | `@cyanheads/mcp-ts-core/storage`       |
-| `@/storage/core/IStorageProvider.js`              | `@cyanheads/mcp-ts-core/storage/types` |
-| `@/mcp-server/transports/auth/lib/checkScopes.js` | `@cyanheads/mcp-ts-core/auth`          |
-| `@/testing/index.js`                              | `@cyanheads/mcp-ts-core/testing`       |
+| Old `@/` import | New package import |
+|:----------------|:-------------------|
+| `@/config/index.js` | `@cyanheads/mcp-ts-core/config` |
+| `@/context.js` or `@/core/context.js` | `@cyanheads/mcp-ts-core` |
+| `@/core/worker.js` | `@cyanheads/mcp-ts-core/worker` |
+| `@/types-global/errors.js` | `@cyanheads/mcp-ts-core/errors` |
+| `@/storage/core/StorageService.js` | `@cyanheads/mcp-ts-core/storage` |
+| `@/storage/core/IStorageProvider.js` | `@cyanheads/mcp-ts-core/storage/types` |
+| `@/mcp-server/transports/auth/lib/checkScopes.js` | `@cyanheads/mcp-ts-core/auth` |
+| `@/testing/index.js` | `@cyanheads/mcp-ts-core/testing` |
 
 ### Definition types
 
-| Old `@/` import                                      | New package import                                                                        |
-| :--------------------------------------------------- | :---------------------------------------------------------------------------------------- |
-| `@/mcp-server/tools/utils/toolDefinition.js`         | `@cyanheads/mcp-ts-core/tools` or `@cyanheads/mcp-ts-core` (for `tool()` builder)         |
+| Old `@/` import | New package import |
+|:----------------|:-------------------|
+| `@/mcp-server/tools/utils/toolDefinition.js` | `@cyanheads/mcp-ts-core/tools` or `@cyanheads/mcp-ts-core` (for `tool()` builder) |
 | `@/mcp-server/resources/utils/resourceDefinition.js` | `@cyanheads/mcp-ts-core/resources` or `@cyanheads/mcp-ts-core` (for `resource()` builder) |
-| `@/mcp-server/prompts/utils/promptDefinition.js`     | `@cyanheads/mcp-ts-core/prompts` or `@cyanheads/mcp-ts-core` (for `prompt()` builder)     |
-| `@/mcp-server/tasks/utils/taskToolDefinition.js`     | `@cyanheads/mcp-ts-core/tasks`                                                            |
+| `@/mcp-server/prompts/utils/promptDefinition.js` | `@cyanheads/mcp-ts-core/prompts` or `@cyanheads/mcp-ts-core` (for `prompt()` builder) |
+| `@/mcp-server/tasks/utils/taskToolDefinition.js` | `@cyanheads/mcp-ts-core/tasks` |
 
 ### Utils
 
-| Old `@/` import                                  | New package import             |
-| :----------------------------------------------- | :----------------------------- |
-| `@/utils/internal/logger.js`                     | `@cyanheads/mcp-ts-core/utils` |
-| `@/utils/internal/requestContext.js`             | `@cyanheads/mcp-ts-core/utils` |
+| Old `@/` import | New package import |
+|:----------------|:-------------------|
+| `@/utils/internal/logger.js` | `@cyanheads/mcp-ts-core/utils` |
+| `@/utils/internal/requestContext.js` | `@cyanheads/mcp-ts-core/utils` |
 | `@/utils/internal/error-handler/errorHandler.js` | `@cyanheads/mcp-ts-core/utils` |
-| `@/utils/internal/runtime.js`                    | `@cyanheads/mcp-ts-core/utils` |
-| `@/utils/internal/encoding.js`                   | `@cyanheads/mcp-ts-core/utils` |
-| `@/utils/formatting/*.js`                        | `@cyanheads/mcp-ts-core/utils` |
-| `@/utils/parsing/*.js`                           | `@cyanheads/mcp-ts-core/utils` |
-| `@/utils/security/*.js`                          | `@cyanheads/mcp-ts-core/utils` |
-| `@/utils/network/*.js`                           | `@cyanheads/mcp-ts-core/utils` |
-| `@/utils/pagination/pagination.js`               | `@cyanheads/mcp-ts-core/utils` |
-| `@/utils/types/guards.js`                        | `@cyanheads/mcp-ts-core/utils` |
-| `@/utils/scheduling/*.js`                        | `@cyanheads/mcp-ts-core/utils` |
-| `@/utils/telemetry/*.js`                         | `@cyanheads/mcp-ts-core/utils` |
-| `@/utils/metrics/*.js`                           | `@cyanheads/mcp-ts-core/utils` |
+| `@/utils/internal/runtime.js` | `@cyanheads/mcp-ts-core/utils` |
+| `@/utils/internal/encoding.js` | `@cyanheads/mcp-ts-core/utils` |
+| `@/utils/formatting/*.js` | `@cyanheads/mcp-ts-core/utils` |
+| `@/utils/parsing/*.js` | `@cyanheads/mcp-ts-core/utils` |
+| `@/utils/security/*.js` | `@cyanheads/mcp-ts-core/utils` |
+| `@/utils/network/*.js` | `@cyanheads/mcp-ts-core/utils` |
+| `@/utils/pagination/pagination.js` | `@cyanheads/mcp-ts-core/utils` |
+| `@/utils/types/guards.js` | `@cyanheads/mcp-ts-core/utils` |
+| `@/utils/scheduling/*.js` | `@cyanheads/mcp-ts-core/utils` |
+| `@/utils/telemetry/*.js` | `@cyanheads/mcp-ts-core/utils` |
+| `@/utils/metrics/*.js` | `@cyanheads/mcp-ts-core/utils` |
 
 ### Services
 
-| Old `@/` import          | New package import                |
-| :----------------------- | :-------------------------------- |
-| `@/services/llm/*.js`    | `@cyanheads/mcp-ts-core/services` |
+| Old `@/` import | New package import |
+|:----------------|:-------------------|
+| `@/services/llm/*.js` | `@cyanheads/mcp-ts-core/services` |
 | `@/services/speech/*.js` | `@cyanheads/mcp-ts-core/services` |
-| `@/services/graph/*.js`  | `@cyanheads/mcp-ts-core/services` |
+| `@/services/graph/*.js` | `@cyanheads/mcp-ts-core/services` |
 
 ## Framework file candidates
 
@@ -113,19 +113,19 @@ Framework files within directories that contain server code:
 
 ## Entry point rewrite
 
-Replace the fork's `src/index.ts` with:
+Replace the fork's `src/index.ts` with the scaffold-default direct-registration pattern:
 
 ```ts
 #!/usr/bin/env node
-import { createApp } from "@cyanheads/mcp-ts-core";
-import { allToolDefinitions } from "./mcp-server/tools/definitions/index.js";
-import { allResourceDefinitions } from "./mcp-server/resources/definitions/index.js";
-import { allPromptDefinitions } from "./mcp-server/prompts/definitions/index.js";
+import { createApp } from '@cyanheads/mcp-ts-core';
+import { echoTool } from './mcp-server/tools/definitions/echo.tool.js';
+import { echoResource } from './mcp-server/resources/definitions/echo.resource.js';
+import { echoPrompt } from './mcp-server/prompts/definitions/echo.prompt.js';
 
 await createApp({
-  tools: allToolDefinitions,
-  resources: allResourceDefinitions,
-  prompts: allPromptDefinitions,
+  tools: [echoTool],
+  resources: [echoResource],
+  prompts: [echoPrompt],
 });
 ```
 
@@ -133,14 +133,16 @@ Add `setup()` if the server initializes services:
 
 ```ts
 await createApp({
-  tools: allToolDefinitions,
-  resources: allResourceDefinitions,
-  prompts: allPromptDefinitions,
+  tools: [echoTool],
+  resources: [echoResource],
+  prompts: [echoPrompt],
   setup(core) {
     initMyService(core.config, core.storage);
   },
 });
 ```
+
+If the migrated project already has `definitions/index.ts` barrels and you want to keep them, that is fine. The important part is removing imports from framework internals and registering definitions consistently.
 
 ## Checklist
 

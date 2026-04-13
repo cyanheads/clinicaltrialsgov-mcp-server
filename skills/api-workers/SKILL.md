@@ -4,7 +4,7 @@ description: >
   Cloudflare Workers deployment using `createWorkerHandler` from `@cyanheads/mcp-ts-core/worker`. Covers the full handler signature, binding types, CloudflareBindings extensibility, runtime compatibility guards, and wrangler.toml requirements.
 metadata:
   author: cyanheads
-  version: "1.0"
+  version: "1.1"
   audience: external
   type: reference
 ---
@@ -18,38 +18,41 @@ metadata:
 ## `createWorkerHandler(options)`
 
 ```ts
-import { createWorkerHandler } from "@cyanheads/mcp-ts-core/worker";
-import { allToolDefinitions } from "./mcp-server/tools/index.js";
-import { allResourceDefinitions } from "./mcp-server/resources/index.js";
-import { allPromptDefinitions } from "./mcp-server/prompts/index.js";
-import { initMyService } from "./services/my-domain/my-service.js";
+import { createWorkerHandler } from '@cyanheads/mcp-ts-core/worker';
+import { echoTool } from './mcp-server/tools/definitions/echo.tool.js';
+import { echoResource } from './mcp-server/resources/definitions/echo.resource.js';
+import { echoPrompt } from './mcp-server/prompts/definitions/echo.prompt.js';
+import { initMyService } from './services/my-domain/my-service.js';
 
 export default createWorkerHandler({
-  tools: allToolDefinitions,
-  resources: allResourceDefinitions,
-  prompts: allPromptDefinitions,
+  tools: [echoTool],
+  resources: [echoResource],
+  prompts: [echoPrompt],
   setup(core) {
     initMyService(core.config, core.storage);
   },
-  extraEnvBindings: [["MY_API_KEY", "MY_API_KEY"]],
-  extraObjectBindings: [["MY_CUSTOM_KV", "MY_CUSTOM_KV"]],
+  extraEnvBindings: [['MY_API_KEY', 'MY_API_KEY']],
+  extraObjectBindings: [['MY_CUSTOM_KV', 'MY_CUSTOM_KV']],
   onScheduled: async (controller, env, ctx) => {
     // Cloudflare cron trigger handler
   },
 });
 ```
 
+Fresh scaffolds register definitions directly in the entry point as shown above. If your project later adds barrel files for definitions, importing arrays from those barrels is also fine.
+
 ### Options
 
-| Option                | Type                                            | Purpose                                                                                           |
-| :-------------------- | :---------------------------------------------- | :------------------------------------------------------------------------------------------------ |
-| `tools`               | `AnyToolDefinition[]`                           | Tool definitions to register                                                                      |
-| `resources`           | `AnyResourceDefinition[]`                       | Resource definitions to register                                                                  |
-| `prompts`             | `PromptDefinition[]`                            | Prompt definitions to register                                                                    |
-| `setup`               | `(core: CoreServices) => void \| Promise<void>` | Runs after core services are ready, during the first request (lazy init inside the fetch handler) |
-| `extraEnvBindings`    | `[bindingKey: string, processEnvKey: string][]` | Maps CF string bindings to `process.env` keys                                                     |
-| `extraObjectBindings` | `[bindingKey: string, globalKey: string][]`     | Maps CF object bindings (KV, R2, D1, AI) to `globalThis` keys                                     |
-| `onScheduled`         | `(controller, env, ctx) => Promise<void>`       | Cloudflare cron trigger handler                                                                   |
+| Option | Type | Purpose |
+|:-------|:-----|:--------|
+| `tools` | `AnyToolDefinition[]` | Tool definitions to register |
+| `resources` | `AnyResourceDefinition[]` | Resource definitions to register |
+| `prompts` | `PromptDefinition[]` | Prompt definitions to register |
+| `extensions` | `Record<string, object>` | SEP-2133 extensions to advertise in server capabilities |
+| `setup` | `(core: CoreServices) => void \| Promise<void>` | Runs after core services are ready, during the first request (lazy init inside the fetch handler) |
+| `extraEnvBindings` | `[bindingKey: string, processEnvKey: string][]` | Maps CF string bindings to `process.env` keys |
+| `extraObjectBindings` | `[bindingKey: string, globalKey: string][]` | Maps CF object bindings (KV, R2, D1, AI) to `globalThis` keys |
+| `onScheduled` | `(controller, env, ctx) => Promise<void>` | Cloudflare cron trigger handler |
 
 ### Key design points
 
@@ -64,10 +67,10 @@ export default createWorkerHandler({
 
 Cloudflare Workers bindings come in two kinds with different injection mechanisms:
 
-| Type            | Examples                                 | Injection mechanism               | Runtime access                     |
-| :-------------- | :--------------------------------------- | :-------------------------------- | :--------------------------------- |
-| String values   | API keys, base URLs, feature flags       | `injectEnvVars()` → `process.env` | `process.env.MY_API_KEY`           |
-| Object bindings | KV namespace, R2 bucket, D1 database, AI | `storeBindings()` → `globalThis`  | `(globalThis as any).MY_CUSTOM_KV` |
+| Type | Examples | Injection mechanism | Runtime access |
+|:-----|:---------|:--------------------|:---------------|
+| String values | API keys, base URLs, feature flags | `injectEnvVars()` → `process.env` | `process.env.MY_API_KEY` |
+| Object bindings | KV namespace, R2 bucket, D1 database, AI | `storeBindings()` → `globalThis` | `(globalThis as any).MY_CUSTOM_KV` |
 
 **`extraEnvBindings`**: array of `[bindingKey, processEnvKey]` tuples. The value of `env[bindingKey]` is assigned to `process.env[processEnvKey]` at request time.
 
@@ -82,7 +85,7 @@ Both are refreshed on every request. Never cache binding references between requ
 Core defines `CloudflareBindings` without an index signature, so servers extend it via intersection rather than module augmentation:
 
 ```ts
-import type { CloudflareBindings as CoreBindings } from "@cyanheads/mcp-ts-core/worker";
+import type { CloudflareBindings as CoreBindings } from '@cyanheads/mcp-ts-core/worker';
 
 interface MyBindings extends CoreBindings {
   MY_CUSTOM_KV: KVNamespace;
@@ -99,7 +102,7 @@ Pass `MyBindings` as a type parameter where the framework accepts a generic env 
 ### `runtimeCaps` feature detection
 
 ```ts
-import { runtimeCaps } from "@cyanheads/mcp-ts-core/utils";
+import { runtimeCaps } from '@cyanheads/mcp-ts-core/utils';
 
 if (runtimeCaps.isWorkerLike) {
   // Workers-specific path
@@ -116,12 +119,12 @@ if (runtimeCaps.isNode) {
 
 In Workers, only these storage providers are allowed:
 
-| Provider        | Notes                                             |
-| :-------------- | :------------------------------------------------ |
-| `in-memory`     | Default — data lost on cold start, no persistence |
-| `cloudflare-kv` | KV namespace binding — eventually consistent      |
-| `cloudflare-r2` | R2 bucket binding — object storage                |
-| `cloudflare-d1` | D1 database binding — SQLite-compatible           |
+| Provider | Notes |
+|:---------|:------|
+| `in-memory` | Default — data lost on cold start, no persistence |
+| `cloudflare-kv` | KV namespace binding — eventually consistent |
+| `cloudflare-r2` | R2 bucket binding — object storage |
+| `cloudflare-d1` | D1 database binding — SQLite-compatible |
 
 `filesystem` and `supabase` are not on the whitelist and behave differently:
 
@@ -157,7 +160,7 @@ bucket_name = "..."
 
 ```ts
 // WRONG — parsed before env is injected
-const apiKey = process.env.MY_API_KEY; // undefined in Workers
+const apiKey = process.env.MY_API_KEY;  // undefined in Workers
 
 // CORRECT — lazy parse inside a function or getter
 export function getServerConfig() {

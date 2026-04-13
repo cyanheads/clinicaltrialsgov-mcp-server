@@ -4,7 +4,7 @@ description: >
   Finalize documentation and project metadata for a ship-ready MCP server. Use after implementation is complete, tests pass, and devcheck is clean. Safe to run at any stage — each step checks current state and only acts on what still needs work.
 metadata:
   author: cyanheads
-  version: "1.2"
+  version: "1.3"
   audience: external
   type: workflow
 ---
@@ -23,7 +23,7 @@ Prefer running after implementation is complete, but safe to re-run at any point
 
 - [ ] All tools/resources/prompts implemented and registered
 - [ ] `bun run devcheck` passes
-- [ ] Tests pass (`npm test`)
+- [ ] Tests pass (`bun run test`)
 
 If these aren't met, address them first.
 
@@ -79,7 +79,6 @@ Key fields: `description`, `repository`, `author`, `homepage`, `bugs`, `keywords
 Read `references/server-json.md` for the official MCP server manifest schema. If `server.json` doesn't exist, create it from the surface area audit. If it exists, diff against current state and update stale fields.
 
 Key sync points:
-
 - `$schema` set to `https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json`
 - `name` matches `mcpName` from `package.json` (reverse-domain: `io.github.{owner}/{repo}`)
 - `version` matches `package.json` version (in all three places: top-level + each package entry)
@@ -131,7 +130,6 @@ If `CHANGELOG.md` doesn't exist, create it with an initial entry. If it exists, 
 Initial release.
 
 ### Added
-
 - [list tools, resources, prompts, key capabilities]
 ```
 
@@ -168,7 +166,7 @@ Run the full check suite one last time:
 
 ```bash
 bun run devcheck
-npm test
+bun run test
 ```
 
 Both must pass clean.
@@ -188,4 +186,4 @@ Both must pass clean.
 - [ ] `Dockerfile` OCI labels and runtime config accurate (if present)
 - [ ] `docs/tree.md` regenerated
 - [ ] `bun run devcheck` passes
-- [ ] `npm test` passes
+- [ ] `bun run test` passes

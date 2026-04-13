@@ -35,12 +35,12 @@ Seven tools for searching, discovering, analyzing, and matching clinical trials:
 | Tool Name                              | Description                                                                                      |
 | :------------------------------------- | :----------------------------------------------------------------------------------------------- |
 | `clinicaltrials_search_studies`        | Search studies with full-text queries, filters, pagination, sorting, and field selection.        |
-| `clinicaltrials_get_study_record`      | Fetch a single study by NCT ID. Tool equivalent of the `clinicaltrials://{nctId}` resource.     |
+| `clinicaltrials_get_study_record`      | Fetch a single study by NCT ID. Returns the full record: protocol, eligibility, outcomes, arms, interventions, contacts, and locations. |
 | `clinicaltrials_get_study_count`       | Get total study count for a query without fetching data. Fast statistics and breakdowns.         |
 | `clinicaltrials_get_field_values`      | Discover valid values for API fields (status, phase, study type, etc.) with per-value counts.    |
 | `clinicaltrials_get_field_definitions` | Browse the study data model field tree — piece names, types, nesting. Supports subtree navigation and keyword search. |
 | `clinicaltrials_get_study_results`     | Extract outcomes, adverse events, participant flow, and baseline from completed studies. Optional summary mode reduces ~200KB payloads to ~5KB. |
-| `clinicaltrials_find_eligible`         | Match patient demographics and conditions to eligible recruiting trials. Builds optimized queries from a patient profile and returns studies with eligibility/location fields. |
+| `clinicaltrials_find_eligible`         | Match patient demographics and conditions to eligible recruiting trials. Provide age, sex, conditions, and location to find studies with matching eligibility criteria, contacts, and recruiting locations. |
 
 | Resource                   | Description                                         |
 | :------------------------- | :-------------------------------------------------- |

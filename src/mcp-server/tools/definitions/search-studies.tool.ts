@@ -240,9 +240,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       const statusStr = status ? ` [${status}]` : '';
       const metaStr = meta.length ? `\n  ${meta.join(' | ')}` : '';
       lines.push(`- **${nctId}**: ${title}${statusStr}${metaStr}`);
-      lines.push(
-        ...formatRemainingStudyFields(study as Record<string, unknown>, SEARCH_RENDERED),
-      );
+      lines.push(...formatRemainingStudyFields(study as Record<string, unknown>, SEARCH_RENDERED));
     }
     if (result.nextPageToken)
       lines.push('\n(More results available — use nextPageToken to paginate)');

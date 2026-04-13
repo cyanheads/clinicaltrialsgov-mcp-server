@@ -48,7 +48,7 @@ const ELIGIBLE_FIELDS = [
 
 export const findEligible = tool('clinicaltrials_find_eligible', {
   description:
-    'Match patient demographics and conditions to eligible recruiting clinical trials. Builds an optimized ClinicalTrials.gov query from a patient profile (age, sex, conditions, location) and returns studies with eligibility and location fields for the caller to evaluate.',
+    'Match patient demographics and conditions to eligible recruiting clinical trials. Provide age, sex, conditions, and location to find studies with matching eligibility criteria, contact information, and recruiting locations.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -59,7 +59,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     age: z.number().int().min(0).max(120).describe('Patient age in years.'),
     sex: z
       .enum(['Female', 'Male', 'All'])
-      .describe("Patient's biological sex. Use 'All' to include studies regardless of sex restrictions."),
+      .describe(
+        "Patient's biological sex. Use 'All' to include studies regardless of sex restrictions.",
+      ),
     conditions: z
       .array(z.string())
       .min(1)
@@ -229,12 +231,17 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         if (conditions?.length) studyMeta.push(conditions.slice(0, 3).join(', '));
         if (studyMeta.length) lines.push(`  ${studyMeta.join(' | ')}`);
         if (interventions?.length) {
-          const names = interventions.map((i) => i.name).filter(Boolean).slice(0, 3);
+          const names = interventions
+            .map((i) => i.name)
+            .filter(Boolean)
+            .slice(0, 3);
           if (names.length) lines.push(`  Interventions: ${names.join(', ')}`);
         }
         const summary = s.protocolSection?.descriptionModule?.briefSummary;
         if (summary) {
-          lines.push(`  Summary: ${summary.length > 200 ? `${summary.slice(0, 200)}...` : summary}`);
+          lines.push(
+            `  Summary: ${summary.length > 200 ? `${summary.slice(0, 200)}...` : summary}`,
+          );
         }
 
         // Eligibility criteria summary

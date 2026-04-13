@@ -10,7 +10,7 @@ import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 
 export const getStudy = tool('clinicaltrials_get_study_record', {
   description:
-    'Fetch a single clinical study by NCT ID. Returns the full study record. Equivalent to the clinicaltrials://{nctId} resource for clients that do not support MCP resources.',
+    'Fetch a single clinical study by NCT ID. Returns the full study record including protocol details, eligibility criteria, outcomes, arms, interventions, contacts, and locations.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,

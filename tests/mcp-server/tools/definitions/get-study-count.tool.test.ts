@@ -159,7 +159,10 @@ describe('getStudyCount', () => {
     });
 
     it('shows suggestion for zero results', () => {
-      const blocks = getStudyCount.format!({ totalCount: 0 });
+      const blocks = getStudyCount.format!({
+        totalCount: 0,
+        noMatchHints: ['Try broader search terms or fewer filters.'],
+      });
       expect(blocks[0].text).toContain('0 studies match');
       expect(blocks[0].text).toContain('Try broader');
     });
@@ -175,6 +178,20 @@ describe('getStudyCount', () => {
     it('omits criteria line when searchCriteria absent', () => {
       const blocks = getStudyCount.format!({ totalCount: 0 });
       expect(blocks[0].text).not.toContain('Criteria:');
+    });
+
+    it('renders hints from result.noMatchHints verbatim', () => {
+      const blocks = getStudyCount.format!({
+        totalCount: 0,
+        noMatchHints: ['Try without statusFilter.', 'Try without phaseFilter.'],
+      });
+      expect(blocks[0].text).toContain('Try without statusFilter.');
+      expect(blocks[0].text).toContain('Try without phaseFilter.');
+    });
+
+    it('emits no hint lines when noMatchHints is absent', () => {
+      const blocks = getStudyCount.format!({ totalCount: 0 });
+      expect(blocks[0].text).not.toContain('Try broader');
     });
   });
 });

@@ -45,12 +45,10 @@ function collectLeaves(obj: unknown, segments: string[], out: Leaf[]): void {
       out.push({ segments, value: obj.join(', ') });
       return;
     }
-    const limit = Math.min(obj.length, 3);
-    for (let i = 0; i < limit; i++) {
+    // No per-array cap — the outer `maxLines` budget in formatRemainingStudyFields
+    // already bounds total output. Capping here silently hid data from callers.
+    for (let i = 0; i < obj.length; i++) {
       collectLeaves(obj[i], [...segments, `[${i}]`], out);
-    }
-    if (obj.length > limit) {
-      out.push({ segments: [...segments, '[…]'], value: `+${obj.length - limit} more` });
     }
     return;
   }

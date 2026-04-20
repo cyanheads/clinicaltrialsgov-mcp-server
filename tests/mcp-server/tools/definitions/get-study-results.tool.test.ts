@@ -342,13 +342,33 @@ describe('getStudyResults', () => {
       expect(result.fetchErrors).toEqual([{ nctId: 'NCT87654321', error: 'Study not found' }]);
     });
 
-    it('throws when all studies fail to fetch', async () => {
+    it('returns fetchErrors gracefully when all studies are missing from the batch response', async () => {
       mockService.getStudiesBatch.mockResolvedValue([]);
 
       const ctx = createMockContext();
       const input = getStudyResults.input.parse({ nctIds: 'NCT12345678' });
+      const result = await getStudyResults.handler(input, ctx);
 
-      await expect(getStudyResults.handler(input, ctx)).rejects.toThrow('All studies failed');
+      expect(result.results).toEqual([]);
+      expect(result.fetchErrors).toEqual([{ nctId: 'NCT12345678', error: 'Study not found' }]);
+    });
+
+    it('catches getStudiesBatch throw and returns fetchErrors for all ids', async () => {
+      mockService.getStudiesBatch.mockRejectedValue(
+        new Error('Study ID(s) not found or rejected by API: NCT99999999'),
+      );
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input.parse({
+        nctIds: ['NCT99999999', 'NCT88888888'],
+      });
+      const result = await getStudyResults.handler(input, ctx);
+
+      expect(result.results).toEqual([]);
+      expect(result.fetchErrors).toEqual([
+        { nctId: 'NCT99999999', error: expect.stringContaining('rejected by API') },
+        { nctId: 'NCT88888888', error: expect.stringContaining('rejected by API') },
+      ]);
     });
 
     it('handles study with empty resultsSection', async () => {

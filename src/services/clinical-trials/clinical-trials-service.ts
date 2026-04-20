@@ -20,20 +20,35 @@ import type {
   Study,
 } from './types.js';
 
-const MAX_RETRIES = 3;
+const DEFAULT_MAX_RETRIES = 6;
+const DEFAULT_BASE_BACKOFF_MS = 1000;
+const DEFAULT_MAX_BACKOFF_MS = 30_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MIN_INTERVAL_MS = 1000;
+
+/** Constructor options for overriding retry/backoff behavior (primarily for tests). */
+export interface ClinicalTrialsServiceOptions {
+  baseBackoffMs?: number;
+  maxBackoffMs?: number;
+  maxRetries?: number;
+}
 
 export class ClinicalTrialsService {
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly maxPageSize: number;
+  private readonly maxRetries: number;
+  private readonly baseBackoffMs: number;
+  private readonly maxBackoffMs: number;
   private lastRequestAt = 0;
 
-  constructor(config: ServerConfig) {
+  constructor(config: ServerConfig, options: ClinicalTrialsServiceOptions = {}) {
     this.baseUrl = config.apiBaseUrl;
     this.timeoutMs = config.requestTimeoutMs;
     this.maxPageSize = config.maxPageSize;
+    this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
+    this.baseBackoffMs = options.baseBackoffMs ?? DEFAULT_BASE_BACKOFF_MS;
+    this.maxBackoffMs = options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
   }
 
   /** Search studies with query, filters, pagination, and field selection. */
@@ -137,13 +152,20 @@ export class ClinicalTrialsService {
     }
 
     let lastError: unknown;
+    let lastStatus: number | undefined;
 
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       if (ctx.signal.aborted) throw new Error('Request cancelled');
 
       if (attempt > 0) {
-        const delay = Math.min(1000 * 2 ** (attempt - 1), 8000) + Math.random() * 500;
-        ctx.log.debug('Retrying', { attempt, delay: Math.round(delay), path });
+        const base = Math.min(this.baseBackoffMs * 2 ** (attempt - 1), this.maxBackoffMs);
+        const delay = base * (0.75 + 0.5 * Math.random());
+        ctx.log.debug('Retrying', {
+          attempt,
+          delay: Math.round(delay),
+          path,
+          lastStatus,
+        });
         await new Promise((r) => setTimeout(r, delay));
       }
 
@@ -209,6 +231,7 @@ export class ClinicalTrialsService {
 
         if (RETRYABLE_STATUS.has(res.status)) {
           lastError = new Error(`HTTP ${res.status}`);
+          lastStatus = res.status;
           continue;
         }
 
@@ -230,9 +253,17 @@ export class ClinicalTrialsService {
       }
     }
 
+    if (lastStatus === 429) {
+      throw new McpError(
+        JsonRpcErrorCode.RateLimited,
+        `Rate limited by ClinicalTrials.gov after ${this.maxRetries} retries`,
+        { path, lastError: String(lastError) },
+      );
+    }
     throw serviceUnavailable('ClinicalTrials.gov API unavailable after retries', {
       path,
       lastError: String(lastError),
+      ...(lastStatus != null ? { lastStatus } : {}),
     });
   }
 }

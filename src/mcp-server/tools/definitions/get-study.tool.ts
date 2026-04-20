@@ -7,6 +7,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
+import { nctIdSchema } from '../utils/_schemas.js';
 
 export const getStudy = tool('clinicaltrials_get_study_record', {
   description:
@@ -18,10 +19,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
   },
 
   input: z.object({
-    nctId: z
-      .string()
-      .regex(/^NCT\d{8}$/)
-      .describe('NCT identifier (e.g., NCT03722472).'),
+    nctId: nctIdSchema.describe('NCT identifier (e.g., NCT03722472).'),
   }),
 
   output: z.object({
@@ -48,6 +46,9 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     const outcomes = ps.outcomesModule ?? {};
     const elig = ps.eligibilityModule ?? {};
     const contacts = ps.contactsLocationsModule ?? {};
+    const oversight = ps.oversightModule ?? {};
+    const ipd = ps.ipdSharingStatementModule ?? {};
+    const references = ps.referencesModule ?? {};
 
     const lines: string[] = [];
 
@@ -56,6 +57,18 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     const title = id.briefTitle ?? id.officialTitle ?? 'Untitled';
     lines.push(`# ${nctId}: ${title}`);
     if (id.acronym) lines.push(`**Acronym:** ${id.acronym}`);
+    // Only surface officialTitle when briefTitle is the primary — otherwise
+    // the header already shows officialTitle and duplicating would be noise.
+    if (id.briefTitle && id.officialTitle && id.officialTitle !== id.briefTitle)
+      lines.push(`**Official Title:** ${id.officialTitle}`);
+    if (id.orgStudyIdInfo?.id) lines.push(`**Org Study ID:** ${id.orgStudyIdInfo.id}`);
+    if (id.organization?.fullName) lines.push(`**Organization:** ${id.organization.fullName}`);
+    if (id.secondaryIdInfos?.length) {
+      const parts = id.secondaryIdInfos
+        .map((s2) => (s2.type ? `${s2.type}: ${s2.id}` : s2.id))
+        .filter(Boolean);
+      if (parts.length) lines.push(`**Secondary IDs:** ${parts.join(', ')}`);
+    }
 
     // Status / Design
     const statusParts: string[] = [
@@ -66,30 +79,78 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     ].filter((v): v is string => v != null);
     if (statusParts.length) lines.push(`**Status:** ${statusParts.join(' | ')}`);
 
+    // Design details
+    const di = design.designInfo;
+    if (di) {
+      const designParts = [
+        di.allocation && `Allocation: ${di.allocation}`,
+        di.interventionModel && `Model: ${di.interventionModel}`,
+        di.primaryPurpose && `Purpose: ${di.primaryPurpose}`,
+        di.maskingInfo?.masking && `Masking: ${di.maskingInfo.masking}`,
+      ].filter(Boolean);
+      if (designParts.length) lines.push(`**Design:** ${designParts.join(' | ')}`);
+    }
+
     // Dates
-    const startDate = status.startDateStruct?.date;
-    const primaryCompletion = status.primaryCompletionDateStruct?.date;
-    const completion = status.completionDateStruct?.date;
     const dateParts: string[] = [];
-    if (startDate) dateParts.push(`Start: ${startDate}`);
-    if (primaryCompletion) dateParts.push(`Primary Completion: ${primaryCompletion}`);
-    if (completion) dateParts.push(`Completion: ${completion}`);
+    if (status.startDateStruct?.date) dateParts.push(`Start: ${status.startDateStruct.date}`);
+    if (status.primaryCompletionDateStruct?.date)
+      dateParts.push(`Primary Completion: ${status.primaryCompletionDateStruct.date}`);
+    if (status.completionDateStruct?.date)
+      dateParts.push(`Completion: ${status.completionDateStruct.date}`);
     if (dateParts.length) lines.push(`**Dates:** ${dateParts.join(' | ')}`);
 
-    // Sponsor
+    // Submission / update dates
+    const submissionParts: string[] = [];
+    if (status.studyFirstSubmitDate)
+      submissionParts.push(`First Submit: ${status.studyFirstSubmitDate}`);
+    if (status.studyFirstPostDateStruct?.date)
+      submissionParts.push(`First Post: ${status.studyFirstPostDateStruct.date}`);
+    if (status.lastUpdateSubmitDate)
+      submissionParts.push(`Last Update Submit: ${status.lastUpdateSubmitDate}`);
+    if (status.lastUpdatePostDateStruct?.date)
+      submissionParts.push(`Last Update Post: ${status.lastUpdatePostDateStruct.date}`);
+    if (status.statusVerifiedDate) submissionParts.push(`Verified: ${status.statusVerifiedDate}`);
+    if (submissionParts.length) lines.push(`**Submission:** ${submissionParts.join(' | ')}`);
+
+    // Sponsor + collaborators
     if (sponsor.leadSponsor?.name) {
       const cls = sponsor.leadSponsor.class ? ` (${sponsor.leadSponsor.class})` : '';
       lines.push(`**Sponsor:** ${sponsor.leadSponsor.name}${cls}`);
     }
+    if (sponsor.collaborators?.length) {
+      const parts = sponsor.collaborators
+        .map((c) => (c.class ? `${c.name} (${c.class})` : c.name))
+        .filter(Boolean);
+      if (parts.length) lines.push(`**Collaborators:** ${parts.join(', ')}`);
+    }
 
-    // Conditions
+    // Conditions + keywords
     if (cond.conditions?.length) lines.push(`**Conditions:** ${cond.conditions.join(', ')}`);
+    if (cond.keywords?.length) lines.push(`**Keywords:** ${cond.keywords.join(', ')}`);
+
+    // Oversight
+    const oversightParts: string[] = [];
+    if (oversight.oversightHasDmc != null)
+      oversightParts.push(`DMC: ${oversight.oversightHasDmc ? 'Yes' : 'No'}`);
+    if (oversight.isFdaRegulatedDrug != null)
+      oversightParts.push(`FDA-Regulated Drug: ${oversight.isFdaRegulatedDrug ? 'Yes' : 'No'}`);
+    if (oversight.isFdaRegulatedDevice != null)
+      oversightParts.push(`FDA-Regulated Device: ${oversight.isFdaRegulatedDevice ? 'Yes' : 'No'}`);
+    if (oversightParts.length) lines.push(`**Oversight:** ${oversightParts.join(' | ')}`);
 
     // Brief summary
     if (desc.briefSummary) {
       lines.push('');
       lines.push('## Summary');
       lines.push(desc.briefSummary.trim());
+    }
+
+    // Detailed description
+    if (desc.detailedDescription) {
+      lines.push('');
+      lines.push('## Detailed Description');
+      lines.push(desc.detailedDescription.trim());
     }
 
     // Eligibility
@@ -129,24 +190,28 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       }
     }
 
-    // Primary outcomes
-    if (outcomes.primaryOutcomes?.length) {
+    // Outcomes
+    const renderOutcomeList = (
+      heading: string,
+      list: Array<{ description?: string; measure?: string; timeFrame?: string }>,
+      limit?: number,
+    ) => {
       lines.push('');
-      lines.push('## Primary Outcomes');
-      for (const o of outcomes.primaryOutcomes) {
-        lines.push(`- ${o.measure}${o.timeFrame ? ` [${o.timeFrame}]` : ''}`);
-      }
-    }
-    if (outcomes.secondaryOutcomes?.length) {
-      lines.push('');
-      lines.push('## Secondary Outcomes');
-      const shown = outcomes.secondaryOutcomes.slice(0, 5);
+      lines.push(`## ${heading}`);
+      const shown = limit != null ? list.slice(0, limit) : list;
       for (const o of shown) {
         lines.push(`- ${o.measure}${o.timeFrame ? ` [${o.timeFrame}]` : ''}`);
       }
-      if (outcomes.secondaryOutcomes.length > 5)
-        lines.push(`... and ${outcomes.secondaryOutcomes.length - 5} more`);
-    }
+      if (limit != null && list.length > limit) {
+        lines.push(`... and ${list.length - limit} more`);
+      }
+    };
+    if (outcomes.primaryOutcomes?.length)
+      renderOutcomeList('Primary Outcomes', outcomes.primaryOutcomes);
+    if (outcomes.secondaryOutcomes?.length)
+      renderOutcomeList('Secondary Outcomes', outcomes.secondaryOutcomes, 5);
+    if (outcomes.otherOutcomes?.length)
+      renderOutcomeList('Other Outcomes', outcomes.otherOutcomes, 5);
 
     // Central contacts
     if (contacts.centralContacts?.length) {
@@ -171,6 +236,32 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
         lines.push(`- ${parts.join(', ')}${statusNote}`);
       }
       if (locs.length > 10) lines.push(`... and ${locs.length - 10} more`);
+    }
+
+    // IPD sharing
+    if (ipd.ipdSharing || ipd.description || ipd.timeFrame) {
+      lines.push('');
+      lines.push('## IPD Sharing');
+      if (ipd.ipdSharing) lines.push(`**Plan:** ${ipd.ipdSharing}`);
+      if (ipd.timeFrame) lines.push(`**Time Frame:** ${ipd.timeFrame}`);
+      if (ipd.description) lines.push(ipd.description.trim());
+    }
+
+    // References
+    if (references.references?.length || references.seeAlsoLinks?.length) {
+      lines.push('');
+      lines.push('## References');
+      const refs = references.references ?? [];
+      const shown = refs.slice(0, 10);
+      for (const r of shown) {
+        const pmid = r.pmid ? ` (PMID: ${r.pmid})` : '';
+        const type = r.type ? ` [${r.type}]` : '';
+        lines.push(`- ${r.citation ?? 'Citation unavailable'}${pmid}${type}`);
+      }
+      if (refs.length > 10) lines.push(`... and ${refs.length - 10} more`);
+      for (const link of references.seeAlsoLinks ?? []) {
+        lines.push(`- See also: ${link.label ?? link.url}${link.url ? ` — ${link.url}` : ''}`);
+      }
     }
 
     return [{ type: 'text', text: lines.join('\n') }];

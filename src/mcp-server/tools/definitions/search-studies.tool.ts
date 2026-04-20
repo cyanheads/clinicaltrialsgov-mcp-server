@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { getServerConfig } from '@/config/server-config.js';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
+import { nctIdSchema } from '../utils/_schemas.js';
 import { formatRemainingStudyFields } from '../utils/format-helpers.js';
 import { buildAdvancedFilter, toArray } from '../utils/query-helpers.js';
 
@@ -75,12 +76,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         `Geographic proximity filter. Format: distance(lat,lon,radius). E.g., "distance(47.6062,-122.3321,50mi)" for studies within 50 miles of Seattle.`,
       ),
     nctIds: z
-      .union([
-        z.string().regex(/^NCT\d{8}$/, 'NCT IDs must match format NCTxxxxxxxx (8 digits).'),
-        z.array(
-          z.string().regex(/^NCT\d{8}$/, 'NCT IDs must match format NCTxxxxxxxx (8 digits).'),
-        ),
-      ])
+      .union([nctIdSchema, z.array(nctIdSchema)])
       .optional()
       .describe('Filter to specific NCT IDs for batch lookups.'),
     fields: z

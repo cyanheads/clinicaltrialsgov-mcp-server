@@ -343,6 +343,41 @@ describe('ClinicalTrialsService', () => {
       );
     });
 
+    it('wraps 400 invalid field name with piece-name hint and field definitions pointer', async () => {
+      mockFetch.mockResolvedValue(
+        textResponse("Parameter 'fields' contains invalid field name: 'StudyDesign'"),
+      );
+
+      const ctx = createMockContext();
+      try {
+        await service.searchStudies({ fields: ['StudyDesign'] }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        const msg = (err as McpError).message;
+        expect(msg).toContain("'StudyDesign'");
+        expect(msg).toContain('piece name');
+        expect(msg).toContain('clinicaltrials_get_field_definitions');
+      }
+    });
+
+    it('wraps 400 invalid field name without offender parse when body lacks quoted name', async () => {
+      mockFetch.mockResolvedValue(
+        textResponse('Parameter fields contains invalid field name somewhere'),
+      );
+
+      const ctx = createMockContext();
+      try {
+        await service.searchStudies({ fields: ['BadName'] }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        const msg = (err as McpError).message;
+        expect(msg).toContain('piece names');
+        expect(msg).toContain('clinicaltrials_get_field_definitions');
+      }
+    });
+
     it('throws notFound for 400 with incorrect format on study path', async () => {
       mockFetch.mockResolvedValue(textResponse('has incorrect format', 400));
 

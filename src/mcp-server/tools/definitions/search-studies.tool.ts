@@ -87,7 +87,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .array(z.string())
       .optional()
       .describe(
-        `Fields to return (PascalCase piece names). Strongly recommended to reduce payload. Common: NCTId, BriefTitle, OverallStatus, Phase, LeadSponsorName, Condition, InterventionName, BriefSummary, EnrollmentCount, StartDate.`,
+        `Fields to return — PascalCase piece names (leaves in the field tree), not module names. E.g., use 'DesignPrimaryPurpose' not 'StudyDesign'. Strongly recommended to reduce payload. Common: NCTId, BriefTitle, OverallStatus, Phase, LeadSponsorName, Condition, InterventionName, BriefSummary, EnrollmentCount, StartDate. Call clinicaltrials_get_field_definitions to browse valid fields.`,
       ),
     sort: z
       .string()

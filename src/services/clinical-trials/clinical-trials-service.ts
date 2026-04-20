@@ -84,7 +84,7 @@ export class ClinicalTrialsService {
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
         throw validationError(
-          `Invalid field name(s): ${fields.join(', ')}. Use PascalCase piece names like OverallStatus, Phase, StudyType, InterventionType, LeadSponsorClass, Sex, StdAge.`,
+          `Invalid field name(s): ${fields.join(', ')}. Use PascalCase piece names like OverallStatus, Phase, StudyType, InterventionType, LeadSponsorClass, Sex, StdAge. Call clinicaltrials_get_field_definitions to browse the full field tree.`,
         );
       }
       throw err;
@@ -176,6 +176,15 @@ export class ClinicalTrialsService {
         }
         if (res.status === 400) {
           const text = await res.text();
+          if (text.includes('contains invalid field name')) {
+            const match = text.match(/invalid field name: ['"]([^'"]+)['"]/);
+            const offender = match
+              ? ` '${match[1]}' is likely a module name — use one of its piece names instead (e.g., DesignPrimaryPurpose, DesignInterventionModel, LeadSponsorName).`
+              : ' Use PascalCase piece names (e.g., DesignPrimaryPurpose, DesignInterventionModel, LeadSponsorName), not module names.';
+            throw validationError(
+              `${text.trim()}${offender} Call clinicaltrials_get_field_definitions to browse valid piece names.`,
+            );
+          }
           if (text.includes('incorrect format')) {
             if (path.startsWith('/studies/')) {
               const id = path.split('/').pop() ?? path;

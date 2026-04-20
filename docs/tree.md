@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-04-13 08:17:59
+Generated on: 2026-04-20 23:03:23
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -111,6 +111,7 @@ clinicaltrialsgov-mcp-server/
 │   │       │   ├── index.ts
 │   │       │   └── search-studies.tool.ts
 │   │       └── utils/
+│   │           ├── _schemas.ts
 │   │           ├── format-helpers.ts
 │   │           └── query-helpers.ts
 │   ├── services/
@@ -138,6 +139,7 @@ clinicaltrialsgov-mcp-server/
 │   │       │   ├── get-study.tool.test.ts
 │   │       │   └── search-studies.tool.test.ts
 │   │       └── utils/
+│   │           ├── format-helpers.test.ts
 │   │           └── query-helpers.test.ts
 │   └── services/
 │       └── clinical-trials/
@@ -145,6 +147,7 @@ clinicaltrialsgov-mcp-server/
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore
+├── AGENTS.md
 ├── biome.json
 ├── bun.lock
 ├── bunfig.toml

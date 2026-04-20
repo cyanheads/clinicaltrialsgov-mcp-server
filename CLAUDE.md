@@ -328,7 +328,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run devcheck`    | Lint + format + typecheck + security |
 | `bun run tree`        | Generate directory structure doc     |
 | `bun run format`      | Auto-fix formatting                  |
-| `bun test`            | Run tests                            |
+| `bun run test`        | Run tests (Vitest)                   |
 | `bun run dev:stdio`   | Dev mode (stdio)                     |
 | `bun run dev:http`    | Dev mode (HTTP)                      |
 | `bun run start:stdio` | Production mode (stdio)              |

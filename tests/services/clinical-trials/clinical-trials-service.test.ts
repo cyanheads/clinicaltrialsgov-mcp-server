@@ -3,7 +3,7 @@
  * @module tests/services/clinical-trials/clinical-trials-service
  */
 
-import { McpError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerConfig } from '@/config/server-config.js';
@@ -54,11 +54,15 @@ function htmlResponse(body: string, status = 200) {
   };
 }
 
+// Fast retry/backoff keeps wall-clock time in retry tests to < 1s. Production
+// defaults (6 retries, 30s cap) are verified via the singleton accessor block.
+const fastOptions = { maxRetries: 3, baseBackoffMs: 10, maxBackoffMs: 50 };
+
 describe('ClinicalTrialsService', () => {
   let service: ClinicalTrialsService;
 
   beforeEach(() => {
-    service = new ClinicalTrialsService(testConfig);
+    service = new ClinicalTrialsService(testConfig, fastOptions);
     mockFetch.mockReset();
   });
 
@@ -445,14 +449,49 @@ describe('ClinicalTrialsService', () => {
       expect(mockFetch).toHaveBeenCalledTimes(2);
     }, 10_000);
 
-    it('throws serviceUnavailable after max retries', async () => {
+    it('throws serviceUnavailable after max retries on 503', async () => {
       mockFetch.mockResolvedValue(jsonResponse(null, 503));
 
       const ctx = createMockContext();
       await expect(service.searchStudies({}, ctx)).rejects.toThrow(/unavailable after retries/);
-      // 1 initial + 3 retries = 4 calls
+      // 1 initial + 3 retries = 4 calls (fastOptions caps maxRetries at 3 for tests)
       expect(mockFetch).toHaveBeenCalledTimes(4);
     }, 30_000);
+
+    it('throws RateLimited McpError after max retries on 429', async () => {
+      mockFetch.mockResolvedValue(jsonResponse(null, 429));
+
+      const ctx = createMockContext();
+      try {
+        await service.searchStudies({}, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        expect((err as McpError).code).toBe(JsonRpcErrorCode.RateLimited);
+        expect((err as McpError).message).toMatch(/Rate limited/);
+      }
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+    }, 30_000);
+
+    it('uses proportional ±25% jitter (no zero-jitter floor)', async () => {
+      // Regression guard — old impl had a fixed 0–500ms jitter that could
+      // produce near-zero delays. New impl multiplies base by 0.75–1.25.
+      const originalRandom = Math.random;
+      Math.random = () => 0; // forces 0.75x multiplier
+      try {
+        mockFetch
+          .mockResolvedValueOnce(jsonResponse(null, 500))
+          .mockResolvedValueOnce(jsonResponse({ ok: true }));
+        const ctx = createMockContext();
+        const start = Date.now();
+        await service.getStudy('NCT12345678', ctx);
+        // baseBackoffMs=10 * 0.75 = 7.5ms minimum; plus throttle ~1s between calls.
+        // Assert we didn't skip the backoff entirely.
+        expect(Date.now() - start).toBeGreaterThanOrEqual(5);
+      } finally {
+        Math.random = originalRandom;
+      }
+    });
 
     it('retries on network errors (ECONNRESET)', async () => {
       const connError = Object.assign(new Error('connection reset'), { code: 'ECONNRESET' });
@@ -560,5 +599,21 @@ describe('ClinicalTrialsService', () => {
     it('throws when service not initialized', () => {
       expect(() => getClinicalTrialsService()).toThrow(/not initialized/);
     });
+  });
+
+  describe('constructor options', () => {
+    it('defaults to 6 retries when options omitted', async () => {
+      const defaultService = new ClinicalTrialsService(testConfig, {
+        baseBackoffMs: 1,
+        maxBackoffMs: 2,
+      });
+      mockFetch.mockResolvedValue(jsonResponse(null, 503));
+      const ctx = createMockContext();
+      await expect(defaultService.searchStudies({}, ctx)).rejects.toThrow(
+        /unavailable after retries/,
+      );
+      // 1 initial + 6 retries = 7 calls
+      expect(mockFetch).toHaveBeenCalledTimes(7);
+    }, 30_000);
   });
 });

@@ -365,6 +365,180 @@ describe('getStudy', () => {
       expect(text).toContain('[RECRUITING]');
     });
 
+    it('renders detailedDescription section (regression for #18)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            descriptionModule: {
+              briefSummary: 'Short summary.',
+              detailedDescription: 'Detailed multi-paragraph description goes here.',
+            },
+          },
+        },
+      });
+      const text = blocks[0].text;
+      expect(text).toContain('## Detailed Description');
+      expect(text).toContain('Detailed multi-paragraph description');
+    });
+
+    it('renders submission and update dates (regression for #18)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            statusModule: {
+              studyFirstSubmitDate: '2020-01-15',
+              studyFirstPostDateStruct: { date: '2020-02-01' },
+              lastUpdateSubmitDate: '2024-06-10',
+              lastUpdatePostDateStruct: { date: '2024-06-15' },
+              statusVerifiedDate: '2024-06',
+            },
+          },
+        },
+      });
+      const text = blocks[0].text;
+      expect(text).toContain('First Submit: 2020-01-15');
+      expect(text).toContain('Last Update Post: 2024-06-15');
+      expect(text).toContain('Verified: 2024-06');
+    });
+
+    it('renders otherOutcomes (regression for #18)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            outcomesModule: {
+              otherOutcomes: [{ measure: 'Exploratory Biomarker', timeFrame: '6 months' }],
+            },
+          },
+        },
+      });
+      expect(blocks[0].text).toContain('## Other Outcomes');
+      expect(blocks[0].text).toContain('Exploratory Biomarker [6 months]');
+    });
+
+    it('renders oversight module (regression for #18)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            oversightModule: {
+              oversightHasDmc: true,
+              isFdaRegulatedDrug: true,
+              isFdaRegulatedDevice: false,
+            },
+          },
+        },
+      });
+      const text = blocks[0].text;
+      expect(text).toContain('**Oversight:**');
+      expect(text).toContain('DMC: Yes');
+      expect(text).toContain('FDA-Regulated Drug: Yes');
+      expect(text).toContain('FDA-Regulated Device: No');
+    });
+
+    it('renders ipdSharingStatementModule (regression for #18)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            ipdSharingStatementModule: {
+              ipdSharing: 'YES',
+              timeFrame: '6 months after publication',
+              description: 'Individual participant data available upon request.',
+            },
+          },
+        },
+      });
+      const text = blocks[0].text;
+      expect(text).toContain('## IPD Sharing');
+      expect(text).toContain('**Plan:** YES');
+      expect(text).toContain('6 months after publication');
+    });
+
+    it('renders referencesModule (regression for #18)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            referencesModule: {
+              references: [
+                {
+                  pmid: '12345',
+                  citation: 'Smith J. Relevant prior work. 2020.',
+                  type: 'BACKGROUND',
+                },
+              ],
+            },
+          },
+        },
+      });
+      const text = blocks[0].text;
+      expect(text).toContain('## References');
+      expect(text).toContain('Smith J. Relevant prior work');
+      expect(text).toContain('PMID: 12345');
+      expect(text).toContain('[BACKGROUND]');
+    });
+
+    it('renders collaborators (regression for #18)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            sponsorCollaboratorsModule: {
+              leadSponsor: { name: 'Pfizer', class: 'INDUSTRY' },
+              collaborators: [
+                { name: 'NIH', class: 'FEDERAL' },
+                { name: 'Academic Partner', class: 'OTHER' },
+              ],
+            },
+          },
+        },
+      });
+      const text = blocks[0].text;
+      expect(text).toContain('**Collaborators:** NIH (FEDERAL), Academic Partner (OTHER)');
+    });
+
+    it('renders keywords (regression for #18)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            conditionsModule: {
+              conditions: ['Diabetes'],
+              keywords: ['insulin resistance', 'glycemic control'],
+            },
+          },
+        },
+      });
+      expect(blocks[0].text).toContain('**Keywords:** insulin resistance, glycemic control');
+    });
+
+    it('renders design details (regression for #18)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            designModule: {
+              designInfo: {
+                allocation: 'RANDOMIZED',
+                interventionModel: 'PARALLEL',
+                primaryPurpose: 'TREATMENT',
+                maskingInfo: { masking: 'DOUBLE' },
+              },
+            },
+          },
+        },
+      });
+      const text = blocks[0].text;
+      expect(text).toContain('**Design:**');
+      expect(text).toContain('Allocation: RANDOMIZED');
+      expect(text).toContain('Model: PARALLEL');
+      expect(text).toContain('Purpose: TREATMENT');
+      expect(text).toContain('Masking: DOUBLE');
+    });
+
     it('truncates locations beyond 10', () => {
       const locations = Array.from({ length: 15 }, (_, i) => ({
         facility: `Hospital ${i}`,

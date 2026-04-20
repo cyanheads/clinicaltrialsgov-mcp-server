@@ -5,16 +5,14 @@
 
 import { resource, z } from '@cyanheads/mcp-ts-core';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
+import { nctIdSchema } from '../../tools/utils/_schemas.js';
 
 export const studyResource = resource('clinicaltrials://{nctId}', {
   name: 'Clinical Trial Study',
   description: 'Fetch a single clinical study by NCT ID. Returns full study data as JSON.',
   mimeType: 'application/json',
   params: z.object({
-    nctId: z
-      .string()
-      .regex(/^NCT\d{8}$/)
-      .describe('NCT identifier (e.g., NCT03722472).'),
+    nctId: nctIdSchema.describe('NCT identifier (e.g., NCT03722472).'),
   }),
 
   async handler(params, ctx) {

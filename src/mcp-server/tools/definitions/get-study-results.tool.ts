@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
+import { nctIdSchema } from '../utils/_schemas.js';
 
 const VALID_SECTIONS = ['outcomes', 'adverseEvents', 'participantFlow', 'baseline'] as const;
 type Section = (typeof VALID_SECTIONS)[number];
@@ -311,15 +312,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
 
   input: z.object({
     nctIds: z
-      .union([
-        z.string().regex(/^NCT\d{8}$/, 'NCT IDs must match format NCTxxxxxxxx (8 digits).'),
-        z
-          .array(
-            z.string().regex(/^NCT\d{8}$/, 'NCT IDs must match format NCTxxxxxxxx (8 digits).'),
-          )
-          .min(1)
-          .max(20),
-      ])
+      .union([nctIdSchema, z.array(nctIdSchema).min(1).max(20)])
       .describe(
         'One or more NCT IDs (max 20). E.g., "NCT12345678" or ["NCT12345678", "NCT87654321"]. Use summary=true for large batches to avoid large payloads.',
       ),
@@ -401,7 +394,24 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     const studiesWithoutResults: string[] = [];
     const fetchErrors: Array<{ nctId: string; error: string }> = [];
 
-    const fetched = (await service.getStudiesBatch(nctIds, ctx)) as RawStudyShape[];
+    let fetched: RawStudyShape[];
+    try {
+      fetched = (await service.getStudiesBatch(nctIds, ctx)) as RawStudyShape[];
+    } catch (err) {
+      // Batch-wide failure (e.g., all IDs rejected by the API). Surface a
+      // structured result with per-ID fetchErrors instead of escaping, so
+      // callers get the same shape as the partial-failure path.
+      const message = err instanceof Error ? err.message : String(err);
+      ctx.log.warning('Batch fetch failed; returning fetchErrors', {
+        count: nctIds.length,
+        error: message,
+      });
+      return {
+        results: [],
+        fetchErrors: nctIds.map((nctId) => ({ nctId, error: message })),
+      };
+    }
+
     const studyMap = new Map(
       fetched
         .map((s) => [s.protocolSection?.identificationModule?.nctId, s])
@@ -444,12 +454,6 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
         }
       }
       results.push(entry);
-    }
-
-    if (results.length === 0 && fetchErrors.length > 0) {
-      throw new Error(
-        `All studies failed to fetch: ${fetchErrors.map((e) => `${e.nctId}: ${e.error}`).join('; ')}`,
-      );
     }
 
     ctx.log.info('Results extracted', {

@@ -173,6 +173,37 @@ describe('getFieldValues', () => {
       expect(lines).toHaveLength(16);
     });
 
+    it('emits empty-values fallback when topValues is missing', () => {
+      const blocks = getFieldValues.format!({
+        fieldStats: [
+          {
+            field: 'UnpopulatedField',
+            piece: 'UnpopulatedField',
+            type: 'STRING',
+            uniqueValuesCount: 0,
+            // no topValues property — simulates the optional-field shape
+          },
+        ],
+      });
+      expect(blocks[0].text).toContain('**UnpopulatedField**');
+      expect(blocks[0].text).toContain('No recorded values for this field.');
+    });
+
+    it('emits empty-values fallback when topValues is an empty array', () => {
+      const blocks = getFieldValues.format!({
+        fieldStats: [
+          {
+            field: 'EmptyField',
+            piece: 'EmptyField',
+            type: 'ENUM',
+            uniqueValuesCount: 0,
+            topValues: [],
+          },
+        ],
+      });
+      expect(blocks[0].text).toContain('No recorded values for this field.');
+    });
+
     it('renders multiple fields', () => {
       const blocks = getFieldValues.format!({
         fieldStats: [

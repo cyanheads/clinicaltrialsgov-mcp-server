@@ -77,8 +77,13 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
           lines.push(`  false: ${stat.falseCount.toLocaleString()} studies`);
       } else {
         lines.push(`**${stat.piece}** (${stat.uniqueValuesCount ?? '?'} unique values):`);
-        for (const tv of (stat.topValues ?? []).slice(0, 15)) {
-          lines.push(`  ${tv.value}: ${tv.studiesCount.toLocaleString()} studies`);
+        const topValues = stat.topValues ?? [];
+        if (topValues.length === 0) {
+          lines.push('  No recorded values for this field.');
+        } else {
+          for (const tv of topValues.slice(0, 15)) {
+            lines.push(`  ${tv.value}: ${tv.studiesCount.toLocaleString()} studies`);
+          }
         }
       }
       if (stat.missingStudiesCount != null && stat.missingStudiesCount > 0)

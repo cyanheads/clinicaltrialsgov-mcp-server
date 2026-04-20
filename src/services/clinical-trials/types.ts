@@ -93,14 +93,21 @@ export interface PagedStudiesResponse {
   totalCount?: number;
 }
 
-/** Field value statistics from GET /stats/field/values. */
+/**
+ * Field value statistics from GET /stats/field/values.
+ *
+ * `topValues` and `uniqueValuesCount` are omitted for BOOLEAN fields, which
+ * return `trueCount`/`falseCount` instead.
+ */
 export interface FieldValueStats {
+  falseCount?: number;
   field: string;
   missingStudiesCount: number;
   piece: string;
-  topValues: Array<{ value: string; studiesCount: number }>;
+  topValues?: Array<{ value: string; studiesCount: number }>;
+  trueCount?: number;
   type: string;
-  uniqueValuesCount: number;
+  uniqueValuesCount?: number;
 }
 
 /** Field node from GET /studies/metadata. */

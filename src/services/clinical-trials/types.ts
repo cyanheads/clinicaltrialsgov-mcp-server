@@ -37,6 +37,11 @@ export interface StudyLocation {
 
 /** Typed subset of the raw study response for accessing common nested fields. */
 export interface RawStudyShape {
+  derivedSection?: {
+    conditionBrowseModule?: { meshes?: Array<{ id?: string; term?: string }> };
+    interventionBrowseModule?: { meshes?: Array<{ id?: string; term?: string }> };
+    miscInfoModule?: { versionHolder?: string };
+  };
   hasResults?: boolean;
   protocolSection?: {
     armsInterventionsModule?: {
@@ -48,9 +53,15 @@ export interface RawStudyShape {
       centralContacts?: Array<{ email?: string; name?: string; phone?: string; role?: string }>;
       locations?: StudyLocation[];
     };
-    descriptionModule?: { briefSummary?: string };
+    descriptionModule?: { briefSummary?: string; detailedDescription?: string };
     designModule?: {
-      enrollmentInfo?: { count?: number };
+      designInfo?: {
+        allocation?: string;
+        interventionModel?: string;
+        maskingInfo?: { masking?: string };
+        primaryPurpose?: string;
+      };
+      enrollmentInfo?: { count?: number; type?: string };
       phases?: string[];
       studyType?: string;
     };
@@ -67,20 +78,43 @@ export interface RawStudyShape {
       briefTitle?: string;
       nctId?: string;
       officialTitle?: string;
+      orgStudyIdInfo?: { id?: string };
+      organization?: { fullName?: string };
+      secondaryIdInfos?: Array<{ id?: string; type?: string }>;
+    };
+    ipdSharingStatementModule?: {
+      description?: string;
+      ipdSharing?: string;
+      timeFrame?: string;
     };
     outcomesModule?: {
-      primaryOutcomes?: Array<{ measure?: string; timeFrame?: string }>;
-      secondaryOutcomes?: Array<{ measure?: string; timeFrame?: string }>;
+      otherOutcomes?: Array<{ description?: string; measure?: string; timeFrame?: string }>;
+      primaryOutcomes?: Array<{ description?: string; measure?: string; timeFrame?: string }>;
+      secondaryOutcomes?: Array<{ description?: string; measure?: string; timeFrame?: string }>;
+    };
+    oversightModule?: {
+      isFdaRegulatedDevice?: boolean;
+      isFdaRegulatedDrug?: boolean;
+      oversightHasDmc?: boolean;
+    };
+    referencesModule?: {
+      references?: Array<{ citation?: string; pmid?: string; type?: string }>;
+      seeAlsoLinks?: Array<{ label?: string; url?: string }>;
     };
     sponsorCollaboratorsModule?: {
       collaborators?: Array<{ class?: string; name?: string }>;
       leadSponsor?: { class?: string; name?: string };
     };
     statusModule?: {
-      completionDateStruct?: { date?: string };
+      completionDateStruct?: { date?: string; type?: string };
+      lastUpdatePostDateStruct?: { date?: string; type?: string };
+      lastUpdateSubmitDate?: string;
       overallStatus?: string;
-      primaryCompletionDateStruct?: { date?: string };
-      startDateStruct?: { date?: string };
+      primaryCompletionDateStruct?: { date?: string; type?: string };
+      startDateStruct?: { date?: string; type?: string };
+      statusVerifiedDate?: string;
+      studyFirstPostDateStruct?: { date?: string; type?: string };
+      studyFirstSubmitDate?: string;
     };
   };
   resultsSection?: Record<string, Record<string, unknown>>;

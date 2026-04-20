@@ -4,6 +4,7 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
+import { parseEnvConfig } from '@cyanheads/mcp-ts-core/config';
 
 const ServerConfigSchema = z.object({
   apiBaseUrl: z
@@ -20,10 +21,10 @@ let _config: ServerConfig | undefined;
 
 /** Get server configuration (lazy-parsed from env vars). */
 export function getServerConfig(): ServerConfig {
-  _config ??= ServerConfigSchema.parse({
-    apiBaseUrl: process.env.CT_API_BASE_URL,
-    requestTimeoutMs: process.env.CT_REQUEST_TIMEOUT_MS,
-    maxPageSize: process.env.CT_MAX_PAGE_SIZE,
+  _config ??= parseEnvConfig(ServerConfigSchema, {
+    apiBaseUrl: 'CT_API_BASE_URL',
+    requestTimeoutMs: 'CT_REQUEST_TIMEOUT_MS',
+    maxPageSize: 'CT_MAX_PAGE_SIZE',
   });
   return _config;
 }

@@ -101,7 +101,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
         const parts = Object.entries(result.searchCriteria).map(([k, v]) => `${k}=${v}`);
         lines.push(`Criteria: ${parts.join(', ')}`);
       }
-      lines.push('Try broader search terms or fewer filters.');
+      for (const hint of result.noMatchHints ?? []) lines.push(hint);
       return [{ type: 'text', text: lines.join('\n') }];
     }
     return [{ type: 'text', text: `${result.totalCount} studies match the specified criteria.` }];

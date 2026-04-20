@@ -2,6 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.0] - 2026-04-20
+
+### Fixed
+
+- **`clinicaltrials_get_study_record` rendering** — `format()` previously emitted only a subset of the fields it fetched, so clients reading `content[]` (e.g., Claude Desktop) never saw `detailedDescription`, `otherOutcomes`, collaborators, keywords, secondary IDs, design info (allocation/model/purpose/masking), submission/update dates, oversight flags, IPD sharing, or references. Rewrote `format()` to render every populated field; expanded `RawStudyShape` to type them. Closes #18.
+- **Silent object-array truncation in shared formatter** — `collectLeaves` in `format-helpers.ts` hard-capped object arrays at 3 items and emitted a misleading `+N more` sentinel. The outer `maxLines` budget already bounds total output; the per-array cap was redundant and silently dropped data for clients reading `content[]`. Removed the cap. Affects `clinicaltrials_search_studies` and `clinicaltrials_find_eligible`. Closes #19.
+- **Retry logic hardening in `ClinicalTrialsService`** — Raised `MAX_RETRIES` from 3 to 6, backoff cap from 8s to 30s, replaced fixed 0–500ms jitter with ±25% proportional jitter, and threw a distinct `McpError(JsonRpcErrorCode.RateLimited)` on 429 exhaustion (previously lumped with 5xx `ServiceUnavailable`). Added a `ClinicalTrialsServiceOptions` constructor parameter for test-friendly overrides. Closes #20.
+- **`clinicaltrials_get_study_count` hint coupling** — `format()` now iterates `result.noMatchHints` instead of hardcoding a fallback string, eliminating a latent divergence between `structuredContent` and `content[]`. Closes #21.
+- **Duplicated NCT ID regex** — Consolidated the inline `/^NCT\d{8}$/` pattern from six sites into a shared `nctIdSchema` export in `src/mcp-server/tools/utils/_schemas.ts`. Two of the prior sites (`get_study_record` input, `clinicaltrials://{nctId}` resource params) were missing the canonical error message and now return "NCT IDs must match format NCTxxxxxxxx (8 digits)." consistently. Closes #22.
+- **`clinicaltrials_get_study_results` batch error handling** — When all submitted NCT IDs were rejected by the API (e.g., with 400 "incorrect format"), `getStudiesBatch` threw out of the handler instead of populating `fetchErrors`. Wrapped the batch call in a try/catch that maps the batch-wide failure into per-ID `fetchErrors` entries, matching the partial-failure response shape. Removed the companion `results.length === 0 && fetchErrors.length > 0` throw so the all-failed path stays graceful too. Closes #23.
+- **`FieldValueStats` type/runtime divergence** — Marked `topValues` and `uniqueValuesCount` optional on `FieldValueStats`; the API omits them for BOOLEAN fields (which return `trueCount`/`falseCount` instead), so the prior required-typed signature lied to TS callers. Also added an empty-topValues fallback in `get_field_values` `format()` — it previously emitted no lines when the array was empty, silently hiding the field from the LLM. Closes #25.
+
+### Added
+
+- **`src/mcp-server/tools/utils/_schemas.ts`** — New module exporting shared Zod schemas (starting with `nctIdSchema`).
+- **`ClinicalTrialsServiceOptions`** — New exported interface on `ClinicalTrialsService` for overriding retry/backoff behavior (`maxRetries`, `baseBackoffMs`, `maxBackoffMs`). Primarily used by tests.
+- **Tests** — Added `tests/mcp-server/tools/utils/format-helpers.test.ts` covering primitive-array flattening, object-array traversal without truncation, `maxLines` budget, `maxValueLen` truncation, and structural path elision. Extended existing tests with regression cases for every fix above.
+
+### Changed
+
+- **`ClinicalTrialsService` constructor signature** — Now accepts an optional second `ClinicalTrialsServiceOptions` parameter. Callers using the one-arg form are unchanged.
+- **`get_study_record` `format()` output** — Significantly richer. Header now includes `**Official Title:**` (when distinct from `briefTitle`), `**Org Study ID:**`, `**Organization:**`, `**Secondary IDs:**`. New `**Design:**`, `**Submission:**`, `**Collaborators:**`, `**Keywords:**`, `**Oversight:**` lines in the metadata block. New `## Detailed Description`, `## Other Outcomes`, `## IPD Sharing`, and `## References` sections (each conditional on presence in the study).
+
+### Dependencies
+
+- Upgraded `@cyanheads/mcp-ts-core` from `^0.4.1` to `^0.5.0`. Adopted the new `parseEnvConfig` helper in `src/config/server-config.ts`.
+
+### Chores
+
+- Synced `maintenance` skill (1.2 → 1.3) from the framework package.
+
 ## [2.2.0] - 2026-04-20
 
 ### Changed

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.2] - 2026-04-21
+
+### Fixed
+
+- **`clinicaltrials_search_studies` pagination token surfacing** — `format()` signaled `(More results available — use nextPageToken to paginate)` but never emitted the token value. `structuredContent.nextPageToken` was correct, but LLM agents that only consume `content[]` could not retrieve the cursor and were capped at page 1 for any query exceeding `pageSize` matches. Token now renders on a dedicated `nextPageToken: <value>` line, and the hint references the correct input parameter name (`pageToken`). Verified end-to-end against the live API via HTTP transport — round-tripped the emitted token to fetch page 2. Closes #33.
+
 ## [2.3.1] - 2026-04-21
 
 ### Fixed

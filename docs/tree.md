@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-04-20 23:03:23
+Generated on: 2026-04-21 04:54:21
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -24,6 +24,7 @@ clinicaltrialsgov-mcp-server/
 │   └── design.md
 ├── scripts/
 │   ├── build.ts
+│   ├── check-docs-sync.ts
 │   ├── clean.ts
 │   ├── devcheck.ts
 │   ├── lint-mcp.ts

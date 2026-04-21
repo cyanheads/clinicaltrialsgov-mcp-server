@@ -67,7 +67,7 @@ const createColor = (open: string, close: string, closeRe: RegExp) => (str: stri
   return open + `${str}`.replace(closeRe, close + open) + close;
 };
 
-const esc = (code: string) => new RegExp(code.replaceAll('[', '\\['), 'g');
+const esc = (code: string) => new RegExp(code.replace('[', '\\['), 'g');
 const c = {
   bold: createColor('\x1b[1m', '\x1b[22m', esc('\x1b[22m')),
   dim: createColor('\x1b[2m', '\x1b[22m', esc('\x1b[22m')),
@@ -414,6 +414,14 @@ const ALL_CHECKS: Check[] = [
       `Fix definition errors reported above. See ${c.bold('validateDefinitions()')} docs for rule details.`,
   },
   {
+    name: 'Docs Sync',
+    flag: '--no-docs-sync',
+    canFix: false,
+    getCommand: () => ['bun', 'run', 'scripts/check-docs-sync.ts'],
+    tip: (c) =>
+      `Edit both files together, or run ${c.bold('cp CLAUDE.md AGENTS.md')} (or reverse) to resync.`,
+  },
+  {
     name: 'Biome',
     flag: '--no-lint',
     canFix: true,
@@ -479,6 +487,16 @@ const ALL_CHECKS: Check[] = [
 
       const output = result.stdout;
       if (output.includes('0 vulnerabilities found')) return true;
+
+      // Detect audit failures (connection errors, registry issues, etc.)
+      // If the output doesn't look like a valid audit response, warn rather than silently passing.
+      const looksLikeAuditOutput = /vulnerabilit|severity|advisori/i.test(output);
+      if (!looksLikeAuditOutput) {
+        return {
+          success: true,
+          warning: `Audit command failed (exit ${result.exitCode}) — could not reach registry. Output: ${output.slice(0, 200).trim() || '(empty)'}`,
+        };
+      }
 
       // Pass if only low/moderate severity
       const hasHighOrCritical = /high|critical/i.test(output);

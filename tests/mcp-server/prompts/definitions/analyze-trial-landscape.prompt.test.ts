@@ -30,20 +30,29 @@ describe('analyzeTrialLandscape', () => {
       expect(args.focusAreas).toBeUndefined();
     });
 
-    it('accepts topic with focusAreas', () => {
+    it('accepts topic with focusAreas as comma-separated string', () => {
       const args = argsSchema.parse({
         topic: 'Diabetes',
-        focusAreas: ['status', 'phases', 'sponsors'],
+        focusAreas: 'status, phases, sponsors',
       });
-      expect(args.focusAreas).toEqual(['status', 'phases', 'sponsors']);
+      expect(args.focusAreas).toBe('status, phases, sponsors');
     });
 
-    it('accepts empty focusAreas array', () => {
+    it('accepts empty focusAreas string', () => {
       const args = argsSchema.parse({
         topic: 'Test',
-        focusAreas: [],
+        focusAreas: '',
       });
-      expect(args.focusAreas).toEqual([]);
+      expect(args.focusAreas).toBe('');
+    });
+
+    it('rejects array focusAreas (MCP spec requires strings on the wire)', () => {
+      expect(() =>
+        argsSchema.parse({
+          topic: 'Diabetes',
+          focusAreas: ['status', 'phases'],
+        }),
+      ).toThrow();
     });
   });
 
@@ -72,16 +81,22 @@ describe('analyzeTrialLandscape', () => {
     });
 
     it('uses default focus for empty focusAreas', () => {
-      expect(firstMessage({ topic: 'Test', focusAreas: [] }).content.text).toContain(
+      expect(firstMessage({ topic: 'Test', focusAreas: '' }).content.text).toContain(
         'whatever dimensions seem most informative',
       );
     });
 
     it('includes specific focus areas when provided', () => {
-      const text = firstMessage({ topic: 'Cancer', focusAreas: ['sponsors', 'geography'] }).content
+      const text = firstMessage({ topic: 'Cancer', focusAreas: 'sponsors, geography' }).content
         .text;
       expect(text).toContain('sponsors, geography');
       expect(text).not.toContain('whatever dimensions');
+    });
+
+    it('trims whitespace around comma-separated focusAreas', () => {
+      const text = firstMessage({ topic: 'Cancer', focusAreas: 'sponsors,   geography , phases' })
+        .content.text;
+      expect(text).toContain('sponsors, geography, phases');
     });
 
     it('returns content with type text', () => {

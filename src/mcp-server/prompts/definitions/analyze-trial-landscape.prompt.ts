@@ -12,16 +12,21 @@ export const analyzeTrialLandscape = prompt('analyze_trial_landscape', {
   args: z.object({
     topic: z.string().describe('Disease, condition, or research area to analyze.'),
     focusAreas: z
-      .array(z.string())
+      .string()
       .optional()
       .describe(
-        'Specific aspects to focus on, e.g.: status, phases, sponsors, geography, timeline, interventions.',
+        'Comma-separated aspects to focus on, e.g.: "status, phases, sponsors, geography, timeline, interventions".',
       ),
   }),
 
   generate: (args) => {
-    const focus = args.focusAreas?.length
-      ? `Focus the analysis on: **${args.focusAreas.join(', ')}**.`
+    const areas =
+      args.focusAreas
+        ?.split(',')
+        .map((s) => s.trim())
+        .filter(Boolean) ?? [];
+    const focus = areas.length
+      ? `Focus the analysis on: **${areas.join(', ')}**.`
       : 'Cover whatever dimensions seem most informative — status distribution, phase breakdown, top sponsors, recent activity, geographic spread, or intervention types.';
 
     return [

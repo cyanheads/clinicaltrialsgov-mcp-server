@@ -130,6 +130,7 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
 
       if (field.children && Array.isArray(field.children)) {
         lines.push(`${field.name}${piece}${typeStr}`);
+        if (field.description) lines.push(`  ${field.description}`);
         for (const child of field.children) {
           const cp = child.piece ? ` [${child.piece as string}]` : '';
           const ct = (child.type as string) ?? '';
@@ -140,6 +141,7 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
         }
       } else {
         lines.push(`${field.name}${piece}${typeStr}${path}`);
+        if (field.description) lines.push(`  ${field.description}`);
       }
     }
 

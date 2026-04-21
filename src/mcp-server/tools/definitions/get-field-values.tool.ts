@@ -43,7 +43,9 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
               }),
             )
             .optional()
-            .describe('Values ranked by frequency. Present for ENUM/STRING fields.'),
+            .describe(
+              'Values ranked by frequency (capped at 250 by the API). Present for ENUM/STRING fields.',
+            ),
           // BOOLEAN fields
           trueCount: z
             .number()
@@ -81,8 +83,16 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
         if (topValues.length === 0) {
           lines.push('  No recorded values for this field.');
         } else {
-          for (const tv of topValues.slice(0, 15)) {
+          const shown = topValues.slice(0, 15);
+          for (const tv of shown) {
             lines.push(`  ${tv.value}: ${tv.studiesCount.toLocaleString()} studies`);
+          }
+          if (topValues.length > shown.length) {
+            const remainder = topValues.length - shown.length;
+            const unique = stat.uniqueValuesCount?.toLocaleString();
+            lines.push(
+              `  … and ${remainder} more values in structuredContent${unique ? ` (of ${unique} unique; topValues capped at 250)` : ''}`,
+            );
           }
         }
       }

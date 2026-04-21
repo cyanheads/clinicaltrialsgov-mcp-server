@@ -160,7 +160,7 @@ describe('getFieldValues', () => {
       expect((blocks[0] as { text: string }).text).not.toContain('missing');
     });
 
-    it('truncates to 15 values per field', () => {
+    it('truncates to 15 values per field with a "+N more" tail', () => {
       const topValues = Array.from({ length: 20 }, (_, i) => ({
         value: `Value${i}`,
         studiesCount: 100 - i,
@@ -168,9 +168,25 @@ describe('getFieldValues', () => {
       const blocks = getFieldValues.format!({
         fieldStats: [{ field: 'F', piece: 'F', type: 'ENUM', uniqueValuesCount: 20, topValues }],
       });
-      const lines = (blocks[0] as { text: string }).text.split('\n');
-      // 1 header + 15 values = 16 lines
-      expect(lines).toHaveLength(16);
+      const text = (blocks[0] as { text: string }).text;
+      const lines = text.split('\n');
+      // 1 header + 15 values + 1 tail = 17 lines
+      expect(lines).toHaveLength(17);
+      expect(text).toContain('and 5 more');
+      expect(text).toContain('of 20 unique');
+      expect(text).toContain('capped at 250');
+    });
+
+    it('does not render "+N more" tail when topValues fits within 15', () => {
+      const topValues = Array.from({ length: 10 }, (_, i) => ({
+        value: `Value${i}`,
+        studiesCount: 100 - i,
+      }));
+      const blocks = getFieldValues.format!({
+        fieldStats: [{ field: 'F', piece: 'F', type: 'ENUM', uniqueValuesCount: 10, topValues }],
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).not.toContain('more values');
     });
 
     it('emits empty-values fallback when topValues is missing', () => {

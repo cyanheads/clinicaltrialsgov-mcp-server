@@ -123,21 +123,22 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
 
     for (const field of result.fields) {
       const piece = field.piece ? ` [${field.piece}]` : '';
-      const type = field.sourceType ?? field.type ?? '';
-      const enumTag = field.isEnum ? ', ENUM' : '';
-      const typeStr = type || enumTag ? ` (${type}${enumTag})` : '';
-      const path = field.path && !result.resolvedPath ? ` — ${field.path}` : '';
+      const typeParts = [field.sourceType, field.type].filter(Boolean);
+      if (field.isEnum) typeParts.push('ENUM');
+      const typeStr = typeParts.length ? ` (${typeParts.join(', ')})` : '';
+      const path = field.path ? ` — ${field.path}` : '';
 
       if (field.children && Array.isArray(field.children)) {
-        lines.push(`${field.name}${piece}${typeStr}`);
+        lines.push(`${field.name}${piece}${typeStr}${path}`);
         if (field.description) lines.push(`  ${field.description}`);
+        lines.push(`  children (${field.children.length}):`);
         for (const child of field.children) {
           const cp = child.piece ? ` [${child.piece as string}]` : '';
           const ct = (child.type as string) ?? '';
           const ce = child.isEnum ? ', ENUM' : '';
           const cts = ct || ce ? ` (${ct}${ce})` : '';
           const arrow = child.hasChildren ? ' →' : '';
-          lines.push(`  ${child.name as string}${cp}${cts}${arrow}`);
+          lines.push(`    ${child.name as string}${cp}${cts}${arrow}`);
         }
       } else {
         lines.push(`${field.name}${piece}${typeStr}${path}`);

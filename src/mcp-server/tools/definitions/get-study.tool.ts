@@ -55,7 +55,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     // Header
     const nctId = id.nctId ?? 'Unknown';
     const title = id.briefTitle ?? id.officialTitle ?? 'Untitled';
-    lines.push(`# ${nctId}: ${title}`);
+    lines.push(`# Study ${nctId}: ${title}`);
     if (id.acronym) lines.push(`**Acronym:** ${id.acronym}`);
     // Only surface officialTitle when briefTitle is the primary — otherwise
     // the header already shows officialTitle and duplicating would be noise.

@@ -72,7 +72,7 @@ describe('getStudy', () => {
           },
         },
       });
-      expect((blocks[0] as { text: string }).text).toContain('# NCT12345678: My Study');
+      expect((blocks[0] as { text: string }).text).toContain('# Study NCT12345678: My Study');
     });
 
     it('falls back to officialTitle when briefTitle missing', () => {
@@ -83,7 +83,7 @@ describe('getStudy', () => {
           },
         },
       });
-      expect((blocks[0] as { text: string }).text).toContain('# NCT12345678: Official Title');
+      expect((blocks[0] as { text: string }).text).toContain('# Study NCT12345678: Official Title');
     });
 
     it('shows Untitled when no title', () => {
@@ -92,12 +92,12 @@ describe('getStudy', () => {
           protocolSection: { identificationModule: { nctId: 'NCT12345678' } },
         },
       });
-      expect((blocks[0] as { text: string }).text).toContain('# NCT12345678: Untitled');
+      expect((blocks[0] as { text: string }).text).toContain('# Study NCT12345678: Untitled');
     });
 
     it('shows Unknown when no nctId', () => {
       const blocks = getStudy.format!({ study: {} });
-      expect((blocks[0] as { text: string }).text).toContain('# Unknown: Untitled');
+      expect((blocks[0] as { text: string }).text).toContain('# Study Unknown: Untitled');
     });
 
     it('renders acronym', () => {

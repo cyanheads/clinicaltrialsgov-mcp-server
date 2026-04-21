@@ -103,7 +103,9 @@ describe('getFieldValues', () => {
           },
         ],
       });
-      expect((blocks[0] as { text: string }).text).toContain('**OverallStatus** (3 unique values)');
+      expect((blocks[0] as { text: string }).text).toContain(
+        '**OverallStatus** — OverallStatus (ENUM, 3 unique values)',
+      );
       expect((blocks[0] as { text: string }).text).toContain('RECRUITING:');
       expect((blocks[0] as { text: string }).text).toContain('COMPLETED:');
     });
@@ -121,11 +123,9 @@ describe('getFieldValues', () => {
         ],
       });
       const text = (blocks[0] as { text: string }).text;
-      expect(text).toContain('**HasResults** (boolean)');
-      expect(text).toContain('true:');
-      expect(text).toContain('50,000');
-      expect(text).toContain('false:');
-      expect(text).toContain('400,000');
+      expect(text).toContain('**HasResults** — HasResults (boolean)');
+      expect(text).toContain('true: 50000');
+      expect(text).toContain('false: 400000');
     });
 
     it('shows missing studies count', () => {
@@ -141,7 +141,7 @@ describe('getFieldValues', () => {
           },
         ],
       });
-      expect((blocks[0] as { text: string }).text).toContain('missing in 100,000 studies');
+      expect((blocks[0] as { text: string }).text).toContain('missing in 100000 studies');
     });
 
     it('does not show missing count when zero', () => {

@@ -71,33 +71,33 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
   format: (result) => {
     const lines: string[] = [];
     for (const stat of result.fieldStats) {
-      if (stat.type === 'BOOLEAN') {
-        lines.push(`**${stat.piece}** (boolean):`);
-        if (stat.trueCount != null)
-          lines.push(`  true: ${stat.trueCount.toLocaleString()} studies`);
-        if (stat.falseCount != null)
-          lines.push(`  false: ${stat.falseCount.toLocaleString()} studies`);
-      } else {
-        lines.push(`**${stat.piece}** (${stat.uniqueValuesCount ?? '?'} unique values):`);
-        const topValues = stat.topValues ?? [];
+      const header =
+        stat.type === 'BOOLEAN'
+          ? `**${stat.piece}** — ${stat.field} (boolean):`
+          : `**${stat.piece}** — ${stat.field} (${stat.type}, ${stat.uniqueValuesCount ?? '?'} unique values):`;
+      lines.push(header);
+      if (stat.trueCount != null) lines.push(`  true: ${stat.trueCount} studies`);
+      if (stat.falseCount != null) lines.push(`  false: ${stat.falseCount} studies`);
+      const topValues = stat.topValues ?? [];
+      if (stat.type !== 'BOOLEAN') {
         if (topValues.length === 0) {
           lines.push('  No recorded values for this field.');
         } else {
           const shown = topValues.slice(0, 15);
           for (const tv of shown) {
-            lines.push(`  ${tv.value}: ${tv.studiesCount.toLocaleString()} studies`);
+            lines.push(`  ${tv.value}: ${tv.studiesCount} studies`);
           }
           if (topValues.length > shown.length) {
             const remainder = topValues.length - shown.length;
-            const unique = stat.uniqueValuesCount?.toLocaleString();
+            const unique = stat.uniqueValuesCount;
             lines.push(
-              `  … and ${remainder} more values in structuredContent${unique ? ` (of ${unique} unique; topValues capped at 250)` : ''}`,
+              `  … and ${remainder} more values in structuredContent${unique != null ? ` (of ${unique} unique; topValues capped at 250)` : ''}`,
             );
           }
         }
       }
       if (stat.missingStudiesCount != null && stat.missingStudiesCount > 0)
-        lines.push(`  (missing in ${stat.missingStudiesCount.toLocaleString()} studies)`);
+        lines.push(`  (missing in ${stat.missingStudiesCount} studies)`);
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

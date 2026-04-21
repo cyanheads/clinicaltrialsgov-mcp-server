@@ -195,18 +195,26 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
   format: (result) => {
     const lines: string[] = [];
     const count = result.studies.length;
+    const sc = result.searchCriteria;
 
     if (count === 0) {
       lines.push('No eligible studies found.');
-      if (result.noMatchHints?.length) {
-        for (const hint of result.noMatchHints) lines.push(`- ${hint}`);
-      }
     } else {
       lines.push(
         result.totalCount !== undefined && result.totalCount > count
           ? `Found ${result.totalCount} eligible studies (showing ${count})`
           : `Found ${count} eligible studies`,
       );
+    }
+
+    lines.push(
+      `Search: conditions=[${sc.conditions.join(', ')}] | location=${sc.location} | age=${sc.age} | sex=${sc.sex}`,
+    );
+    if (result.noMatchHints?.length) {
+      for (const hint of result.noMatchHints) lines.push(`- ${hint}`);
+    }
+
+    if (count > 0) {
       lines.push('');
       for (const study of result.studies) {
         const s = study as RawStudyShape;

@@ -201,21 +201,19 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     const count = result.studies.length;
     if (count === 0) {
       lines.push('No studies matched the search criteria.');
-      if (result.searchCriteria && Object.keys(result.searchCriteria).length > 0) {
-        const parts = Object.entries(result.searchCriteria).map(([k, v]) => `${k}=${v}`);
-        lines.push(`Criteria: ${parts.join(', ')}`);
-      }
-      if (result.noMatchHints?.length) {
-        for (const hint of result.noMatchHints) lines.push(hint);
-      } else {
-        lines.push('Try broader search terms or fewer filters.');
-      }
-      return [{ type: 'text', text: lines.join('\n') }];
-    }
-    if (result.totalCount !== undefined) {
+    } else if (result.totalCount !== undefined) {
       lines.push(`Found ${count} studies (${result.totalCount} total matching)`);
     } else {
       lines.push(`Found ${count} studies`);
+    }
+    if (result.searchCriteria && Object.keys(result.searchCriteria).length > 0) {
+      const parts = Object.entries(result.searchCriteria).map(([k, v]) => `${k}=${v}`);
+      lines.push(`Criteria: ${parts.join(', ')}`);
+    }
+    if (result.noMatchHints?.length) {
+      for (const hint of result.noMatchHints) lines.push(hint);
+    } else if (count === 0) {
+      lines.push('Try broader search terms or fewer filters.');
     }
     for (const study of result.studies) {
       const s = study as RawStudyShape;

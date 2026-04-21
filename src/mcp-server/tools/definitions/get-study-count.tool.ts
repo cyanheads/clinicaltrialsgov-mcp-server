@@ -95,15 +95,12 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
   },
 
   format: (result) => {
-    if (result.totalCount === 0) {
-      const lines = ['0 studies match the specified criteria.'];
-      if (result.searchCriteria && Object.keys(result.searchCriteria).length > 0) {
-        const parts = Object.entries(result.searchCriteria).map(([k, v]) => `${k}=${v}`);
-        lines.push(`Criteria: ${parts.join(', ')}`);
-      }
-      for (const hint of result.noMatchHints ?? []) lines.push(hint);
-      return [{ type: 'text', text: lines.join('\n') }];
+    const lines: string[] = [`${result.totalCount} studies match the specified criteria.`];
+    if (result.searchCriteria && Object.keys(result.searchCriteria).length > 0) {
+      const parts = Object.entries(result.searchCriteria).map(([k, v]) => `${k}=${v}`);
+      lines.push(`Criteria: ${parts.join(', ')}`);
     }
-    return [{ type: 'text', text: `${result.totalCount} studies match the specified criteria.` }];
+    for (const hint of result.noMatchHints ?? []) lines.push(hint);
+    return [{ type: 'text', text: lines.join('\n') }];
   },
 });

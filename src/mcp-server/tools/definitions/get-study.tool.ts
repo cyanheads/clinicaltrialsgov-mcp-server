@@ -113,6 +113,13 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     if (status.statusVerifiedDate) submissionParts.push(`Verified: ${status.statusVerifiedDate}`);
     if (submissionParts.length) lines.push(`**Submission:** ${submissionParts.join(' | ')}`);
 
+    // Results availability — chaining signal for clinicaltrials_get_study_results
+    if (s.hasResults != null) {
+      lines.push(
+        `**Has Results:** ${s.hasResults ? 'yes — fetch via clinicaltrials_get_study_results' : 'no'}`,
+      );
+    }
+
     // Sponsor + collaborators
     if (sponsor.leadSponsor?.name) {
       const cls = sponsor.leadSponsor.class ? ` (${sponsor.leadSponsor.class})` : '';
@@ -128,6 +135,20 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     // Conditions + keywords
     if (cond.conditions?.length) lines.push(`**Conditions:** ${cond.conditions.join(', ')}`);
     if (cond.keywords?.length) lines.push(`**Keywords:** ${cond.keywords.join(', ')}`);
+
+    // MeSH-normalized terms from derivedSection — prefer browseLeaves (richer
+    // display-ready view) when present, fall back to meshes (raw MeSH terms).
+    const condMod = s.derivedSection?.conditionBrowseModule;
+    const condTerms =
+      condMod?.browseLeaves?.map((l) => l.name).filter((n): n is string => Boolean(n)) ??
+      condMod?.meshes?.map((m) => m.term).filter((n): n is string => Boolean(n));
+    if (condTerms?.length) lines.push(`**MeSH Conditions:** ${condTerms.join(', ')}`);
+
+    const intrMod = s.derivedSection?.interventionBrowseModule;
+    const intrTerms =
+      intrMod?.browseLeaves?.map((l) => l.name).filter((n): n is string => Boolean(n)) ??
+      intrMod?.meshes?.map((m) => m.term).filter((n): n is string => Boolean(n));
+    if (intrTerms?.length) lines.push(`**MeSH Interventions:** ${intrTerms.join(', ')}`);
 
     // Oversight
     const oversightParts: string[] = [];
@@ -213,6 +234,30 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     if (outcomes.otherOutcomes?.length)
       renderOutcomeList('Other Outcomes', outcomes.otherOutcomes, 5);
 
+    // Results summary stub — counts only; full data via clinicaltrials_get_study_results
+    if (s.hasResults && s.resultsSection) {
+      const rs = s.resultsSection;
+      const om = rs.outcomeMeasuresModule as { outcomeMeasures?: unknown[] } | undefined;
+      const ae = rs.adverseEventsModule as
+        | { otherEvents?: unknown[]; seriousEvents?: unknown[] }
+        | undefined;
+      const pf = rs.participantFlowModule as { periods?: unknown[] } | undefined;
+      const bl = rs.baselineCharacteristicsModule as { measures?: unknown[] } | undefined;
+      const aeCount = ae ? (ae.seriousEvents?.length ?? 0) + (ae.otherEvents?.length ?? 0) : 0;
+      const parts = [
+        om?.outcomeMeasures?.length ? `${om.outcomeMeasures.length} outcome measures` : '',
+        aeCount ? `${aeCount} adverse events` : '',
+        pf?.periods?.length ? `${pf.periods.length} participant flow periods` : '',
+        bl?.measures?.length ? `${bl.measures.length} baseline measures` : '',
+      ].filter(Boolean);
+      if (parts.length) {
+        lines.push('');
+        lines.push('## Results Summary');
+        lines.push(parts.join(' | '));
+        lines.push('Use clinicaltrials_get_study_results for full data.');
+      }
+    }
+
     // Central contacts
     if (contacts.centralContacts?.length) {
       lines.push('');
@@ -245,6 +290,24 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       if (ipd.ipdSharing) lines.push(`**Plan:** ${ipd.ipdSharing}`);
       if (ipd.timeFrame) lines.push(`**Time Frame:** ${ipd.timeFrame}`);
       if (ipd.description) lines.push(ipd.description.trim());
+    }
+
+    // Documents (protocol, consent, SAP, etc.)
+    const docs = s.documentSection?.largeDocumentModule?.largeDocs;
+    if (docs?.length) {
+      lines.push('');
+      lines.push(`## Documents (${docs.length})`);
+      for (const d of docs) {
+        const kinds = [
+          d.hasProtocol ? 'Protocol' : '',
+          d.hasSap ? 'SAP' : '',
+          d.hasIcf ? 'ICF' : '',
+        ].filter(Boolean);
+        const label = d.label ?? d.typeAbbrev ?? d.filename ?? 'Document';
+        const kindStr = kinds.length ? ` (${kinds.join('+')})` : '';
+        const date = d.uploadDate ? ` [${d.uploadDate}]` : '';
+        lines.push(`- ${label}${kindStr}${date}`);
+      }
     }
 
     // References

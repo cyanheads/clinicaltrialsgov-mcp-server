@@ -38,9 +38,28 @@ export interface StudyLocation {
 /** Typed subset of the raw study response for accessing common nested fields. */
 export interface RawStudyShape {
   derivedSection?: {
-    conditionBrowseModule?: { meshes?: Array<{ id?: string; term?: string }> };
-    interventionBrowseModule?: { meshes?: Array<{ id?: string; term?: string }> };
+    conditionBrowseModule?: {
+      browseLeaves?: Array<{ id?: string; name?: string; relevance?: string }>;
+      meshes?: Array<{ id?: string; term?: string }>;
+    };
+    interventionBrowseModule?: {
+      browseLeaves?: Array<{ id?: string; name?: string; relevance?: string }>;
+      meshes?: Array<{ id?: string; term?: string }>;
+    };
     miscInfoModule?: { versionHolder?: string };
+  };
+  documentSection?: {
+    largeDocumentModule?: {
+      largeDocs?: Array<{
+        filename?: string;
+        hasIcf?: boolean;
+        hasProtocol?: boolean;
+        hasSap?: boolean;
+        label?: string;
+        typeAbbrev?: string;
+        uploadDate?: string;
+      }>;
+    };
   };
   hasResults?: boolean;
   protocolSection?: {

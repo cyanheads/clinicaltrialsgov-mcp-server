@@ -228,7 +228,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         if (phases?.length) studyMeta.push(phases.join('/'));
         if (enrollment != null) studyMeta.push(`N=${enrollment}`);
         if (sponsor) studyMeta.push(sponsor);
-        if (conditions?.length) studyMeta.push(conditions.slice(0, 3).join(', '));
+        if (conditions?.length) studyMeta.push(conditions.join(', '));
         if (studyMeta.length) lines.push(`  ${studyMeta.join(' | ')}`);
         if (interventions?.length) {
           const names = interventions

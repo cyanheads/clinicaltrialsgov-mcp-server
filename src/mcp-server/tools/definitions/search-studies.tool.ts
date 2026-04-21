@@ -231,7 +231,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       if (phases?.length) meta.push(phases.join('/'));
       if (enrollment != null) meta.push(`N=${enrollment}`);
       if (sponsor) meta.push(sponsor);
-      if (conditions?.length) meta.push(conditions.slice(0, 2).join(', '));
+      if (conditions?.length) meta.push(conditions.join(', '));
 
       const statusStr = status ? ` [${status}]` : '';
       const metaStr = meta.length ? `\n  ${meta.join(' | ')}` : '';

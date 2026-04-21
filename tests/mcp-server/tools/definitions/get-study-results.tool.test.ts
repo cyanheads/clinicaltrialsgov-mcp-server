@@ -32,7 +32,7 @@ function makeStudy(
 }
 
 describe('getStudyResults', () => {
-  const mockService = { getStudiesBatch: vi.fn() };
+  const mockService = { getStudiesBatch: vi.fn(), getStudy: vi.fn() };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -353,10 +353,36 @@ describe('getStudyResults', () => {
       expect(result.fetchErrors).toEqual([{ nctId: 'NCT12345678', error: 'Study not found' }]);
     });
 
-    it('catches getStudiesBatch throw and returns fetchErrors for all ids', async () => {
+    it('falls back to per-ID fetches when batch rejects; valid IDs succeed', async () => {
+      // Batch rejects because one ID is bad (API's all-or-nothing behavior).
       mockService.getStudiesBatch.mockRejectedValue(
-        new Error('Study ID(s) not found or rejected by API: NCT99999999'),
+        new Error('Study ID(s) not found or rejected by API: NCT00000000'),
       );
+      // Per-ID fallback: two valid, one invalid.
+      mockService.getStudy.mockImplementation(async (nctId: string) => {
+        if (nctId === 'NCT00000000') throw new Error('Study NCT00000000 not found');
+        return makeStudy(nctId, nctId === 'NCT03722472', {
+          outcomeMeasuresModule: { outcomeMeasures: [{ title: 'Measure' }] },
+        });
+      });
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input!.parse({
+        nctIds: ['NCT03722472', 'NCT05956821', 'NCT00000000'],
+      });
+      const result = await getStudyResults.handler(input, ctx);
+
+      expect(mockService.getStudy).toHaveBeenCalledTimes(3);
+      expect(result.results).toHaveLength(2);
+      expect(result.results.map((r) => r.nctId).sort()).toEqual(['NCT03722472', 'NCT05956821']);
+      expect(result.fetchErrors).toEqual([
+        { nctId: 'NCT00000000', error: expect.stringContaining('not found') },
+      ]);
+    });
+
+    it('returns fetchErrors for all IDs when both batch and per-ID fallback fail', async () => {
+      mockService.getStudiesBatch.mockRejectedValue(new Error('Batch rejected'));
+      mockService.getStudy.mockRejectedValue(new Error('Study not found'));
 
       const ctx = createMockContext();
       const input = getStudyResults.input!.parse({
@@ -366,8 +392,8 @@ describe('getStudyResults', () => {
 
       expect(result.results).toEqual([]);
       expect(result.fetchErrors).toEqual([
-        { nctId: 'NCT99999999', error: expect.stringContaining('rejected by API') },
-        { nctId: 'NCT88888888', error: expect.stringContaining('rejected by API') },
+        { nctId: 'NCT99999999', error: 'Study not found' },
+        { nctId: 'NCT88888888', error: 'Study not found' },
       ]);
     });
 

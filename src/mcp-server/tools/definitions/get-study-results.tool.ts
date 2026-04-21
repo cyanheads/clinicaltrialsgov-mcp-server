@@ -393,23 +393,31 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     const results: StudyResult[] = [];
     const studiesWithoutResults: string[] = [];
     const fetchErrors: Array<{ nctId: string; error: string }> = [];
+    const erroredIds = new Set<string>();
 
     let fetched: RawStudyShape[];
     try {
       fetched = (await service.getStudiesBatch(nctIds, ctx)) as RawStudyShape[];
     } catch (err) {
-      // Batch-wide failure (e.g., all IDs rejected by the API). Surface a
-      // structured result with per-ID fetchErrors instead of escaping, so
-      // callers get the same shape as the partial-failure path.
-      const message = err instanceof Error ? err.message : String(err);
-      ctx.log.warning('Batch fetch failed; returning fetchErrors', {
+      // The batch endpoint rejects the whole request if any single ID is
+      // malformed or nonexistent. Fall back to per-ID fetches so valid IDs
+      // still succeed and only failing IDs land in fetchErrors. Sequential
+      // to honor the service's rate limit (~1 req/sec).
+      const batchMessage = err instanceof Error ? err.message : String(err);
+      ctx.log.warning('Batch fetch rejected; falling back to per-ID fetches', {
         count: nctIds.length,
-        error: message,
+        error: batchMessage,
       });
-      return {
-        results: [],
-        fetchErrors: nctIds.map((nctId) => ({ nctId, error: message })),
-      };
+      fetched = [];
+      for (const nctId of nctIds) {
+        try {
+          fetched.push((await service.getStudy(nctId, ctx)) as RawStudyShape);
+        } catch (perIdErr) {
+          const perIdMessage = perIdErr instanceof Error ? perIdErr.message : String(perIdErr);
+          fetchErrors.push({ nctId, error: perIdMessage });
+          erroredIds.add(nctId);
+        }
+      }
     }
 
     const studyMap = new Map(
@@ -419,6 +427,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     );
 
     for (const nctId of nctIds) {
+      if (erroredIds.has(nctId)) continue;
       const study = studyMap.get(nctId);
       if (!study) {
         fetchErrors.push({ nctId, error: 'Study not found' });

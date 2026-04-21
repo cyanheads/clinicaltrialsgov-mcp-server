@@ -358,12 +358,19 @@ describe('searchStudies', () => {
       expect(text).toContain('Diabetes');
     });
 
-    it('shows pagination hint when nextPageToken present', () => {
+    it('emits nextPageToken value and pagination hint when token present', () => {
       const blocks = searchStudies.format!({
         studies: [{}],
-        nextPageToken: 'tok',
+        nextPageToken: 'tok_abc123',
       });
-      expect((blocks[0] as { text: string }).text).toContain('nextPageToken');
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('pass pageToken');
+      expect(text).toContain('nextPageToken: tok_abc123');
+    });
+
+    it('omits pagination hint when nextPageToken absent', () => {
+      const blocks = searchStudies.format!({ studies: [{}] });
+      expect((blocks[0] as { text: string }).text).not.toContain('pageToken');
     });
 
     it('handles study with missing fields gracefully', () => {

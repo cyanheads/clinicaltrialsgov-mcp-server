@@ -238,8 +238,10 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       lines.push(`- **${nctId}**: ${title}${statusStr}${metaStr}`);
       lines.push(...formatRemainingStudyFields(study as Record<string, unknown>, SEARCH_RENDERED));
     }
-    if (result.nextPageToken)
-      lines.push('\n(More results available — use nextPageToken to paginate)');
+    if (result.nextPageToken) {
+      lines.push('\n(More results available — pass pageToken to paginate)');
+      lines.push(`nextPageToken: ${result.nextPageToken}`);
+    }
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });

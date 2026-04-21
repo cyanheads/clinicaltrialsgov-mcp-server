@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.3.1] - 2026-04-21
+
+### Fixed
+
+- **`clinicaltrials_search_studies` and `clinicaltrials_find_eligible` condition rendering** — `format()` rendered only the first 2 (search) or 3 (eligible) conditions from `conditionsModule.conditions` and marked the full path as covered in `SEARCH_RENDERED`/`ELIGIBLE_RENDERED`, so the overflow helper also skipped them. Conditions beyond the slice disappeared from `content[]` with no "+N more" signal. Live reproducer NCT05956821 showed 8 conditions in `structuredContent` but only 2 in `content[]`. Dropped the slice; both tools now render all conditions with `.join(', ')`, matching the style already used in `get_study_record`. Closes #29.
+
+### Chores
+
+- **Test-side type narrowing** — Eliminated 249 pre-existing `tsc` errors in `tests/**/*.test.ts` that surfaced under the framework's strict `noUncheckedIndexedAccess` + `exactOptionalPropertyTypes` tsconfig. Narrowed optional framework attributes (`tool.input`, `resource.params`, `prompt.args`) via local `!` bindings; cast `ContentBlock[]` indexed access to a text-shaped type at call sites; added a typed `firstMessage()` helper for the prompt test; switched `makeStudy()` to conditional-spread for `resultsSection`. No runtime semantics changed; `bun run test` remains 262/262 passing.
+
 ## [2.3.0] - 2026-04-20
 
 ### Fixed

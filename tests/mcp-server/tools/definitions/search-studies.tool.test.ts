@@ -26,41 +26,41 @@ describe('searchStudies', () => {
 
   describe('input validation', () => {
     it('applies default pageSize of 10', () => {
-      const input = searchStudies.input.parse({});
+      const input = searchStudies.input!.parse({});
       expect(input.pageSize).toBe(10);
     });
 
     it('applies default countTotal of true', () => {
-      const input = searchStudies.input.parse({});
+      const input = searchStudies.input!.parse({});
       expect(input.countTotal).toBe(true);
     });
 
     it('rejects pageSize below 1', () => {
-      expect(() => searchStudies.input.parse({ pageSize: 0 })).toThrow();
+      expect(() => searchStudies.input!.parse({ pageSize: 0 })).toThrow();
     });
 
     it('rejects pageSize above maxPageSize', () => {
-      expect(() => searchStudies.input.parse({ pageSize: 999 })).toThrow();
+      expect(() => searchStudies.input!.parse({ pageSize: 999 })).toThrow();
     });
 
     it('accepts valid pageSize', () => {
-      expect(() => searchStudies.input.parse({ pageSize: 50 })).not.toThrow();
+      expect(() => searchStudies.input!.parse({ pageSize: 50 })).not.toThrow();
     });
 
     it('validates NCT ID format', () => {
-      expect(() => searchStudies.input.parse({ nctIds: 'INVALID' })).toThrow();
-      expect(() => searchStudies.input.parse({ nctIds: 'NCT1234' })).toThrow();
-      expect(() => searchStudies.input.parse({ nctIds: 'NCT12345678' })).not.toThrow();
+      expect(() => searchStudies.input!.parse({ nctIds: 'INVALID' })).toThrow();
+      expect(() => searchStudies.input!.parse({ nctIds: 'NCT1234' })).toThrow();
+      expect(() => searchStudies.input!.parse({ nctIds: 'NCT12345678' })).not.toThrow();
     });
 
     it('accepts array of NCT IDs', () => {
-      const input = searchStudies.input.parse({ nctIds: ['NCT12345678', 'NCT87654321'] });
+      const input = searchStudies.input!.parse({ nctIds: ['NCT12345678', 'NCT87654321'] });
       expect(input.nctIds).toEqual(['NCT12345678', 'NCT87654321']);
     });
 
     it('accepts all optional query fields', () => {
       expect(() =>
-        searchStudies.input.parse({
+        searchStudies.input!.parse({
           query: 'test',
           conditionQuery: 'diabetes',
           interventionQuery: 'insulin',
@@ -73,20 +73,19 @@ describe('searchStudies', () => {
     });
 
     it('accepts statusFilter as string or array', () => {
-      expect(searchStudies.input.parse({ statusFilter: 'RECRUITING' }).statusFilter).toBe(
+      expect(searchStudies.input!.parse({ statusFilter: 'RECRUITING' }).statusFilter).toBe(
         'RECRUITING',
       );
       expect(
-        searchStudies.input.parse({ statusFilter: ['RECRUITING', 'COMPLETED'] }).statusFilter,
+        searchStudies.input!.parse({ statusFilter: ['RECRUITING', 'COMPLETED'] }).statusFilter,
       ).toEqual(['RECRUITING', 'COMPLETED']);
     });
 
     it('accepts phaseFilter as string or array', () => {
-      expect(searchStudies.input.parse({ phaseFilter: 'PHASE3' }).phaseFilter).toBe('PHASE3');
-      expect(searchStudies.input.parse({ phaseFilter: ['PHASE1', 'PHASE2'] }).phaseFilter).toEqual([
-        'PHASE1',
-        'PHASE2',
-      ]);
+      expect(searchStudies.input!.parse({ phaseFilter: 'PHASE3' }).phaseFilter).toBe('PHASE3');
+      expect(searchStudies.input!.parse({ phaseFilter: ['PHASE1', 'PHASE2'] }).phaseFilter).toEqual(
+        ['PHASE1', 'PHASE2'],
+      );
     });
   });
 
@@ -97,7 +96,7 @@ describe('searchStudies', () => {
 
       const ctx = createMockContext();
       const result = await searchStudies.handler(
-        searchStudies.input.parse({ conditionQuery: 'diabetes' }),
+        searchStudies.input!.parse({ conditionQuery: 'diabetes' }),
         ctx,
       );
 
@@ -109,7 +108,7 @@ describe('searchStudies', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
       const ctx = createMockContext();
       await searchStudies.handler(
-        searchStudies.input.parse({
+        searchStudies.input!.parse({
           query: 'general',
           conditionQuery: 'cancer',
           interventionQuery: 'chemo',
@@ -149,7 +148,7 @@ describe('searchStudies', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
       const ctx = createMockContext();
       await searchStudies.handler(
-        searchStudies.input.parse({ phaseFilter: ['PHASE1', 'PHASE2'] }),
+        searchStudies.input!.parse({ phaseFilter: ['PHASE1', 'PHASE2'] }),
         ctx,
       );
 
@@ -165,7 +164,7 @@ describe('searchStudies', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
       const ctx = createMockContext();
       await searchStudies.handler(
-        searchStudies.input.parse({
+        searchStudies.input!.parse({
           phaseFilter: 'PHASE3',
           advancedFilter: 'AREA[StudyType]INTERVENTIONAL',
         }),
@@ -183,7 +182,7 @@ describe('searchStudies', () => {
     it('converts nctIds string to filterIds array', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
       const ctx = createMockContext();
-      await searchStudies.handler(searchStudies.input.parse({ nctIds: 'NCT12345678' }), ctx);
+      await searchStudies.handler(searchStudies.input!.parse({ nctIds: 'NCT12345678' }), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
         expect.objectContaining({ filterIds: ['NCT12345678'] }),
@@ -195,7 +194,7 @@ describe('searchStudies', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       const result = await searchStudies.handler(
-        searchStudies.input.parse({ conditionQuery: 'rare disease', statusFilter: 'RECRUITING' }),
+        searchStudies.input!.parse({ conditionQuery: 'rare disease', statusFilter: 'RECRUITING' }),
         ctx,
       );
 
@@ -210,7 +209,7 @@ describe('searchStudies', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       const result = await searchStudies.handler(
-        searchStudies.input.parse({
+        searchStudies.input!.parse({
           conditionQuery: 'rare disease',
           statusFilter: 'RECRUITING',
           phaseFilter: 'PHASE3',
@@ -228,7 +227,7 @@ describe('searchStudies', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       const result = await searchStudies.handler(
-        searchStudies.input.parse({ conditionQuery: 'xyz' }),
+        searchStudies.input!.parse({ conditionQuery: 'xyz' }),
         ctx,
       );
 
@@ -240,7 +239,7 @@ describe('searchStudies', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       const result = await searchStudies.handler(
-        searchStudies.input.parse({ statusFilter: 'SUSPENDED', geoFilter: 'distance(0,0,1mi)' }),
+        searchStudies.input!.parse({ statusFilter: 'SUSPENDED', geoFilter: 'distance(0,0,1mi)' }),
         ctx,
       );
 
@@ -255,7 +254,7 @@ describe('searchStudies', () => {
       });
       const ctx = createMockContext();
       const result = await searchStudies.handler(
-        searchStudies.input.parse({ conditionQuery: 'diabetes' }),
+        searchStudies.input!.parse({ conditionQuery: 'diabetes' }),
         ctx,
       );
 
@@ -270,7 +269,7 @@ describe('searchStudies', () => {
         nextPageToken: 'abc123',
       });
       const ctx = createMockContext();
-      const result = await searchStudies.handler(searchStudies.input.parse({}), ctx);
+      const result = await searchStudies.handler(searchStudies.input!.parse({}), ctx);
 
       expect(result.nextPageToken).toBe('abc123');
     });
@@ -278,7 +277,7 @@ describe('searchStudies', () => {
     it('passes pageToken to service', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 50 });
       const ctx = createMockContext();
-      await searchStudies.handler(searchStudies.input.parse({ pageToken: 'tok_page2' }), ctx);
+      await searchStudies.handler(searchStudies.input!.parse({ pageToken: 'tok_page2' }), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
         expect.objectContaining({ pageToken: 'tok_page2' }),
@@ -293,9 +292,9 @@ describe('searchStudies', () => {
         studies: [],
         searchCriteria: { conditionQuery: 'xyz' },
       });
-      expect(blocks[0].text).toContain('No studies matched');
-      expect(blocks[0].text).toContain('conditionQuery=xyz');
-      expect(blocks[0].text).toContain('Try broader');
+      expect((blocks[0] as { text: string }).text).toContain('No studies matched');
+      expect((blocks[0] as { text: string }).text).toContain('conditionQuery=xyz');
+      expect((blocks[0] as { text: string }).text).toContain('Try broader');
     });
 
     it('shows noMatchHints when provided', () => {
@@ -304,8 +303,8 @@ describe('searchStudies', () => {
         searchCriteria: { query: 'test' },
         noMatchHints: ['Try broader terms.', 'Remove statusFilter.'],
       });
-      expect(blocks[0].text).toContain('Try broader terms.');
-      expect(blocks[0].text).toContain('Remove statusFilter.');
+      expect((blocks[0] as { text: string }).text).toContain('Try broader terms.');
+      expect((blocks[0] as { text: string }).text).toContain('Remove statusFilter.');
     });
 
     it('shows study count with totalCount', () => {
@@ -320,18 +319,18 @@ describe('searchStudies', () => {
         ],
         totalCount: 50,
       });
-      expect(blocks[0].text).toContain('Found 1 studies (50 total matching)');
-      expect(blocks[0].text).toContain('NCT12345678');
-      expect(blocks[0].text).toContain('Test Study');
-      expect(blocks[0].text).toContain('RECRUITING');
+      expect((blocks[0] as { text: string }).text).toContain('Found 1 studies (50 total matching)');
+      expect((blocks[0] as { text: string }).text).toContain('NCT12345678');
+      expect((blocks[0] as { text: string }).text).toContain('Test Study');
+      expect((blocks[0] as { text: string }).text).toContain('RECRUITING');
     });
 
     it('shows study count without totalCount', () => {
       const blocks = searchStudies.format!({
         studies: [{}],
       });
-      expect(blocks[0].text).toContain('Found 1 studies');
-      expect(blocks[0].text).not.toContain('total matching');
+      expect((blocks[0] as { text: string }).text).toContain('Found 1 studies');
+      expect((blocks[0] as { text: string }).text).not.toContain('total matching');
     });
 
     it('renders study metadata (phases, enrollment, sponsor, conditions)', () => {
@@ -352,7 +351,7 @@ describe('searchStudies', () => {
         ],
         totalCount: 1,
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('PHASE3');
       expect(text).toContain('N=500');
       expect(text).toContain('NIH');
@@ -364,13 +363,13 @@ describe('searchStudies', () => {
         studies: [{}],
         nextPageToken: 'tok',
       });
-      expect(blocks[0].text).toContain('nextPageToken');
+      expect((blocks[0] as { text: string }).text).toContain('nextPageToken');
     });
 
     it('handles study with missing fields gracefully', () => {
       const blocks = searchStudies.format!({ studies: [{}], totalCount: 1 });
-      expect(blocks[0].text).toContain('Found 1 studies');
-      expect(blocks[0].text).toContain('Unknown');
+      expect((blocks[0] as { text: string }).text).toContain('Found 1 studies');
+      expect((blocks[0] as { text: string }).text).toContain('Unknown');
     });
   });
 });

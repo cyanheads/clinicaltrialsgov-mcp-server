@@ -104,7 +104,7 @@ describe('ClinicalTrialsService', () => {
         ctx,
       );
 
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.searchParams.get('query.term')).toBe('general');
       expect(calledUrl.searchParams.get('query.cond')).toBe('cancer');
       expect(calledUrl.searchParams.get('query.intr')).toBe('chemo');
@@ -129,7 +129,7 @@ describe('ClinicalTrialsService', () => {
 
       await service.searchStudies({ pageSize: 999 }, ctx);
 
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.searchParams.get('pageSize')).toBe('100');
     });
 
@@ -139,7 +139,7 @@ describe('ClinicalTrialsService', () => {
 
       await service.searchStudies({}, ctx);
 
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.searchParams.get('format')).toBe('json');
     });
 
@@ -149,7 +149,7 @@ describe('ClinicalTrialsService', () => {
 
       await service.searchStudies({ queryCond: 'test' }, ctx);
 
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.searchParams.has('query.term')).toBe(false);
       expect(calledUrl.searchParams.has('filter.overallStatus')).toBe(false);
     });
@@ -164,7 +164,7 @@ describe('ClinicalTrialsService', () => {
       const result = await service.getStudy('NCT12345678', ctx);
 
       expect(result).toEqual(study);
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.pathname).toBe('/v2/studies/NCT12345678');
     });
 
@@ -186,7 +186,7 @@ describe('ClinicalTrialsService', () => {
 
       await service.getStudy('NCT12345678', ctx);
 
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.pathname).toContain('NCT12345678');
     });
   });
@@ -202,7 +202,7 @@ describe('ClinicalTrialsService', () => {
       const result = await service.getStudiesBatch(['NCT12345678', 'NCT87654321'], ctx);
 
       expect(result).toHaveLength(2);
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.searchParams.get('filter.ids')).toBe('NCT12345678|NCT87654321');
     });
 
@@ -212,7 +212,7 @@ describe('ClinicalTrialsService', () => {
 
       await service.getStudiesBatch(['NCT12345678', 'NCT87654321'], ctx);
 
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.searchParams.get('pageSize')).toBe('2');
     });
 
@@ -222,7 +222,7 @@ describe('ClinicalTrialsService', () => {
 
       await service.getStudiesBatch(['NCT12345678'], ctx);
 
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       const fields = calledUrl.searchParams.get('fields')!;
       expect(fields).toContain('NCTId');
       expect(fields).toContain('HasResults');
@@ -239,7 +239,7 @@ describe('ClinicalTrialsService', () => {
       const result = await service.getMetadata(false, ctx);
 
       expect(result).toEqual(tree);
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.pathname).toBe('/v2/studies/metadata');
     });
 
@@ -249,7 +249,7 @@ describe('ClinicalTrialsService', () => {
 
       await service.getMetadata(true, ctx);
 
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.searchParams.get('includeIndexedOnly')).toBe('true');
     });
 
@@ -259,7 +259,7 @@ describe('ClinicalTrialsService', () => {
 
       await service.getMetadata(false, ctx);
 
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.searchParams.has('includeIndexedOnly')).toBe(false);
     });
 
@@ -269,7 +269,7 @@ describe('ClinicalTrialsService', () => {
 
       await service.getMetadata(false, ctx);
 
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.searchParams.has('format')).toBe(false);
     });
   });
@@ -291,7 +291,7 @@ describe('ClinicalTrialsService', () => {
       const result = await service.getFieldValues(['OverallStatus'], ctx);
 
       expect(result).toEqual(stats);
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.pathname).toBe('/v2/stats/field/values');
       expect(calledUrl.searchParams.get('fields')).toBe('OverallStatus');
       expect(calledUrl.searchParams.has('format')).toBe(false);
@@ -303,7 +303,7 @@ describe('ClinicalTrialsService', () => {
 
       await service.getFieldValues(['OverallStatus', 'Phase'], ctx);
 
-      const calledUrl = new URL(mockFetch.mock.calls[0][0]);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.searchParams.get('fields')).toBe('OverallStatus|Phase');
     });
 

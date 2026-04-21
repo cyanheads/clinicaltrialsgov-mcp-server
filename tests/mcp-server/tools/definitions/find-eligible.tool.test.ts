@@ -33,43 +33,45 @@ describe('findEligible', () => {
 
   describe('input validation', () => {
     it('requires at least one condition', () => {
-      expect(() => findEligible.input.parse({ ...baseInput, conditions: [] })).toThrow();
+      expect(() => findEligible.input!.parse({ ...baseInput, conditions: [] })).toThrow();
     });
 
     it('rejects age outside 0-120', () => {
-      expect(() => findEligible.input.parse({ ...baseInput, age: -1 })).toThrow();
-      expect(() => findEligible.input.parse({ ...baseInput, age: 121 })).toThrow();
+      expect(() => findEligible.input!.parse({ ...baseInput, age: -1 })).toThrow();
+      expect(() => findEligible.input!.parse({ ...baseInput, age: 121 })).toThrow();
     });
 
     it('accepts boundary ages', () => {
-      expect(() => findEligible.input.parse({ ...baseInput, age: 0 })).not.toThrow();
-      expect(() => findEligible.input.parse({ ...baseInput, age: 120 })).not.toThrow();
+      expect(() => findEligible.input!.parse({ ...baseInput, age: 0 })).not.toThrow();
+      expect(() => findEligible.input!.parse({ ...baseInput, age: 120 })).not.toThrow();
     });
 
     it('rejects invalid sex', () => {
-      expect(() => findEligible.input.parse({ ...baseInput, sex: 'Other' })).toThrow();
+      expect(() => findEligible.input!.parse({ ...baseInput, sex: 'Other' })).toThrow();
     });
 
     it('accepts all valid sex values', () => {
       for (const sex of ['Female', 'Male', 'All'] as const) {
-        expect(() => findEligible.input.parse({ ...baseInput, sex })).not.toThrow();
+        expect(() => findEligible.input!.parse({ ...baseInput, sex })).not.toThrow();
       }
     });
 
     it('applies defaults for recruitingOnly, healthyVolunteer, and maxResults', () => {
-      const input = findEligible.input.parse(baseInput);
+      const input = findEligible.input!.parse(baseInput);
       expect(input.recruitingOnly).toBe(true);
       expect(input.healthyVolunteer).toBe(false);
       expect(input.maxResults).toBe(10);
     });
 
     it('rejects maxResults outside 1-50', () => {
-      expect(() => findEligible.input.parse({ ...baseInput, maxResults: 0 })).toThrow();
-      expect(() => findEligible.input.parse({ ...baseInput, maxResults: 51 })).toThrow();
+      expect(() => findEligible.input!.parse({ ...baseInput, maxResults: 0 })).toThrow();
+      expect(() => findEligible.input!.parse({ ...baseInput, maxResults: 51 })).toThrow();
     });
 
     it('requires location.country', () => {
-      expect(() => findEligible.input.parse({ ...baseInput, location: { state: 'WA' } })).toThrow();
+      expect(() =>
+        findEligible.input!.parse({ ...baseInput, location: { state: 'WA' } }),
+      ).toThrow();
     });
   });
 
@@ -79,7 +81,7 @@ describe('findEligible', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
 
       const ctx = createMockContext();
-      const result = await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       expect(result.studies).toHaveLength(1);
       expect(result.totalCount).toBe(1);
@@ -89,7 +91,10 @@ describe('findEligible', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       await findEligible.handler(
-        findEligible.input.parse({ ...baseInput, conditions: ['Type 2 Diabetes', 'Hypertension'] }),
+        findEligible.input!.parse({
+          ...baseInput,
+          conditions: ['Type 2 Diabetes', 'Hypertension'],
+        }),
         ctx,
       );
 
@@ -103,7 +108,7 @@ describe('findEligible', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       await findEligible.handler(
-        findEligible.input.parse({ ...baseInput, conditions: ['Asthma'] }),
+        findEligible.input!.parse({ ...baseInput, conditions: ['Asthma'] }),
         ctx,
       );
 
@@ -116,7 +121,7 @@ describe('findEligible', () => {
     it('builds location query from city, state, country', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
         expect.objectContaining({ queryLocn: 'Seattle, Washington, United States' }),
@@ -128,7 +133,7 @@ describe('findEligible', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       await findEligible.handler(
-        findEligible.input.parse({
+        findEligible.input!.parse({
           ...baseInput,
           location: { country: 'United States' },
         }),
@@ -144,7 +149,7 @@ describe('findEligible', () => {
     it('builds status filter when recruitingOnly is true', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -158,7 +163,7 @@ describe('findEligible', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       await findEligible.handler(
-        findEligible.input.parse({ ...baseInput, recruitingOnly: false }),
+        findEligible.input!.parse({ ...baseInput, recruitingOnly: false }),
         ctx,
       );
 
@@ -171,18 +176,18 @@ describe('findEligible', () => {
     it('includes sex filter in advancedFilter when sex is not All', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      await findEligible.handler(findEligible.input.parse({ ...baseInput, sex: 'Female' }), ctx);
+      await findEligible.handler(findEligible.input!.parse({ ...baseInput, sex: 'Female' }), ctx);
 
-      const call = mockService.searchStudies.mock.calls[0][0];
+      const call = mockService.searchStudies.mock.calls[0]![0];
       expect(call.filterAdvanced).toContain('AREA[Sex]ALL OR AREA[Sex]FEMALE');
     });
 
     it('omits sex filter when sex is All', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
-      const call = mockService.searchStudies.mock.calls[0][0];
+      const call = mockService.searchStudies.mock.calls[0]![0];
       expect(call.filterAdvanced).not.toContain('AREA[Sex]');
     });
 
@@ -190,20 +195,20 @@ describe('findEligible', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       await findEligible.handler(
-        findEligible.input.parse({ ...baseInput, healthyVolunteer: true }),
+        findEligible.input!.parse({ ...baseInput, healthyVolunteer: true }),
         ctx,
       );
 
-      const call = mockService.searchStudies.mock.calls[0][0];
+      const call = mockService.searchStudies.mock.calls[0]![0];
       expect(call.filterAdvanced).toContain('AREA[HealthyVolunteers]true');
     });
 
     it('includes age range filters in advancedFilter', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
-      const call = mockService.searchStudies.mock.calls[0][0];
+      const call = mockService.searchStudies.mock.calls[0]![0];
       expect(call.filterAdvanced).toContain('AREA[MinimumAge]RANGE[MIN, 30 years]');
       expect(call.filterAdvanced).toContain('AREA[MaximumAge]RANGE[30 years, MAX]');
     });
@@ -211,7 +216,7 @@ describe('findEligible', () => {
     it('uses maxResults as pageSize', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      await findEligible.handler(findEligible.input.parse({ ...baseInput, maxResults: 25 }), ctx);
+      await findEligible.handler(findEligible.input!.parse({ ...baseInput, maxResults: 25 }), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
         expect.objectContaining({ pageSize: 25 }),
@@ -222,9 +227,9 @@ describe('findEligible', () => {
     it('requests the eligibility field set', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
-      const call = mockService.searchStudies.mock.calls[0][0];
+      const call = mockService.searchStudies.mock.calls[0]![0];
       expect(call.fields).toContain('NCTId');
       expect(call.fields).toContain('MinimumAge');
       expect(call.fields).toContain('LocationCity');
@@ -235,7 +240,7 @@ describe('findEligible', () => {
     it('echoes search criteria in output', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       expect(result.searchCriteria).toEqual({
         conditions: ['Type 2 Diabetes'],
@@ -248,7 +253,7 @@ describe('findEligible', () => {
     it('provides noMatchHints when no studies found', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       expect(result.noMatchHints).toBeDefined();
       expect(result.noMatchHints!.length).toBeGreaterThan(0);
@@ -258,7 +263,7 @@ describe('findEligible', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       const result = await findEligible.handler(
-        findEligible.input.parse({ ...baseInput, age: 120 }),
+        findEligible.input!.parse({ ...baseInput, age: 120 }),
         ctx,
       );
 
@@ -269,7 +274,7 @@ describe('findEligible', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       const result = await findEligible.handler(
-        findEligible.input.parse({ ...baseInput, sex: 'Male' }),
+        findEligible.input!.parse({ ...baseInput, sex: 'Male' }),
         ctx,
       );
 
@@ -280,7 +285,7 @@ describe('findEligible', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       const result = await findEligible.handler(
-        findEligible.input.parse({ ...baseInput, healthyVolunteer: true }),
+        findEligible.input!.parse({ ...baseInput, healthyVolunteer: true }),
         ctx,
       );
 
@@ -290,7 +295,7 @@ describe('findEligible', () => {
     it('hints about recruiting-only restriction', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       expect(result.noMatchHints!.some((h: string) => h.includes('recruitingOnly=false'))).toBe(
         true,
@@ -300,7 +305,7 @@ describe('findEligible', () => {
     it('hints about narrowing location', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       expect(result.noMatchHints!.some((h: string) => h.includes('just the country'))).toBe(true);
     });
@@ -310,7 +315,7 @@ describe('findEligible', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
 
       const ctx = createMockContext();
-      const result = await findEligible.handler(findEligible.input.parse(baseInput), ctx);
+      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       expect(result.noMatchHints).toBeUndefined();
     });
@@ -336,7 +341,7 @@ describe('findEligible', () => {
         totalCount: 1,
         searchCriteria: { conditions: ['Diabetes'], location: 'US', age: 30, sex: 'All' },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('Found 1 eligible studies');
       expect(text).toContain('NCT12345678');
       expect(text).toContain('RECRUITING');
@@ -364,8 +369,8 @@ describe('findEligible', () => {
         totalCount: 1,
         searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'All' },
       });
-      expect(blocks[0].text).toContain('Hospital A');
-      expect(blocks[0].text).toContain('Locations:');
+      expect((blocks[0] as { text: string }).text).toContain('Hospital A');
+      expect((blocks[0] as { text: string }).text).toContain('Locations:');
     });
 
     it('renders central contacts', () => {
@@ -386,8 +391,8 @@ describe('findEligible', () => {
         totalCount: 1,
         searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'All' },
       });
-      expect(blocks[0].text).toContain('Contact:');
-      expect(blocks[0].text).toContain('Dr. Smith');
+      expect((blocks[0] as { text: string }).text).toContain('Contact:');
+      expect((blocks[0] as { text: string }).text).toContain('Dr. Smith');
     });
 
     it('renders no-match hints', () => {
@@ -397,9 +402,9 @@ describe('findEligible', () => {
         searchCriteria: { conditions: ['Rare'], location: 'US', age: 30, sex: 'All' },
         noMatchHints: ['No studies found', 'Try broader terms'],
       });
-      expect(blocks[0].text).toContain('No eligible studies found');
-      expect(blocks[0].text).toContain('No studies found');
-      expect(blocks[0].text).toContain('Try broader terms');
+      expect((blocks[0] as { text: string }).text).toContain('No eligible studies found');
+      expect((blocks[0] as { text: string }).text).toContain('No studies found');
+      expect((blocks[0] as { text: string }).text).toContain('Try broader terms');
     });
 
     it('shows total when more results exist', () => {
@@ -410,7 +415,7 @@ describe('findEligible', () => {
         totalCount: 50,
         searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'All' },
       });
-      expect(blocks[0].text).toContain('50 eligible studies (showing 1)');
+      expect((blocks[0] as { text: string }).text).toContain('50 eligible studies (showing 1)');
     });
   });
 });

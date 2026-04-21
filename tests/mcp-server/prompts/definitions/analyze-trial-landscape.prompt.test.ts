@@ -6,20 +6,32 @@
 import { describe, expect, it } from 'vitest';
 import { analyzeTrialLandscape } from '@/mcp-server/prompts/definitions/analyze-trial-landscape.prompt.js';
 
+type PromptMessage = { role: string; content: { type: string; text: string } };
+const argsSchema = analyzeTrialLandscape.args!;
+const generate = (args: Parameters<typeof analyzeTrialLandscape.generate>[0]) =>
+  analyzeTrialLandscape.generate(args) as PromptMessage[];
+const firstMessage = (
+  args: Parameters<typeof analyzeTrialLandscape.generate>[0],
+): PromptMessage => {
+  const [msg] = generate(args);
+  if (!msg) throw new Error('generate() returned no messages');
+  return msg;
+};
+
 describe('analyzeTrialLandscape', () => {
   describe('args validation', () => {
     it('requires topic', () => {
-      expect(() => analyzeTrialLandscape.args.parse({})).toThrow();
+      expect(() => argsSchema.parse({})).toThrow();
     });
 
     it('accepts topic only', () => {
-      const args = analyzeTrialLandscape.args.parse({ topic: 'Lung Cancer' });
+      const args = argsSchema.parse({ topic: 'Lung Cancer' });
       expect(args.topic).toBe('Lung Cancer');
       expect(args.focusAreas).toBeUndefined();
     });
 
     it('accepts topic with focusAreas', () => {
-      const args = analyzeTrialLandscape.args.parse({
+      const args = argsSchema.parse({
         topic: 'Diabetes',
         focusAreas: ['status', 'phases', 'sponsors'],
       });
@@ -27,7 +39,7 @@ describe('analyzeTrialLandscape', () => {
     });
 
     it('accepts empty focusAreas array', () => {
-      const args = analyzeTrialLandscape.args.parse({
+      const args = argsSchema.parse({
         topic: 'Test',
         focusAreas: [],
       });
@@ -37,51 +49,43 @@ describe('analyzeTrialLandscape', () => {
 
   describe('generate', () => {
     it('returns a single user message', () => {
-      const messages = analyzeTrialLandscape.generate({ topic: 'Lung Cancer' });
+      const messages = generate({ topic: 'Lung Cancer' });
       expect(messages).toHaveLength(1);
-      expect(messages[0].role).toBe('user');
+      expect(firstMessage({ topic: 'Lung Cancer' }).role).toBe('user');
     });
 
     it('includes the topic in the message', () => {
-      const messages = analyzeTrialLandscape.generate({ topic: 'Type 2 Diabetes' });
-      const text = (messages[0].content as { type: string; text: string }).text;
-      expect(text).toContain('Type 2 Diabetes');
+      expect(firstMessage({ topic: 'Type 2 Diabetes' }).content.text).toContain('Type 2 Diabetes');
     });
 
     it('mentions available tools', () => {
-      const messages = analyzeTrialLandscape.generate({ topic: 'Test' });
-      const text = (messages[0].content as { type: string; text: string }).text;
+      const text = firstMessage({ topic: 'Test' }).content.text;
       expect(text).toContain('clinicaltrials_get_study_count');
       expect(text).toContain('clinicaltrials_search_studies');
       expect(text).toContain('clinicaltrials_get_field_values');
     });
 
     it('uses default focus when focusAreas omitted', () => {
-      const messages = analyzeTrialLandscape.generate({ topic: 'Test' });
-      const text = (messages[0].content as { type: string; text: string }).text;
-      expect(text).toContain('whatever dimensions seem most informative');
+      expect(firstMessage({ topic: 'Test' }).content.text).toContain(
+        'whatever dimensions seem most informative',
+      );
     });
 
     it('uses default focus for empty focusAreas', () => {
-      const messages = analyzeTrialLandscape.generate({ topic: 'Test', focusAreas: [] });
-      const text = (messages[0].content as { type: string; text: string }).text;
-      expect(text).toContain('whatever dimensions seem most informative');
+      expect(firstMessage({ topic: 'Test', focusAreas: [] }).content.text).toContain(
+        'whatever dimensions seem most informative',
+      );
     });
 
     it('includes specific focus areas when provided', () => {
-      const messages = analyzeTrialLandscape.generate({
-        topic: 'Cancer',
-        focusAreas: ['sponsors', 'geography'],
-      });
-      const text = (messages[0].content as { type: string; text: string }).text;
+      const text = firstMessage({ topic: 'Cancer', focusAreas: ['sponsors', 'geography'] }).content
+        .text;
       expect(text).toContain('sponsors, geography');
       expect(text).not.toContain('whatever dimensions');
     });
 
     it('returns content with type text', () => {
-      const messages = analyzeTrialLandscape.generate({ topic: 'Test' });
-      const content = messages[0].content as { type: string; text: string };
-      expect(content.type).toBe('text');
+      expect(firstMessage({ topic: 'Test' }).content.type).toBe('text');
     });
   });
 

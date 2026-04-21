@@ -26,17 +26,17 @@ describe('getStudy', () => {
 
   describe('input validation', () => {
     it('accepts valid NCT ID', () => {
-      expect(() => getStudy.input.parse({ nctId: 'NCT12345678' })).not.toThrow();
+      expect(() => getStudy.input!.parse({ nctId: 'NCT12345678' })).not.toThrow();
     });
 
     it('rejects invalid NCT ID format', () => {
-      expect(() => getStudy.input.parse({ nctId: 'INVALID' })).toThrow();
-      expect(() => getStudy.input.parse({ nctId: 'NCT1234' })).toThrow();
-      expect(() => getStudy.input.parse({ nctId: 'nct12345678' })).toThrow();
+      expect(() => getStudy.input!.parse({ nctId: 'INVALID' })).toThrow();
+      expect(() => getStudy.input!.parse({ nctId: 'NCT1234' })).toThrow();
+      expect(() => getStudy.input!.parse({ nctId: 'nct12345678' })).toThrow();
     });
 
     it('rejects missing nctId', () => {
-      expect(() => getStudy.input.parse({})).toThrow();
+      expect(() => getStudy.input!.parse({})).toThrow();
     });
   });
 
@@ -48,7 +48,7 @@ describe('getStudy', () => {
       mockService.getStudy.mockResolvedValue(study);
 
       const ctx = createMockContext();
-      const result = await getStudy.handler(getStudy.input.parse({ nctId: 'NCT12345678' }), ctx);
+      const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx);
 
       expect(result.study).toBe(study);
       expect(mockService.getStudy).toHaveBeenCalledWith('NCT12345678', ctx);
@@ -58,7 +58,7 @@ describe('getStudy', () => {
       mockService.getStudy.mockRejectedValue(new Error('Not found'));
       const ctx = createMockContext();
       await expect(
-        getStudy.handler(getStudy.input.parse({ nctId: 'NCT12345678' }), ctx),
+        getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx),
       ).rejects.toThrow('Not found');
     });
   });
@@ -72,7 +72,7 @@ describe('getStudy', () => {
           },
         },
       });
-      expect(blocks[0].text).toContain('# NCT12345678: My Study');
+      expect((blocks[0] as { text: string }).text).toContain('# NCT12345678: My Study');
     });
 
     it('falls back to officialTitle when briefTitle missing', () => {
@@ -83,7 +83,7 @@ describe('getStudy', () => {
           },
         },
       });
-      expect(blocks[0].text).toContain('# NCT12345678: Official Title');
+      expect((blocks[0] as { text: string }).text).toContain('# NCT12345678: Official Title');
     });
 
     it('shows Untitled when no title', () => {
@@ -92,12 +92,12 @@ describe('getStudy', () => {
           protocolSection: { identificationModule: { nctId: 'NCT12345678' } },
         },
       });
-      expect(blocks[0].text).toContain('# NCT12345678: Untitled');
+      expect((blocks[0] as { text: string }).text).toContain('# NCT12345678: Untitled');
     });
 
     it('shows Unknown when no nctId', () => {
       const blocks = getStudy.format!({ study: {} });
-      expect(blocks[0].text).toContain('# Unknown: Untitled');
+      expect((blocks[0] as { text: string }).text).toContain('# Unknown: Untitled');
     });
 
     it('renders acronym', () => {
@@ -108,7 +108,7 @@ describe('getStudy', () => {
           },
         },
       });
-      expect(blocks[0].text).toContain('**Acronym:** ACME');
+      expect((blocks[0] as { text: string }).text).toContain('**Acronym:** ACME');
     });
 
     it('renders status with design info', () => {
@@ -125,7 +125,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('RECRUITING');
       expect(text).toContain('INTERVENTIONAL');
       expect(text).toContain('PHASE3');
@@ -145,7 +145,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('Start: 2024-01-01');
       expect(text).toContain('Primary Completion: 2025-06-01');
       expect(text).toContain('Completion: 2025-12-31');
@@ -162,7 +162,7 @@ describe('getStudy', () => {
           },
         },
       });
-      expect(blocks[0].text).toContain('**Sponsor:** Pfizer (INDUSTRY)');
+      expect((blocks[0] as { text: string }).text).toContain('**Sponsor:** Pfizer (INDUSTRY)');
     });
 
     it('renders conditions', () => {
@@ -174,7 +174,9 @@ describe('getStudy', () => {
           },
         },
       });
-      expect(blocks[0].text).toContain('**Conditions:** Diabetes, Hypertension');
+      expect((blocks[0] as { text: string }).text).toContain(
+        '**Conditions:** Diabetes, Hypertension',
+      );
     });
 
     it('renders summary', () => {
@@ -186,8 +188,8 @@ describe('getStudy', () => {
           },
         },
       });
-      expect(blocks[0].text).toContain('## Summary');
-      expect(blocks[0].text).toContain('This study evaluates...');
+      expect((blocks[0] as { text: string }).text).toContain('## Summary');
+      expect((blocks[0] as { text: string }).text).toContain('This study evaluates...');
     });
 
     it('renders eligibility section', () => {
@@ -205,7 +207,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('## Eligibility');
       expect(text).toContain('18 Years');
       expect(text).toContain('65 Years');
@@ -223,7 +225,7 @@ describe('getStudy', () => {
           },
         },
       });
-      expect(blocks[0].text).toMatch(/≥ 18 Years/);
+      expect((blocks[0] as { text: string }).text).toMatch(/≥ 18 Years/);
     });
 
     it('renders eligibility with only maxAge', () => {
@@ -235,7 +237,7 @@ describe('getStudy', () => {
           },
         },
       });
-      expect(blocks[0].text).toMatch(/≤ 65 Years/);
+      expect((blocks[0] as { text: string }).text).toMatch(/≤ 65 Years/);
     });
 
     it('renders interventions', () => {
@@ -252,7 +254,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('## Interventions');
       expect(text).toContain('**DRUG:** Aspirin');
       expect(text).toContain('Low dose aspirin');
@@ -273,7 +275,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('## Arms');
       expect(text).toContain('**Treatment** (EXPERIMENTAL)');
       expect(text).toContain('Active drug');
@@ -291,7 +293,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('## Primary Outcomes');
       expect(text).toContain('Overall Survival [24 months]');
       expect(text).toContain('## Secondary Outcomes');
@@ -311,7 +313,7 @@ describe('getStudy', () => {
           },
         },
       });
-      expect(blocks[0].text).toContain('... and 3 more');
+      expect((blocks[0] as { text: string }).text).toContain('... and 3 more');
     });
 
     it('renders central contacts', () => {
@@ -327,7 +329,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('## Contacts');
       expect(text).toContain('Dr. Smith');
       expect(text).toContain('smith@test.com');
@@ -359,7 +361,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('## Locations (2 total)');
       expect(text).toContain('General Hospital');
       expect(text).toContain('[RECRUITING]');
@@ -377,7 +379,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('## Detailed Description');
       expect(text).toContain('Detailed multi-paragraph description');
     });
@@ -397,7 +399,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('First Submit: 2020-01-15');
       expect(text).toContain('Last Update Post: 2024-06-15');
       expect(text).toContain('Verified: 2024-06');
@@ -414,8 +416,8 @@ describe('getStudy', () => {
           },
         },
       });
-      expect(blocks[0].text).toContain('## Other Outcomes');
-      expect(blocks[0].text).toContain('Exploratory Biomarker [6 months]');
+      expect((blocks[0] as { text: string }).text).toContain('## Other Outcomes');
+      expect((blocks[0] as { text: string }).text).toContain('Exploratory Biomarker [6 months]');
     });
 
     it('renders oversight module (regression for #18)', () => {
@@ -431,7 +433,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('**Oversight:**');
       expect(text).toContain('DMC: Yes');
       expect(text).toContain('FDA-Regulated Drug: Yes');
@@ -451,7 +453,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('## IPD Sharing');
       expect(text).toContain('**Plan:** YES');
       expect(text).toContain('6 months after publication');
@@ -474,7 +476,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('## References');
       expect(text).toContain('Smith J. Relevant prior work');
       expect(text).toContain('PMID: 12345');
@@ -496,7 +498,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('**Collaborators:** NIH (FEDERAL), Academic Partner (OTHER)');
     });
 
@@ -512,7 +514,9 @@ describe('getStudy', () => {
           },
         },
       });
-      expect(blocks[0].text).toContain('**Keywords:** insulin resistance, glycemic control');
+      expect((blocks[0] as { text: string }).text).toContain(
+        '**Keywords:** insulin resistance, glycemic control',
+      );
     });
 
     it('renders design details (regression for #18)', () => {
@@ -531,7 +535,7 @@ describe('getStudy', () => {
           },
         },
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('**Design:**');
       expect(text).toContain('Allocation: RANDOMIZED');
       expect(text).toContain('Model: PARALLEL');
@@ -553,7 +557,7 @@ describe('getStudy', () => {
           },
         },
       });
-      expect(blocks[0].text).toContain('... and 5 more');
+      expect((blocks[0] as { text: string }).text).toContain('... and 5 more');
     });
   });
 });

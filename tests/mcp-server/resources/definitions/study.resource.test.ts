@@ -24,22 +24,24 @@ describe('studyResource', () => {
     mockGetService.mockReturnValue(mockService as never);
   });
 
+  const params = studyResource.params!;
+
   describe('params validation', () => {
     it('accepts valid NCT ID', () => {
-      expect(() => studyResource.params.parse({ nctId: 'NCT03722472' })).not.toThrow();
+      expect(() => params.parse({ nctId: 'NCT03722472' })).not.toThrow();
     });
 
     it('rejects invalid NCT ID', () => {
-      expect(() => studyResource.params.parse({ nctId: 'bad' })).toThrow();
-      expect(() => studyResource.params.parse({ nctId: 'NCT1234' })).toThrow();
+      expect(() => params.parse({ nctId: 'bad' })).toThrow();
+      expect(() => params.parse({ nctId: 'NCT1234' })).toThrow();
     });
 
     it('rejects lowercase nct prefix', () => {
-      expect(() => studyResource.params.parse({ nctId: 'nct03722472' })).toThrow();
+      expect(() => params.parse({ nctId: 'nct03722472' })).toThrow();
     });
 
     it('rejects NCT ID with wrong digit count', () => {
-      expect(() => studyResource.params.parse({ nctId: 'NCT123456789' })).toThrow();
+      expect(() => params.parse({ nctId: 'NCT123456789' })).toThrow();
     });
   });
 
@@ -49,8 +51,8 @@ describe('studyResource', () => {
       mockService.getStudy.mockResolvedValue(study);
 
       const ctx = createMockContext();
-      const params = studyResource.params.parse({ nctId: 'NCT03722472' });
-      const result = await studyResource.handler(params, ctx);
+      const parsed = params.parse({ nctId: 'NCT03722472' });
+      const result = await studyResource.handler(parsed, ctx);
 
       expect(result).toBe(study);
       expect(mockService.getStudy).toHaveBeenCalledWith('NCT03722472', ctx);
@@ -59,9 +61,9 @@ describe('studyResource', () => {
     it('propagates service errors', async () => {
       mockService.getStudy.mockRejectedValue(new Error('Not found'));
       const ctx = createMockContext();
-      const params = studyResource.params.parse({ nctId: 'NCT03722472' });
+      const parsed = params.parse({ nctId: 'NCT03722472' });
 
-      await expect(studyResource.handler(params, ctx)).rejects.toThrow('Not found');
+      await expect(studyResource.handler(parsed, ctx)).rejects.toThrow('Not found');
     });
   });
 

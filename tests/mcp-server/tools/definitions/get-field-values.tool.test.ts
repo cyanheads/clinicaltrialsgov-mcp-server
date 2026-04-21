@@ -26,17 +26,17 @@ describe('getFieldValues', () => {
 
   describe('input validation', () => {
     it('accepts a single field string', () => {
-      const input = getFieldValues.input.parse({ fields: 'OverallStatus' });
+      const input = getFieldValues.input!.parse({ fields: 'OverallStatus' });
       expect(input.fields).toBe('OverallStatus');
     });
 
     it('accepts an array of fields', () => {
-      const input = getFieldValues.input.parse({ fields: ['OverallStatus', 'Phase'] });
+      const input = getFieldValues.input!.parse({ fields: ['OverallStatus', 'Phase'] });
       expect(input.fields).toEqual(['OverallStatus', 'Phase']);
     });
 
     it('requires fields parameter', () => {
-      expect(() => getFieldValues.input.parse({})).toThrow();
+      expect(() => getFieldValues.input!.parse({})).toThrow();
     });
   });
 
@@ -54,7 +54,7 @@ describe('getFieldValues', () => {
       mockService.getFieldValues.mockResolvedValue(stats);
 
       const ctx = createMockContext();
-      const input = getFieldValues.input.parse({ fields: 'OverallStatus' });
+      const input = getFieldValues.input!.parse({ fields: 'OverallStatus' });
       const result = await getFieldValues.handler(input, ctx);
 
       expect(result.fieldStats).toBe(stats);
@@ -64,7 +64,7 @@ describe('getFieldValues', () => {
     it('normalizes single string to array', async () => {
       mockService.getFieldValues.mockResolvedValue([]);
       const ctx = createMockContext();
-      await getFieldValues.handler(getFieldValues.input.parse({ fields: 'Phase' }), ctx);
+      await getFieldValues.handler(getFieldValues.input!.parse({ fields: 'Phase' }), ctx);
 
       expect(mockService.getFieldValues).toHaveBeenCalledWith(['Phase'], ctx);
     });
@@ -73,7 +73,7 @@ describe('getFieldValues', () => {
       mockService.getFieldValues.mockResolvedValue([]);
       const ctx = createMockContext();
       const fields = ['OverallStatus', 'Phase'];
-      await getFieldValues.handler(getFieldValues.input.parse({ fields }), ctx);
+      await getFieldValues.handler(getFieldValues.input!.parse({ fields }), ctx);
 
       expect(mockService.getFieldValues).toHaveBeenCalledWith(fields, ctx);
     });
@@ -82,7 +82,7 @@ describe('getFieldValues', () => {
       mockService.getFieldValues.mockRejectedValue(new Error('Invalid field'));
       const ctx = createMockContext();
       await expect(
-        getFieldValues.handler(getFieldValues.input.parse({ fields: 'BadField' }), ctx),
+        getFieldValues.handler(getFieldValues.input!.parse({ fields: 'BadField' }), ctx),
       ).rejects.toThrow('Invalid field');
     });
   });
@@ -103,9 +103,9 @@ describe('getFieldValues', () => {
           },
         ],
       });
-      expect(blocks[0].text).toContain('**OverallStatus** (3 unique values)');
-      expect(blocks[0].text).toContain('RECRUITING:');
-      expect(blocks[0].text).toContain('COMPLETED:');
+      expect((blocks[0] as { text: string }).text).toContain('**OverallStatus** (3 unique values)');
+      expect((blocks[0] as { text: string }).text).toContain('RECRUITING:');
+      expect((blocks[0] as { text: string }).text).toContain('COMPLETED:');
     });
 
     it('renders BOOLEAN field stats', () => {
@@ -120,7 +120,7 @@ describe('getFieldValues', () => {
           },
         ],
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('**HasResults** (boolean)');
       expect(text).toContain('true:');
       expect(text).toContain('50,000');
@@ -141,7 +141,7 @@ describe('getFieldValues', () => {
           },
         ],
       });
-      expect(blocks[0].text).toContain('missing in 100,000 studies');
+      expect((blocks[0] as { text: string }).text).toContain('missing in 100,000 studies');
     });
 
     it('does not show missing count when zero', () => {
@@ -157,7 +157,7 @@ describe('getFieldValues', () => {
           },
         ],
       });
-      expect(blocks[0].text).not.toContain('missing');
+      expect((blocks[0] as { text: string }).text).not.toContain('missing');
     });
 
     it('truncates to 15 values per field', () => {
@@ -168,7 +168,7 @@ describe('getFieldValues', () => {
       const blocks = getFieldValues.format!({
         fieldStats: [{ field: 'F', piece: 'F', type: 'ENUM', uniqueValuesCount: 20, topValues }],
       });
-      const lines = blocks[0].text.split('\n');
+      const lines = (blocks[0] as { text: string }).text.split('\n');
       // 1 header + 15 values = 16 lines
       expect(lines).toHaveLength(16);
     });
@@ -185,8 +185,8 @@ describe('getFieldValues', () => {
           },
         ],
       });
-      expect(blocks[0].text).toContain('**UnpopulatedField**');
-      expect(blocks[0].text).toContain('No recorded values for this field.');
+      expect((blocks[0] as { text: string }).text).toContain('**UnpopulatedField**');
+      expect((blocks[0] as { text: string }).text).toContain('No recorded values for this field.');
     });
 
     it('emits empty-values fallback when topValues is an empty array', () => {
@@ -201,7 +201,7 @@ describe('getFieldValues', () => {
           },
         ],
       });
-      expect(blocks[0].text).toContain('No recorded values for this field.');
+      expect((blocks[0] as { text: string }).text).toContain('No recorded values for this field.');
     });
 
     it('renders multiple fields', () => {
@@ -223,7 +223,7 @@ describe('getFieldValues', () => {
           },
         ],
       });
-      const text = blocks[0].text;
+      const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('**OverallStatus**');
       expect(text).toContain('**Phase**');
     });

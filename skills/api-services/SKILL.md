@@ -4,7 +4,7 @@ description: >
   API reference for built-in service providers (LLM, Speech, Graph). Use when looking up service interfaces, provider capabilities, or integration patterns.
 metadata:
   author: cyanheads
-  version: "1.2"
+  version: "1.3"
   audience: external
   type: reference
 ---
@@ -17,8 +17,8 @@ All services follow the **init/accessor pattern**: initialized in `setup()`, acc
 
 ## References
 
-| Reference | Path                   | Description                                                              |
-| :-------- | :--------------------- | :----------------------------------------------------------------------- |
-| LLM       | `references/llm.md`    | OpenRouter-based LLM provider (`ILlmProvider`, streaming, config)        |
-| Speech    | `references/speech.md` | TTS/STT providers (`SpeechService`, ElevenLabs, Whisper)                 |
-| Graph     | `references/graph.md`  | Relationship graph operations (`IGraphProvider`, traversal, pathfinding) |
+| Reference | Path | Description |
+|:----------|:-----|:------------|
+| LLM | `references/llm.md` | OpenRouter-based LLM provider (`ILlmProvider`, streaming, config) |
+| Speech | `references/speech.md` | TTS/STT providers (`SpeechService`, ElevenLabs, Whisper) |
+| Graph | `references/graph.md` | Relationship graph operations (`IGraphProvider`, traversal, pathfinding) |

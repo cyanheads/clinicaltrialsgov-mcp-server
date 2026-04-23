@@ -4,7 +4,7 @@ description: >
   Canonical reference for the unified `Context` object passed to every tool and resource handler in `@cyanheads/mcp-ts-core`. Covers the full interface, all sub-APIs (`ctx.log`, `ctx.state`, `ctx.elicit`, `ctx.sample`, `ctx.progress`), and when to use each.
 metadata:
   author: cyanheads
-  version: "1.0"
+  version: "1.1"
   audience: external
   type: reference
 ---
@@ -20,16 +20,16 @@ The framework auto-instruments every handler call (OTel span, duration, payload 
 ## `Context` interface
 
 ```ts
-import type { Context } from "@cyanheads/mcp-ts-core";
+import type { Context } from '@cyanheads/mcp-ts-core';
 
 interface Context {
   // Identity & tracing
-  readonly requestId: string; // Unique per request, auto-generated
-  readonly timestamp: string; // ISO 8601 request start time
-  readonly tenantId?: string; // From JWT 'tid' claim; 'default' in stdio mode
-  readonly traceId?: string; // OTEL trace ID (present when OTEL enabled)
-  readonly spanId?: string; // OTEL span ID (present when OTEL enabled)
-  readonly auth?: AuthContext; // Parsed auth claims (clientId, scopes, sub)
+  readonly requestId: string;       // Unique per request, auto-generated
+  readonly timestamp: string;       // ISO 8601 request start time
+  readonly tenantId?: string;       // From JWT 'tid' claim; 'default' in stdio mode
+  readonly traceId?: string;        // OTEL trace ID (present when OTEL enabled)
+  readonly spanId?: string;         // OTEL span ID (present when OTEL enabled)
+  readonly auth?: AuthContext;      // Parsed auth claims (clientId, scopes, sub)
 
   // Structured logging — auto-includes requestId, traceId, tenantId
   readonly log: ContextLogger;
@@ -38,14 +38,8 @@ interface Context {
   readonly state: ContextState;
 
   // Optional protocol capabilities (undefined when client doesn't support them)
-  readonly elicit?: (
-    message: string,
-    schema: z.ZodObject<z.ZodRawShape>,
-  ) => Promise<ElicitResult>;
-  readonly sample?: (
-    messages: SamplingMessage[],
-    opts?: SamplingOpts,
-  ) => Promise<CreateMessageResult>;
+  readonly elicit?: (message: string, schema: z.ZodObject<z.ZodRawShape>) => Promise<ElicitResult>;
+  readonly sample?: (messages: SamplingMessage[], opts?: SamplingOpts) => Promise<CreateMessageResult>;
 
   // Cancellation
   readonly signal: AbortSignal;
@@ -60,14 +54,14 @@ interface Context {
 
 ### Identity fields
 
-| Field       | Always present                                          | Source                          |
-| :---------- | :------------------------------------------------------ | :------------------------------ |
-| `requestId` | Yes                                                     | Auto-generated UUID per request |
-| `timestamp` | Yes                                                     | ISO 8601, request start         |
-| `tenantId`  | In stdio (as `'default'`); from JWT `tid` claim in HTTP | JWT / stdio default             |
-| `traceId`   | When OTEL enabled                                       | OTEL trace context              |
-| `spanId`    | When OTEL enabled                                       | OTEL trace context              |
-| `auth`      | When auth enabled                                       | Parsed JWT claims               |
+| Field | Always present | Source |
+|:------|:--------------|:-------|
+| `requestId` | Yes | Auto-generated UUID per request |
+| `timestamp` | Yes | ISO 8601, request start |
+| `tenantId` | In stdio (as `'default'`); from JWT `tid` claim in HTTP | JWT / stdio default |
+| `traceId` | When OTEL enabled | OTEL trace context |
+| `spanId` | When OTEL enabled | OTEL trace context |
+| `auth` | When auth enabled | Parsed JWT claims |
 
 ---
 
@@ -77,32 +71,32 @@ Request-scoped structured logger. Every log line is automatically annotated with
 
 ### Methods
 
-| Method                              | Level                                   |
-| :---------------------------------- | :-------------------------------------- |
-| `ctx.log.debug(msg, data?)`         | Verbose debugging                       |
-| `ctx.log.info(msg, data?)`          | Normal operational events               |
-| `ctx.log.notice(msg, data?)`        | Significant but non-error events        |
-| `ctx.log.warning(msg, data?)`       | Recoverable issues, unexpected states   |
+| Method | Level |
+|:-------|:------|
+| `ctx.log.debug(msg, data?)` | Verbose debugging |
+| `ctx.log.info(msg, data?)` | Normal operational events |
+| `ctx.log.notice(msg, data?)` | Significant but non-error events |
+| `ctx.log.warning(msg, data?)` | Recoverable issues, unexpected states |
 | `ctx.log.error(msg, error?, data?)` | Errors (second arg is the Error object) |
 
 ### Usage
 
 ```ts
 // Basic
-ctx.log.info("Processing query", { query: input.query });
+ctx.log.info('Processing query', { query: input.query });
 
 // With error object (second arg)
-ctx.log.error("Failed to fetch upstream", error, { url, statusCode });
+ctx.log.error('Failed to fetch upstream', error, { url, statusCode });
 
 // Debug detail
-ctx.log.debug("Cache miss", { key, ttl });
+ctx.log.debug('Cache miss', { key, ttl });
 ```
 
 ### `ctx.log` vs global `logger`
 
-| Use                      | Where                                                                               |
-| :----------------------- | :---------------------------------------------------------------------------------- |
-| `ctx.log`                | Inside tool/resource handlers — auto-correlated to the request                      |
+| Use | Where |
+|:----|:------|
+| `ctx.log` | Inside tool/resource handlers — auto-correlated to the request |
 | `core.logger` / `logger` | In `setup()`, service constructors, background tasks — no request context available |
 
 The global `logger` is imported from `@cyanheads/mcp-ts-core/utils`. In handlers, prefer `ctx.log`.
@@ -118,21 +112,15 @@ Tenant-scoped key-value storage. Delegates to `StorageService` with automatic `t
 ```ts
 interface ContextState {
   get<T = unknown>(key: string): Promise<T | null>;
-  get<T>(key: string, schema: ZodType<T>): Promise<T | null>; // runtime-validated
+  get<T>(key: string, schema: ZodType<T>): Promise<T | null>;  // runtime-validated
   set(key: string, value: unknown, opts?: { ttl?: number }): Promise<void>;
   delete(key: string): Promise<void>;
   deleteMany(keys: string[]): Promise<number>;
   getMany<T = unknown>(keys: string[]): Promise<Map<string, T>>;
-  setMany(
-    entries: Map<string, unknown>,
-    opts?: { ttl?: number },
-  ): Promise<void>;
-  list(
-    prefix?: string,
-    opts?: { cursor?: string; limit?: number },
-  ): Promise<{
+  setMany(entries: Map<string, unknown>, opts?: { ttl?: number }): Promise<void>;
+  list(prefix?: string, opts?: { cursor?: string; limit?: number }): Promise<{
     items: Array<{ key: string; value: unknown }>;
-    cursor?: string; // opaque base64url; omitted on last page
+    cursor?: string;  // opaque base64url; omitted on last page
   }>;
 }
 ```
@@ -141,34 +129,25 @@ interface ContextState {
 
 ```ts
 // Store — accepts any serializable value, no manual JSON.stringify needed
-await ctx.state.set("item:123", { name: "Widget", count: 42 });
-await ctx.state.set("session:xyz", token, { ttl: 3600 }); // TTL in seconds
+await ctx.state.set('item:123', { name: 'Widget', count: 42 });
+await ctx.state.set('session:xyz', token, { ttl: 3600 }); // TTL in seconds
 
 // Retrieve — generic type assertion or Zod-validated
-const item = await ctx.state.get<Item>("item:123"); // T | null (type assertion)
-const safe = await ctx.state.get("item:123", ItemSchema); // T | null (runtime validated)
+const item = await ctx.state.get<Item>('item:123');       // T | null (type assertion)
+const safe = await ctx.state.get('item:123', ItemSchema);  // T | null (runtime validated)
 
 // Delete
-await ctx.state.delete("item:123");
+await ctx.state.delete('item:123');
 
 // Batch operations
-const values = await ctx.state.getMany<Item>(["item:1", "item:2"]); // Map<string, T>
-await ctx.state.setMany(
-  new Map([
-    ["a", 1],
-    ["b", 2],
-  ]),
-);
-const deleted = await ctx.state.deleteMany(["item:1", "item:2"]); // number
+const values = await ctx.state.getMany<Item>(['item:1', 'item:2']); // Map<string, T>
+await ctx.state.setMany(new Map([['a', 1], ['b', 2]]));
+const deleted = await ctx.state.deleteMany(['item:1', 'item:2']);    // number
 
 // List with prefix + pagination
-const page = await ctx.state.list("item:", { cursor, limit: 20 });
-for (const { key, value } of page.items) {
-  /* ... */
-}
-if (page.cursor) {
-  /* more pages available */
-}
+const page = await ctx.state.list('item:', { cursor, limit: 20 });
+for (const { key, value } of page.items) { /* ... */ }
+if (page.cursor) { /* more pages available */ }
 ```
 
 ### Behavior notes
@@ -190,25 +169,19 @@ Presents a form to the user via the MCP elicitation protocol. The user fills in 
 ```ts
 if (ctx.elicit) {
   const result = await ctx.elicit(
-    "Which output format do you want?",
+    'Which output format do you want?',
     z.object({
-      format: z.enum(["json", "csv", "markdown"]).describe("Output format"),
-      includeHeaders: z
-        .boolean()
-        .default(true)
-        .describe("Include column headers"),
+      format: z.enum(['json', 'csv', 'markdown']).describe('Output format'),
+      includeHeaders: z.boolean().default(true).describe('Include column headers'),
     }),
   );
 
-  if (result.action === "accept") {
+  if (result.action === 'accept') {
     // result.content is Record<string, string | number | boolean | string[]> | undefined
-    await produceOutput(
-      result.content?.format as string,
-      result.content?.includeHeaders as boolean,
-    );
+    await produceOutput(result.content?.format as string, result.content?.includeHeaders as boolean);
   } else {
     // 'decline' or 'cancel' — user opted out
-    throw new McpError(JsonRpcErrorCode.InvalidRequest, "User declined input");
+    throw invalidRequest('User declined input');
   }
 }
 ```
@@ -218,7 +191,7 @@ if (ctx.elicit) {
 ```ts
 // Actual SDK type — a flat object, not a discriminated union
 interface ElicitResult {
-  action: "accept" | "decline" | "cancel";
+  action: 'accept' | 'decline' | 'cancel';
   // Present when action === 'accept'; values are primitives or string arrays
   content?: Record<string, string | number | boolean | string[]>;
 }
@@ -235,7 +208,9 @@ Requests a completion from the client's LLM via the MCP sampling protocol. Usefu
 ```ts
 if (ctx.sample) {
   const result = await ctx.sample(
-    [{ role: "user", content: { type: "text", text: `Summarize: ${data}` } }],
+    [
+      { role: 'user', content: { type: 'text', text: `Summarize: ${data}` } },
+    ],
     { maxTokens: 500 },
   );
   return { summary: result.content.text };
@@ -246,7 +221,7 @@ if (ctx.sample) {
 
 ```ts
 interface SamplingOpts {
-  includeContext?: "none" | "thisServer" | "allServers";
+  includeContext?: 'none' | 'thisServer' | 'allServers';
   maxTokens?: number;
   modelPreferences?: Record<string, unknown>;
   stopSequences?: string[];
@@ -286,25 +261,25 @@ Present only when the tool definition includes `task: true`. Undefined for stand
 
 ### Methods
 
-| Method                            | Purpose                                                                  |
-| :-------------------------------- | :----------------------------------------------------------------------- |
-| `ctx.progress.setTotal(n)`        | Set the total number of steps (enables percentage calculation on client) |
-| `ctx.progress.increment(amount?)` | Advance progress by `amount` (default: 1)                                |
-| `ctx.progress.update(message)`    | Send a descriptive status message without advancing the counter          |
+| Method | Purpose |
+|:-------|:--------|
+| `ctx.progress.setTotal(n)` | Set the total number of steps (enables percentage calculation on client) |
+| `ctx.progress.increment(amount?)` | Advance progress by `amount` (default: 1) |
+| `ctx.progress.update(message)` | Send a descriptive status message without advancing the counter |
 
 ### Usage
 
 ```ts
-const asyncCountdown = tool("async_countdown", {
-  description: "Count down from a number with progress updates.",
+const asyncCountdown = tool('async_countdown', {
+  description: 'Count down from a number with progress updates.',
   task: true,
   input: z.object({
-    count: z.number().int().positive().describe("Number to count down from"),
-    delayMs: z.number().default(1000).describe("Delay between counts in ms"),
+    count: z.number().int().positive().describe('Number to count down from'),
+    delayMs: z.number().default(1000).describe('Delay between counts in ms'),
   }),
   output: z.object({
-    finalCount: z.number().describe("Final count value"),
-    message: z.string().describe("Completion message"),
+    finalCount: z.number().describe('Final count value'),
+    message: z.string().describe('Completion message'),
   }),
 
   async handler(input, ctx) {
@@ -314,11 +289,11 @@ const asyncCountdown = tool("async_countdown", {
       if (ctx.signal.aborted) break;
 
       await ctx.progress!.update(`Counting: ${i}`);
-      await new Promise((resolve) => setTimeout(resolve, input.delayMs));
+      await new Promise(resolve => setTimeout(resolve, input.delayMs));
       await ctx.progress!.increment();
     }
 
-    return { finalCount: 0, message: "Countdown complete" };
+    return { finalCount: 0, message: 'Countdown complete' };
   },
 });
 ```
@@ -332,9 +307,9 @@ const asyncCountdown = tool("async_countdown", {
 Present only for resource handlers. The raw `URL` object for the matched resource URI.
 
 ```ts
-export const myResource = resource("myscheme://{itemId}/data", {
+export const myResource = resource('myscheme://{itemId}/data', {
   async handler(params, ctx) {
-    ctx.log.debug("Resource accessed", { uri: ctx.uri?.toString() });
+    ctx.log.debug('Resource accessed', { uri: ctx.uri?.toString() });
     // params.itemId is extracted from the URI pattern — prefer params over ctx.uri
     return fetchItem(params.itemId);
   },
@@ -347,18 +322,18 @@ Prefer `params` (the extracted URI template variables) over parsing `ctx.uri` ma
 
 ## Quick reference
 
-| Property        | Type                           | Present when                                  |
-| :-------------- | :----------------------------- | :-------------------------------------------- |
-| `ctx.requestId` | `string`                       | Always                                        |
-| `ctx.timestamp` | `string`                       | Always                                        |
-| `ctx.tenantId`  | `string \| undefined`          | Always in stdio (`'default'`); HTTP with auth |
-| `ctx.traceId`   | `string \| undefined`          | OTEL enabled                                  |
-| `ctx.spanId`    | `string \| undefined`          | OTEL enabled                                  |
-| `ctx.auth`      | `AuthContext \| undefined`     | Auth enabled                                  |
-| `ctx.log`       | `ContextLogger`                | Always                                        |
-| `ctx.state`     | `ContextState`                 | Always (throws if `tenantId` missing)         |
-| `ctx.signal`    | `AbortSignal`                  | Always                                        |
-| `ctx.elicit`    | `function \| undefined`        | Client supports elicitation                   |
-| `ctx.sample`    | `function \| undefined`        | Client supports sampling                      |
-| `ctx.progress`  | `ContextProgress \| undefined` | Tool defined with `task: true`                |
-| `ctx.uri`       | `URL \| undefined`             | Resource handlers only                        |
+| Property | Type | Present when |
+|:---------|:-----|:-------------|
+| `ctx.requestId` | `string` | Always |
+| `ctx.timestamp` | `string` | Always |
+| `ctx.tenantId` | `string \| undefined` | Always in stdio (`'default'`); HTTP with auth |
+| `ctx.traceId` | `string \| undefined` | OTEL enabled |
+| `ctx.spanId` | `string \| undefined` | OTEL enabled |
+| `ctx.auth` | `AuthContext \| undefined` | Auth enabled |
+| `ctx.log` | `ContextLogger` | Always |
+| `ctx.state` | `ContextState` | Always (throws if `tenantId` missing) |
+| `ctx.signal` | `AbortSignal` | Always |
+| `ctx.elicit` | `function \| undefined` | Client supports elicitation |
+| `ctx.sample` | `function \| undefined` | Client supports sampling |
+| `ctx.progress` | `ContextProgress \| undefined` | Tool defined with `task: true` |
+| `ctx.uri` | `URL \| undefined` | Resource handlers only |

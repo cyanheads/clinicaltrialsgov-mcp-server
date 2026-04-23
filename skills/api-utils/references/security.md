@@ -1,14 +1,7 @@
 # Security Utilities (`utils/security`)
 
 ```ts
-import {
-  sanitization,
-  RateLimiter,
-  IdGenerator,
-  idGenerator,
-  generateUUID,
-  generateRequestContextId,
-} from "@cyanheads/mcp-ts-core/utils";
+import { sanitization, RateLimiter, IdGenerator, idGenerator, generateUUID, generateRequestContextId } from '@cyanheads/mcp-ts-core/utils';
 ```
 
 ---
@@ -19,38 +12,38 @@ Pre-constructed singleton of `Sanitization`. Tier 3 peers: `sanitize-html`, `val
 
 ### Methods
 
-| Method                   | Async  | Peer dep                      | Signature                                       |
-| :----------------------- | :----- | :---------------------------- | :---------------------------------------------- |
-| `sanitizeHtml`           | yes    | `sanitize-html`               | `(input, config?) -> Promise<string>`           |
-| `sanitizeString`         | yes    | `sanitize-html` / `validator` | `(input, options?) -> Promise<string>`          |
-| `sanitizeUrl`            | yes    | `validator`                   | `(input, allowedProtocols?) -> Promise<string>` |
-| `sanitizeNumber`         | yes    | `validator` (string input)    | `(input, min?, max?) -> Promise<number>`        |
-| `sanitizePath`           | **no** | Node.js only                  | `(input, options?) -> SanitizedPathInfo`        |
-| `sanitizeJson`           | **no** | none                          | `<T>(input, maxSize?) -> T`                     |
-| `sanitizeForLogging`     | **no** | none                          | `(input) -> unknown`                            |
-| `redactSensitiveFields`  | **no** | none                          | `(data, fields?, ctx?) -> unknown`              |
-| `getSensitivePinoFields` | **no** | none                          | `() -> string[]`                                |
+| Method | Async | Peer dep | Signature |
+|:-------|:------|:---------|:----------|
+| `sanitizeHtml` | yes | `sanitize-html` | `(input, config?) -> Promise<string>` |
+| `sanitizeString` | yes | `sanitize-html` / `validator` | `(input, options?) -> Promise<string>` |
+| `sanitizeUrl` | yes | `validator` | `(input, allowedProtocols?) -> Promise<string>` |
+| `sanitizeNumber` | yes | `validator` (string input) | `(input, min?, max?) -> Promise<number>` |
+| `sanitizePath` | **no** | Node.js only | `(input, options?) -> SanitizedPathInfo` |
+| `sanitizeJson` | **no** | none | `<T>(input, maxSize?) -> T` |
+| `sanitizeForLogging` | **no** | none | `(input) -> unknown` |
+| `redactSensitiveFields` | **no** | none | `(data, fields?, ctx?) -> unknown` |
+| `getSensitivePinoFields` | **no** | none | `() -> string[]` |
 
 ### Option types
 
 ```ts
 interface HtmlSanitizeConfig {
   allowedTags?: string[];
-  allowedAttributes?: sanitizeHtml.IOptions["allowedAttributes"];
+  allowedAttributes?: sanitizeHtml.IOptions['allowedAttributes'];
   preserveComments?: boolean;
-  transformTags?: sanitizeHtml.IOptions["transformTags"];
+  transformTags?: sanitizeHtml.IOptions['transformTags'];
 }
 
 interface SanitizeStringOptions {
-  context?: "text" | "html" | "attribute" | "url" | "javascript"; // default: 'text'
-  allowedTags?: string[]; // only used when context: 'html'
-  allowedAttributes?: Record<string, string[]>; // only used when context: 'html'
+  context?: 'text' | 'html' | 'attribute' | 'url' | 'javascript';  // default: 'text'
+  allowedTags?: string[];          // only used when context: 'html'
+  allowedAttributes?: Record<string, string[]>;  // only used when context: 'html'
 }
 
 interface PathSanitizeOptions {
-  allowAbsolute?: boolean; // default: false
-  rootDir?: string; // resolved via path.resolve before use
-  toPosix?: boolean; // normalize backslashes to /
+  allowAbsolute?: boolean;  // default: false
+  rootDir?: string;         // resolved via path.resolve before use
+  toPosix?: boolean;        // normalize backslashes to /
 }
 
 interface SanitizedPathInfo {
@@ -83,32 +76,22 @@ Manage with `setSensitiveFields(fields)` (merges, deduped, lowercased) and `getS
 ```ts
 // HTML sanitization
 const clean = await sanitization.sanitizeHtml(userHtml, {
-  allowedTags: ["p", "b", "i", "a"],
-  allowedAttributes: { a: ["href"] },
+  allowedTags: ['p', 'b', 'i', 'a'],
+  allowedAttributes: { a: ['href'] },
 });
 
 // URL validation
-const safeUrl = await sanitization.sanitizeUrl(userUrl, [
-  "http",
-  "https",
-  "mailto",
-]);
+const safeUrl = await sanitization.sanitizeUrl(userUrl, ['http', 'https', 'mailto']);
 
 // Path sanitization (Node-only)
-const info = sanitization.sanitizePath(userPath, {
-  rootDir: "/app/data",
-  allowAbsolute: false,
-});
+const info = sanitization.sanitizePath(userPath, { rootDir: '/app/data', allowAbsolute: false });
 // info.sanitizedPath is safe to use in fs operations
 
 // JSON with size limit
 const data = sanitization.sanitizeJson<Config>(rawJson, 1024 * 1024); // 1MB max
 
 // Logging redaction
-const safe = sanitization.sanitizeForLogging({
-  password: "secret",
-  name: "Alice",
-});
+const safe = sanitization.sanitizeForLogging({ password: 'secret', name: 'Alice' });
 // { password: '[REDACTED]', name: 'Alice' }
 ```
 
@@ -132,12 +115,12 @@ Reads initial settings from `AppConfig`. Call `configure()` to override at runti
 
 ```ts
 interface RateLimitConfig {
-  maxRequests: number; // required
-  windowMs: number; // required, in milliseconds
-  cleanupInterval?: number; // ms between expired entry purges
-  maxTrackedKeys?: number; // default 10,000; LRU eviction beyond this
-  skipInDevelopment?: boolean; // skips limiting when environment === 'development'
-  errorMessage?: string; // supports {waitTime} placeholder
+  maxRequests: number;            // required
+  windowMs: number;               // required, in milliseconds
+  cleanupInterval?: number;       // ms between expired entry purges
+  maxTrackedKeys?: number;        // default 10,000; LRU eviction beyond this
+  skipInDevelopment?: boolean;    // skips limiting when environment === 'development'
+  errorMessage?: string;          // supports {waitTime} placeholder
   keyGenerator?: (identifier: string, context?: RequestContext) => string;
 }
 ```
@@ -146,14 +129,14 @@ Defaults: `windowMs` 15 min, `maxRequests` 100, `cleanupInterval` 5 min, `maxTra
 
 ### Methods
 
-| Method      | Signature                                                   | Notes                                                                                                                          |
-| :---------- | :---------------------------------------------------------- | :----------------------------------------------------------------------------------------------------------------------------- |
-| `configure` | `(config: Partial<RateLimitConfig>) -> void`                | Merges partial config; restarts cleanup timer if `cleanupInterval` changed                                                     |
-| `check`     | `(key, context?) -> void`                                   | Throws `McpError(RateLimited)` with data `{ waitTimeSeconds, key, limit, windowMs }` when exceeded; annotates active OTEL span |
-| `getStatus` | `(key) -> { current, limit, remaining, resetTime } \| null` | Does NOT apply `keyGenerator` — pass the already-resolved key                                                                  |
-| `getConfig` | `() -> RateLimitConfig`                                     | Shallow copy of effective config                                                                                               |
-| `reset`     | `() -> void`                                                | Clears all tracked entries (no per-key reset)                                                                                  |
-| `dispose`   | `() -> void`                                                | Stops cleanup timer and clears all entries; call on shutdown                                                                   |
+| Method | Signature | Notes |
+|:-------|:----------|:------|
+| `configure` | `(config: Partial<RateLimitConfig>) -> void` | Merges partial config; restarts cleanup timer if `cleanupInterval` changed |
+| `check` | `(key, context?) -> void` | Throws `McpError(RateLimited)` with data `{ waitTimeSeconds, key, limit, windowMs }` when exceeded; annotates active OTEL span |
+| `getStatus` | `(key) -> { current, limit, remaining, resetTime } \| null` | Does NOT apply `keyGenerator` — pass the already-resolved key |
+| `getConfig` | `() -> RateLimitConfig` | Shallow copy of effective config |
+| `reset` | `() -> void` | Clears all tracked entries (no per-key reset) |
+| `dispose` | `() -> void` | Stops cleanup timer and clears all entries; call on shutdown |
 
 ### Usage
 
@@ -162,11 +145,9 @@ Defaults: `windowMs` 15 min, `maxRequests` 100, `cleanupInterval` 5 min, `maxTra
 rateLimiter.check(`api:${ctx.tenantId}`, ctx);
 
 // Check status without consuming a request
-const status = rateLimiter.getStatus("api:tenant-123");
+const status = rateLimiter.getStatus('api:tenant-123');
 if (status) {
-  console.log(
-    `${status.remaining} requests left, resets at ${new Date(status.resetTime)}`,
-  );
+  logger.info(`${status.remaining} requests left, resets at ${new Date(status.resetTime)}`);
 }
 
 // Runtime reconfiguration
@@ -194,48 +175,48 @@ new IdGenerator(entityPrefixes?: EntityPrefixConfig)
 
 ```ts
 interface EntityPrefixConfig {
-  [key: string]: string; // entityType -> prefix, e.g. { project: 'PROJ', task: 'TASK' }
+  [key: string]: string;  // entityType -> prefix, e.g. { project: 'PROJ', task: 'TASK' }
 }
 
 interface IdGenerationOptions {
-  charset?: string; // default: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
-  length?: number; // default: 6 (random part length)
-  separator?: string; // default: '_'
+  charset?: string;    // default: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+  length?: number;     // default: 6 (random part length)
+  separator?: string;  // default: '_'
 }
 ```
 
 ### Methods
 
-| Method                 | Signature                               | Notes                                                                           |
-| :--------------------- | :-------------------------------------- | :------------------------------------------------------------------------------ |
-| `generate`             | `(prefix?, options?) -> string`         | `PREFIX_XXXXXX` or just `XXXXXX` if no prefix                                   |
-| `generateForEntity`    | `(entityType, options?) -> string`      | Uses registered prefix; throws `McpError(ValidationError)` if type unknown      |
-| `generateRandomString` | `(length?, charset?) -> string`         | Raw random string; defaults: length 6, charset `A-Z0-9`                         |
-| `isValid`              | `(id, entityType, options?) -> boolean` | Regex-validates format against prefix + separator + charset{length}             |
-| `getEntityType`        | `(id, separator?) -> string`            | Resolves entity type from prefix; throws `McpError(ValidationError)` if unknown |
-| `normalize`            | `(id, separator?) -> string`            | Canonical prefix casing + uppercase random part                                 |
-| `stripPrefix`          | `(id, separator?) -> string`            | Returns random part; returns original if separator not found                    |
-| `setEntityPrefixes`    | `(config) -> void`                      | Replaces all prefixes and rebuilds reverse lookup                               |
-| `getEntityPrefixes`    | `() -> EntityPrefixConfig`              | Copy of current config                                                          |
+| Method | Signature | Notes |
+|:-------|:----------|:------|
+| `generate` | `(prefix?, options?) -> string` | `PREFIX_XXXXXX` or just `XXXXXX` if no prefix |
+| `generateForEntity` | `(entityType, options?) -> string` | Uses registered prefix; throws `McpError(ValidationError)` if type unknown |
+| `generateRandomString` | `(length?, charset?) -> string` | Raw random string; defaults: length 6, charset `A-Z0-9` |
+| `isValid` | `(id, entityType, options?) -> boolean` | Regex-validates format against prefix + separator + charset{length} |
+| `getEntityType` | `(id, separator?) -> string` | Resolves entity type from prefix; throws `McpError(ValidationError)` if unknown |
+| `normalize` | `(id, separator?) -> string` | Canonical prefix casing + uppercase random part |
+| `stripPrefix` | `(id, separator?) -> string` | Returns random part; returns original if separator not found |
+| `setEntityPrefixes` | `(config) -> void` | Replaces all prefixes and rebuilds reverse lookup |
+| `getEntityPrefixes` | `() -> EntityPrefixConfig` | Copy of current config |
 
 ### Standalone exports
 
-| Export                       | Returns  | Notes                                                  |
-| :--------------------------- | :------- | :----------------------------------------------------- |
-| `generateUUID()`             | `string` | `crypto.randomUUID()` — UUID v4                        |
+| Export | Returns | Notes |
+|:-------|:--------|:------|
+| `generateUUID()` | `string` | `crypto.randomUUID()` — UUID v4 |
 | `generateRequestContextId()` | `string` | `XXXXX-XXXXX` format (5+5 alphanumeric, hyphen-joined) |
 
 ### Usage
 
 ```ts
 // Simple ID with prefix
-const id = idGenerator.generate("PROJ"); // 'PROJ_A7K2M9'
+const id = idGenerator.generate('PROJ'); // 'PROJ_A7K2M9'
 
 // Entity-based generation
-const gen = new IdGenerator({ project: "PROJ", task: "TASK" });
-const taskId = gen.generateForEntity("task"); // 'TASK_X3B8P1'
-const valid = gen.isValid("TASK_X3B8P1", "task"); // true
-const type = gen.getEntityType("TASK_X3B8P1"); // 'task'
+const gen = new IdGenerator({ project: 'PROJ', task: 'TASK' });
+const taskId = gen.generateForEntity('task'); // 'TASK_X3B8P1'
+const valid = gen.isValid('TASK_X3B8P1', 'task'); // true
+const type = gen.getEntityType('TASK_X3B8P1'); // 'task'
 
 // Raw random string
 const token = idGenerator.generateRandomString(32); // 32-char alphanumeric

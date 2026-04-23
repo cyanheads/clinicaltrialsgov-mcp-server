@@ -8,6 +8,7 @@ import {
   JsonRpcErrorCode,
   McpError,
   notFound,
+  rateLimited,
   serviceUnavailable,
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
@@ -254,11 +255,10 @@ export class ClinicalTrialsService {
     }
 
     if (lastStatus === 429) {
-      throw new McpError(
-        JsonRpcErrorCode.RateLimited,
-        `Rate limited by ClinicalTrials.gov after ${this.maxRetries} retries`,
-        { path, lastError: String(lastError) },
-      );
+      throw rateLimited(`Rate limited by ClinicalTrials.gov after ${this.maxRetries} retries`, {
+        path,
+        lastError: String(lastError),
+      });
     }
     throw serviceUnavailable('ClinicalTrials.gov API unavailable after retries', {
       path,

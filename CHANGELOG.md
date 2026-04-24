@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.4.1](changelog/2.4.x/2.4.1.md) — 2026-04-24
+
+Bump @cyanheads/mcp-ts-core 0.6.17 → 0.7.0, resync 5 skills and 2 framework scripts, adopt expanded CLAUDE.md/AGENTS.md checklist and Changelog/Agent-skill-dir callouts
+
 ## [2.4.0](changelog/2.4.x/2.4.0.md) — 2026-04-24 · ⚠️ Breaking
 
 Uppercase `find_eligible.sex` enum (breaking); specific offending-field error on field-values 404; directory-based changelog; new `security-pass` skill; framework 0.6.17

@@ -54,13 +54,19 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     titleQuery: z.string().optional().describe('Search within study titles and acronyms only.'),
     outcomeQuery: z.string().optional().describe('Search within outcome measure fields.'),
     statusFilter: z
-      .union([z.string(), z.array(z.string())])
+      .union([
+        z.string().describe('A single status value.'),
+        z.array(z.string()).describe('Multiple status values (OR).'),
+      ])
       .optional()
       .describe(
         `Filter by study status. Values: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, NOT_YET_RECRUITING, ENROLLING_BY_INVITATION, SUSPENDED, TERMINATED, WITHDRAWN, UNKNOWN, WITHHELD, NO_LONGER_AVAILABLE, AVAILABLE, APPROVED_FOR_MARKETING, TEMPORARILY_NOT_AVAILABLE.`,
       ),
     phaseFilter: z
-      .union([z.string(), z.array(z.string())])
+      .union([
+        z.string().describe('A single phase value.'),
+        z.array(z.string()).describe('Multiple phase values (OR).'),
+      ])
       .optional()
       .describe('Filter by trial phase. Values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA.'),
     advancedFilter: z
@@ -76,7 +82,10 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         `Geographic proximity filter. Format: distance(lat,lon,radius). E.g., "distance(47.6062,-122.3321,50mi)" for studies within 50 miles of Seattle.`,
       ),
     nctIds: z
-      .union([nctIdSchema, z.array(nctIdSchema)])
+      .union([
+        nctIdSchema.describe('A single NCT ID.'),
+        z.array(nctIdSchema).describe('Multiple NCT IDs (OR).'),
+      ])
       .optional()
       .describe('Filter to specific NCT IDs for batch lookups.'),
     fields: z

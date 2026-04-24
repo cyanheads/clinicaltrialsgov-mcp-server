@@ -56,19 +56,24 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
   output: z.object({
     fields: z
       .array(
-        z.object({
-          name: z.string().describe('Field name (camelCase).'),
-          piece: z.string().optional().describe('PascalCase piece name for fields/AREA[] params.'),
-          sourceType: z.string().optional().describe('Data type in the model.'),
-          type: z.string().optional().describe('Semantic type.'),
-          isEnum: z.boolean().optional().describe('Whether the field is an enum type.'),
-          description: z.string().optional().describe('Field description.'),
-          path: z.string().optional().describe('Full dot-notation path.'),
-          children: z
-            .array(z.record(z.string(), z.unknown()))
-            .optional()
-            .describe('Child fields (top-level overview only).'),
-        }),
+        z
+          .object({
+            name: z.string().describe('Field name (camelCase).'),
+            piece: z
+              .string()
+              .optional()
+              .describe('PascalCase piece name for fields/AREA[] params.'),
+            sourceType: z.string().optional().describe('Data type in the model.'),
+            type: z.string().optional().describe('Semantic type.'),
+            isEnum: z.boolean().optional().describe('Whether the field is an enum type.'),
+            description: z.string().optional().describe('Field description.'),
+            path: z.string().optional().describe('Full dot-notation path.'),
+            children: z
+              .array(z.record(z.string(), z.unknown()))
+              .optional()
+              .describe('Child fields (top-level overview only).'),
+          })
+          .describe('A single field definition node.'),
       )
       .describe('Field definitions.'),
     totalFields: z.number().describe('Total fields returned.'),

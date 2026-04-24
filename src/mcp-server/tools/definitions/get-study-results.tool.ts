@@ -312,12 +312,18 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
 
   input: z.object({
     nctIds: z
-      .union([nctIdSchema, z.array(nctIdSchema).min(1).max(20)])
+      .union([
+        nctIdSchema.describe('A single NCT ID.'),
+        z.array(nctIdSchema).min(1).max(20).describe('Multiple NCT IDs (max 20).'),
+      ])
       .describe(
         'One or more NCT IDs (max 20). E.g., "NCT12345678" or ["NCT12345678", "NCT87654321"]. Use summary=true for large batches to avoid large payloads.',
       ),
     sections: z
-      .union([z.enum(VALID_SECTIONS), z.array(z.enum(VALID_SECTIONS))])
+      .union([
+        z.enum(VALID_SECTIONS).describe('A single section name.'),
+        z.array(z.enum(VALID_SECTIONS)).describe('Multiple section names.'),
+      ])
       .optional()
       .describe(
         `Filter which sections to return. Values: outcomes, adverseEvents, participantFlow, baseline. Omit for all sections.`,
@@ -333,27 +339,29 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
   output: z.object({
     results: z
       .array(
-        z.object({
-          nctId: z.string().describe('NCT identifier.'),
-          title: z.string().describe('Study title.'),
-          hasResults: z.boolean().describe('Whether study has posted results.'),
-          outcomes: z
-            .array(z.record(z.string(), z.unknown()))
-            .optional()
-            .describe('Outcome measures with statistics.'),
-          adverseEvents: z
-            .record(z.string(), z.unknown())
-            .optional()
-            .describe('Adverse events data.'),
-          participantFlow: z
-            .record(z.string(), z.unknown())
-            .optional()
-            .describe('Participant flow data.'),
-          baseline: z
-            .record(z.string(), z.unknown())
-            .optional()
-            .describe('Baseline characteristics.'),
-        }),
+        z
+          .object({
+            nctId: z.string().describe('NCT identifier.'),
+            title: z.string().describe('Study title.'),
+            hasResults: z.boolean().describe('Whether study has posted results.'),
+            outcomes: z
+              .array(z.record(z.string(), z.unknown()))
+              .optional()
+              .describe('Outcome measures with statistics.'),
+            adverseEvents: z
+              .record(z.string(), z.unknown())
+              .optional()
+              .describe('Adverse events data.'),
+            participantFlow: z
+              .record(z.string(), z.unknown())
+              .optional()
+              .describe('Participant flow data.'),
+            baseline: z
+              .record(z.string(), z.unknown())
+              .optional()
+              .describe('Baseline characteristics.'),
+          })
+          .describe('Extracted results for one study.'),
       )
       .describe('Results per study.'),
     studiesWithoutResults: z
@@ -362,10 +370,12 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       .describe('NCT IDs that do not have results data.'),
     fetchErrors: z
       .array(
-        z.object({
-          nctId: z.string().describe('NCT ID.'),
-          error: z.string().describe('Error message.'),
-        }),
+        z
+          .object({
+            nctId: z.string().describe('NCT ID.'),
+            error: z.string().describe('Error message.'),
+          })
+          .describe('A single fetch error.'),
       )
       .optional()
       .describe('Studies that could not be fetched.'),

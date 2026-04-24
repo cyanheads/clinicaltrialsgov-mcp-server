@@ -31,13 +31,19 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       ),
     sponsorQuery: z.string().optional().describe('Sponsor/collaborator name search.'),
     statusFilter: z
-      .union([z.string(), z.array(z.string())])
+      .union([
+        z.string().describe('A single status value.'),
+        z.array(z.string()).describe('Multiple status values (OR).'),
+      ])
       .optional()
       .describe(
         `Filter by study status. Values: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, NOT_YET_RECRUITING, ENROLLING_BY_INVITATION, SUSPENDED, TERMINATED, WITHDRAWN, UNKNOWN, WITHHELD, NO_LONGER_AVAILABLE, AVAILABLE, APPROVED_FOR_MARKETING, TEMPORARILY_NOT_AVAILABLE.`,
       ),
     phaseFilter: z
-      .union([z.string(), z.array(z.string())])
+      .union([
+        z.string().describe('A single phase value.'),
+        z.array(z.string()).describe('Multiple phase values (OR).'),
+      ])
       .optional()
       .describe('Filter by trial phase. Values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA.'),
     advancedFilter: z

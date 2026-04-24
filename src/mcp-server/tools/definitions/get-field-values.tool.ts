@@ -16,7 +16,10 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
 
   input: z.object({
     fields: z
-      .union([z.string(), z.array(z.string())])
+      .union([
+        z.string().describe('A single PascalCase piece name.'),
+        z.array(z.string()).describe('Multiple PascalCase piece names.'),
+      ])
       .describe(
         `PascalCase piece name(s) to get values for. Common fields: OverallStatus, Phase, StudyType, InterventionType, LeadSponsorClass, Sex, StdAge, DesignAllocation, DesignPrimaryPurpose, DesignMasking.`,
       ),
@@ -25,37 +28,41 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
   output: z.object({
     fieldStats: z
       .array(
-        z.object({
-          field: z.string().describe('Full dot-notation field path.'),
-          piece: z.string().describe('PascalCase piece name.'),
-          type: z.string().describe('Field data type (ENUM, BOOLEAN, STRING, DATE, etc.).'),
-          missingStudiesCount: z
-            .number()
-            .optional()
-            .describe('Number of studies where this field is absent.'),
-          // ENUM / STRING fields
-          uniqueValuesCount: z.number().optional().describe('Number of distinct values.'),
-          topValues: z
-            .array(
-              z.object({
-                value: z.string().describe('Field value.'),
-                studiesCount: z.number().describe('Number of studies with this value.'),
-              }),
-            )
-            .optional()
-            .describe(
-              'Values ranked by frequency (capped at 250 by the API). Present for ENUM/STRING fields.',
-            ),
-          // BOOLEAN fields
-          trueCount: z
-            .number()
-            .optional()
-            .describe('Studies where field is true. Present for BOOLEAN fields.'),
-          falseCount: z
-            .number()
-            .optional()
-            .describe('Studies where field is false. Present for BOOLEAN fields.'),
-        }),
+        z
+          .object({
+            field: z.string().describe('Full dot-notation field path.'),
+            piece: z.string().describe('PascalCase piece name.'),
+            type: z.string().describe('Field data type (ENUM, BOOLEAN, STRING, DATE, etc.).'),
+            missingStudiesCount: z
+              .number()
+              .optional()
+              .describe('Number of studies where this field is absent.'),
+            // ENUM / STRING fields
+            uniqueValuesCount: z.number().optional().describe('Number of distinct values.'),
+            topValues: z
+              .array(
+                z
+                  .object({
+                    value: z.string().describe('Field value.'),
+                    studiesCount: z.number().describe('Number of studies with this value.'),
+                  })
+                  .describe('A value and its study count.'),
+              )
+              .optional()
+              .describe(
+                'Values ranked by frequency (capped at 250 by the API). Present for ENUM/STRING fields.',
+              ),
+            // BOOLEAN fields
+            trueCount: z
+              .number()
+              .optional()
+              .describe('Studies where field is true. Present for BOOLEAN fields.'),
+            falseCount: z
+              .number()
+              .optional()
+              .describe('Studies where field is false. Present for BOOLEAN fields.'),
+          })
+          .describe('Statistics for a single requested field.'),
       )
       .describe('Statistics per requested field.'),
   }),

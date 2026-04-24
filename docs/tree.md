@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-04-23 15:38:33
+Generated on: 2026-04-24 14:00:20
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -16,6 +16,13 @@ clinicaltrialsgov-mcp-server/
 ├── .vscode/
 │   ├── extensions.json
 │   └── settings.json
+├── changelog/
+│   ├── 2.0.x/
+│   ├── 2.1.x/
+│   ├── 2.2.x/
+│   ├── 2.3.x/
+│   ├── 2.4.x/
+│   └── template.md
 ├── changelogs/
 │   └── archive1.md
 ├── claude-plans/
@@ -23,8 +30,10 @@ clinicaltrialsgov-mcp-server/
 │   ├── api-reference.md
 │   └── design.md
 ├── scripts/
+│   ├── build-changelog.ts
 │   ├── build.ts
 │   ├── check-docs-sync.ts
+│   ├── check-skills-sync.ts
 │   ├── clean.ts
 │   ├── devcheck.ts
 │   ├── lint-mcp.ts
@@ -90,6 +99,8 @@ clinicaltrialsgov-mcp-server/
 │   ├── report-issue-framework/
 │   │   └── SKILL.md
 │   ├── report-issue-local/
+│   │   └── SKILL.md
+│   ├── security-pass/
 │   │   └── SKILL.md
 │   └── setup/
 │       └── SKILL.md

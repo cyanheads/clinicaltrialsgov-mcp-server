@@ -58,9 +58,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
   input: z.object({
     age: z.number().int().min(0).max(120).describe('Patient age in years.'),
     sex: z
-      .enum(['Female', 'Male', 'All'])
+      .enum(['FEMALE', 'MALE', 'ALL'])
       .describe(
-        "Patient's biological sex. Use 'All' to include studies regardless of sex restrictions.",
+        "Patient's biological sex. Use 'ALL' to include studies regardless of sex restrictions.",
       ),
     conditions: z
       .array(z.string())
@@ -122,8 +122,8 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       `AREA[MinimumAge]RANGE[MIN, ${input.age} years]`,
       `AREA[MaximumAge]RANGE[${input.age} years, MAX]`,
     ];
-    if (input.sex !== 'All') {
-      advancedParts.push(`(AREA[Sex]ALL OR AREA[Sex]${input.sex.toUpperCase()})`);
+    if (input.sex !== 'ALL') {
+      advancedParts.push(`(AREA[Sex]ALL OR AREA[Sex]${input.sex})`);
     }
     if (input.healthyVolunteer) {
       advancedParts.push('AREA[HealthyVolunteers]true');
@@ -163,8 +163,8 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         noMatchHints.push(
           `Age ${input.age} is at the extreme of typical trial ranges. Few trials enroll this age group.`,
         );
-      if (input.sex !== 'All')
-        noMatchHints.push('Try sex="All" to include studies not restricted by sex.');
+      if (input.sex !== 'ALL')
+        noMatchHints.push('Try sex="ALL" to include studies not restricted by sex.');
       if (input.healthyVolunteer)
         noMatchHints.push(
           'Many studies do not accept healthy volunteers. Set healthyVolunteer=false if the patient has a relevant condition.',

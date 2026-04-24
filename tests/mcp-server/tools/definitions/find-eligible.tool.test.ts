@@ -18,7 +18,7 @@ import { findEligible } from '@/mcp-server/tools/definitions/find-eligible.tool.
 
 const baseInput = {
   age: 30,
-  sex: 'All' as const,
+  sex: 'ALL' as const,
   conditions: ['Type 2 Diabetes'],
   location: { country: 'United States', state: 'Washington', city: 'Seattle' },
 };
@@ -51,7 +51,7 @@ describe('findEligible', () => {
     });
 
     it('accepts all valid sex values', () => {
-      for (const sex of ['Female', 'Male', 'All'] as const) {
+      for (const sex of ['FEMALE', 'MALE', 'ALL'] as const) {
         expect(() => findEligible.input!.parse({ ...baseInput, sex })).not.toThrow();
       }
     });
@@ -176,7 +176,7 @@ describe('findEligible', () => {
     it('includes sex filter in advancedFilter when sex is not All', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      await findEligible.handler(findEligible.input!.parse({ ...baseInput, sex: 'Female' }), ctx);
+      await findEligible.handler(findEligible.input!.parse({ ...baseInput, sex: 'FEMALE' }), ctx);
 
       const call = mockService.searchStudies.mock.calls[0]![0];
       expect(call.filterAdvanced).toContain('AREA[Sex]ALL OR AREA[Sex]FEMALE');
@@ -246,7 +246,7 @@ describe('findEligible', () => {
         conditions: ['Type 2 Diabetes'],
         location: 'Seattle, Washington, United States',
         age: 30,
-        sex: 'All',
+        sex: 'ALL',
       });
     });
 
@@ -274,11 +274,11 @@ describe('findEligible', () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       const result = await findEligible.handler(
-        findEligible.input!.parse({ ...baseInput, sex: 'Male' }),
+        findEligible.input!.parse({ ...baseInput, sex: 'MALE' }),
         ctx,
       );
 
-      expect(result.noMatchHints!.some((h: string) => h.includes('sex="All"'))).toBe(true);
+      expect(result.noMatchHints!.some((h: string) => h.includes('sex="ALL"'))).toBe(true);
     });
 
     it('hints about healthy volunteer restriction', async () => {
@@ -339,7 +339,7 @@ describe('findEligible', () => {
           },
         ],
         totalCount: 1,
-        searchCriteria: { conditions: ['Diabetes'], location: 'US', age: 30, sex: 'All' },
+        searchCriteria: { conditions: ['Diabetes'], location: 'US', age: 30, sex: 'ALL' },
       });
       const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('Found 1 eligible studies');
@@ -367,7 +367,7 @@ describe('findEligible', () => {
           },
         ],
         totalCount: 1,
-        searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'All' },
+        searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'ALL' },
       });
       expect((blocks[0] as { text: string }).text).toContain('Hospital A');
       expect((blocks[0] as { text: string }).text).toContain('Locations:');
@@ -389,7 +389,7 @@ describe('findEligible', () => {
           },
         ],
         totalCount: 1,
-        searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'All' },
+        searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'ALL' },
       });
       expect((blocks[0] as { text: string }).text).toContain('Contact:');
       expect((blocks[0] as { text: string }).text).toContain('Dr. Smith');
@@ -399,7 +399,7 @@ describe('findEligible', () => {
       const blocks = findEligible.format!({
         studies: [],
         totalCount: 0,
-        searchCriteria: { conditions: ['Rare'], location: 'US', age: 30, sex: 'All' },
+        searchCriteria: { conditions: ['Rare'], location: 'US', age: 30, sex: 'ALL' },
         noMatchHints: ['No studies found', 'Try broader terms'],
       });
       expect((blocks[0] as { text: string }).text).toContain('No eligible studies found');
@@ -413,7 +413,7 @@ describe('findEligible', () => {
           { protocolSection: { identificationModule: { nctId: 'NCT00000001', briefTitle: 'A' } } },
         ],
         totalCount: 50,
-        searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'All' },
+        searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'ALL' },
       });
       expect((blocks[0] as { text: string }).text).toContain('50 eligible studies (showing 1)');
     });

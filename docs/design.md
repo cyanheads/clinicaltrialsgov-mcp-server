@@ -10,7 +10,7 @@
 | `clinicaltrials_get_study_results` | Extract outcomes, adverse events, participant flow, and baseline characteristics for completed studies with results.                                              | `nctIds`, `sections`                                                                                                                                                                     | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_get_field_values`  | Discover valid values for any ClinicalTrials.gov field with study counts per value. Use before constructing searches to find valid filter options.                | `fields`                                                                                                                                                                                 | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_get_study_count`   | Get total study count matching a query without fetching study data. Use for quick stats and building breakdowns by calling multiple times with different filters. | `query`, `conditionQuery`, `interventionQuery`, `statusFilter`, `phaseFilter`, `advancedFilter`                                                                                          | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
-| `clinicaltrials_get_field_definitions` | Get field definitions from the study data model — piece names, types, nesting. For discovering available fields and AREA[] filter targets.                   | `path`, `search`, `includeIndexedOnly`                                                                                                                                                   | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
+| `clinicaltrials_get_field_definitions` | Get field definitions from the study data model — piece names, types, nesting. For discovering available fields and AREA[] filter targets.                   | `path`, `includeIndexedOnly`                                                                                                                                                             | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_find_eligible`     | Match patient demographics to recruiting clinical trials. Builds optimized API queries from a patient profile and returns studies with eligibility/location fields. | `age`, `sex`, `conditions`, `location`, `healthyVolunteer`, `recruitingOnly`, `maxResults`                                                                                               | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 
 ### Resources
@@ -169,7 +169,7 @@ InterventionType, StudyType, or LeadSponsorClass values.
 
 ### 4. `clinicaltrials_get_field_definitions`
 
-Discovery tool for the study data model. Wraps `GET /studies/metadata`. Supports subtree browsing via `path` and keyword search via `search`.
+Discovery tool for the study data model. Wraps `GET /studies/metadata`. Supports top-level overview and subtree browsing via `path`.
 
 **Description:**
 
@@ -185,7 +185,6 @@ names for AREA[] filter expressions, or explore the study data model structure.
 | Parameter          | Type        | Description                                                                                                                                                           |
 | :----------------- | :---------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `path`             | `string?`   | Dot-notation path to get a subtree (e.g., `"protocolSection.designModule"`). Omit for top-level overview (sections + direct children, not full tree).                 |
-| `search`           | `string?`   | Keyword search across field names, piece names, and descriptions. Returns matching fields with full paths. Case-insensitive. E.g., `"enrollment"` finds EnrollmentCount. |
 | `includeIndexedOnly` | `boolean?` | Only return indexed (searchable) fields. Default: false.                                                                                                             |
 
 **Output schema:**
@@ -200,14 +199,12 @@ names for AREA[] filter expressions, or explore the study data model structure.
 
 - No params: returns top-level overview (2 levels deep) — sections and their direct children. Prevents context bloat.
 - `path`: navigates to that subtree and flattens all descendants.
-- `search`: searches all fields recursively, returns matching fields with full dot-notation paths.
 
 **Error messages:**
 
 - Invalid path: `"Path 'X' not found. Top-level sections: protocolSection, resultsSection, annotationSection, documentSection, derivedSection, hasResults."`
-- No search results: `"No fields matching 'X'. Try broader terms or browse via the path parameter."`
 
-**Format function:** Tree-style display for browsing, flat list with paths for search results.
+**Format function:** Tree-style display.
 
 ---
 
@@ -461,7 +458,7 @@ Each step is independently testable via `dev:stdio`.
 
 ### "Am I eligible for any trials?"
 
-1. `find_eligible(age=45, sex="Female", conditions=["breast cancer"], location={country:"United States", state:"Washington"})`
+1. `find_eligible(age=45, sex="FEMALE", conditions=["breast cancer"], location={country:"United States", state:"Washington"})`
 2. Agent presents matches with explanations
 
 ### "What do the results show for this trial?"

@@ -20,12 +20,12 @@ The framework handles auth at the handler factory level — tools and resources 
 Declare required scopes directly on the tool or resource definition via the `auth` property. The handler factory checks `ctx.auth.scopes` against these before calling `handler`.
 
 ```ts
-import { tool } from "@cyanheads/mcp-ts-core";
+import { tool } from '@cyanheads/mcp-ts-core';
 
-const myTool = tool("my_tool", {
-  input: z.object({ query: z.string().describe("Search query") }),
-  output: z.object({ result: z.string().describe("Search result") }),
-  auth: ["tool:my_tool:read"],
+const myTool = tool('my_tool', {
+  input: z.object({ query: z.string().describe('Search query') }),
+  output: z.object({ result: z.string().describe('Search result') }),
+  auth: ['tool:my_tool:read'],
   async handler(input, ctx) {
     // Only reached if caller has 'tool:my_tool:read' scope
   },
@@ -63,50 +63,50 @@ handler: async (input, ctx) => {
 
 Set via `MCP_AUTH_MODE` environment variable.
 
-| Mode     | Value   | Behavior                                                                                                                    |
-| :------- | :------ | :-------------------------------------------------------------------------------------------------------------------------- |
-| Disabled | `none`  | No auth enforcement. All requests allowed.                                                                                  |
-| JWT      | `jwt`   | Local secret verification via `MCP_AUTH_SECRET_KEY`. Requires explicit `DEV_MCP_AUTH_BYPASS=true` to bypass in development. |
-| OAuth    | `oauth` | JWKS verification against an external issuer.                                                                               |
+| Mode | Value | Behavior |
+|:-----|:------|:---------|
+| Disabled | `none` | No auth enforcement. All requests allowed. |
+| JWT | `jwt` | Local secret verification via `MCP_AUTH_SECRET_KEY`. Requires explicit `DEV_MCP_AUTH_BYPASS=true` to bypass in development. |
+| OAuth | `oauth` | JWKS verification against an external issuer. |
 
 ### JWT config
 
-| Variable              | Required            | Purpose                                                                                  |
-| :-------------------- | :------------------ | :--------------------------------------------------------------------------------------- |
-| `MCP_AUTH_SECRET_KEY` | Yes (unless bypass) | Signing secret for HS256 JWT verification. Must be ≥ 32 characters.                      |
-| `DEV_MCP_AUTH_BYPASS` | No                  | Set to `true` to skip JWT verification in development. Blocked in `NODE_ENV=production`. |
-| `DEV_MCP_CLIENT_ID`   | No                  | Client ID injected when bypass is active (default: `'dev-client-id'`).                   |
-| `DEV_MCP_SCOPES`      | No                  | Comma-separated scopes injected when bypass is active (default: `['dev-scope']`).        |
+| Variable | Required | Purpose |
+|:---------|:---------|:--------|
+| `MCP_AUTH_SECRET_KEY` | Yes (unless bypass) | Signing secret for HS256 JWT verification. Must be ≥ 32 characters. |
+| `DEV_MCP_AUTH_BYPASS` | No | Set to `true` to skip JWT verification in development. Blocked in `NODE_ENV=production`. |
+| `DEV_MCP_CLIENT_ID` | No | Client ID injected when bypass is active (default: `'dev-client-id'`). |
+| `DEV_MCP_SCOPES` | No | Comma-separated scopes injected when bypass is active (default: `['dev-scope']`). |
 
 **Important:** With `MCP_AUTH_MODE=jwt`, a missing `MCP_AUTH_SECRET_KEY` is a **fatal startup error** unless `DEV_MCP_AUTH_BYPASS=true` is explicitly set. Setting `DEV_MCP_AUTH_BYPASS` in production (`NODE_ENV=production`) is rejected at config parse time.
 
 ### OAuth config
 
-| Variable                         | Required | Purpose                                                                                                                                                                 |
-| :------------------------------- | :------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OAUTH_ISSUER_URL`               | Yes      | Token issuer URL (used for JWKS discovery)                                                                                                                              |
-| `OAUTH_AUDIENCE`                 | Yes      | Expected `aud` claim value                                                                                                                                              |
-| `OAUTH_JWKS_URI`                 | No       | Override JWKS endpoint (defaults to `{issuer}/.well-known/jwks.json`)                                                                                                   |
-| `MCP_SERVER_RESOURCE_IDENTIFIER` | No       | RFC 8707 resource indicator URI. When set, the OAuth strategy validates that the token's `resource` or `aud` claim matches this value — throws `Forbidden` on mismatch. |
+| Variable | Required | Purpose |
+|:---------|:---------|:--------|
+| `OAUTH_ISSUER_URL` | Yes | Token issuer URL (used for JWKS discovery) |
+| `OAUTH_AUDIENCE` | Yes | Expected `aud` claim value |
+| `OAUTH_JWKS_URI` | No | Override JWKS endpoint (defaults to `{issuer}/.well-known/jwks.json`) |
+| `MCP_SERVER_RESOURCE_IDENTIFIER` | No | RFC 8707 resource indicator URI. When set, the OAuth strategy validates that the token's `resource` or `aud` claim matches this value — throws `Forbidden` on mismatch. |
 
 ### JWT claims mapping
 
-| Claim      | JWT Field           | Purpose                                        |
-| :--------- | :------------------ | :--------------------------------------------- |
-| `clientId` | `cid` / `client_id` | Identifies the calling client                  |
-| `scopes`   | `scp` / `scope`     | Space-separated list of granted scopes         |
-| `sub`      | `sub`               | Subject (user or service identity)             |
-| `tenantId` | `tid`               | Tenant identifier — drives `ctx.state` scoping |
+| Claim | JWT Field | Purpose |
+|:------|:----------|:--------|
+| `clientId` | `cid` / `client_id` | Identifies the calling client |
+| `scopes` | `scp` / `scope` | Space-separated list of granted scopes |
+| `sub` | `sub` | Subject (user or service identity) |
+| `tenantId` | `tid` | Tenant identifier — drives `ctx.state` scoping |
 
 ---
 
 ## Endpoints
 
-| Endpoint       | Protected               |
-| :------------- | :---------------------- |
-| `GET /healthz` | No                      |
-| `GET /mcp`     | No                      |
-| `POST /mcp`    | Yes (when auth enabled) |
+| Endpoint | Protected |
+|:---------|:----------|
+| `GET /healthz` | No |
+| `GET /mcp` | No |
+| `POST /mcp` | Yes (when auth enabled) |
 | `OPTIONS /mcp` | Yes (when auth enabled) |
 
 **CORS:** Set `MCP_ALLOWED_ORIGINS` to a comma-separated list of allowed origins, or `*` for open access.
@@ -121,10 +121,10 @@ Set via `MCP_AUTH_MODE` environment variable.
 
 ### tenantId sources
 
-| Transport      | Source            | Value                      |
-| :------------- | :---------------- | :------------------------- |
-| HTTP with auth | JWT `tid` claim   | Auto-propagated from token |
-| Stdio          | Hardcoded default | `'default'`                |
+| Transport | Source | Value |
+|:----------|:-------|:------|
+| HTTP with auth | JWT `tid` claim | Auto-propagated from token |
+| Stdio | Hardcoded default | `'default'` |
 
 ### Tenant ID validation rules
 
@@ -158,11 +158,11 @@ Available on `ctx.auth` inside handlers (when auth is enabled):
 
 ```ts
 interface AuthContext {
-  clientId: string; // Required — 'cid' or 'client_id' JWT claim
-  scopes: string[]; // Required — derived from 'scp' or 'scope' claim
-  sub: string; // Required — 'sub' claim; falls back to clientId when absent
-  token: string; // Required — raw JWT or OAuth bearer token string
-  tenantId?: string; // Optional — 'tid' claim; present only for multi-tenant tokens
+  clientId: string;        // Required — 'cid' or 'client_id' JWT claim
+  scopes: string[];        // Required — derived from 'scp' or 'scope' claim
+  sub: string;             // Required — 'sub' claim; falls back to clientId when absent
+  token: string;           // Required — raw JWT or OAuth bearer token string
+  tenantId?: string;       // Optional — 'tid' claim; present only for multi-tenant tokens
 }
 ```
 

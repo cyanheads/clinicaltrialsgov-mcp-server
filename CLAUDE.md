@@ -54,8 +54,9 @@ When the user asks what to do next, what's left, or needs direction, suggest rel
 3. **Add tests** — scaffold tests using the `add-test` skill
 4. **Field-test definitions** — exercise tools/resources/prompts with real inputs using the `field-test` skill
 5. **Run `devcheck`** — lint, format, typecheck, and security audit
-6. **Run the `polish-docs-meta` skill** — finalize README, CHANGELOG, metadata for shipping
-7. **Run the `maintenance` skill** — sync skills and dependencies after framework updates
+6. **Run the `security-pass` skill** — audit handlers for MCP-specific security gaps: output injection, scope blast radius, input sinks, tenant isolation
+7. **Run the `polish-docs-meta` skill** — finalize README, CHANGELOG, metadata for shipping
+8. **Run the `maintenance` skill** — sync skills and dependencies after framework updates
 
 Tailor suggestions to what's actually missing or stale — don't recite the full list every time.
 
@@ -301,6 +302,7 @@ Available skills:
 | `add-service`            | Scaffold a new service integration                                                |
 | `add-test`               | Scaffold test file for a tool, resource, or service                               |
 | `field-test`             | Exercise tools/resources/prompts with real inputs, verify behavior, report issues |
+| `security-pass`          | Audit handlers for MCP-specific security gaps (injection, scopes, input sinks)    |
 | `devcheck`               | Lint, format, typecheck, audit                                                    |
 | `polish-docs-meta`       | Finalize docs, README, metadata, and agent protocol for shipping                  |
 | `maintenance`            | Sync skills and dependencies after updates                                        |

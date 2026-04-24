@@ -308,10 +308,32 @@ describe('ClinicalTrialsService', () => {
     });
 
     it('rethrows 404 as validation error with helpful message', async () => {
-      mockFetch.mockResolvedValue(jsonResponse(null, 404));
+      mockFetch.mockResolvedValue(textResponse('Unknown piece name of field path: BadField', 404));
       const ctx = createMockContext();
 
-      await expect(service.getFieldValues(['BadField'], ctx)).rejects.toThrow(/Invalid field name/);
+      await expect(service.getFieldValues(['BadField'], ctx)).rejects.toThrow(
+        /Invalid field name: 'BadField'/,
+      );
+    });
+
+    it('extracts offending field name on multi-field 404 without flagging valid inputs', async () => {
+      mockFetch.mockResolvedValue(
+        textResponse('Unknown piece name of field path: BogusPiece', 404),
+      );
+      const ctx = createMockContext();
+
+      await expect(service.getFieldValues(['Phase', 'BogusPiece'], ctx)).rejects.toThrow(
+        /Invalid field name: 'BogusPiece'\. Other submitted fields \(Phase\) may also be invalid/,
+      );
+    });
+
+    it('falls back to input list when upstream body lacks the offender name', async () => {
+      mockFetch.mockResolvedValue(textResponse('', 404));
+      const ctx = createMockContext();
+
+      await expect(service.getFieldValues(['Phase', 'Foo'], ctx)).rejects.toThrow(
+        /Invalid field name\(s\): Phase, Foo/,
+      );
     });
 
     it('rethrows non-404 errors as-is', async () => {

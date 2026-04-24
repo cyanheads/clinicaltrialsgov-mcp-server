@@ -99,8 +99,23 @@ export class ClinicalTrialsService {
       );
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
+        // Upstream reports only the first bad name ("Unknown piece name of field
+        // path: X"); extract X so we blame only that field. When multi-field
+        // requests fail, other inputs may also be bad — upstream doesn't say,
+        // so we note that in the error text.
+        const match = err.message.match(/Unknown piece name of field path:\s*(\S+)/i);
+        const badName = match?.[1];
+        const message = badName
+          ? fields.length > 1 && !fields.every((f) => f === badName)
+            ? `Invalid field name: '${badName}'. Other submitted fields (${fields
+                .filter((f) => f !== badName)
+                .join(
+                  ', ',
+                )}) may also be invalid — upstream reports only the first offender. Re-run without '${badName}' to verify the rest.`
+            : `Invalid field name: '${badName}'.`
+          : `Invalid field name(s): ${fields.join(', ')}.`;
         throw validationError(
-          `Invalid field name(s): ${fields.join(', ')}. Use PascalCase piece names like OverallStatus, Phase, StudyType, InterventionType, LeadSponsorClass, Sex, StdAge. Call clinicaltrials_get_field_definitions to browse the full field tree.`,
+          `${message} Use PascalCase piece names like OverallStatus, Phase, StudyType, InterventionType, LeadSponsorClass, Sex, StdAge. Call clinicaltrials_get_field_definitions to browse the full field tree.`,
         );
       }
       throw err;
@@ -193,9 +208,15 @@ export class ClinicalTrialsService {
         }
 
         if (res.status === 404) {
-          // Extract meaningful identifier from path (e.g. "/studies/NCT12345678" → "NCT12345678")
-          const id = path.split('/').pop() ?? path;
-          throw notFound(`Study ${id} not found`);
+          if (path.startsWith('/studies/')) {
+            const id = path.split('/').pop() ?? path;
+            throw notFound(`Study ${id} not found`);
+          }
+          // Non-/studies/ endpoints (e.g. /stats/field/values) — surface the
+          // upstream body so callers can extract specific offenders instead of
+          // getting a generic "not found" that loses which input was bad.
+          const text = (await res.text()).trim();
+          throw notFound(text || `Not found: ${path}`);
         }
         if (res.status === 400) {
           const text = await res.text();

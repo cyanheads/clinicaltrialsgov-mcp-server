@@ -58,6 +58,8 @@
     "coverage:commit": "bun run scripts/update-coverage.ts --commit",
     "audit": "bun audit",
     "audit:fix": "bun audit --fix",
+    "changelog:build": "bun run scripts/build-changelog.ts",
+    "changelog:check": "bun run scripts/build-changelog.ts --check",
     "publish-mcp": "bunx mcp-publisher publish"
   },
   "keywords": [

@@ -336,6 +336,8 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run start:stdio` | Production mode (stdio)              |
 | `bun run start:http`  | Production mode (HTTP)               |
 | `bun run inspector`   | Launch MCP Inspector                 |
+| `bun run changelog:build` | Regenerate `CHANGELOG.md` from `changelog/*.md` |
+| `bun run changelog:check` | Verify `CHANGELOG.md` is in sync (used by devcheck) |
 
 ---
 

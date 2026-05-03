@@ -3,6 +3,7 @@
  * @module mcp-server/resources/definitions
  */
 
+import type { AnyResourceDefinition } from '@cyanheads/mcp-ts-core';
 import { studyResource } from './study.resource.js';
 
-export const allResourceDefinitions = [studyResource];
+export const allResourceDefinitions: AnyResourceDefinition[] = [studyResource];

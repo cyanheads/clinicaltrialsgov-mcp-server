@@ -4,7 +4,9 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
+import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 export const getFieldValues = tool('clinicaltrials_get_field_values', {
   description: `Discover valid values for ClinicalTrials.gov fields with study counts per value. Use to explore available filter options before building a search — e.g., valid OverallStatus, Phase, InterventionType, StudyType, or LeadSponsorClass values.`,
@@ -14,14 +16,30 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
     openWorldHint: true,
   },
 
+  errors: [
+    {
+      reason: 'field_invalid',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A requested field name is not a valid PascalCase piece name.',
+      recovery: RECOVERY_HINTS.field_invalid,
+    },
+    {
+      reason: 'rate_limited',
+      code: JsonRpcErrorCode.RateLimited,
+      when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
+      recovery: RECOVERY_HINTS.rate_limited,
+      retryable: true,
+    },
+  ],
+
   input: z.object({
     fields: z
       .union([
-        z.string().describe('A single PascalCase piece name.'),
-        z.array(z.string()).describe('Multiple PascalCase piece names.'),
+        z.string().describe('A single PascalCase field name.'),
+        z.array(z.string()).describe('Multiple PascalCase field names.'),
       ])
       .describe(
-        `PascalCase piece name(s) to get values for. Common fields: OverallStatus, Phase, StudyType, InterventionType, LeadSponsorClass, Sex, StdAge, DesignAllocation, DesignPrimaryPurpose, DesignMasking.`,
+        `PascalCase field name(s) to get value statistics for. Examples: OverallStatus, Phase, StudyType, Sex, LeadSponsorClass. Use clinicaltrials_get_field_definitions with a query to find more field names.`,
       ),
   }),
 

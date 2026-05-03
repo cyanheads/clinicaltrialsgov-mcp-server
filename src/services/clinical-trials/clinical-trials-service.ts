@@ -12,7 +12,14 @@ import {
   serviceUnavailable,
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
+import { httpErrorFromResponse } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
+import {
+  type FieldIndexEntry,
+  flattenMetadata,
+  nearestPieces,
+  searchFields,
+} from './field-search.js';
 import type {
   FieldNode,
   FieldValueStats,
@@ -27,11 +34,17 @@ const DEFAULT_MAX_BACKOFF_MS = 30_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MIN_INTERVAL_MS = 1000;
 
-/** Constructor options for overriding retry/backoff behavior (primarily for tests). */
+/** Constructor options for overriding retry/backoff/validation behavior (primarily for tests). */
 export interface ClinicalTrialsServiceOptions {
   baseBackoffMs?: number;
   maxBackoffMs?: number;
   maxRetries?: number;
+  /**
+   * Whether to validate `fields` against the cached metadata index before
+   * making API calls. Defaults to true; lazy-fetches /studies/metadata on
+   * first use, then caches the index in-memory.
+   */
+  validateFieldsLocally?: boolean;
 }
 
 export class ClinicalTrialsService {
@@ -41,7 +54,11 @@ export class ClinicalTrialsService {
   private readonly maxRetries: number;
   private readonly baseBackoffMs: number;
   private readonly maxBackoffMs: number;
+  private readonly validateFieldsLocally: boolean;
   private lastRequestAt = 0;
+  private fieldIndexPromise:
+    | Promise<{ entries: FieldIndexEntry[]; pieceSet: Set<string> }>
+    | undefined;
 
   constructor(config: ServerConfig, options: ClinicalTrialsServiceOptions = {}) {
     this.baseUrl = config.apiBaseUrl;
@@ -50,10 +67,14 @@ export class ClinicalTrialsService {
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.baseBackoffMs = options.baseBackoffMs ?? DEFAULT_BASE_BACKOFF_MS;
     this.maxBackoffMs = options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
+    this.validateFieldsLocally = options.validateFieldsLocally ?? true;
   }
 
   /** Search studies with query, filters, pagination, and field selection. */
-  searchStudies(params: SearchParams, ctx: Context): Promise<PagedStudiesResponse> {
+  async searchStudies(params: SearchParams, ctx: Context): Promise<PagedStudiesResponse> {
+    if (this.validateFieldsLocally && params.fields?.length) {
+      await this.validateFields(params.fields, ctx);
+    }
     const q = this.buildSearchQuery(params);
     ctx.log.debug('searchStudies', { paramKeys: Object.keys(q) });
     return this.fetchJson<PagedStudiesResponse>('/studies', q, ctx);
@@ -90,6 +111,9 @@ export class ClinicalTrialsService {
   /** Get field value statistics for the specified fields. */
   async getFieldValues(fields: string[], ctx: Context): Promise<FieldValueStats[]> {
     ctx.log.debug('getFieldValues', { fields });
+    if (this.validateFieldsLocally) {
+      await this.validateFields(fields, ctx);
+    }
     try {
       return await this.fetchJson<FieldValueStats[]>(
         '/stats/field/values',
@@ -116,15 +140,88 @@ export class ClinicalTrialsService {
           : `Invalid field name(s): ${fields.join(', ')}.`;
         throw validationError(
           `${message} Use PascalCase piece names like OverallStatus, Phase, StudyType, InterventionType, LeadSponsorClass, Sex, StdAge. Call clinicaltrials_get_field_definitions to browse the full field tree.`,
+          { reason: 'field_invalid', ...ctx.recoveryFor('field_invalid') },
         );
       }
       throw err;
     }
   }
 
+  /** Search the field model by keyword, returning ranked matches with paths and types. */
+  async searchFieldDefinitions(
+    query: string,
+    limit: number,
+    ctx: Context,
+  ): Promise<FieldIndexEntry[]> {
+    ctx.log.debug('searchFieldDefinitions', { query, limit });
+    const { entries } = await this.getFieldIndex(ctx);
+    return searchFields(query, entries, limit);
+  }
+
   /* ------------------------------------------------------------------ */
   /*  Internal                                                           */
   /* ------------------------------------------------------------------ */
+
+  /** Lazy-load and memoize the flattened field index from /studies/metadata. */
+  private getFieldIndex(
+    ctx: Context,
+  ): Promise<{ entries: FieldIndexEntry[]; pieceSet: Set<string> }> {
+    if (!this.fieldIndexPromise) {
+      this.fieldIndexPromise = (async () => {
+        const tree = await this.getMetadata(false, ctx);
+        const entries = flattenMetadata(tree);
+        const pieceSet = new Set(entries.map((e) => e.piece));
+        ctx.log.debug('Field index built', { entryCount: entries.length });
+        return { entries, pieceSet };
+      })().catch((err) => {
+        // Reset on failure so the next call can retry the metadata fetch
+        this.fieldIndexPromise = undefined;
+        throw err;
+      });
+    }
+    return this.fieldIndexPromise;
+  }
+
+  /** Reject invalid field names locally with did-you-mean suggestions. */
+  private async validateFields(fields: string[], ctx: Context): Promise<void> {
+    let entries: FieldIndexEntry[];
+    let pieceSet: Set<string>;
+    try {
+      ({ entries, pieceSet } = await this.getFieldIndex(ctx));
+    } catch (err) {
+      // Fail open — if the metadata index can't be built, fall through to the
+      // upstream API and let its error handling surface any problem. Worst case,
+      // the agent gets the same error it would have without pre-validation.
+      ctx.log.warning('Field validation skipped — metadata unavailable', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    const invalid = fields.filter((f) => !pieceSet.has(f));
+    if (invalid.length === 0) return;
+
+    const suggestions: Record<string, string[]> = {};
+    for (const f of invalid) {
+      const near = nearestPieces(f, entries, 3);
+      if (near.length > 0) suggestions[f] = near;
+    }
+
+    const header =
+      invalid.length === 1
+        ? `Invalid field name: '${invalid[0]}'.`
+        : `Invalid field names: ${invalid.map((f) => `'${f}'`).join(', ')}.`;
+    const hintParts = Object.entries(suggestions).map(
+      ([f, near]) => `'${f}' — did you mean ${near.map((p) => `'${p}'`).join(', ')}?`,
+    );
+    const message = hintParts.length > 0 ? `${header} ${hintParts.join(' ')}` : header;
+
+    throw validationError(message, {
+      reason: 'field_invalid',
+      invalid,
+      ...(Object.keys(suggestions).length > 0 ? { suggestions } : {}),
+      ...ctx.recoveryFor('field_invalid'),
+    });
+  }
 
   private buildSearchQuery(params: SearchParams): Record<string, string> {
     const q: Record<string, string> = {};
@@ -210,7 +307,10 @@ export class ClinicalTrialsService {
         if (res.status === 404) {
           if (path.startsWith('/studies/')) {
             const id = path.split('/').pop() ?? path;
-            throw notFound(`Study ${id} not found`);
+            throw notFound(`Study ${id} not found`, {
+              reason: 'study_not_found',
+              ...ctx.recoveryFor('study_not_found'),
+            });
           }
           // Non-/studies/ endpoints (e.g. /stats/field/values) — surface the
           // upstream body so callers can extract specific offenders instead of
@@ -227,6 +327,7 @@ export class ClinicalTrialsService {
               : ' Use PascalCase piece names (e.g., DesignPrimaryPurpose, DesignInterventionModel, LeadSponsorName), not module names.';
             throw validationError(
               `${text.trim()}${offender} Call clinicaltrials_get_field_definitions to browse valid piece names.`,
+              { reason: 'field_invalid', ...ctx.recoveryFor('field_invalid') },
             );
           }
           if (text.includes('incorrect format')) {
@@ -234,6 +335,7 @@ export class ClinicalTrialsService {
               const id = path.split('/').pop() ?? path;
               throw notFound(
                 `Study ${id} not found. Verify the NCT ID exists on ClinicalTrials.gov.`,
+                { reason: 'study_not_found', ...ctx.recoveryFor('study_not_found') },
               );
             }
             // filter.ids rejection — the API may reject IDs that match the
@@ -244,6 +346,7 @@ export class ClinicalTrialsService {
               const idList = ids.split('|').join(', ');
               throw notFound(
                 `Study ID(s) not found or rejected by API: ${idList}. Verify the NCT IDs exist on ClinicalTrials.gov.`,
+                { reason: 'ids_not_found', ...ctx.recoveryFor('ids_not_found') },
               );
             }
             throw validationError(`Invalid request format. API response: ${text}`);
@@ -257,7 +360,7 @@ export class ClinicalTrialsService {
           continue;
         }
 
-        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+        throw await httpErrorFromResponse(res, { service: 'ClinicalTrials.gov' });
       } catch (err) {
         if (err instanceof McpError) throw err;
         const name = (err as Error).name ?? '';
@@ -279,6 +382,8 @@ export class ClinicalTrialsService {
       throw rateLimited(`Rate limited by ClinicalTrials.gov after ${this.maxRetries} retries`, {
         path,
         lastError: String(lastError),
+        reason: 'rate_limited',
+        ...ctx.recoveryFor('rate_limited'),
       });
     }
     throw serviceUnavailable('ClinicalTrials.gov API unavailable after retries', {

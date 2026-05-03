@@ -11,6 +11,7 @@ import {
   ClinicalTrialsService,
   getClinicalTrialsService,
 } from '@/services/clinical-trials/clinical-trials-service.js';
+import type { FieldNode } from '@/services/clinical-trials/types.js';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -56,7 +57,14 @@ function htmlResponse(body: string, status = 200) {
 
 // Fast retry/backoff keeps wall-clock time in retry tests to < 1s. Production
 // defaults (6 retries, 30s cap) are verified via the singleton accessor block.
-const fastOptions = { maxRetries: 3, baseBackoffMs: 10, maxBackoffMs: 50 };
+// validateFieldsLocally=false skips the lazy /studies/metadata fetch — tests
+// that exercise the validation path opt back in explicitly via a fresh service.
+const fastOptions = {
+  maxRetries: 3,
+  baseBackoffMs: 10,
+  maxBackoffMs: 50,
+  validateFieldsLocally: false,
+};
 
 describe('ClinicalTrialsService', () => {
   let service: ClinicalTrialsService;
@@ -614,6 +622,354 @@ describe('ClinicalTrialsService', () => {
       const ctx = createMockContext();
       const result = await service.getStudy('NCT12345678', ctx);
       expect(result).toEqual({ data: 'value' });
+    });
+  });
+
+  describe('error data wire shape', () => {
+    // The service spreads `ctx.recoveryFor(reason)` from whatever contract is
+    // attached to the active context. These tests attach a synthetic contract
+    // covering every reason the service throws, so assertions can verify both
+    // `data.reason` (always set by the service) and `data.recovery.hint`
+    // (resolved from the contract via the framework's typed-fail wiring).
+    const allReasons = [
+      {
+        reason: 'study_not_found' as const,
+        code: JsonRpcErrorCode.NotFound,
+        when: 'No study matched.',
+        recovery: 'Verify the NCT ID at clinicaltrials.gov or use the search tool to discover one.',
+      },
+      {
+        reason: 'ids_not_found' as const,
+        code: JsonRpcErrorCode.NotFound,
+        when: 'Some IDs missing.',
+        recovery: 'Verify each NCT ID exists, or call the search tool first to discover valid IDs.',
+      },
+      {
+        reason: 'field_invalid' as const,
+        code: JsonRpcErrorCode.ValidationError,
+        when: 'Field name not valid.',
+        recovery: 'Call the field-definitions tool to browse valid PascalCase piece names instead.',
+      },
+      {
+        reason: 'rate_limited' as const,
+        code: JsonRpcErrorCode.RateLimited,
+        when: 'Rate limited after retries.',
+        recovery:
+          'Wait about a minute before retrying; the upstream API enforces a tight rate limit.',
+        retryable: true,
+      },
+    ];
+
+    it('attaches reason=study_not_found + recovery on 404 /studies/', async () => {
+      mockFetch.mockResolvedValue(jsonResponse(null, 404));
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.getStudy('NCT12345678', ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('study_not_found');
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toMatch(
+          /Verify the NCT ID/,
+        );
+      }
+    });
+
+    it('attaches reason=study_not_found on 400 with "incorrect format" for /studies/', async () => {
+      mockFetch.mockResolvedValue(textResponse('has incorrect format', 400));
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.getStudy('BADID', ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('study_not_found');
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toBeTruthy();
+      }
+    });
+
+    it('attaches reason=ids_not_found for filter.ids rejection', async () => {
+      mockFetch.mockResolvedValue(textResponse('filter.ids has incorrect format for value XYZ'));
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies({ filterIds: ['XYZ'] }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('ids_not_found');
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toMatch(
+          /Verify each NCT ID/,
+        );
+      }
+    });
+
+    it('attaches reason=field_invalid for "contains invalid field name" 400', async () => {
+      mockFetch.mockResolvedValue(
+        textResponse("Parameter 'fields' contains invalid field name: 'StudyDesign'"),
+      );
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies({ fields: ['StudyDesign'] }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('field_invalid');
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toMatch(
+          /field-definitions/,
+        );
+      }
+    });
+
+    it('attaches reason=field_invalid for getFieldValues 404 unknown piece', async () => {
+      mockFetch.mockResolvedValue(textResponse('Unknown piece name of field path: BadField', 404));
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.getFieldValues(['BadField'], ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('field_invalid');
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toBeTruthy();
+      }
+    });
+
+    it('attaches reason=rate_limited after 429 retries exhaust', async () => {
+      mockFetch.mockResolvedValue(jsonResponse(null, 429));
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies({}, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('rate_limited');
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toMatch(
+          /Wait about a minute/,
+        );
+      }
+    }, 30_000);
+
+    it('omits recovery.hint when no contract is attached (service stays contract-agnostic)', async () => {
+      mockFetch.mockResolvedValue(jsonResponse(null, 404));
+      const ctx = createMockContext(); // no errors → ctx.recoveryFor returns {}
+      try {
+        await service.getStudy('NCT12345678', ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('study_not_found'); // reason still set
+        expect(data?.recovery).toBeUndefined(); // hint only when contract attached
+      }
+    });
+  });
+
+  describe('field validation (validateFieldsLocally=true)', () => {
+    const sampleMetadata: FieldNode[] = [
+      {
+        name: 'protocolSection',
+        children: [
+          {
+            name: 'identificationModule',
+            children: [
+              { name: 'nctId', piece: 'NCTId', type: 'STRING' },
+              { name: 'briefTitle', piece: 'BriefTitle', type: 'STRING' },
+            ],
+          },
+          {
+            name: 'conditionsModule',
+            children: [{ name: 'conditions', piece: 'Condition', type: 'STRING' }],
+          },
+          {
+            name: 'designModule',
+            children: [
+              {
+                name: 'enrollmentInfo',
+                piece: 'EnrollmentCount',
+                type: 'INTEGER',
+                description: 'Number of participants enrolled in the study.',
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    function mockByRoute(routes: { metadata?: unknown; primary?: unknown } = {}) {
+      mockFetch.mockImplementation((url: string | URL) => {
+        const u = typeof url === 'string' ? url : url.toString();
+        if (u.includes('/studies/metadata')) {
+          return Promise.resolve(routes.metadata ?? jsonResponse(sampleMetadata));
+        }
+        return Promise.resolve(routes.primary ?? jsonResponse({ studies: [] }));
+      });
+    }
+
+    let validatingService: ClinicalTrialsService;
+    beforeEach(() => {
+      validatingService = new ClinicalTrialsService(testConfig, {
+        ...fastOptions,
+        validateFieldsLocally: true,
+      });
+    });
+
+    it('rejects searchStudies with an invalid field name before hitting the API', async () => {
+      mockByRoute();
+      const ctx = createMockContext();
+      await expect(
+        validatingService.searchStudies({ fields: ['ConditionList'] }, ctx),
+      ).rejects.toThrow(/Invalid field name: 'ConditionList'/);
+      // Only the metadata fetch should have happened — no /studies call.
+      const studiesCalls = mockFetch.mock.calls.filter((c) => {
+        const u = typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString();
+        return !u.includes('/studies/metadata');
+      });
+      expect(studiesCalls).toHaveLength(0);
+    });
+
+    it('suggests nearest matches for a typo', async () => {
+      mockByRoute();
+      const ctx = createMockContext();
+      try {
+        await validatingService.searchStudies({ fields: ['ConditionList'] }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const msg = (err as McpError).message;
+        expect(msg).toContain('did you mean');
+        expect(msg).toContain("'Condition'");
+      }
+    });
+
+    it('passes through when all fields are valid', async () => {
+      mockByRoute();
+      const ctx = createMockContext();
+      const result = await validatingService.searchStudies(
+        { fields: ['NCTId', 'BriefTitle'] },
+        ctx,
+      );
+      expect(result.studies).toEqual([]);
+    });
+
+    it('rejects getFieldValues with an invalid field name', async () => {
+      mockByRoute();
+      const ctx = createMockContext();
+      await expect(validatingService.getFieldValues(['NotAField'], ctx)).rejects.toThrow(
+        /Invalid field name: 'NotAField'/,
+      );
+    });
+
+    it('fails open when metadata is unreachable so the request still proceeds', async () => {
+      mockByRoute({
+        metadata: jsonResponse(null, 404),
+        primary: jsonResponse({ studies: [] }),
+      });
+      const ctx = createMockContext();
+      const result = await validatingService.searchStudies({ fields: ['BadName'] }, ctx);
+      expect(result.studies).toEqual([]);
+    });
+
+    it('caches the field index across multiple calls', async () => {
+      let metadataCalls = 0;
+      mockFetch.mockImplementation((url: string | URL) => {
+        const u = typeof url === 'string' ? url : url.toString();
+        if (u.includes('/studies/metadata')) {
+          metadataCalls += 1;
+          return Promise.resolve(jsonResponse(sampleMetadata));
+        }
+        return Promise.resolve(jsonResponse({ studies: [] }));
+      });
+      const ctx = createMockContext();
+      await validatingService.searchStudies({ fields: ['NCTId'] }, ctx);
+      await validatingService.searchStudies({ fields: ['BriefTitle'] }, ctx);
+      expect(metadataCalls).toBe(1);
+    });
+
+    it('attaches reason=field_invalid and recovery hint on validation failure', async () => {
+      mockByRoute();
+      const ctx = createMockContext({
+        errors: [
+          {
+            reason: 'field_invalid',
+            code: JsonRpcErrorCode.ValidationError,
+            when: 'A field name is not valid.',
+            recovery: 'Call clinicaltrials_get_field_definitions to look up the correct name.',
+          },
+        ],
+      });
+      try {
+        await validatingService.searchStudies({ fields: ['Bogus'] }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const data = (err as McpError).data as Record<string, unknown>;
+        expect(data?.reason).toBe('field_invalid');
+        expect(Array.isArray(data?.invalid)).toBe(true);
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain(
+          'clinicaltrials_get_field_definitions',
+        );
+      }
+    });
+  });
+
+  describe('searchFieldDefinitions', () => {
+    const sampleMetadata: FieldNode[] = [
+      {
+        name: 'protocolSection',
+        children: [
+          {
+            name: 'designModule',
+            children: [
+              {
+                name: 'enrollmentInfo',
+                piece: 'EnrollmentCount',
+                type: 'INTEGER',
+                description: 'Number of participants enrolled.',
+              },
+            ],
+          },
+          {
+            name: 'sponsorCollaboratorsModule',
+            children: [
+              { name: 'leadSponsor', piece: 'LeadSponsorName', type: 'STRING' },
+              { name: 'collaborators', piece: 'CollaboratorName', type: 'STRING' },
+            ],
+          },
+        ],
+      },
+    ];
+
+    let validatingService: ClinicalTrialsService;
+    beforeEach(() => {
+      validatingService = new ClinicalTrialsService(testConfig, {
+        ...fastOptions,
+        validateFieldsLocally: true,
+      });
+      mockFetch.mockResolvedValue(jsonResponse(sampleMetadata));
+    });
+
+    it('returns ranked matches for a keyword search', async () => {
+      const ctx = createMockContext();
+      const results = await validatingService.searchFieldDefinitions('enrollment', 5, ctx);
+      expect(results.length).toBeGreaterThan(0);
+      expect(results[0]!.piece).toBe('EnrollmentCount');
+    });
+
+    it('finds multiple matches sorted by relevance', async () => {
+      const ctx = createMockContext();
+      const results = await validatingService.searchFieldDefinitions('sponsor', 5, ctx);
+      const pieces = results.map((r) => r.piece);
+      expect(pieces).toContain('LeadSponsorName');
+      expect(pieces).toContain('CollaboratorName');
+    });
+
+    it('respects the limit', async () => {
+      const ctx = createMockContext();
+      const results = await validatingService.searchFieldDefinitions('sponsor', 1, ctx);
+      expect(results).toHaveLength(1);
+    });
+
+    it('returns an empty array when nothing matches', async () => {
+      const ctx = createMockContext();
+      const results = await validatingService.searchFieldDefinitions('zzznomatchzzz', 5, ctx);
+      expect(results).toEqual([]);
     });
   });
 

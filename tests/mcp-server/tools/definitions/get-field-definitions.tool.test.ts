@@ -72,7 +72,7 @@ const sampleTree: FieldNode[] = [
 ];
 
 describe('getFieldDefinitions', () => {
-  const mockService = { getMetadata: vi.fn() };
+  const mockService = { getMetadata: vi.fn(), searchFieldDefinitions: vi.fn() };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -89,9 +89,19 @@ describe('getFieldDefinitions', () => {
       expect(input.path).toBe('protocolSection.statusModule');
     });
 
+    it('accepts a query parameter', () => {
+      const input = getFieldDefinitions.input!.parse({ query: 'enrollment' });
+      expect(input.query).toBe('enrollment');
+    });
+
     it('accepts includeIndexedOnly flag', () => {
       const input = getFieldDefinitions.input!.parse({ includeIndexedOnly: true });
       expect(input.includeIndexedOnly).toBe(true);
+    });
+
+    it('defaults limit to 20', () => {
+      const input = getFieldDefinitions.input!.parse({ query: 'sponsor' });
+      expect(input.limit).toBe(20);
     });
   });
 
@@ -149,7 +159,7 @@ describe('getFieldDefinitions', () => {
 
     it('throws on invalid path', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const input = getFieldDefinitions.input!.parse({ path: 'nonexistent.path' });
 
       await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow(
@@ -159,7 +169,7 @@ describe('getFieldDefinitions', () => {
 
     it('includes available section names in error for invalid path', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const input = getFieldDefinitions.input!.parse({ path: 'badSection' });
 
       await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow(
@@ -205,6 +215,38 @@ describe('getFieldDefinitions', () => {
 
       expect(mockService.getMetadata).toHaveBeenCalledWith(false, ctx);
     });
+
+    it('routes to searchFieldDefinitions when query is provided', async () => {
+      mockService.searchFieldDefinitions.mockResolvedValue([
+        {
+          name: 'enrollmentInfo',
+          piece: 'EnrollmentCount',
+          path: 'protocolSection.designModule.enrollmentInfo.count',
+          type: 'INTEGER',
+        },
+      ]);
+      const ctx = createMockContext();
+      const input = getFieldDefinitions.input!.parse({ query: 'enrollment', limit: 5 });
+      const result = await getFieldDefinitions.handler(input, ctx);
+
+      expect(mockService.searchFieldDefinitions).toHaveBeenCalledWith('enrollment', 5, ctx);
+      expect(mockService.getMetadata).not.toHaveBeenCalled();
+      expect(result.searchQuery).toBe('enrollment');
+      expect(result.fields).toHaveLength(1);
+      expect(result.fields[0]!.piece).toBe('EnrollmentCount');
+    });
+
+    it('rejects providing both query and path', async () => {
+      const ctx = createMockContext();
+      const input = getFieldDefinitions.input!.parse({
+        query: 'enrollment',
+        path: 'protocolSection',
+      });
+
+      await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow(
+        /Provide either `query` or `path`/,
+      );
+    });
   });
 
   describe('format', () => {
@@ -246,6 +288,24 @@ describe('getFieldDefinitions', () => {
     it('renders empty result', () => {
       const blocks = getFieldDefinitions.format!({ fields: [], totalFields: 0 });
       expect((blocks[0] as { text: string }).text).toContain('No fields found');
+    });
+
+    it('renders search results with the query in the header', () => {
+      const blocks = getFieldDefinitions.format!({
+        fields: [
+          {
+            name: 'enrollmentInfo',
+            piece: 'EnrollmentCount',
+            path: 'protocolSection.designModule.enrollmentInfo.count',
+            type: 'INTEGER',
+          },
+        ],
+        totalFields: 1,
+        searchQuery: 'enrollment',
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain("matching 'enrollment'");
+      expect(text).toContain('EnrollmentCount');
     });
   });
 });

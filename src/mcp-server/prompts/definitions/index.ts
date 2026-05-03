@@ -3,6 +3,7 @@
  * @module mcp-server/prompts/definitions
  */
 
+import type { AnyPromptDefinition } from '@cyanheads/mcp-ts-core';
 import { analyzeTrialLandscape } from './analyze-trial-landscape.prompt.js';
 
-export const allPromptDefinitions = [analyzeTrialLandscape];
+export const allPromptDefinitions: AnyPromptDefinition[] = [analyzeTrialLandscape];

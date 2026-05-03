@@ -1,10 +1,14 @@
 /**
- * @fileoverview Get field definitions from the ClinicalTrials.gov study data model.
+ * @fileoverview Discover valid field names from the ClinicalTrials.gov data model.
+ * Supports keyword search, path-based drill-down, and top-level overview.
  * @module mcp-server/tools/definitions/get-field-definitions.tool
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { RECOVERY_HINTS } from '@/mcp-server/tools/utils/recovery-hints.js';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
+import type { FieldIndexEntry } from '@/services/clinical-trials/field-search.js';
 import type { FieldNode } from '@/services/clinical-trials/types.js';
 
 /** Flattened field result returned by the tool. */
@@ -30,26 +34,72 @@ function toFieldResult(node: FieldNode, path: string): FieldDefResult {
   return r;
 }
 
+/** Convert a flat search-index entry into the tool's output shape. */
+function indexEntryToResult(entry: FieldIndexEntry): FieldDefResult {
+  const r: FieldDefResult = { name: entry.name, path: entry.path, piece: entry.piece };
+  if (entry.sourceType != null) r.sourceType = entry.sourceType;
+  if (entry.type != null) r.type = entry.type;
+  if (entry.isEnum != null) r.isEnum = entry.isEnum;
+  if (entry.description != null) r.description = entry.description;
+  return r;
+}
+
 export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', {
-  description: `Get field definitions from the ClinicalTrials.gov study data model. Returns the field tree with piece names (used in the fields parameter and AREA[] filters), data types, and nesting structure. Call with no path for a top-level overview, then drill into a section with the path parameter to see its fields.`,
+  description: `Discover valid field names from the ClinicalTrials.gov data model. Call this FIRST when you need to know which field names to use in \`fields\`, \`advancedFilter\`, or \`sort\` parameters of other tools, or as input to clinicaltrials_get_field_values.
+
+Three usage modes:
+- \`query\`: keyword search. Pass a concept (e.g., "enrollment", "sponsor", "adverse events") to get a ranked list of matching field names with their data types and locations.
+- \`path\`: drill into a section. Pass a dot-notation path (e.g., "protocolSection.designModule") to see its individual fields.
+- (no input): top-level overview of all sections in the study record.
+
+Returns canonical PascalCase identifiers like OverallStatus, EnrollmentCount, LeadSponsorName — these are the exact names the API accepts.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
     openWorldHint: true,
   },
 
+  errors: [
+    {
+      reason: 'path_not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'The dot-notation path does not match any node in the field tree.',
+      recovery: RECOVERY_HINTS.path_not_found,
+    },
+    {
+      reason: 'rate_limited',
+      code: JsonRpcErrorCode.RateLimited,
+      when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
+      recovery: RECOVERY_HINTS.rate_limited,
+      retryable: true,
+    },
+  ],
+
   input: z.object({
+    query: z
+      .string()
+      .optional()
+      .describe(
+        `Keyword to search field names by — e.g., "enrollment", "sponsor", "adverse events". Returns matching field names ranked by relevance with their full paths and data types. Cannot be combined with \`path\`.`,
+      ),
     path: z
       .string()
       .optional()
       .describe(
-        `Dot-notation path to get a subtree. E.g., "protocolSection.designModule", "protocolSection.eligibilityModule", "resultsSection". Omit for top-level overview (sections + direct children, not the full tree).`,
+        `Dot-notation path to drill into a section. E.g., "protocolSection.designModule", "protocolSection.eligibilityModule", "resultsSection". Returns the section's individual fields. Cannot be combined with \`query\`. Omit both \`path\` and \`query\` for a top-level overview.`,
       ),
+    limit: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .default(20)
+      .describe('Maximum results to return when using `query`. Default: 20.'),
     includeIndexedOnly: z
       .boolean()
       .optional()
       .describe(
-        'Only return indexed (searchable) fields. Default: false. Has no visible effect at the top level — use with a path to filter leaf fields.',
+        'Only return indexed (searchable) fields. Default: false. Has no visible effect at the top level — use with `path` to filter.',
       ),
   }),
 
@@ -62,7 +112,7 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
             piece: z
               .string()
               .optional()
-              .describe('PascalCase piece name for fields/AREA[] params.'),
+              .describe('PascalCase identifier for use in `fields`/`AREA[]`/`sort` params.'),
             sourceType: z.string().optional().describe('Data type in the model.'),
             type: z.string().optional().describe('Semantic type.'),
             isEnum: z.boolean().optional().describe('Whether the field is an enum type.'),
@@ -75,21 +125,37 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
           })
           .describe('A single field definition node.'),
       )
-      .describe('Field definitions.'),
+      .describe('Field definitions, ordered by relevance when `query` is used.'),
     totalFields: z.number().describe('Total fields returned.'),
-    resolvedPath: z.string().optional().describe('Resolved path when path param was used.'),
+    resolvedPath: z.string().optional().describe('Resolved path when `path` was used.'),
+    searchQuery: z.string().optional().describe('Echo of the keyword when `query` was used.'),
   }),
 
   async handler(input, ctx) {
+    if (input.query && input.path) {
+      throw validationError(
+        'Provide either `query` or `path`, not both. Use `query` for keyword search; use `path` to drill into a known section.',
+      );
+    }
+
     const service = getClinicalTrialsService();
+
+    if (input.query) {
+      const matches = await service.searchFieldDefinitions(input.query, input.limit, ctx);
+      const fields = matches.map(indexEntryToResult);
+      ctx.log.info('Field search completed', { query: input.query, matchCount: fields.length });
+      return { fields, totalFields: fields.length, searchQuery: input.query };
+    }
+
     const tree = await service.getMetadata(input.includeIndexedOnly ?? false, ctx);
 
     if (input.path) {
       const node = navigateToPath(tree, input.path);
       if (!node) {
-        throw new Error(
-          `Path '${input.path}' not found. Top-level sections: ` +
-            `${tree.map((n) => n.name).join(', ')}.`,
+        throw ctx.fail(
+          'path_not_found',
+          `Path '${input.path}' not found. Top-level sections: ${tree.map((n) => n.name).join(', ')}.`,
+          { ...ctx.recoveryFor('path_not_found') },
         );
       }
       const fields = flattenChildren(node, input.path);
@@ -97,7 +163,7 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
       return { fields, totalFields: fields.length, resolvedPath: input.path };
     }
 
-    /** No path — return top-level overview (2 levels deep). */
+    /** No path or query — return top-level overview (2 levels deep). */
     const overview: FieldDefResult[] = tree.map((section) => {
       const r = toFieldResult(section, section.name);
       if (section.children) {
@@ -122,6 +188,9 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
   format: (result) => {
     const lines: string[] = [];
 
+    if (result.searchQuery) {
+      lines.push(`**${result.totalFields} field(s) matching '${result.searchQuery}':**\n`);
+    }
     if (result.resolvedPath) {
       lines.push(`**${result.resolvedPath}** (${result.totalFields} fields):\n`);
     }

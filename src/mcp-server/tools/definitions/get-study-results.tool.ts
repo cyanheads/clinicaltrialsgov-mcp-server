@@ -4,9 +4,11 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
+import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 const VALID_SECTIONS = ['outcomes', 'adverseEvents', 'participantFlow', 'baseline'] as const;
 type Section = (typeof VALID_SECTIONS)[number];
@@ -309,6 +311,28 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     idempotentHint: true,
     openWorldHint: true,
   },
+
+  errors: [
+    {
+      reason: 'study_not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'A provided NCT ID does not match any study at ClinicalTrials.gov.',
+      recovery: RECOVERY_HINTS.study_not_found,
+    },
+    {
+      reason: 'ids_not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'A batch lookup rejected because one or more NCT IDs are not present.',
+      recovery: RECOVERY_HINTS.ids_not_found,
+    },
+    {
+      reason: 'rate_limited',
+      code: JsonRpcErrorCode.RateLimited,
+      when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
+      recovery: RECOVERY_HINTS.rate_limited,
+      retryable: true,
+    },
+  ],
 
   input: z.object({
     nctIds: z

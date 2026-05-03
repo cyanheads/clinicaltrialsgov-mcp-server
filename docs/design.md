@@ -418,7 +418,7 @@ Single service wrapping all API interactions. Init/accessor pattern.
 8. **Tool: find_eligible** — patient matching workflow
 9. **Prompt: analyze_trial_landscape** — analysis guide
 
-Each step is independently testable via `dev:stdio`.
+Each step is independently testable via `bun run rebuild && bun run start:stdio`.
 
 ---
 
@@ -649,4 +649,4 @@ See [docs/api-reference.md](api-reference.md) for the complete ClinicalTrials.go
 - [ ] All definitions registered in `createApp()` arrays
 - [ ] Tests for each tool handler using `createMockContext()`
 - [ ] `bun run devcheck` passes
-- [ ] Smoke test with `dev:stdio`
+- [ ] Smoke test with `bun run rebuild && bun run start:stdio`

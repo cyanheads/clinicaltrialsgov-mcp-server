@@ -4,8 +4,10 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import { buildAdvancedFilter, toArray } from '../utils/query-helpers.js';
+import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 export const getStudyCount = tool('clinicaltrials_get_study_count', {
   description: `Get total study count matching a query without fetching study data. Fast and lightweight. Use for quick statistics or to build breakdowns by calling multiple times with different filters (e.g., count by phase, count by status, count recruiting vs completed for a condition).`,
@@ -14,6 +16,22 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     idempotentHint: true,
     openWorldHint: true,
   },
+
+  errors: [
+    {
+      reason: 'field_invalid',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A field name in the advanced filter is invalid (often a module name instead of a piece name).',
+      recovery: RECOVERY_HINTS.field_invalid,
+    },
+    {
+      reason: 'rate_limited',
+      code: JsonRpcErrorCode.RateLimited,
+      when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
+      recovery: RECOVERY_HINTS.rate_limited,
+      retryable: true,
+    },
+  ],
 
   input: z.object({
     query: z.string().optional().describe('General full-text search across all fields.'),
@@ -50,7 +68,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       .string()
       .optional()
       .describe(
-        'Advanced filter using AREA[] Essie syntax. E.g., "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]". Combine with AND/OR/NOT and parentheses.',
+        'Advanced filter using AREA[] Essie syntax. E.g., "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]". Combine with AND/OR/NOT and parentheses. Use clinicaltrials_get_field_definitions with a query to find AREA[]-compatible field names.',
       ),
   }),
 

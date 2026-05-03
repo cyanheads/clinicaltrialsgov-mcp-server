@@ -4,9 +4,11 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 import { formatRemainingStudyFields } from '../utils/format-helpers.js';
+import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 /** Dot-notation prefixes already rendered by the eligible formatter. */
 const ELIGIBLE_RENDERED = new Set([
@@ -54,6 +56,16 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     idempotentHint: true,
     openWorldHint: true,
   },
+
+  errors: [
+    {
+      reason: 'rate_limited',
+      code: JsonRpcErrorCode.RateLimited,
+      when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
+      recovery: RECOVERY_HINTS.rate_limited,
+      retryable: true,
+    },
+  ],
 
   input: z.object({
     age: z.number().int().min(0).max(120).describe('Patient age in years.'),

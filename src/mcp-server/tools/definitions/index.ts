@@ -3,6 +3,7 @@
  * @module mcp-server/tools/definitions
  */
 
+import type { AnyToolDefinition } from '@cyanheads/mcp-ts-core';
 import { findEligible } from './find-eligible.tool.js';
 import { getFieldDefinitions } from './get-field-definitions.tool.js';
 import { getFieldValues } from './get-field-values.tool.js';
@@ -11,7 +12,7 @@ import { getStudyCount } from './get-study-count.tool.js';
 import { getStudyResults } from './get-study-results.tool.js';
 import { searchStudies } from './search-studies.tool.js';
 
-export const allToolDefinitions = [
+export const allToolDefinitions: AnyToolDefinition[] = [
   searchStudies,
   getStudy,
   getStudyCount,

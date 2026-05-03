@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** clinicaltrialsgov-mcp-server
-**Version:** 2.4.2
+**Version:** 2.4.3
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -216,14 +216,27 @@ Note: `ctx.state` is available but unused — this is a stateless read-only serv
 
 ## Errors
 
-Handlers throw — the framework catches, classifies, and formats. Three escalation levels:
+Handlers throw — the framework catches, classifies, and formats.
+
+**Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable? }]` on `tool()` / `resource()` to receive a typed `ctx.fail(reason, …)` keyed by the declared reason union. TypeScript catches `ctx.fail('typo')` at compile time, `data.reason` is auto-populated for observability, and the linter enforces conformance against the handler body. The `recovery` field is required descriptive metadata (≥ 5 words, lint-validated); for the wire payload's `data.recovery.hint` (which the framework mirrors into `content[]` text), spread `ctx.recoveryFor('reason')` for the contract default, or pass `{ recovery: { hint: '...' } }` explicitly when dynamic context matters. Baseline codes (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`, `SerializationError`) bubble freely and don't need declaring.
 
 ```ts
-// 1. Plain Error — framework auto-classifies from message patterns
-throw new Error("Study not found"); // → NotFound
-throw new Error("Invalid filter expression"); // → ValidationError
+errors: [
+  { reason: "path_not_found", code: JsonRpcErrorCode.NotFound,
+    when: "Field path doesn't match the data model tree",
+    recovery: "Call clinicaltrials_get_field_definitions with no path to see top-level sections." },
+],
+async handler(input, ctx) {
+  const node = navigateToPath(tree, input.path);
+  if (!node) throw ctx.fail("path_not_found", `Path '${input.path}' not found`);
+  return { node };
+}
+```
 
-// 2. Error factories — explicit code, concise
+**Fallback (no contract entry fits):** factories or plain `Error`.
+
+```ts
+// Error factories — explicit code, concise
 import { notFound, serviceUnavailable } from "@cyanheads/mcp-ts-core/errors";
 throw notFound("Study not found", { nctId });
 throw serviceUnavailable(
@@ -232,16 +245,15 @@ throw serviceUnavailable(
   { cause: err },
 );
 
-// 3. McpError — full control over code and data
-import { McpError, JsonRpcErrorCode } from "@cyanheads/mcp-ts-core/errors";
-throw new McpError(
-  JsonRpcErrorCode.ServiceUnavailable,
-  "Rate limited by ClinicalTrials.gov",
-  { retryAfter: 60 },
-);
+// Plain Error — framework auto-classifies from message patterns
+throw new Error("Study not found"); // → NotFound
+
+// HTTP errors from upstream — use httpErrorFromResponse for status-aware classification
+import { httpErrorFromResponse } from "@cyanheads/mcp-ts-core/utils";
+throw await httpErrorFromResponse(res, { service: "ClinicalTrials.gov" });
 ```
 
-Plain `Error` is fine for most cases. Use factories when the error code matters. See framework CLAUDE.md for the full auto-classification table and all available factories.
+See framework CLAUDE.md and the `api-errors` skill for the full auto-classification table, all available factories, and the contract reference.
 
 ---
 
@@ -315,13 +327,14 @@ Available skills:
 | `report-issue-framework` | File a bug or feature request against `@cyanheads/mcp-ts-core` via `gh` CLI       |
 | `report-issue-local`     | File a bug or feature request against this server's own repo via `gh` CLI         |
 | `api-auth`               | Auth modes, scopes, JWT/OAuth                                                     |
+| `api-canvas`             | DataCanvas primitive — SQL/analytical workspace (Tier 3, opt-in)                  |
 | `api-config`             | AppConfig, parseConfig, env vars                                                  |
 | `api-context`            | Context interface, logger, state, progress                                        |
-| `api-errors`             | McpError, JsonRpcErrorCode, error patterns                                        |
+| `api-errors`             | McpError, JsonRpcErrorCode, error patterns, typed contracts                       |
 | `api-linter`             | Definition lint rule reference — look up rule IDs reported by `lint:mcp`/devcheck |
 | `api-services`           | LLM, Speech, Graph services                                                       |
 | `api-testing`            | createMockContext, test patterns                                                  |
-| `api-utils`              | Formatting, parsing, security, pagination, scheduling                             |
+| `api-utils`              | Formatting, parsing, security, pagination, scheduling, `httpErrorFromResponse`    |
 | `api-workers`            | Cloudflare Workers runtime                                                        |
 
 When you complete a skill's checklist, check the boxes and add a completion timestamp at the end (e.g., `Completed: 2026-03-11`).
@@ -338,8 +351,6 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run tree`        | Generate directory structure doc     |
 | `bun run format`      | Auto-fix formatting                  |
 | `bun run test`        | Run tests (Vitest)                   |
-| `bun run dev:stdio`   | Dev mode (stdio)                     |
-| `bun run dev:http`    | Dev mode (HTTP)                      |
 | `bun run start:stdio` | Production mode (stdio)              |
 | `bun run start:http`  | Production mode (HTTP)               |
 | `bun run inspector`   | Launch MCP Inspector                 |

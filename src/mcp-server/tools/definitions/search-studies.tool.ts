@@ -4,12 +4,14 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
 import { formatRemainingStudyFields } from '../utils/format-helpers.js';
 import { buildAdvancedFilter, toArray } from '../utils/query-helpers.js';
+import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 const { maxPageSize } = getServerConfig();
 
@@ -31,6 +33,28 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     idempotentHint: true,
     openWorldHint: true,
   },
+
+  errors: [
+    {
+      reason: 'ids_not_found',
+      code: JsonRpcErrorCode.NotFound,
+      when: 'One or more NCT IDs in the nctIds filter are not present at ClinicalTrials.gov.',
+      recovery: RECOVERY_HINTS.ids_not_found,
+    },
+    {
+      reason: 'field_invalid',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A field name in the fields parameter is invalid (often a module name instead of a piece name).',
+      recovery: RECOVERY_HINTS.field_invalid,
+    },
+    {
+      reason: 'rate_limited',
+      code: JsonRpcErrorCode.RateLimited,
+      when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
+      recovery: RECOVERY_HINTS.rate_limited,
+      retryable: true,
+    },
+  ],
 
   input: z.object({
     query: z.string().optional().describe('General full-text search across all fields.'),
@@ -73,7 +97,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        `Advanced filter using AREA[] Essie syntax. E.g., "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]". Combine with AND/OR/NOT and parentheses.`,
+        `Advanced filter using AREA[] Essie syntax. E.g., "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]". Combine with AND/OR/NOT and parentheses. Use clinicaltrials_get_field_definitions with a query to find AREA[]-compatible field names.`,
       ),
     geoFilter: z
       .string()
@@ -92,13 +116,13 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .array(z.string())
       .optional()
       .describe(
-        `Fields to return — PascalCase piece names (leaves in the field tree), not module names. E.g., use 'DesignPrimaryPurpose' not 'StudyDesign'. Strongly recommended to reduce payload. Common: NCTId, BriefTitle, OverallStatus, Phase, LeadSponsorName, Condition, InterventionName, BriefSummary, EnrollmentCount, StartDate. Call clinicaltrials_get_field_definitions to browse valid fields.`,
+        `Specific field names to return — strongly recommended to reduce response size from ~70KB per study. Examples: NCTId, BriefTitle, OverallStatus, Condition, BriefSummary. Use clinicaltrials_get_field_definitions with a query (e.g., "enrollment", "sponsor") to find the exact field names for any concept.`,
       ),
     sort: z
       .string()
       .optional()
       .describe(
-        `Sort order. Format: FieldName:asc or FieldName:desc. E.g., "LastUpdatePostDate:desc", "EnrollmentCount:desc". Max 2 fields comma-separated.`,
+        `Sort order. Format: FieldName:asc or FieldName:desc. E.g., "LastUpdatePostDate:desc", "EnrollmentCount:desc". Max 2 fields comma-separated. Use clinicaltrials_get_field_definitions to find sortable field names.`,
       ),
     pageSize: z
       .number()

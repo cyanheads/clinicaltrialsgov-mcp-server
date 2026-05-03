@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.4.3](changelog/2.4.x/2.4.3.md) — 2026-05-03
+
+Field-name validation cache + did-you-mean suggestions (fixes #35); new `query` mode in `clinicaltrials_get_field_definitions`; typed error contracts on every tool/resource; framework 0.7.6 → 0.8.13
+
 ## [2.4.2](changelog/2.4.x/2.4.2.md) — 2026-04-27
 
 Bump @cyanheads/mcp-ts-core 0.7.0 → 0.7.6, resync 7 skills and 1 script (+ 1 new), adopt 0.7.4 form-client safety guidance in CLAUDE.md/AGENTS.md checklist

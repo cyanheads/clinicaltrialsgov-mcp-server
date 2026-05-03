@@ -4,7 +4,7 @@ description: >
   Review an MCP server for common security gaps: LLM-facing surfaces as injection vector (tools, resources, prompts, descriptions), scope blast radius, destructive ops without consent, upstream auth shape, input sinks (URL / path / roots / shell / sampling / schema strictness / ReDoS), tenant isolation, leakage through errors and telemetry, unbounded resources, and HTTP-mode deployment surface. Use before a release, after a batch of handler changes, or when the user asks for a security review, audit, or hardening pass. Produces grouped findings and a numbered options list.
 metadata:
   author: cyanheads
-  version: "1.1"
+  version: "1.3"
   audience: external
   type: audit
 ---
@@ -53,6 +53,12 @@ Note: tool / resource / prompt counts, auth mode, storage provider, upstream API
 - Session ID source (framework CSPRNG, or builder-supplied?) and binding to auth identity
 - Any unauthenticated routes (`/healthz`, `/sse`, metadata endpoints) — do they leak tool lists or tenant hints?
 - MCP Authorization spec: if implemented, PKCE enforced, token audience (`aud`) checked, resource indicators used
+
+**If `CANVAS_PROVIDER_TYPE=duckdb` is set**, also capture:
+
+- Auth mode — canvas in `MCP_AUTH_MODE=none` collapses the composite `(tenantId, canvasId)` scope to `('default', canvasId)`, where the ID is the only differentiator
+- `CANVAS_MAX_CANVASES_PER_TENANT`, `CANVAS_TTL_MS`, `CANVAS_ABSOLUTE_CAP_MS`, `CANVAS_EXPORT_PATH` values
+- Whether external rate limiting (CDN, reverse proxy, WAF) fronts the deployment — required to keep the ~10¹⁸ canvasId keyspace operationally infeasible to brute-force
 
 Use `TaskCreate` — one task per axis. Mark complete as you go.
 
@@ -203,10 +209,10 @@ grep -rn "^let " src/services/
 
 What accidentally reaches the LLM, user, or observability sinks.
 
-**Look in:** `throw new McpError(...)` sites, `McpError.data` fields, output schemas, and every logging / telemetry surface — not just `ctx.log`.
+**Look in:** `throw new McpError(...)` and `ctx.fail(reason, msg, data)` sites, error factory calls (`notFound`, `httpErrorFromResponse`, …), `McpError.data` fields (the `data` arg flows through both paths), output schemas, and every logging / telemetry surface — not just `ctx.log`.
 
 ```bash
-grep -rn "new McpError" src/
+grep -rnE "new McpError|ctx\.fail\(|httpErrorFromResponse\(" src/
 grep -rnE "\b(ctx\.log|console\.(log|info|warn|error|debug)|logger\.)" src/
 grep -rnE "(Sentry\.|captureException|setTag|setContext|addBreadcrumb)" src/
 grep -rnE "(setAttribute|setAttributes|span\.)" src/  # OpenTelemetry
@@ -214,7 +220,8 @@ grep -rnE "(setAttribute|setAttributes|span\.)" src/  # OpenTelemetry
 
 **Check:**
 
-- Error `data` fields carry upstream response bodies, auth headers, stack traces?
+- Error `data` fields (whether passed via `ctx.fail(reason, msg, data)`, `new McpError(code, msg, data)`, or factory calls) carry upstream response bodies, auth headers, stack traces?
+- `httpErrorFromResponse` body capture sweeping in too much (default 500-byte cap is fine for most APIs but consider `captureBody: false` when the upstream returns auth-bearing payloads)?
 - Output schemas include token prefixes, internal IDs, session identifiers?
 - `format()` renders fields that shouldn't leave the server?
 - `ctx.log.info(msg, body)` where `body` is the raw request (may contain secrets)?
@@ -222,7 +229,7 @@ grep -rnE "(setAttribute|setAttributes|span\.)" src/  # OpenTelemetry
 - OpenTelemetry span attributes / Sentry breadcrumbs carry tokens, PII, or full request bodies?
 - Secret / token / HMAC comparisons use `===` or `==` instead of constant-time (`timingSafeEqual` / `crypto.timingSafeEqual`) — leaks length and prefix via timing?
 
-**Smell:** `throw new McpError(code, upstream.message, { raw: upstream.body })`. Or: `if (apiKey === expected)` on a request-auth path.
+**Smell:** `throw new McpError(code, upstream.message, { raw: upstream.body })` or `throw ctx.fail('upstream_failed', e.message, { raw: e.response.body })`. Or: `if (apiKey === expected)` on a request-auth path.
 
 #### Axis 8 — Resource bounds
 
@@ -247,6 +254,23 @@ grep -rn "JSON.parse\b" src/
 - Concurrency cap on long-running tools so one tenant can't starve the event loop?
 
 **Smell:** `while (cursor) { results.push(...); cursor = next; }` with no max count. Or: `JSON.parse(await req.text())` with no `Content-Length` check upstream.
+
+#### Axis 9 — Canvas (only if `CANVAS_PROVIDER_TYPE=duckdb`)
+
+DataCanvas is opt-in and deliberately trades isolation for cross-agent token-shareable working sets — designed for public-data tabular servers (BrAPI, OpenAlex, etc.) where session-pinning isn't desired. The trade only holds when the deployment matches that assumption. Skip this axis entirely when canvas is disabled (`CANVAS_PROVIDER_TYPE=none`, the default).
+
+**Look in:** `src/config/server-config.ts`, every tool reading `ctx.core.canvas?`, deployment config (wrangler / Dockerfile / proxy).
+
+**Check:**
+
+- Data registered on canvases is **already public** or already-shared-out-of-band. The composite `(tenantId, canvasId)` scope collapses to `('default', canvasId)` in `MCP_AUTH_MODE=none` — anyone with the `canvasId` attaches.
+- External rate limiting (CDN, reverse proxy, WAF) fronts the deployment so the ~10¹⁸ keyspace can't be brute-forced. Without it, the entropy assumption breaks and discovery becomes feasible.
+- `CANVAS_MAX_CANVASES_PER_TENANT` sized for the memory budget — default 100 is the floor; raising it lets a single tenant exhaust memory faster.
+- `CANVAS_TTL_MS` / `CANVAS_ABSOLUTE_CAP_MS` not absurdly long. Defaults (24 h sliding / 7 d absolute) are reasonable; longer widens the window an unreferenced `canvasId` stays guessable.
+- `CANVAS_EXPORT_PATH` doesn't point into a shared mount, the repo, or a directory another service serves from. The path-sandbox blocks `..` traversal but doesn't prevent the configured root from being a bad choice.
+- Axis 1 (description templating from canvas-supplied content), Axis 5 (no parallel service runs raw SQL outside the canvas API and bypasses `assertReadOnlyQuery`), and Axis 7 (errors from canvas operations don't leak the failed SQL string back through `McpError.data`) all apply.
+
+**Smell:** `MCP_AUTH_MODE=none` deployment registering per-user data (recent activity, account state, cart contents) onto a canvas. Or: `CANVAS_EXPORT_PATH=/srv/static` with a static file server pointing at the same root.
 
 ### 3. Quick sanity pass
 
@@ -319,5 +343,6 @@ End with:
 - [ ] Axis 6 — tenant isolation: module-scope state swept
 - [ ] Axis 7 — leakage back: errors / outputs / `ctx.log` / `console.*` / telemetry / constant-time comparisons
 - [ ] Axis 8 — resource bounds on loops / retries / pagination / parse size+depth / per-tenant rate
+- [ ] **If `CANVAS_PROVIDER_TYPE=duckdb`:** Axis 9 — public-data assumption holds, external rate limiting in place, max-canvases-per-tenant + TTLs sized for the deployment, `CANVAS_EXPORT_PATH` doesn't escape into shared / served paths, `assertReadOnlyQuery` is the only SQL path
 - [ ] Quick sanity pass: `bun audit`, lifecycle scripts, `.env.example`, config validation, new-dep provenance
 - [ ] Report: summary → grouped findings → numbered options

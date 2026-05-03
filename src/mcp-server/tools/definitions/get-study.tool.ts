@@ -41,7 +41,11 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
   }),
 
   output: z.object({
-    study: z.record(z.string(), z.unknown()).describe('Full study record.'),
+    study: z
+      .record(z.string(), z.unknown())
+      .describe(
+        'Full study record. Top-level keys: protocolSection (identification, status, sponsor, conditions, design, arms/interventions, outcomes, eligibility, contacts/locations), derivedSection (MeSH-normalized terms), hasResults, resultsSection, documentSection. Use clinicaltrials_get_field_definitions to explore the schema.',
+      ),
   }),
 
   async handler(input, ctx) {

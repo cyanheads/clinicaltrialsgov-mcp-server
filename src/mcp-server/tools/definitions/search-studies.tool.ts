@@ -139,7 +139,11 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
   }),
 
   output: z.object({
-    studies: z.array(z.record(z.string(), z.unknown())).describe('Matching studies.'),
+    studies: z
+      .array(z.record(z.string(), z.unknown()))
+      .describe(
+        'Matching studies. Each entry is a nested ClinicalTrials.gov study record — top-level keys: protocolSection, derivedSection, hasResults, resultsSection, documentSection. Use clinicaltrials_get_field_definitions to explore the schema.',
+      ),
     totalCount: z
       .number()
       .optional()

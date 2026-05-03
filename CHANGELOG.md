@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.4.4](changelog/2.4.x/2.4.4.md) — 2026-05-03
+
+Polish LLM-facing definition language — flatten `clinicaltrials_get_field_definitions` description, enrich opaque output schemas in search/get-study/get-study-results, expand landscape prompt to all relevant tools.
+
 ## [2.4.3](changelog/2.4.x/2.4.3.md) — 2026-05-03
 
 Field-name validation cache + did-you-mean suggestions (fixes #35); new `query` mode in `clinicaltrials_get_field_definitions`; typed error contracts on every tool/resource; framework 0.7.6 → 0.8.13

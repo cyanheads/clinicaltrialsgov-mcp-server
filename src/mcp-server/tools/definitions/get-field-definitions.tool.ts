@@ -45,14 +45,8 @@ function indexEntryToResult(entry: FieldIndexEntry): FieldDefResult {
 }
 
 export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', {
-  description: `Discover valid field names from the ClinicalTrials.gov data model. Call this FIRST when you need to know which field names to use in \`fields\`, \`advancedFilter\`, or \`sort\` parameters of other tools, or as input to clinicaltrials_get_field_values.
-
-Three usage modes:
-- \`query\`: keyword search. Pass a concept (e.g., "enrollment", "sponsor", "adverse events") to get a ranked list of matching field names with their data types and locations.
-- \`path\`: drill into a section. Pass a dot-notation path (e.g., "protocolSection.designModule") to see its individual fields.
-- (no input): top-level overview of all sections in the study record.
-
-Returns canonical PascalCase identifiers like OverallStatus, EnrollmentCount, LeadSponsorName — these are the exact names the API accepts.`,
+  description:
+    'Discover valid field names from the ClinicalTrials.gov data model. Call this FIRST when you need to know which field names to use in `fields`, `advancedFilter`, or `sort` parameters of other tools, or as input to clinicaltrials_get_field_values. Three usage modes: pass `query` for keyword search by concept (e.g., "enrollment", "sponsor", "adverse events") returning a ranked list of matches; pass `path` for drill-down into a section by dot-notation (e.g., "protocolSection.designModule") returning its individual fields; omit both for a top-level overview of all sections. Returns canonical PascalCase identifiers like OverallStatus, EnrollmentCount, LeadSponsorName — the exact names the API accepts.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -116,7 +110,10 @@ Returns canonical PascalCase identifiers like OverallStatus, EnrollmentCount, Le
             sourceType: z.string().optional().describe('Data type in the model.'),
             type: z.string().optional().describe('Semantic type.'),
             isEnum: z.boolean().optional().describe('Whether the field is an enum type.'),
-            description: z.string().optional().describe('Field description.'),
+            description: z
+              .string()
+              .optional()
+              .describe('Human-readable description from the upstream data model. Often absent.'),
             path: z.string().optional().describe('Full dot-notation path.'),
             children: z
               .array(z.record(z.string(), z.unknown()))

@@ -371,19 +371,27 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
             outcomes: z
               .array(z.record(z.string(), z.unknown()))
               .optional()
-              .describe('Outcome measures with statistics.'),
+              .describe(
+                'Outcome measures with per-group statistics. Summary mode (compact): type, title, timeFrame, paramType, unitOfMeasure, group/class counts, plus topStats per group when available. Full mode (default): adds raw groups, classes, categories, measurements, and analyses arrays.',
+              ),
             adverseEvents: z
               .record(z.string(), z.unknown())
               .optional()
-              .describe('Adverse events data.'),
+              .describe(
+                'Adverse events. Summary mode: timeFrame, groupCount, seriousEventCount, otherEventCount. Full mode: adds eventGroups, seriousEvents, otherEvents with per-event term and per-group affected/at-risk stats.',
+              ),
             participantFlow: z
               .record(z.string(), z.unknown())
               .optional()
-              .describe('Participant flow data.'),
+              .describe(
+                'Participant flow milestones and drop-outs. Summary mode: groupCount, periodCount. Full mode: adds groups and periods with per-period milestones, achievements, and dropWithdraws.',
+              ),
             baseline: z
               .record(z.string(), z.unknown())
               .optional()
-              .describe('Baseline characteristics.'),
+              .describe(
+                'Baseline characteristics. Summary mode: groupCount, measureCount, and measures (title, paramType, unitOfMeasure). Full mode: adds groups and measures with per-group classes/categories/measurements.',
+              ),
           })
           .describe('Extracted results for one study.'),
       )

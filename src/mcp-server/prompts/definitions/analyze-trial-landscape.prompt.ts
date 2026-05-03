@@ -36,11 +36,13 @@ export const analyzeTrialLandscape = prompt('analyze_trial_landscape', {
           type: 'text',
           text: `Analyze the clinical trial landscape for: **${args.topic}**
 
-Use the ClinicalTrials.gov MCP tools to build a data-driven analysis. Available tools:
+Use the ClinicalTrials.gov MCP tools to build a data-driven analysis. Most useful for landscape work:
 
 - **clinicaltrials_get_study_count** — fast counts for a query with optional filters (status, phase, etc.). Use this to build breakdowns and comparisons.
 - **clinicaltrials_search_studies** — full study search with field selection, sorting, and pagination. Use to sample key studies, identify sponsors, or examine recent activity.
 - **clinicaltrials_get_field_values** — discover valid filter values and their frequency. Useful when you need to know what values exist for a field.
+- **clinicaltrials_get_field_definitions** — discover available field names by keyword or path. Use when you need a field name for filtering or sorting that you don't already know.
+- **clinicaltrials_get_study_results** — fetch outcomes, adverse events, participant flow, and baseline for completed studies. Use when the analysis benefits from outcome trends across completed trials.
 
 ${focus}
 

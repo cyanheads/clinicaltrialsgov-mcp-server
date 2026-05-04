@@ -86,19 +86,25 @@ export function formatRemainingStudyFields(
   const remaining = leaves.filter((leaf) => !isRendered(leaf.segments, renderedPrefixes));
   if (remaining.length === 0) return [];
 
+  // Count only cap-dropped fields as "uncovered" — dedup-dropped leaves aren't
+  // truncation, just consolidation. Pre-fix logic counted both, lying about
+  // truncation whenever multiple array entries shared a label.
   const seen = new Set<string>();
   const lines: string[] = [];
+  let dropped = 0;
   for (const leaf of remaining) {
-    if (lines.length >= maxLines) break;
     const label = labelFromPath(leaf.segments);
     if (!label || seen.has(label)) continue;
+    if (lines.length >= maxLines) {
+      dropped++;
+      continue;
+    }
     seen.add(label);
     lines.push(`  ${label}: ${truncate(leaf.value, maxValueLen)}`);
   }
 
-  const uncovered = remaining.length - lines.length;
-  if (uncovered > 0) {
-    lines.push(`  … and ${uncovered} more fields`);
+  if (dropped > 0) {
+    lines.push(`  … and ${dropped} more fields`);
   }
 
   return lines;

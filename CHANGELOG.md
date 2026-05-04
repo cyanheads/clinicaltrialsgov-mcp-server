@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.4.5](changelog/2.4.x/2.4.5.md) — 2026-05-03
+
+find_eligible adds match-prioritized location sort + 3-stage funnel diagnostics; search/count default-filter the EnrollmentCount=99999999 sentinel; search format() lifts truncation cap when fields is explicit.
+
 ## [2.4.4](changelog/2.4.x/2.4.4.md) — 2026-05-03
 
 Polish LLM-facing definition language — flatten `clinicaltrials_get_field_definitions` description, enrich opaque output schemas in search/get-study/get-study-results, expand landscape prompt to all relevant tools.

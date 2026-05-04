@@ -224,6 +224,20 @@ describe('findEligible', () => {
       );
     });
 
+    it('opts out of the EnrollmentCount sentinel filter (regression for #41)', async () => {
+      // Eligibility matches care about who can enroll, not whether the
+      // sponsor published an enrollment count. The sentinel filter would
+      // drop otherwise-valid matches.
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext();
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ includeUnknownEnrollment: true }),
+        ctx,
+      );
+    });
+
     it('requests the eligibility field set', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
@@ -322,6 +336,8 @@ describe('findEligible', () => {
   });
 
   describe('format', () => {
+    const baseFunnel = { conditionMatched: 0, locationMatched: 0, demographicsMatched: 0 };
+
     it('renders study list with eligibility', () => {
       const blocks = findEligible.format!({
         studies: [
@@ -340,6 +356,7 @@ describe('findEligible', () => {
         ],
         totalCount: 1,
         searchCriteria: { conditions: ['Diabetes'], location: 'US', age: 30, sex: 'ALL' },
+        funnel: { ...baseFunnel, demographicsMatched: 1 },
       });
       const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('Found 1 eligible studies');
@@ -368,6 +385,7 @@ describe('findEligible', () => {
         ],
         totalCount: 1,
         searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'ALL' },
+        funnel: baseFunnel,
       });
       expect((blocks[0] as { text: string }).text).toContain('Hospital A');
       expect((blocks[0] as { text: string }).text).toContain('Locations:');
@@ -390,6 +408,7 @@ describe('findEligible', () => {
         ],
         totalCount: 1,
         searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'ALL' },
+        funnel: baseFunnel,
       });
       expect((blocks[0] as { text: string }).text).toContain('Contact:');
       expect((blocks[0] as { text: string }).text).toContain('Dr. Smith');
@@ -400,6 +419,7 @@ describe('findEligible', () => {
         studies: [],
         totalCount: 0,
         searchCriteria: { conditions: ['Rare'], location: 'US', age: 30, sex: 'ALL' },
+        funnel: baseFunnel,
         noMatchHints: ['No studies found', 'Try broader terms'],
       });
       expect((blocks[0] as { text: string }).text).toContain('No eligible studies found');
@@ -414,8 +434,116 @@ describe('findEligible', () => {
         ],
         totalCount: 50,
         searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'ALL' },
+        funnel: { conditionMatched: 200, locationMatched: 80, demographicsMatched: 50 },
       });
       expect((blocks[0] as { text: string }).text).toContain('50 eligible studies (showing 1)');
+    });
+
+    it('renders the funnel line (regression for #37)', () => {
+      const blocks = findEligible.format!({
+        studies: [],
+        totalCount: 2,
+        searchCriteria: { conditions: ['RA'], location: 'Seattle', age: 58, sex: 'FEMALE' },
+        funnel: { conditionMatched: 298, locationMatched: 47, demographicsMatched: 2 },
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('Funnel: 298 condition → 47 + location → 2 + demographics');
+    });
+
+    it('renders sites in pre-sorted order without recruiting-priority override (regression for #37)', () => {
+      // Handler sorts locations by match score; format() must not re-filter
+      // by status, or a city-matched non-recruiting site gets buried behind
+      // recruiting non-matches.
+      const blocks = findEligible.format!({
+        studies: [
+          {
+            protocolSection: {
+              identificationModule: { nctId: 'NCT1', briefTitle: 'X' },
+              contactsLocationsModule: {
+                locations: [
+                  // Pre-sorted: Seattle match first even when not RECRUITING
+                  { facility: 'Seattle Site', city: 'Seattle', status: 'COMPLETED' },
+                  { facility: 'NY Site 1', city: 'New York', status: 'RECRUITING' },
+                  { facility: 'NY Site 2', city: 'New York', status: 'RECRUITING' },
+                  { facility: 'NY Site 3', city: 'New York', status: 'RECRUITING' },
+                ],
+              },
+            },
+          },
+        ],
+        totalCount: 1,
+        searchCriteria: { conditions: ['X'], location: 'Seattle', age: 30, sex: 'ALL' },
+        funnel: { conditionMatched: 1, locationMatched: 1, demographicsMatched: 1 },
+      });
+      const text = (blocks[0] as { text: string }).text;
+      const seattleIdx = text.indexOf('Seattle Site');
+      const nySite3Idx = text.indexOf('NY Site 3');
+      expect(seattleIdx).toBeGreaterThan(-1);
+      // Seattle Site comes before NY Site 3 (or NY Site 3 is in the +N more bucket)
+      if (nySite3Idx > -1) expect(seattleIdx).toBeLessThan(nySite3Idx);
+    });
+  });
+
+  describe('handler — funnel + location sort', () => {
+    it('populates funnel from condition + location + main-search counts (regression for #37)', async () => {
+      mockService.searchStudies.mockImplementation(async (params: { queryLocn?: string }) => {
+        // Distinguish the three calls by which params are present:
+        //   - main: queryLocn + filterAdvanced + fields
+        //   - condition stage: only queryCond + count
+        //   - location stage: queryCond + queryLocn (no filterAdvanced/fields)
+        const p = params as Record<string, unknown>;
+        if (p.fields) return { studies: [], totalCount: 2 }; // main
+        if (p.queryLocn) return { studies: [], totalCount: 47 }; // condition + location
+        return { studies: [], totalCount: 298 }; // condition only
+      });
+
+      const ctx = createMockContext();
+      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+
+      expect(result.funnel).toEqual({
+        conditionMatched: 298,
+        locationMatched: 47,
+        demographicsMatched: 2,
+      });
+    });
+
+    it("sorts locations by match to the user's city (regression for #37)", async () => {
+      const study = {
+        protocolSection: {
+          identificationModule: { nctId: 'NCT1' },
+          contactsLocationsModule: {
+            locations: [
+              {
+                facility: 'NY Site',
+                city: 'New York',
+                state: 'New York',
+                country: 'United States',
+              },
+              {
+                facility: 'Seattle Site',
+                city: 'Seattle',
+                state: 'Washington',
+                country: 'United States',
+              },
+              {
+                facility: 'Portland Site',
+                city: 'Portland',
+                state: 'Oregon',
+                country: 'United States',
+              },
+            ],
+          },
+        },
+      };
+      mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
+
+      const ctx = createMockContext();
+      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+
+      const sortedStudy = result.studies[0] as typeof study;
+      const locs = sortedStudy.protocolSection.contactsLocationsModule.locations;
+      // Seattle (city match) wins over WA-state-only and US-country-only sites.
+      expect(locs[0]!.facility).toBe('Seattle Site');
     });
   });
 });

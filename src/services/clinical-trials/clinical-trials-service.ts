@@ -33,6 +33,13 @@ const DEFAULT_BASE_BACKOFF_MS = 1000;
 const DEFAULT_MAX_BACKOFF_MS = 30_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MIN_INTERVAL_MS = 1000;
+/**
+ * ClinicalTrials.gov uses 99999999 as a sentinel for "unknown enrollment
+ * count". The filter below excludes studies carrying the sentinel by
+ * default — `RANGE[5000, MAX]` and `EnrollmentCount:desc` otherwise surface
+ * sentinel-polluted results that look like the largest trials but aren't.
+ */
+const ENROLLMENT_SENTINEL_FILTER = 'AREA[EnrollmentCount]RANGE[0, 99999998]';
 
 /** Constructor options for overriding retry/backoff/validation behavior (primarily for tests). */
 export interface ClinicalTrialsServiceOptions {
@@ -94,6 +101,8 @@ export class ClinicalTrialsService {
         filterIds: nctIds,
         fields: ['NCTId', 'BriefTitle', 'HasResults', 'ResultsSection'],
         pageSize: nctIds.length,
+        // ID-targeted lookups must never filter the caller's selection.
+        includeUnknownEnrollment: true,
       },
       ctx,
     );
@@ -236,7 +245,15 @@ export class ClinicalTrialsService {
       q['filter.overallStatus'] = params.filterOverallStatus.join('|');
     if (params.filterGeo) q['filter.geo'] = params.filterGeo;
     if (params.filterIds?.length) q['filter.ids'] = params.filterIds.join('|');
-    if (params.filterAdvanced) q['filter.advanced'] = params.filterAdvanced;
+    const advancedParts: string[] = [];
+    if (params.filterAdvanced) advancedParts.push(params.filterAdvanced);
+    if (!params.includeUnknownEnrollment) advancedParts.push(ENROLLMENT_SENTINEL_FILTER);
+    if (advancedParts.length > 0) {
+      q['filter.advanced'] =
+        advancedParts.length === 1
+          ? advancedParts.join('')
+          : advancedParts.map((p) => `(${p})`).join(' AND ');
+    }
     if (params.fields?.length) q.fields = params.fields.join('|');
     if (params.sort) q.sort = params.sort;
     if (params.countTotal !== undefined) q.countTotal = String(params.countTotal);

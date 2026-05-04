@@ -70,6 +70,12 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       .describe(
         'Advanced filter using AREA[] Essie syntax. E.g., "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]". Combine with AND/OR/NOT and parentheses. Use clinicaltrials_get_field_definitions with a query to find AREA[]-compatible field names.',
       ),
+    includeUnknownEnrollment: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Include studies whose EnrollmentCount is the upstream "unknown" sentinel (99999999). Excluded by default — the sentinel pollutes RANGE[N, MAX] queries. Set true for data-quality audits.',
+      ),
   }),
 
   output: z.object({
@@ -96,6 +102,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
         filterAdvanced: buildAdvancedFilter(toArray(input.phaseFilter), input.advancedFilter),
         countTotal: true,
         pageSize: 0,
+        includeUnknownEnrollment: input.includeUnknownEnrollment,
       },
       ctx,
     );

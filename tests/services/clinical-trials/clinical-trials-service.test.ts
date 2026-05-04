@@ -123,12 +123,53 @@ describe('ClinicalTrialsService', () => {
       expect(calledUrl.searchParams.get('filter.overallStatus')).toBe('RECRUITING|COMPLETED');
       expect(calledUrl.searchParams.get('filter.geo')).toBe('distance(47.6,-122.3,50mi)');
       expect(calledUrl.searchParams.get('filter.ids')).toBe('NCT12345678');
-      expect(calledUrl.searchParams.get('filter.advanced')).toBe('AREA[StudyType]INTERVENTIONAL');
+      // Sentinel filter is appended unless the caller opts in.
+      expect(calledUrl.searchParams.get('filter.advanced')).toBe(
+        '(AREA[StudyType]INTERVENTIONAL) AND (AREA[EnrollmentCount]RANGE[0, 99999998])',
+      );
       expect(calledUrl.searchParams.get('fields')).toBe('NCTId|BriefTitle');
       expect(calledUrl.searchParams.get('sort')).toBe('LastUpdatePostDate:desc');
       expect(calledUrl.searchParams.get('countTotal')).toBe('true');
       expect(calledUrl.searchParams.get('pageSize')).toBe('20');
       expect(calledUrl.searchParams.get('pageToken')).toBe('tok123');
+    });
+
+    it('appends the EnrollmentCount sentinel filter by default', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [] }));
+      const ctx = createMockContext();
+
+      await service.searchStudies({ queryCond: 'diabetes' }, ctx);
+
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
+      expect(calledUrl.searchParams.get('filter.advanced')).toBe(
+        'AREA[EnrollmentCount]RANGE[0, 99999998]',
+      );
+    });
+
+    it('skips the sentinel filter when includeUnknownEnrollment=true', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [] }));
+      const ctx = createMockContext();
+
+      await service.searchStudies({ queryCond: 'diabetes', includeUnknownEnrollment: true }, ctx);
+
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
+      expect(calledUrl.searchParams.has('filter.advanced')).toBe(false);
+    });
+
+    it('preserves a user-supplied filter.advanced when includeUnknownEnrollment=true', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [] }));
+      const ctx = createMockContext();
+
+      await service.searchStudies(
+        {
+          filterAdvanced: 'AREA[StudyType]INTERVENTIONAL',
+          includeUnknownEnrollment: true,
+        },
+        ctx,
+      );
+
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
+      expect(calledUrl.searchParams.get('filter.advanced')).toBe('AREA[StudyType]INTERVENTIONAL');
     });
 
     it('caps pageSize at maxPageSize', async () => {

@@ -11,6 +11,13 @@ export interface SearchParams {
   filterGeo?: string | undefined;
   filterIds?: string[] | undefined;
   filterOverallStatus?: string[] | undefined;
+  /**
+   * Include studies whose `EnrollmentCount` is the upstream "unknown" sentinel
+   * (`99999999`). Default behavior excludes them — the sentinel pollutes
+   * `RANGE[N, MAX]` queries and `EnrollmentCount:desc` sorts. Set true to opt
+   * out of the filter (e.g. when matching by eligibility, not enrollment).
+   */
+  includeUnknownEnrollment?: boolean | undefined;
   pageSize?: number | undefined;
   pageToken?: string | undefined;
   queryCond?: string | undefined;

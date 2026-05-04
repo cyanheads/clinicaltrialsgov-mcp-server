@@ -6,9 +6,31 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
-import type { RawStudyShape } from '@/services/clinical-trials/types.js';
+import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
 import { formatRemainingStudyFields } from '../utils/format-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
+
+interface UserLocation {
+  city?: string | undefined;
+  country: string;
+  state?: string | undefined;
+}
+
+/**
+ * Score a study location against the user's stated location. Higher = better
+ * match. City equality dominates, then state, then country; recruiting status
+ * breaks ties between geographically-equivalent sites.
+ */
+function locationMatchScore(loc: StudyLocation, user: UserLocation): number {
+  const eq = (a?: string, b?: string) =>
+    a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
+  let score = 0;
+  if (eq(loc.city, user.city)) score += 4;
+  if (eq(loc.state, user.state)) score += 2;
+  if (eq(loc.country, user.country)) score += 1;
+  if (loc.status === 'RECRUITING') score += 0.5;
+  return score;
+}
 
 /** Dot-notation prefixes already rendered by the eligible formatter. */
 const ELIGIBLE_RENDERED = new Set([
@@ -108,6 +130,23 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         sex: z.string().describe('Patient sex.'),
       })
       .describe('Search criteria used.'),
+    funnel: z
+      .object({
+        conditionMatched: z
+          .number()
+          .describe('Studies matching the condition query alone (broadest stage).'),
+        locationMatched: z
+          .number()
+          .describe('Studies matching condition + location — diagnoses geographic narrowing.'),
+        demographicsMatched: z
+          .number()
+          .describe(
+            'Studies matching the full filter set (condition + location + age/sex + status). Equal to totalCount.',
+          ),
+      })
+      .describe(
+        'Match counts at each filter stage. Diagnoses where the funnel collapsed on sparse results — e.g., conditionMatched=298 but demographicsMatched=2 means age/sex/status are the constraint.',
+      ),
     noMatchHints: z
       .array(z.string())
       .optional()
@@ -148,23 +187,66 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       sex: input.sex,
     });
 
-    const result = await service.searchStudies(
-      {
-        queryCond: conditionQuery,
-        queryLocn: locationQuery,
-        filterOverallStatus: statusFilter,
-        filterAdvanced: advancedParts.join(' AND '),
-        fields: ELIGIBLE_FIELDS,
-        pageSize: input.maxResults,
-        countTotal: true,
-      },
-      ctx,
-    );
+    // Run the main search and the two funnel-stage counts together. The
+    // service throttles outbound requests at ~1 req/sec, so the calls
+    // serialize at the network layer regardless — Promise.all keeps the code
+    // straight rather than chaining awaits. The extra ~2s is the price of
+    // diagnosing sparse results without a follow-up call.
+    const [result, conditionStage, locationStage] = await Promise.all([
+      service.searchStudies(
+        {
+          queryCond: conditionQuery,
+          queryLocn: locationQuery,
+          filterOverallStatus: statusFilter,
+          filterAdvanced: advancedParts.join(' AND '),
+          fields: ELIGIBLE_FIELDS,
+          pageSize: input.maxResults,
+          countTotal: true,
+          // Eligibility matches are about who can enroll, not about enrollment
+          // count quality. Don't drop matches just because the sponsor didn't
+          // publish a count.
+          includeUnknownEnrollment: true,
+        },
+        ctx,
+      ),
+      service.searchStudies(
+        {
+          queryCond: conditionQuery,
+          pageSize: 0,
+          countTotal: true,
+          includeUnknownEnrollment: true,
+        },
+        ctx,
+      ),
+      service.searchStudies(
+        {
+          queryCond: conditionQuery,
+          queryLocn: locationQuery,
+          pageSize: 0,
+          countTotal: true,
+          includeUnknownEnrollment: true,
+        },
+        ctx,
+      ),
+    ]);
 
     ctx.log.info('Eligibility search complete', {
       returned: result.studies.length,
       totalCount: result.totalCount,
     });
+
+    // Sort each study's locations by match to the user's input so the most
+    // relevant sites surface first in both the structured payload and the
+    // truncated format() rendering. Stable sort preserves upstream order for
+    // sites with equal match scores.
+    for (const study of result.studies) {
+      const locs = (study as RawStudyShape).protocolSection?.contactsLocationsModule?.locations;
+      if (locs && locs.length > 1) {
+        locs.sort(
+          (a, b) => locationMatchScore(b, input.location) - locationMatchScore(a, input.location),
+        );
+      }
+    }
 
     let noMatchHints: string[] | undefined;
     if (result.studies.length === 0) {
@@ -200,6 +282,11 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         age: input.age,
         sex: input.sex,
       },
+      funnel: {
+        conditionMatched: conditionStage.totalCount ?? 0,
+        locationMatched: locationStage.totalCount ?? 0,
+        demographicsMatched: result.totalCount ?? 0,
+      },
       ...(noMatchHints ? { noMatchHints } : {}),
     };
   },
@@ -221,6 +308,10 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
 
     lines.push(
       `Search: conditions=[${sc.conditions.join(', ')}] | location=${sc.location} | age=${sc.age} | sex=${sc.sex}`,
+    );
+    const f = result.funnel;
+    lines.push(
+      `Funnel: ${f.conditionMatched} condition → ${f.locationMatched} + location → ${f.demographicsMatched} + demographics`,
     );
     if (result.noMatchHints?.length) {
       for (const hint of result.noMatchHints) lines.push(`- ${hint}`);
@@ -275,15 +366,14 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
           eligParts.push(`Healthy Volunteers: ${elig.healthyVolunteers ? 'Yes' : 'No'}`);
         if (eligParts.length) lines.push(`  Eligibility: ${eligParts.join(' | ')}`);
 
-        // Recruiting locations (up to 3)
+        // Locations are pre-sorted by match-score in the handler, so the top
+        // 3 are the most relevant sites — typically the user's city/state.
         if (locs.length > 0) {
-          const recruiting = locs.filter((l) => l.status === 'RECRUITING');
-          const toShow = (recruiting.length > 0 ? recruiting : locs).slice(0, 3);
+          const toShow = locs.slice(0, 3);
           const locStr = toShow
             .map((l) => [l.facility, l.city, l.state, l.country].filter(Boolean).join(', '))
             .join(' | ');
-          const remaining =
-            (recruiting.length > 0 ? recruiting.length : locs.length) - toShow.length;
+          const remaining = locs.length - toShow.length;
           lines.push(`  Locations: ${locStr}${remaining > 0 ? ` (+${remaining} more)` : ''}`);
         }
 

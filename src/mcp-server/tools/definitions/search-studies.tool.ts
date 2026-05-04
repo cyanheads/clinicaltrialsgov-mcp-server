@@ -136,6 +136,12 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .boolean()
       .default(true)
       .describe('Include total study count in response. Only computed on the first page.'),
+    includeUnknownEnrollment: z
+      .boolean()
+      .default(false)
+      .describe(
+        'Include studies whose EnrollmentCount is the upstream "unknown" sentinel (99999999). Excluded by default — the sentinel pollutes RANGE[N, MAX] queries and EnrollmentCount:desc sorts. Set true for data-quality audits or when targeting unknown-enrollment studies specifically.',
+      ),
   }),
 
   output: z.object({
@@ -153,6 +159,12 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .record(z.string(), z.unknown())
       .optional()
       .describe('Echo of query/filter criteria used. Present when results are empty.'),
+    requestedFields: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'Echo of the explicit fields parameter. Present only when the caller passed fields — signals that all requested leaves should render in format() without the default truncation cap.',
+      ),
     noMatchHints: z
       .array(z.string())
       .optional()
@@ -179,6 +191,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         countTotal: input.countTotal,
         pageSize: input.pageSize,
         pageToken: input.pageToken,
+        includeUnknownEnrollment: input.includeUnknownEnrollment,
       },
       ctx,
     );
@@ -227,10 +240,18 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         );
       if (input.phaseFilter) hints.push('Remove phaseFilter to include all trial phases.');
 
-      return { ...result, searchCriteria: criteria, noMatchHints: hints };
+      return {
+        ...result,
+        searchCriteria: criteria,
+        noMatchHints: hints,
+        ...(input.fields?.length ? { requestedFields: input.fields } : {}),
+      };
     }
 
-    return result;
+    return {
+      ...result,
+      ...(input.fields?.length ? { requestedFields: input.fields } : {}),
+    };
   },
 
   format: (result) => {
@@ -247,11 +268,20 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       const parts = Object.entries(result.searchCriteria).map(([k, v]) => `${k}=${v}`);
       lines.push(`Criteria: ${parts.join(', ')}`);
     }
+    if (result.requestedFields?.length) {
+      lines.push(`Requested fields: ${result.requestedFields.join(', ')}`);
+    }
     if (result.noMatchHints?.length) {
       for (const hint of result.noMatchHints) lines.push(hint);
     } else if (count === 0) {
       lines.push('Try broader search terms or fewer filters.');
     }
+    // Lift the per-study truncation cap when the caller asked for explicit
+    // fields — they've already opted into payload control, so silently dropping
+    // any of them is the wrong default.
+    const overflowOpts = result.requestedFields?.length
+      ? { maxLines: Number.POSITIVE_INFINITY }
+      : undefined;
     for (const study of result.studies) {
       const s = study as RawStudyShape;
       const nctId = s.protocolSection?.identificationModule?.nctId ?? 'Unknown';
@@ -271,7 +301,13 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       const statusStr = status ? ` [${status}]` : '';
       const metaStr = meta.length ? `\n  ${meta.join(' | ')}` : '';
       lines.push(`- **${nctId}**: ${title}${statusStr}${metaStr}`);
-      lines.push(...formatRemainingStudyFields(study as Record<string, unknown>, SEARCH_RENDERED));
+      lines.push(
+        ...formatRemainingStudyFields(
+          study as Record<string, unknown>,
+          SEARCH_RENDERED,
+          overflowOpts,
+        ),
+      );
     }
     if (result.nextPageToken) {
       lines.push('\n(More results available — pass pageToken to paginate)');

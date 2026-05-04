@@ -52,7 +52,25 @@ describe('formatRemainingStudyFields', () => {
     expect(output).not.toContain('[…]');
   });
 
-  it('respects the outer maxLines budget', () => {
+  it('respects the outer maxLines budget for distinct labels', () => {
+    // 6 distinct field labels with maxLines: 3 — the cap should drop 3 and
+    // emit a truthful "and 3 more fields" footer.
+    const study = {
+      protocolSection: {
+        identificationModule: { nctId: 'NCT1', briefTitle: 'T', acronym: 'A' },
+        statusModule: { overallStatus: 'RECRUITING', studyFirstSubmitDate: '2026-01-01' },
+        descriptionModule: { briefSummary: 'S' },
+      },
+    };
+    const lines = formatRemainingStudyFields(study, new Set(), { maxLines: 3 });
+    expect(lines.length).toBe(4); // 3 content + 1 summary
+    expect(lines.some((l) => /and 3 more fields/.test(l))).toBe(true);
+  });
+
+  it('does not emit "+N more" when leaves dedup below the cap (regression for #38)', () => {
+    // 20 interventions all sharing the same label dedup to a single line.
+    // Pre-fix logic counted dedup-dropped leaves toward the truncation
+    // footer, lying about a cap that didn't actually fire.
     const study = {
       protocolSection: {
         armsInterventionsModule: {
@@ -64,9 +82,28 @@ describe('formatRemainingStudyFields', () => {
       },
     };
     const lines = formatRemainingStudyFields(study, new Set(), { maxLines: 4 });
-    // 4 content lines + possible "... and N more fields" summary
-    expect(lines.length).toBeLessThanOrEqual(5);
-    expect(lines.some((l) => /more fields/.test(l))).toBe(true);
+    expect(lines.some((l) => /more fields/.test(l))).toBe(false);
+  });
+
+  it('renders all fields when maxLines is Infinity (regression for #38)', () => {
+    // Explicit-fields path passes Infinity so every requested leaf renders.
+    const study = {
+      protocolSection: {
+        identificationModule: { nctId: 'NCT1', briefTitle: 'T' },
+        statusModule: {
+          startDateStruct: { date: '2024-01-01' },
+          primaryCompletionDateStruct: { date: '2025-01-01' },
+        },
+        armsInterventionsModule: { interventions: [{ name: 'Drug', type: 'DRUG' }] },
+      },
+    };
+    const lines = formatRemainingStudyFields(study, new Set(), {
+      maxLines: Number.POSITIVE_INFINITY,
+    });
+    expect(lines.some((l) => /more fields/.test(l))).toBe(false);
+    expect(lines.some((l) => l.includes('NCT1'))).toBe(true);
+    expect(lines.some((l) => l.includes('Drug'))).toBe(true);
+    expect(lines.some((l) => l.includes('2024-01-01'))).toBe(true);
   });
 
   it('truncates long string values at maxValueLen', () => {

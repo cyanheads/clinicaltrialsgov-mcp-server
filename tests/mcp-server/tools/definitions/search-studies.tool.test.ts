@@ -284,6 +284,54 @@ describe('searchStudies', () => {
         ctx,
       );
     });
+
+    it('defaults includeUnknownEnrollment to false (regression for #41)', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
+      const ctx = createMockContext();
+      await searchStudies.handler(searchStudies.input!.parse({}), ctx);
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ includeUnknownEnrollment: false }),
+        ctx,
+      );
+    });
+
+    it('forwards includeUnknownEnrollment=true to service', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
+      const ctx = createMockContext();
+      await searchStudies.handler(
+        searchStudies.input!.parse({ includeUnknownEnrollment: true }),
+        ctx,
+      );
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ includeUnknownEnrollment: true }),
+        ctx,
+      );
+    });
+
+    it('echoes requestedFields when caller passed explicit fields (regression for #38)', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [{ nctId: 'NCT12345678' }],
+        totalCount: 1,
+      });
+      const ctx = createMockContext();
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({ fields: ['NCTId', 'BriefTitle'] }),
+        ctx,
+      );
+      expect(result.requestedFields).toEqual(['NCTId', 'BriefTitle']);
+    });
+
+    it('omits requestedFields when caller did not pass fields', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [{ nctId: 'NCT12345678' }],
+        totalCount: 1,
+      });
+      const ctx = createMockContext();
+      const result = await searchStudies.handler(searchStudies.input!.parse({}), ctx);
+      expect(result.requestedFields).toBeUndefined();
+    });
   });
 
   describe('format', () => {

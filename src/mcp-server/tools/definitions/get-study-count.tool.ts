@@ -10,7 +10,7 @@ import { buildAdvancedFilter, toArray } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 export const getStudyCount = tool('clinicaltrials_get_study_count', {
-  description: `Get total study count matching a query without fetching study data. Fast and lightweight. Use for quick statistics or to build breakdowns by calling multiple times with different filters (e.g., count by phase, count by status, count recruiting vs completed for a condition).`,
+  description: `Get total clinical trial study count from ClinicalTrials.gov matching a query, without fetching study data. Fast and lightweight. Use for quick statistics or to build breakdowns by calling multiple times with different filters (e.g., count by phase, count by status, count recruiting vs completed for a condition).`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,

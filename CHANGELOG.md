@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.4.6](changelog/2.4.x/2.4.6.md) — 2026-05-04
+
+search_studies fields description hardened against Sponsor/*List hallucinations; three tool descriptions anchor on "clinical trial"; framework bumped to 0.8.14 with skill sync.
+
 ## [2.4.5](changelog/2.4.x/2.4.5.md) — 2026-05-03
 
 find_eligible adds match-prioritized location sort + 3-stage funnel diagnostics; search/count default-filter the EnrollmentCount=99999999 sentinel; search format() lifts truncation cap when fields is explicit.

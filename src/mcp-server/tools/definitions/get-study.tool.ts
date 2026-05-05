@@ -13,7 +13,7 @@ import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 export const getStudy = tool('clinicaltrials_get_study_record', {
   description:
-    'Fetch a single clinical study by NCT ID. Returns the full study record including protocol details, eligibility criteria, outcomes, arms, interventions, contacts, and locations.',
+    'Fetch a single clinical trial study by NCT ID from ClinicalTrials.gov. Returns the full study record including protocol details, eligibility criteria, outcomes, arms, interventions, contacts, and locations.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,

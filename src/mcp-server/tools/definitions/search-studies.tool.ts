@@ -116,7 +116,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .array(z.string())
       .optional()
       .describe(
-        `Specific field names to return — strongly recommended to reduce response size from ~70KB per study. Examples: NCTId, BriefTitle, OverallStatus, Condition, BriefSummary. Use clinicaltrials_get_field_definitions with a query (e.g., "enrollment", "sponsor") to find the exact field names for any concept.`,
+        `PascalCase leaf names to return; strongly recommended since full records are ~70KB. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept.`,
       ),
     sort: z
       .string()

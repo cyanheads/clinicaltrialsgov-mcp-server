@@ -56,7 +56,7 @@ function htmlResponse(body: string, status = 200) {
 }
 
 // Fast retry/backoff keeps wall-clock time in retry tests to < 1s. Production
-// defaults (6 retries, 30s cap) are verified via the singleton accessor block.
+// defaults (3 retries, 30s cap) are verified via the singleton accessor block.
 // validateFieldsLocally=false skips the lazy /studies/metadata fetch — tests
 // that exercise the validation path opt back in explicitly via a fresh service.
 const fastOptions = {
@@ -1021,7 +1021,7 @@ describe('ClinicalTrialsService', () => {
   });
 
   describe('constructor options', () => {
-    it('defaults to 6 retries when options omitted', async () => {
+    it('defaults to 3 retries when options omitted', async () => {
       const defaultService = new ClinicalTrialsService(testConfig, {
         baseBackoffMs: 1,
         maxBackoffMs: 2,
@@ -1031,8 +1031,8 @@ describe('ClinicalTrialsService', () => {
       await expect(defaultService.searchStudies({}, ctx)).rejects.toThrow(
         /unavailable after retries/,
       );
-      // 1 initial + 6 retries = 7 calls
-      expect(mockFetch).toHaveBeenCalledTimes(7);
+      // 1 initial + 3 retries = 4 calls
+      expect(mockFetch).toHaveBeenCalledTimes(4);
     }, 30_000);
   });
 });

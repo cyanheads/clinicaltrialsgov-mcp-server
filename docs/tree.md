@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-04-24 14:00:20
+Generated on: 2026-05-05 05:15:26
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -33,10 +33,12 @@ clinicaltrialsgov-mcp-server/
 │   ├── build-changelog.ts
 │   ├── build.ts
 │   ├── check-docs-sync.ts
+│   ├── check-framework-antipatterns.ts
 │   ├── check-skills-sync.ts
 │   ├── clean.ts
 │   ├── devcheck.ts
 │   ├── lint-mcp.ts
+│   ├── split-changelog.ts
 │   └── tree.ts
 ├── skills/
 │   ├── add-app-tool/
@@ -52,6 +54,8 @@ clinicaltrialsgov-mcp-server/
 │   ├── add-tool/
 │   │   └── SKILL.md
 │   ├── api-auth/
+│   │   └── SKILL.md
+│   ├── api-canvas/
 │   │   └── SKILL.md
 │   ├── api-config/
 │   │   └── SKILL.md
@@ -102,7 +106,9 @@ clinicaltrialsgov-mcp-server/
 │   │   └── SKILL.md
 │   ├── security-pass/
 │   │   └── SKILL.md
-│   └── setup/
+│   ├── setup/
+│   │   └── SKILL.md
+│   └── tool-defs-analysis/
 │       └── SKILL.md
 ├── src/
 │   ├── config/
@@ -129,10 +135,12 @@ clinicaltrialsgov-mcp-server/
 │   │       └── utils/
 │   │           ├── _schemas.ts
 │   │           ├── format-helpers.ts
-│   │           └── query-helpers.ts
+│   │           ├── query-helpers.ts
+│   │           └── recovery-hints.ts
 │   ├── services/
 │   │   └── clinical-trials/
 │   │       ├── clinical-trials-service.ts
+│   │       ├── field-search.ts
 │   │       └── types.ts
 │   └── index.ts
 ├── tests/

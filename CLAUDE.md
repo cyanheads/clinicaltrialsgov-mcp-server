@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** clinicaltrialsgov-mcp-server
-**Version:** 2.4.4
+**Version:** 2.4.6
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -55,8 +55,9 @@ When the user asks what to do next, what's left, or needs direction, suggest rel
 4. **Field-test definitions** — exercise tools/resources/prompts with real inputs using the `field-test` skill
 5. **Run `devcheck`** — lint, format, typecheck, and security audit
 6. **Run the `security-pass` skill** — audit handlers for MCP-specific security gaps: output injection, scope blast radius, input sinks, tenant isolation
-7. **Run the `polish-docs-meta` skill** — finalize README, CHANGELOG, metadata for shipping
-8. **Run the `maintenance` skill** — sync skills and dependencies after framework updates
+7. **Run the `tool-defs-analysis` skill** — audit definition language across every tool/resource/prompt: voice, internal leaks, recovery hints, cross-references
+8. **Run the `polish-docs-meta` skill** — finalize README, CHANGELOG, metadata for shipping
+9. **Run the `maintenance` skill** — sync skills and dependencies after framework updates
 
 Tailor suggestions to what's actually missing or stale — don't recite the full list every time.
 
@@ -233,6 +234,8 @@ async handler(input, ctx) {
 }
 ```
 
+**Declare contracts inline on each tool, even when similar across tools.** The contract is part of the tool's documented public surface — reading one tool definition file should give the full picture. Don't extract a shared `errors[]` constant or contract module to deduplicate; per-tool repetition is the intended cost of locality.
+
 **Fallback (no contract entry fits):** factories or plain `Error`.
 
 ```ts
@@ -320,6 +323,7 @@ Available skills:
 | `add-test`               | Scaffold test file for a tool, resource, or service                               |
 | `field-test`             | Exercise tools/resources/prompts with real inputs, verify behavior, report issues |
 | `security-pass`          | Audit handlers for MCP-specific security gaps (injection, scopes, input sinks)    |
+| `tool-defs-analysis`     | Audit definition language across the surface (voice, leaks, recovery, cross-refs) |
 | `devcheck`               | Lint, format, typecheck, audit                                                    |
 | `polish-docs-meta`       | Finalize docs, README, metadata, and agent protocol for shipping                  |
 | `maintenance`            | Sync skills and dependencies after updates                                        |

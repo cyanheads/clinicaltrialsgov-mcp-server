@@ -28,7 +28,7 @@ import type {
   Study,
 } from './types.js';
 
-const DEFAULT_MAX_RETRIES = 6;
+const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_BACKOFF_MS = 1000;
 const DEFAULT_MAX_BACKOFF_MS = 30_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);

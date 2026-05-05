@@ -305,7 +305,7 @@ function formatBaseline(bl: RO, lines: string[]) {
 }
 
 export const getStudyResults = tool('clinicaltrials_get_study_results', {
-  description: `Fetch trial results data for completed studies — outcome measures with statistics, adverse events, participant flow, and baseline characteristics. Only available for studies where hasResults is true. Use clinicaltrials_search_studies first to find studies with results.`,
+  description: `Fetch clinical trial results data from ClinicalTrials.gov for completed studies — outcome measures with statistics, adverse events, participant flow, and baseline characteristics. Only available for studies where hasResults is true. Use clinicaltrials_search_studies first to find studies with results.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,

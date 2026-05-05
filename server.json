@@ -6,7 +6,7 @@
     "url": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server",
     "source": "github"
   },
-  "version": "2.4.5",
+  "version": "2.4.6",
   "remotes": [
     {
       "type": "streamable-http",
@@ -19,7 +19,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
       "runtimeHint": "bun",
-      "version": "2.4.5",
+      "version": "2.4.6",
       "packageArguments": [
         {
           "type": "positional",
@@ -53,13 +53,6 @@
           "default": "200"
         },
         {
-          "name": "CT_MAX_ELIGIBLE_CANDIDATES",
-          "description": "Max studies to evaluate in find_eligible.",
-          "format": "string",
-          "isRequired": false,
-          "default": "100"
-        },
-        {
           "name": "MCP_LOG_LEVEL",
           "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn').",
           "format": "string",
@@ -76,7 +69,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
       "runtimeHint": "bun",
-      "version": "2.4.5",
+      "version": "2.4.6",
       "packageArguments": [
         {
           "type": "positional",
@@ -108,13 +101,6 @@
           "format": "string",
           "isRequired": false,
           "default": "200"
-        },
-        {
-          "name": "CT_MAX_ELIGIBLE_CANDIDATES",
-          "description": "Max studies to evaluate in find_eligible.",
-          "format": "string",
-          "isRequired": false,
-          "default": "100"
         },
         {
           "name": "MCP_HTTP_HOST",

@@ -1,8 +1,9 @@
 # Agent Protocol
 
 **Server:** clinicaltrialsgov-mcp-server
-**Version:** 2.4.6
+**Version:** 2.4.7
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
+**Engines:** Bun ≥1.3.0, Node ≥24.0.0
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
 
@@ -337,6 +338,7 @@ Available skills:
 | `api-errors`             | McpError, JsonRpcErrorCode, error patterns, typed contracts                       |
 | `api-linter`             | Definition lint rule reference — look up rule IDs reported by `lint:mcp`/devcheck |
 | `api-services`           | LLM, Speech, Graph services                                                       |
+| `api-telemetry`          | OTel catalog: spans, metrics, completion logs, env config, cardinality rules      |
 | `api-testing`            | createMockContext, test patterns                                                  |
 | `api-utils`              | Formatting, parsing, security, pagination, scheduling, `httpErrorFromResponse`    |
 | `api-workers`            | Cloudflare Workers runtime                                                        |

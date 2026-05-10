@@ -1,9 +1,10 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-05-05 05:15:26
+Generated on: 2026-05-10 08:11:56
 
 ```text
 clinicaltrialsgov-mcp-server/
+├── .agents/
 ├── .claude/
 ├── .github/
 │   ├── ISSUE_TEMPLATE/
@@ -70,6 +71,8 @@ clinicaltrialsgov-mcp-server/
 │   │   │   ├── graph.md
 │   │   │   ├── llm.md
 │   │   │   └── speech.md
+│   │   └── SKILL.md
+│   ├── api-telemetry/
 │   │   └── SKILL.md
 │   ├── api-testing/
 │   │   └── SKILL.md
@@ -155,12 +158,15 @@ clinicaltrialsgov-mcp-server/
 │   │   │       └── study.resource.test.ts
 │   │   └── tools/
 │   │       ├── definitions/
+│   │       │   ├── find-eligible.fuzz.test.ts
 │   │       │   ├── find-eligible.tool.test.ts
+│   │       │   ├── get-field-definitions.fuzz.test.ts
 │   │       │   ├── get-field-definitions.tool.test.ts
 │   │       │   ├── get-field-values.tool.test.ts
 │   │       │   ├── get-study-count.tool.test.ts
 │   │       │   ├── get-study-results.tool.test.ts
 │   │       │   ├── get-study.tool.test.ts
+│   │       │   ├── search-studies.fuzz.test.ts
 │   │       │   └── search-studies.tool.test.ts
 │   │       └── utils/
 │   │           ├── format-helpers.test.ts

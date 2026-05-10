@@ -10,7 +10,7 @@
 
 [![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server)
 [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server)
-[![Version](https://img.shields.io/badge/Version-2.4.6-blue.svg?style=flat-square)](./CHANGELOG.md)
+[![Version](https://img.shields.io/badge/Version-2.4.7-blue.svg?style=flat-square)](./CHANGELOG.md)
 [![Framework](https://img.shields.io/badge/Built%20on-@cyanheads/mcp--ts--core-259?style=flat-square)](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
 
 
@@ -148,7 +148,7 @@ MCP_HTTP_PORT=3010
 
 ### Prerequisites
 
-- [Bun v1.2.0](https://bun.sh/) or higher (or Node.js >= 22.0.0)
+- [Bun v1.3.0](https://bun.sh/) or higher (or Node.js >= 24.0.0)
 
 ### Installation
 

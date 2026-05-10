@@ -3,7 +3,6 @@
     "ignores": [
       "@types/*",
       "pino-pretty",
-      "pino",
       "typescript",
       "tsc-alias",
       "@cyanheads/mcp-ts-core",
@@ -11,7 +10,7 @@
       "depcheck",
       "@cloudflare/workers-types",
       "@vitest/coverage-istanbul",
-      "repomix"
+      "fast-check"
     ],
     "ignorePatterns": []
   },

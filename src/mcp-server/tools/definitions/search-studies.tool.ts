@@ -265,7 +265,9 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       lines.push(`Found ${count} studies`);
     }
     if (result.searchCriteria && Object.keys(result.searchCriteria).length > 0) {
-      const parts = Object.entries(result.searchCriteria).map(([k, v]) => `${k}=${v}`);
+      const parts = Object.entries(result.searchCriteria).map(([k, v]) =>
+        Array.isArray(v) ? `${k}=[${v.join(', ')}]` : `${k}=${v}`,
+      );
       lines.push(`Criteria: ${parts.join(', ')}`);
     }
     if (result.requestedFields?.length) {

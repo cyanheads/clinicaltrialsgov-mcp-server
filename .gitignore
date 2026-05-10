@@ -77,5 +77,6 @@ docs/devdocs.md
 .agents/
 .mcpregistry_github_token
 .mcpregistry_registry_token
+.codex
 
 src_old/

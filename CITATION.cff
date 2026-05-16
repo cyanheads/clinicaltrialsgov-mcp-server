@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: clinicaltrialsgov-mcp-server
+abstract: "Model Context Protocol (MCP) server for the ClinicalTrials.gov v2 API, providing study search and filtering, full study record retrieval, results extraction (outcomes, adverse events, participant flow, baselines), field discovery, and patient-to-trial eligibility matching."
+type: software
+authors:
+  - family-names: Hand
+    given-names: Casey
+    orcid: "https://orcid.org/0009-0009-3726-568X"
+repository-code: "https://github.com/cyanheads/clinicaltrialsgov-mcp-server"
+license: Apache-2.0
+keywords:
+  - mcp
+  - model-context-protocol
+  - clinicaltrials
+  - clinical-trials
+  - biomedical-research
+  - patient-matching

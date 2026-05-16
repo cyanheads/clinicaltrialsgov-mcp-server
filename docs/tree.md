@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-05-10 08:11:56
+Generated on: 2026-05-16 19:22:39
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -182,6 +182,7 @@ clinicaltrialsgov-mcp-server/
 ├── bun.lock
 ├── bunfig.toml
 ├── CHANGELOG.md
+├── CITATION.cff
 ├── CLAUDE.md
 ├── devcheck.config.json
 ├── Dockerfile

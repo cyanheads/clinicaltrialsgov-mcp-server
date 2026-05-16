@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.4.8](changelog/2.4.x/2.4.8.md) — 2026-05-16
+
+Framework 0.8.20 → 0.9.1: adopt server-level `instructions` on `createApp` (spec orientation text broadcast on `initialize`), summary cap 250 → 350 chars, `bun outdated` parser fix for markdown-style rows, skill resyncs including the new portability lint family in `api-linter`.
+
 ## [2.4.7](changelog/2.4.x/2.4.7.md) — 2026-05-10
 
 Framework 0.8.14 → 0.8.20, engines bumped to Bun ≥1.3 / Node ≥24, search/count format() renders array criteria as [a, b], fuzz coverage for 3 tools, new api-telemetry skill, template-fork dep cleanup.

@@ -14,6 +14,8 @@ export const RECOVERY_HINTS = {
     'Verify each NCT ID exists at clinicaltrials.gov, or call clinicaltrials_search_studies first to discover valid identifiers.',
   field_invalid:
     'Call clinicaltrials_get_field_definitions to browse the field tree; use PascalCase piece names like OverallStatus, Phase, or StudyType.',
+  query_parse_error:
+    'Field-scoped search uses advancedFilter with AREA[FieldName]value (call clinicaltrials_get_field_definitions to look up the right FieldName); free-text fields (query, conditionQuery, etc.) take plain words plus AND, OR, NOT — brackets, parentheses, and commas are reserved by the upstream parser.',
   path_not_found:
     'Call clinicaltrials_get_field_definitions with no path to see top-level sections.',
   rate_limited:

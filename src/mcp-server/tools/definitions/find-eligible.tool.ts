@@ -99,7 +99,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     conditions: z
       .array(z.string())
       .min(1)
-      .describe('Medical conditions or diagnoses. E.g., ["Type 2 Diabetes", "Hypertension"].'),
+      .describe(
+        'Medical conditions or diagnoses. E.g., ["Type 2 Diabetes", "Hypertension"]. Plain words only — brackets, parentheses, and commas inside an entry will trip the upstream Essie parser.',
+      ),
     location: z
       .object({
         country: z.string().describe('Country name. E.g., "United States".'),

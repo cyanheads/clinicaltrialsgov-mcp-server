@@ -418,6 +418,64 @@ describe('ClinicalTrialsService', () => {
       );
     });
 
+    it('wraps bad AREA[] field name with field_invalid reason + recovery hint', async () => {
+      mockFetch.mockResolvedValue(
+        textResponse('Error parsing query in advanced filter: Unknown area name: `NotARealField`'),
+      );
+      const ctx = createMockContext({
+        errors: [
+          {
+            reason: 'field_invalid',
+            code: JsonRpcErrorCode.ValidationError,
+            when: 'A field name is not valid.',
+            recovery: 'Call clinicaltrials_get_field_definitions to look up the correct name.',
+          },
+        ],
+      });
+      try {
+        await service.searchStudies({ filterAdvanced: 'AREA[NotARealField]value' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        const msg = (err as McpError).message;
+        expect(msg).toContain("'NotARealField'");
+        expect(msg).toContain('clinicaltrials_get_field_definitions');
+        const data = (err as McpError).data as Record<string, unknown>;
+        expect(data?.reason).toBe('field_invalid');
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain(
+          'clinicaltrials_get_field_definitions',
+        );
+      }
+    });
+
+    it('wraps Essie free-text parser error with query_parse_error reason + recovery hint', async () => {
+      mockFetch.mockResolvedValue(
+        textResponse(
+          "Error parsing query in Other terms: no viable alternative at input 'rosuvastatin BCRP OATP1B1 ['\nmismatched input '[' expecting {<EOF>, '(', ','}",
+        ),
+      );
+      const ctx = createMockContext({
+        errors: [
+          {
+            reason: 'query_parse_error',
+            code: JsonRpcErrorCode.ValidationError,
+            when: 'Free-text query rejected by upstream parser.',
+            recovery:
+              'Free-text fields take plain words plus AND/OR/NOT; reserved chars are [ ] ( ) ,',
+          },
+        ],
+      });
+      try {
+        await service.searchStudies({ queryTerm: 'foo [diag:0]' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        const data = (err as McpError).data as Record<string, unknown>;
+        expect(data?.reason).toBe('query_parse_error');
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain('reserved');
+      }
+    });
+
     it('wraps 400 invalid field name with piece-name hint and field definitions pointer', async () => {
       mockFetch.mockResolvedValue(
         textResponse("Parameter 'fields' contains invalid field name: 'StudyDesign'"),

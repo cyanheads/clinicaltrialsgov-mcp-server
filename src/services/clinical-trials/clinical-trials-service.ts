@@ -430,6 +430,23 @@ export class ClinicalTrialsService {
             }
             throw validationError(`Invalid request format. API response: ${text}`);
           }
+          // Essie parser errors share the `Error parsing query in <where>: …` prefix.
+          // Two shapes show up: `Unknown area name: \`X\`` (bad field in AREA[X])
+          // and `no viable alternative at input '… ['` (reserved char like [ ] ( ) ,
+          // in a free-text field).
+          if (text.startsWith('Error parsing query in')) {
+            const areaMatch = text.match(/Unknown area name:\s*`([^`]+)`/);
+            if (areaMatch) {
+              throw validationError(
+                `${text.trim()} '${areaMatch[1]}' is not a recognized AREA[]-compatible field. Call clinicaltrials_get_field_definitions to look up valid PascalCase piece names.`,
+                { reason: 'field_invalid', ...ctx.recoveryFor('field_invalid') },
+              );
+            }
+            throw validationError(text.trim(), {
+              reason: 'query_parse_error',
+              ...ctx.recoveryFor('query_parse_error'),
+            });
+          }
           throw validationError(text || `Bad request: ${path}`);
         }
 

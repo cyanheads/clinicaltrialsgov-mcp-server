@@ -559,5 +559,148 @@ describe('getStudy', () => {
       });
       expect((blocks[0] as { text: string }).text).toContain('... and 5 more');
     });
+
+    it('honors locationLimit input (caller-controlled cap)', () => {
+      const locations = Array.from({ length: 30 }, (_, i) => ({
+        facility: `Hospital ${i}`,
+        country: 'US',
+      }));
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            contactsLocationsModule: { locations },
+          },
+        },
+        locationLimit: 25,
+      });
+      expect((blocks[0] as { text: string }).text).toContain('... and 5 more');
+    });
+
+    it('locationLimit=0 disables the cap', () => {
+      const locations = Array.from({ length: 30 }, (_, i) => ({
+        facility: `Hospital ${i}`,
+        country: 'US',
+      }));
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            contactsLocationsModule: { locations },
+          },
+        },
+        locationLimit: 0,
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).not.toContain('... and');
+      expect(text).toContain('Hospital 29');
+    });
+
+    it('honors outcomeLimit input on secondary outcomes', () => {
+      const secondaryOutcomes = Array.from({ length: 20 }, (_, i) => ({
+        measure: `Outcome ${i}`,
+      }));
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            outcomesModule: { secondaryOutcomes },
+          },
+        },
+        outcomeLimit: 12,
+      });
+      expect((blocks[0] as { text: string }).text).toContain('... and 8 more');
+    });
+
+    it('outcomeLimit=0 renders all secondary outcomes', () => {
+      const secondaryOutcomes = Array.from({ length: 30 }, (_, i) => ({
+        measure: `Outcome ${i}`,
+      }));
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            outcomesModule: { secondaryOutcomes },
+          },
+        },
+        outcomeLimit: 0,
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).not.toContain('... and');
+      expect(text).toContain('Outcome 29');
+    });
+
+    it('nearLocation filters and sorts locations by distance', () => {
+      // Seattle, Portland, Boston coords; nearLocation around Seattle.
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            contactsLocationsModule: {
+              locations: [
+                {
+                  facility: 'Boston General',
+                  city: 'Boston',
+                  country: 'US',
+                  geoPoint: { lat: 42.3601, lon: -71.0589 },
+                },
+                {
+                  facility: 'Portland Clinic',
+                  city: 'Portland',
+                  country: 'US',
+                  geoPoint: { lat: 45.5152, lon: -122.6784 },
+                },
+                {
+                  facility: 'Seattle Med',
+                  city: 'Seattle',
+                  country: 'US',
+                  geoPoint: { lat: 47.6062, lon: -122.3321 },
+                },
+              ],
+            },
+          },
+        },
+        locationLimit: 10,
+        nearLocation: { lat: 47.6062, lon: -122.3321, radiusMi: 250 },
+      });
+      const text = (blocks[0] as { text: string }).text;
+      // Seattle (0 mi) and Portland (~145 mi) inside 250 mi; Boston excluded.
+      expect(text).toContain('2 within 250 mi');
+      expect(text).toContain('Seattle Med');
+      expect(text).toContain('Portland Clinic');
+      expect(text).not.toContain('Boston General');
+      // Sorted nearest first — Seattle line appears before Portland.
+      const seattleIdx = text.indexOf('Seattle Med');
+      const portlandIdx = text.indexOf('Portland Clinic');
+      expect(seattleIdx).toBeLessThan(portlandIdx);
+      // Distance annotation included.
+      expect(text).toMatch(/Seattle Med.*\(0\.0 mi\)/);
+    });
+
+    it('nearLocation skips locations without coordinates and notes the count', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            contactsLocationsModule: {
+              locations: [
+                {
+                  facility: 'Has Coords',
+                  geoPoint: { lat: 47.6062, lon: -122.3321 },
+                },
+                { facility: 'No Coords' },
+                { facility: 'Also No Coords' },
+              ],
+            },
+          },
+        },
+        nearLocation: { lat: 47.6062, lon: -122.3321, radiusMi: 50 },
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('1 within 50 mi');
+      expect(text).toContain('2 without coordinates skipped');
+      expect(text).toContain('Has Coords');
+      expect(text).not.toContain('No Coords');
+    });
   });
 });

@@ -38,6 +38,7 @@ export interface StudyLocation {
   city?: string;
   country?: string;
   facility?: string;
+  geoPoint?: { lat: number; lon: number };
   state?: string;
   status?: string;
 }

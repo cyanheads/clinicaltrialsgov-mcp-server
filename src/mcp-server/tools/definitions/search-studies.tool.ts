@@ -67,7 +67,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        'General free-text search across all fields. Plain words plus AND, OR, NOT only — brackets, parentheses, and commas are reserved by the upstream Essie parser and will fail. For field-scoped searches, use the dedicated *Query parameters (conditionQuery, interventionQuery, etc.) or advancedFilter with AREA[FieldName]value.',
+        'General free-text search across all fields. Plain words plus AND, OR, NOT only — reserved chars `[ ] ( ) ,` will fail. For field-scoped searches, use the dedicated *Query parameters (conditionQuery, interventionQuery, etc.) or advancedFilter with AREA[FieldName]value.',
       ),
     conditionQuery: z
       .string()
@@ -125,7 +125,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        `Advanced filter using AREA[] Essie syntax. E.g., "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]". Combine with AND/OR/NOT and parentheses. Use clinicaltrials_get_field_definitions with a query to find AREA[]-compatible field names.`,
+        `Advanced filter using AREA[] syntax. E.g., "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]". Combine with AND/OR/NOT and parentheses. Use clinicaltrials_get_field_definitions with a query to find AREA[]-compatible field names.`,
       ),
     geoFilter: z
       .string()
@@ -191,7 +191,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .array(z.string())
       .optional()
       .describe(
-        'Echo of the explicit fields parameter. Present only when the caller passed fields — signals that all requested leaves should render in format() without the default truncation cap.',
+        'Echo of the explicit fields parameter — present only when the caller passed fields. Lifts the default truncation cap so all requested leaves render in full.',
       ),
     noMatchHints: z
       .array(z.string())
@@ -315,7 +315,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     for (const study of result.studies) {
       const s = study as RawStudyShape;
       const nctId = s.protocolSection?.identificationModule?.nctId ?? 'Unknown';
-      const title = s.protocolSection?.identificationModule?.briefTitle ?? 'Untitled';
+      const title = s.protocolSection?.identificationModule?.briefTitle;
       const status = s.protocolSection?.statusModule?.overallStatus ?? '';
       const phases = s.protocolSection?.designModule?.phases;
       const enrollment = s.protocolSection?.designModule?.enrollmentInfo?.count;
@@ -328,9 +328,10 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       if (sponsor) meta.push(sponsor);
       if (conditions?.length) meta.push(conditions.join(', '));
 
+      const titleStr = title ? `: ${title}` : '';
       const statusStr = status ? ` [${status}]` : '';
       const metaStr = meta.length ? `\n  ${meta.join(' | ')}` : '';
-      lines.push(`- **${nctId}**: ${title}${statusStr}${metaStr}`);
+      lines.push(`- **${nctId}**${titleStr}${statusStr}${metaStr}`);
       lines.push(
         ...formatRemainingStudyFields(
           study as Record<string, unknown>,

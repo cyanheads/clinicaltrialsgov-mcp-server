@@ -82,7 +82,9 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
           })
           .describe('Statistics for a single requested field.'),
       )
-      .describe('Statistics per requested field.'),
+      .describe(
+        'One entry per requested field: canonical path, PascalCase piece name, data type, missing/unique counts, and top values with study counts (or trueCount/falseCount for BOOLEAN fields).',
+      ),
   }),
 
   async handler(input, ctx) {
@@ -116,7 +118,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
             const remainder = topValues.length - shown.length;
             const unique = stat.uniqueValuesCount;
             lines.push(
-              `  … and ${remainder} more values in structuredContent${unique != null ? ` (of ${unique} unique; topValues capped at 250)` : ''}`,
+              `  … and ${remainder} more${unique != null ? ` (of ${unique} unique; topValues capped at 250)` : ''}`,
             );
           }
         }

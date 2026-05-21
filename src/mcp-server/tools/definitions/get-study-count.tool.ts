@@ -44,7 +44,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       .string()
       .optional()
       .describe(
-        'General free-text search across all fields. Plain words plus AND, OR, NOT only — brackets, parentheses, and commas are reserved by the upstream Essie parser and will fail. For field-scoped searches, use the dedicated *Query parameters (conditionQuery, interventionQuery, etc.) or advancedFilter with AREA[FieldName]value.',
+        'General free-text search across all fields. Plain words plus AND, OR, NOT only — reserved chars `[ ] ( ) ,` will fail. For field-scoped searches, use the dedicated *Query parameters (conditionQuery, interventionQuery, etc.) or advancedFilter with AREA[FieldName]value.',
       ),
     conditionQuery: z
       .string()
@@ -84,7 +84,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       .string()
       .optional()
       .describe(
-        'Advanced filter using AREA[] Essie syntax. E.g., "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]". Combine with AND/OR/NOT and parentheses. Use clinicaltrials_get_field_definitions with a query to find AREA[]-compatible field names.',
+        'Advanced filter using AREA[] syntax. E.g., "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]". Combine with AND/OR/NOT and parentheses. Use clinicaltrials_get_field_definitions with a query to find AREA[]-compatible field names.',
       ),
     includeUnknownEnrollment: z
       .boolean()

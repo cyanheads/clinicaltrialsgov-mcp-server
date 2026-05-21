@@ -46,7 +46,7 @@ function indexEntryToResult(entry: FieldIndexEntry): FieldDefResult {
 
 export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', {
   description:
-    'Discover valid field names from the ClinicalTrials.gov data model. Call this FIRST when you need to know which field names to use in `fields`, `advancedFilter`, or `sort` parameters of other tools, or as input to clinicaltrials_get_field_values. Three usage modes: pass `query` for keyword search by concept (e.g., "enrollment", "sponsor", "adverse events") returning a ranked list of matches; pass `path` for drill-down into a section by dot-notation (e.g., "protocolSection.designModule") returning its individual fields; omit both for a top-level overview of all sections. Returns canonical PascalCase identifiers like OverallStatus, EnrollmentCount, LeadSponsorName — the exact names the API accepts.',
+    'Resolve valid field names from the ClinicalTrials.gov data model. Returns canonical PascalCase identifiers (OverallStatus, EnrollmentCount, LeadSponsorName) — the exact names accepted by the `fields`, `advancedFilter`, and `sort` parameters of other tools and as input to clinicaltrials_get_field_values. Three usage modes: pass `query` for keyword search by concept (e.g., "enrollment", "sponsor", "adverse events") returning a ranked list of matches; pass `path` for drill-down into a section by dot-notation (e.g., "protocolSection.designModule") returning its individual fields; omit both for a top-level overview of all sections.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,

@@ -100,7 +100,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       .array(z.string())
       .min(1)
       .describe(
-        'Medical conditions or diagnoses. E.g., ["Type 2 Diabetes", "Hypertension"]. Plain words only — brackets, parentheses, and commas inside an entry will trip the upstream Essie parser.',
+        'Medical conditions or diagnoses. E.g., ["Type 2 Diabetes", "Hypertension"]. Plain words only — reserved chars `[ ] ( ) ,` inside an entry will fail.',
       ),
     location: z
       .object({
@@ -108,7 +108,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         state: z.string().optional().describe('State or province.'),
         city: z.string().optional().describe('City name.'),
       })
-      .describe('Patient location.'),
+      .describe(
+        'Patient location as `{ country (required), state?, city? }`. Country is required; state/city narrow the match. For radius-based geographic search, use clinicaltrials_search_studies with geoFilter.',
+      ),
     healthyVolunteer: z
       .boolean()
       .default(false)

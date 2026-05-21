@@ -285,6 +285,126 @@ describe('getStudyResults', () => {
       expect(bl.measureCount).toBe(2);
     });
 
+    it('lifts topAnalysis (p-value, CI, method) into summary mode when analyses present', async () => {
+      const study = makeStudy('NCT04074161', true, {
+        outcomeMeasuresModule: {
+          outcomeMeasures: [
+            {
+              type: 'PRIMARY',
+              title: 'Change in Body Weight (%)',
+              groups: [{ id: 'G1' }, { id: 'G2' }],
+              classes: [{ id: 'C1' }],
+              analyses: [
+                {
+                  statisticalMethod: 'ANCOVA',
+                  pValue: '<0.0001',
+                  paramType: 'Treatment difference',
+                  paramValue: '-9.38',
+                  ciPctValue: '95',
+                  ciNumSides: '2-Sided',
+                  ciLowerLimit: '-11.97',
+                  ciUpperLimit: '-6.80',
+                  nonInferiorityType: 'SUPERIORITY',
+                  groupIds: ['G1', 'G2'],
+                },
+              ],
+            },
+          ],
+        },
+      });
+      mockService.getStudiesBatch.mockResolvedValue([study]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input!.parse({
+        nctIds: 'NCT04074161',
+        sections: 'outcomes',
+        summary: true,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      const outcome = result.results[0]!.outcomes![0]!;
+
+      expect(outcome.topAnalysis).toMatchObject({
+        statisticalMethod: 'ANCOVA',
+        pValue: '<0.0001',
+        paramValue: '-9.38',
+        ciLowerLimit: '-11.97',
+        ciUpperLimit: '-6.80',
+        ciPctValue: '95',
+        ciNumSides: '2-Sided',
+        nonInferiorityType: 'SUPERIORITY',
+        groupIds: ['G1', 'G2'],
+      });
+      // Raw analyses array must not leak through summary mode.
+      expect(outcome.analyses).toBeUndefined();
+    });
+
+    it('omits topAnalysis when the measure has no analyses (sparse case)', async () => {
+      const study = makeStudy('NCT05891496', true, {
+        outcomeMeasuresModule: {
+          outcomeMeasures: [
+            {
+              type: 'PRIMARY',
+              title: 'Gene Expression',
+              groups: [{ id: 'G1' }],
+              classes: [{ id: 'C1' }],
+            },
+          ],
+        },
+      });
+      mockService.getStudiesBatch.mockResolvedValue([study]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input!.parse({
+        nctIds: 'NCT05891496',
+        sections: 'outcomes',
+        summary: true,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      const outcome = result.results[0]!.outcomes![0]!;
+      expect(outcome.topAnalysis).toBeUndefined();
+    });
+
+    it('renders topAnalysis line in summary format() output', async () => {
+      const study = makeStudy('NCT04074161', true, {
+        outcomeMeasuresModule: {
+          outcomeMeasures: [
+            {
+              type: 'PRIMARY',
+              title: 'Change in Body Weight (%)',
+              groups: [{ id: 'G1' }, { id: 'G2' }],
+              classes: [{ id: 'C1' }],
+              analyses: [
+                {
+                  statisticalMethod: 'ANCOVA',
+                  pValue: '<0.0001',
+                  paramType: 'Treatment difference',
+                  paramValue: '-9.38',
+                  ciPctValue: '95',
+                  ciLowerLimit: '-11.97',
+                  ciUpperLimit: '-6.80',
+                },
+              ],
+            },
+          ],
+        },
+      });
+      mockService.getStudiesBatch.mockResolvedValue([study]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input!.parse({
+        nctIds: 'NCT04074161',
+        sections: 'outcomes',
+        summary: true,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      const blocks = getStudyResults.format!(result);
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('Analysis:');
+      expect(text).toContain('Method: ANCOVA');
+      expect(text).toContain('p=<0.0001');
+      expect(text).toContain('95% CI [-11.97, -6.80]');
+    });
+
     it('returns full data in non-summary mode', async () => {
       const study = makeStudy('NCT12345678', true, {
         adverseEventsModule: {

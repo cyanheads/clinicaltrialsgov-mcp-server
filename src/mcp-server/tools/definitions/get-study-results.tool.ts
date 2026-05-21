@@ -46,11 +46,40 @@ function extractTopStats(
   return stats.length ? stats : undefined;
 }
 
+/**
+ * Extract topline statistical analysis from a raw outcome object. Returns the
+ * first analysis (typically the primary one), keeping only present fields so
+ * the summary stays compact.
+ */
+function extractTopAnalysis(o: Record<string, unknown>): Record<string, unknown> | undefined {
+  const analyses = o.analyses as Array<Record<string, unknown>> | undefined;
+  const a = analyses?.[0];
+  if (!a) return;
+  const keys = [
+    'statisticalMethod',
+    'pValue',
+    'pValueComment',
+    'paramType',
+    'paramValue',
+    'ciPctValue',
+    'ciNumSides',
+    'ciLowerLimit',
+    'ciUpperLimit',
+    'nonInferiorityType',
+    'estimateComment',
+    'groupIds',
+  ] as const;
+  const out: Record<string, unknown> = {};
+  for (const k of keys) if (a[k] != null) out[k] = a[k];
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Condense a full outcome measure to its essential metadata plus top-line per-group stats. */
 function summarizeOutcome(o: Record<string, unknown>) {
   const groups = o.groups as Array<Record<string, unknown>> | undefined;
   const classes = o.classes as Array<Record<string, unknown>> | undefined;
   const topStats = extractTopStats(o);
+  const topAnalysis = extractTopAnalysis(o);
   return {
     type: o.type,
     title: o.title,
@@ -61,6 +90,7 @@ function summarizeOutcome(o: Record<string, unknown>) {
     groupCount: groups?.length,
     classCount: classes?.length,
     ...(topStats ? { topStats } : {}),
+    ...(topAnalysis ? { topAnalysis } : {}),
   };
 }
 
@@ -119,6 +149,20 @@ function shortGroup(title: string, max = 40): string {
   return title.length <= max ? title : `${title.slice(0, max - 1)}…`;
 }
 
+/** Render one analysis (summary or full) as a single-line bullet. */
+function formatAnalysisLine(a: RO): string {
+  const parts = [
+    a.statisticalMethod ? `Method: ${a.statisticalMethod}` : '',
+    a.pValue ? `p=${a.pValue}` : '',
+    a.paramValue ? `${a.paramType ?? 'estimate'}=${a.paramValue}` : '',
+    a.ciLowerLimit != null && a.ciUpperLimit != null
+      ? `${a.ciPctValue ?? 95}% CI [${a.ciLowerLimit}, ${a.ciUpperLimit}]`
+      : '',
+    a.nonInferiorityType ? `(${a.nonInferiorityType})` : '',
+  ].filter(Boolean);
+  return parts.length ? `  Analysis: ${parts.join(', ')}` : '';
+}
+
 function formatOutcomes(outcomes: RO[], lines: string[]) {
   lines.push(`\n### Outcomes (${outcomes.length} measures)`);
   for (const o of outcomes) {
@@ -145,19 +189,19 @@ function formatOutcomes(outcomes: RO[], lines: string[]) {
       );
     }
 
-    // Full mode: render analyses if present
+    // Summary mode: single condensed analysis lifted from analyses[0].
+    const topAnalysis = o.topAnalysis as RO | undefined;
+    if (topAnalysis) {
+      const line = formatAnalysisLine(topAnalysis);
+      if (line) lines.push(line);
+    }
+
+    // Full mode: render every analysis on the measure.
     const analyses = o.analyses as Array<RO> | undefined;
     if (analyses?.length) {
       for (const a of analyses) {
-        const parts = [
-          a.statisticalMethod ? `Method: ${a.statisticalMethod}` : '',
-          a.pValue ? `p=${a.pValue}` : '',
-          a.paramValue ? `${a.paramType ?? 'estimate'}=${a.paramValue}` : '',
-          a.ciLowerLimit != null && a.ciUpperLimit != null
-            ? `${a.ciPctValue ?? 95}% CI [${a.ciLowerLimit}, ${a.ciUpperLimit}]`
-            : '',
-        ].filter(Boolean);
-        if (parts.length) lines.push(`  Analysis: ${parts.join(', ')}`);
+        const line = formatAnalysisLine(a);
+        if (line) lines.push(line);
       }
     }
   }
@@ -372,7 +416,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
               .array(z.record(z.string(), z.unknown()))
               .optional()
               .describe(
-                'Outcome measures with per-group statistics. Summary mode (compact): type, title, timeFrame, paramType, unitOfMeasure, group/class counts, plus topStats per group when available. Full mode (default): adds raw groups, classes, categories, measurements, and analyses arrays.',
+                'Outcome measures with per-group statistics. Summary mode (compact): type, title, timeFrame, paramType, unitOfMeasure, group/class counts, plus topStats (per-group measurements) and topAnalysis (statisticalMethod, pValue, paramType/Value, ciPctValue/Lower/Upper, nonInferiorityType, groupIds — lifted from analyses[0]) when present. Full mode (default): adds raw groups, classes, categories, measurements, and analyses arrays.',
               ),
             adverseEvents: z
               .record(z.string(), z.unknown())

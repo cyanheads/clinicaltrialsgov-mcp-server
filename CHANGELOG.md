@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.4.9](changelog/2.4.x/2.4.9.md) — 2026-05-20
+
+Auto-normalize case/whitespace field-name mistakes (#44), surface Essie query parse errors with recovery hints (#34, #39), add locationLimit/outcomeLimit/nearLocation render controls on get_study_record (#40), and lift topAnalysis (p-value, CI, method) into get_study_results summary mode (#42).
+
 ## [2.4.8](changelog/2.4.x/2.4.8.md) — 2026-05-16
 
 Framework 0.8.20 → 0.9.1: adopt server-level `instructions` on `createApp` (spec orientation text broadcast on `initialize`), summary cap 250 → 350 chars, `bun outdated` parser fix for markdown-style rows, skill resyncs including the new portability lint family in `api-linter`.

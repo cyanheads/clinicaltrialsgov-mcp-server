@@ -924,6 +924,50 @@ describe('ClinicalTrialsService', () => {
       expect(metadataCalls).toBe(1);
     });
 
+    it('silently normalizes case-only field-name mismatches before validation', async () => {
+      mockByRoute();
+      const ctx = createMockContext();
+      // `nctid` and `BRIEFTITLE` both have unambiguous case-folded canonicals
+      // in the sample metadata. Should pass through without throwing.
+      const result = await validatingService.searchStudies(
+        { fields: ['nctid', 'BRIEFTITLE'] },
+        ctx,
+      );
+      expect(result.studies).toEqual([]);
+      // Confirm the upstream call used the canonical names.
+      const studiesCall = mockFetch.mock.calls.find((c) => {
+        const u = typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString();
+        return u.includes('/studies') && !u.includes('/metadata');
+      });
+      expect(studiesCall).toBeDefined();
+      const url = new URL(studiesCall![0] as string);
+      expect(url.searchParams.get('fields')).toBe('NCTId|BriefTitle');
+    });
+
+    it('silently strips leading/trailing whitespace before validation', async () => {
+      mockByRoute();
+      const ctx = createMockContext();
+      const result = await validatingService.searchStudies(
+        { fields: [' NCTId ', 'BriefTitle\t'] },
+        ctx,
+      );
+      expect(result.studies).toEqual([]);
+      const studiesCall = mockFetch.mock.calls.find((c) => {
+        const u = typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString();
+        return u.includes('/studies') && !u.includes('/metadata');
+      });
+      const url = new URL(studiesCall![0] as string);
+      expect(url.searchParams.get('fields')).toBe('NCTId|BriefTitle');
+    });
+
+    it('still throws on truly invalid names that are not case- or whitespace-correctable', async () => {
+      mockByRoute();
+      const ctx = createMockContext();
+      await expect(
+        validatingService.searchStudies({ fields: ['BriefSubtitle'] }, ctx),
+      ).rejects.toThrow(/Invalid field name: 'BriefSubtitle'/);
+    });
+
     it('attaches reason=field_invalid and recovery hint on validation failure', async () => {
       mockByRoute();
       const ctx = createMockContext({

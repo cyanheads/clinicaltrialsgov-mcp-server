@@ -64,7 +64,11 @@ export class ClinicalTrialsService {
   private readonly validateFieldsLocally: boolean;
   private lastRequestAt = 0;
   private fieldIndexPromise:
-    | Promise<{ entries: FieldIndexEntry[]; pieceSet: Set<string> }>
+    | Promise<{
+        caseFold: Map<string, string>;
+        entries: FieldIndexEntry[];
+        pieceSet: Set<string>;
+      }>
     | undefined;
 
   constructor(config: ServerConfig, options: ClinicalTrialsServiceOptions = {}) {
@@ -80,7 +84,9 @@ export class ClinicalTrialsService {
   /** Search studies with query, filters, pagination, and field selection. */
   async searchStudies(params: SearchParams, ctx: Context): Promise<PagedStudiesResponse> {
     if (this.validateFieldsLocally && params.fields?.length) {
-      await this.validateFields(params.fields, ctx);
+      const normalized = await this.normalizeFields(params.fields, ctx);
+      await this.validateFields(normalized, ctx);
+      params = { ...params, fields: normalized };
     }
     const q = this.buildSearchQuery(params);
     ctx.log.debug('searchStudies', { paramKeys: Object.keys(q) });
@@ -121,6 +127,7 @@ export class ClinicalTrialsService {
   async getFieldValues(fields: string[], ctx: Context): Promise<FieldValueStats[]> {
     ctx.log.debug('getFieldValues', { fields });
     if (this.validateFieldsLocally) {
+      fields = await this.normalizeFields(fields, ctx);
       await this.validateFields(fields, ctx);
     }
     try {
@@ -172,16 +179,33 @@ export class ClinicalTrialsService {
   /* ------------------------------------------------------------------ */
 
   /** Lazy-load and memoize the flattened field index from /studies/metadata. */
-  private getFieldIndex(
-    ctx: Context,
-  ): Promise<{ entries: FieldIndexEntry[]; pieceSet: Set<string> }> {
+  private getFieldIndex(ctx: Context): Promise<{
+    caseFold: Map<string, string>;
+    entries: FieldIndexEntry[];
+    pieceSet: Set<string>;
+  }> {
     if (!this.fieldIndexPromise) {
       this.fieldIndexPromise = (async () => {
         const tree = await this.getMetadata(false, ctx);
         const entries = flattenMetadata(tree);
         const pieceSet = new Set(entries.map((e) => e.piece));
-        ctx.log.debug('Field index built', { entryCount: entries.length });
-        return { entries, pieceSet };
+        // Case-fold index — skip any lowered form that collides across canonicals
+        // so normalization stays ambiguity-free.
+        const lowerCounts = new Map<string, number>();
+        for (const p of pieceSet) {
+          const lp = p.toLowerCase();
+          lowerCounts.set(lp, (lowerCounts.get(lp) ?? 0) + 1);
+        }
+        const caseFold = new Map<string, string>();
+        for (const p of pieceSet) {
+          const lp = p.toLowerCase();
+          if (lowerCounts.get(lp) === 1) caseFold.set(lp, p);
+        }
+        ctx.log.debug('Field index built', {
+          entryCount: entries.length,
+          caseFoldable: caseFold.size,
+        });
+        return { entries, pieceSet, caseFold };
       })().catch((err) => {
         // Reset on failure so the next call can retry the metadata fetch
         this.fieldIndexPromise = undefined;
@@ -189,6 +213,44 @@ export class ClinicalTrialsService {
       });
     }
     return this.fieldIndexPromise;
+  }
+
+  /**
+   * Apply unambiguous fixes (whitespace, case-only) to field names before
+   * validation. Returns the corrected list — anything still invalid falls
+   * through to validateFields and surfaces the structured did-you-mean error.
+   * Logs corrections via ctx.log.notice so operators can spot recurring LLM
+   * mistakes without forcing a tool-call round-trip.
+   */
+  private async normalizeFields(fields: string[], ctx: Context): Promise<string[]> {
+    let pieceSet: Set<string>;
+    let caseFold: Map<string, string>;
+    try {
+      ({ pieceSet, caseFold } = await this.getFieldIndex(ctx));
+    } catch {
+      // Fall through silently — validateFields runs next and emits the
+      // metadata-unavailable warning + fail-open behavior on the same failure.
+      return fields;
+    }
+    const corrections: Array<{ from: string; to: string }> = [];
+    const normalized = fields.map((f) => {
+      if (pieceSet.has(f)) return f;
+      const trimmed = f.trim();
+      if (trimmed !== f && pieceSet.has(trimmed)) {
+        corrections.push({ from: f, to: trimmed });
+        return trimmed;
+      }
+      const folded = caseFold.get(trimmed.toLowerCase());
+      if (folded) {
+        corrections.push({ from: f, to: folded });
+        return folded;
+      }
+      return f;
+    });
+    if (corrections.length > 0) {
+      ctx.log.notice('Field names auto-corrected', { corrections });
+    }
+    return normalized;
   }
 
   /** Reject invalid field names locally with did-you-mean suggestions. */

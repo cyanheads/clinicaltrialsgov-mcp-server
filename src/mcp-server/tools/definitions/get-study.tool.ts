@@ -24,9 +24,88 @@ function haversineMi(a: { lat: number; lon: number }, b: { lat: number; lon: num
   return 2 * EARTH_RADIUS_MI * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
+type LocationWithDistance = StudyLocation & { distanceMi?: number };
+
+interface FilterInputs {
+  locationLimit?: number | undefined;
+  nearLocation?: { lat: number; lon: number; radiusMi: number } | undefined;
+  outcomeLimit?: number | undefined;
+}
+
+interface FilterMeta {
+  locationsWithoutGeo?: number;
+  totalLocations?: number;
+  totalOtherOutcomes?: number;
+  totalSecondaryOutcomes?: number;
+}
+
+/**
+ * Apply caller-requested filters to the study so structuredContent and format()
+ * see the same data. Totals from before filtering are preserved in `meta` and
+ * returned alongside the filtered study.
+ */
+function applyFilters(
+  study: RawStudyShape,
+  input: FilterInputs,
+): { study: RawStudyShape; meta: FilterMeta } {
+  const ps = study.protocolSection;
+  if (!ps) return { study, meta: {} };
+
+  const meta: FilterMeta = {};
+  let nextPs = ps;
+
+  const origLocations = ps.contactsLocationsModule?.locations;
+  const hasLocationFilter = input.nearLocation != null || input.locationLimit != null;
+  if (origLocations?.length && hasLocationFilter) {
+    meta.totalLocations = origLocations.length;
+    let locations: LocationWithDistance[] = origLocations;
+
+    if (input.nearLocation) {
+      const { lat, lon, radiusMi } = input.nearLocation;
+      const withGeo = origLocations.filter(
+        (l): l is StudyLocation & { geoPoint: { lat: number; lon: number } } => l.geoPoint != null,
+      );
+      meta.locationsWithoutGeo = origLocations.length - withGeo.length;
+      locations = withGeo
+        .map((l) => ({ ...l, distanceMi: haversineMi({ lat, lon }, l.geoPoint) }))
+        .filter((l) => l.distanceMi <= radiusMi)
+        .sort((a, b) => a.distanceMi - b.distanceMi);
+    }
+
+    if (input.locationLimit != null) {
+      locations = locations.slice(0, input.locationLimit);
+    }
+
+    nextPs = {
+      ...nextPs,
+      contactsLocationsModule: {
+        ...nextPs.contactsLocationsModule,
+        locations,
+      },
+    };
+  }
+
+  const outcomes = ps.outcomesModule;
+  if (outcomes && input.outcomeLimit != null) {
+    const limit = input.outcomeLimit;
+    const nextOutcomes = { ...outcomes };
+    if (outcomes.secondaryOutcomes?.length) {
+      meta.totalSecondaryOutcomes = outcomes.secondaryOutcomes.length;
+      nextOutcomes.secondaryOutcomes = outcomes.secondaryOutcomes.slice(0, limit);
+    }
+    if (outcomes.otherOutcomes?.length) {
+      meta.totalOtherOutcomes = outcomes.otherOutcomes.length;
+      nextOutcomes.otherOutcomes = outcomes.otherOutcomes.slice(0, limit);
+    }
+    nextPs = { ...nextPs, outcomesModule: nextOutcomes };
+  }
+
+  return { study: { ...study, protocolSection: nextPs }, meta };
+}
+
 export const getStudy = tool('clinicaltrials_get_study_record', {
   description:
-    'Fetch a single clinical trial study by NCT ID from ClinicalTrials.gov. Returns the full study record including protocol details, eligibility criteria, outcomes, arms, interventions, contacts, and locations.',
+    'Fetch a single clinical trial study by NCT ID from ClinicalTrials.gov. Returns the full study record including protocol details, eligibility criteria, outcomes, arms, interventions, contacts, and locations. Optional locationLimit / outcomeLimit / nearLocation parameters trim locations and outcomes — when present, the same trimmed view is reflected in both structuredContent and the formatted text.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -50,24 +129,26 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
   ],
 
   input: z.object({
-    nctId: nctIdSchema.describe('NCT identifier (e.g., NCT03722472).'),
+    nctId: nctIdSchema.describe(
+      'NCT identifier — format `NCT` followed by 8 digits (e.g., `NCT03722472`).',
+    ),
     locationLimit: z
       .number()
       .int()
-      .min(0)
+      .min(1)
       .max(500)
-      .default(10)
+      .optional()
       .describe(
-        'Max locations to render in the formatted output. 0 = unlimited. Default 10. Pairs naturally with nearLocation for narrowing a large multi-site trial.',
+        'Optional cap on the number of locations returned. Omit for no cap (full upstream list). Pairs naturally with nearLocation for narrowing a large multi-site trial. Original total preserved in filtersApplied.totalLocations whenever a cap is applied.',
       ),
     outcomeLimit: z
       .number()
       .int()
-      .min(0)
+      .min(1)
       .max(100)
-      .default(5)
+      .optional()
       .describe(
-        'Max secondary and other outcomes to render in the formatted output. 0 = unlimited. Default 5. Primary outcomes always render in full.',
+        'Optional cap on the number of secondary and other outcomes returned. Omit for no cap (full upstream lists). Primary outcomes are never capped. Original totals preserved in filtersApplied.totalSecondaryOutcomes / totalOtherOutcomes whenever a cap is applied.',
       ),
     nearLocation: z
       .object({
@@ -77,7 +158,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       })
       .optional()
       .describe(
-        'Filter rendered locations to those within radius of (lat, lon) and sort by distance. Only locations with upstream coordinates are returned — most US sites carry them; international sites less reliably so. Use clinicaltrials_search_studies with geoFilter for upstream-side geographic filtering.',
+        'Filter returned locations to those within radius of (lat, lon) and sort by distance. Adds distanceMi to each location. Locations without published coordinates are dropped — most US sites carry them; international sites less reliably so. For broader geographic filtering across studies, use clinicaltrials_search_studies with geoFilter.',
       ),
   }),
 
@@ -85,45 +166,70 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     study: z
       .record(z.string(), z.unknown())
       .describe(
-        'Full study record. Top-level keys: protocolSection (identification, status, sponsor, conditions, design, arms/interventions, outcomes, eligibility, contacts/locations), derivedSection (MeSH-normalized terms), hasResults, resultsSection, documentSection. Use clinicaltrials_get_field_definitions to explore the schema.',
+        'Full study record with caller-requested filters already applied to locations and outcomes. Top-level keys: protocolSection (identification, status, sponsor, conditions, design, arms/interventions, outcomes, eligibility, contacts/locations), derivedSection (MeSH-normalized terms), hasResults, resultsSection, documentSection. Use clinicaltrials_get_field_definitions to explore the schema.',
       ),
-    locationLimit: z
-      .number()
-      .int()
-      .optional()
-      .describe('Echo of the locationLimit input; drives format() truncation.'),
-    outcomeLimit: z
-      .number()
-      .int()
-      .optional()
-      .describe('Echo of the outcomeLimit input; drives format() truncation.'),
-    nearLocation: z
+    filtersApplied: z
       .object({
-        lat: z.number().describe('Latitude in decimal degrees.'),
-        lon: z.number().describe('Longitude in decimal degrees.'),
-        radiusMi: z.number().describe('Radius in miles.'),
+        totalLocations: z
+          .number()
+          .int()
+          .optional()
+          .describe('Upstream location count before any filter was applied.'),
+        locationsWithoutGeo: z
+          .number()
+          .int()
+          .optional()
+          .describe(
+            'Number of upstream locations dropped because they lacked geoPoint when nearLocation was provided.',
+          ),
+        totalSecondaryOutcomes: z
+          .number()
+          .int()
+          .optional()
+          .describe('Upstream secondary outcomes count before outcomeLimit was applied.'),
+        totalOtherOutcomes: z
+          .number()
+          .int()
+          .optional()
+          .describe('Upstream other outcomes count before outcomeLimit was applied.'),
+        locationLimit: z.number().int().optional().describe('Echo of the locationLimit input.'),
+        outcomeLimit: z.number().int().optional().describe('Echo of the outcomeLimit input.'),
+        nearLocation: z
+          .object({
+            lat: z.number().describe('Latitude in decimal degrees.'),
+            lon: z.number().describe('Longitude in decimal degrees.'),
+            radiusMi: z.number().describe('Radius in miles.'),
+          })
+          .optional()
+          .describe('Echo of the nearLocation input.'),
       })
-      .optional()
-      .describe('Echo of the nearLocation input; drives format() geo filter.'),
+      .describe('Metadata about the filtering applied to `study`.'),
   }),
 
   async handler(input, ctx) {
     const service = getClinicalTrialsService();
-    const study = await service.getStudy(input.nctId, ctx);
-    ctx.log.info('Study fetched', { nctId: input.nctId });
-    return {
-      study,
+    const raw = await service.getStudy(input.nctId, ctx);
+    const { study, meta } = applyFilters(raw as RawStudyShape, input);
+    ctx.log.info('Study fetched', {
+      nctId: input.nctId,
       locationLimit: input.locationLimit,
       outcomeLimit: input.outcomeLimit,
-      ...(input.nearLocation ? { nearLocation: input.nearLocation } : {}),
+      nearLocation: input.nearLocation != null,
+    });
+    return {
+      study: study as Record<string, unknown>,
+      filtersApplied: {
+        ...meta,
+        ...(input.locationLimit != null ? { locationLimit: input.locationLimit } : {}),
+        ...(input.outcomeLimit != null ? { outcomeLimit: input.outcomeLimit } : {}),
+        ...(input.nearLocation ? { nearLocation: input.nearLocation } : {}),
+      },
     };
   },
 
   format: (result) => {
     const s = result.study as RawStudyShape;
-    const locationLimit = result.locationLimit ?? 10;
-    const outcomeLimit = result.outcomeLimit ?? 5;
-    const nearLocation = result.nearLocation;
+    const meta = result.filtersApplied ?? {};
     const ps = s.protocolSection ?? {};
     const id = ps.identificationModule ?? {};
     const status = ps.statusModule ?? {};
@@ -300,35 +406,29 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       }
     }
 
-    // Outcomes — primaries always render in full; secondary/other honor outcomeLimit (0 = unlimited).
+    // Outcomes — render every item present in the (already filtered) study.
     const renderOutcomeList = (
       heading: string,
       list: Array<{ description?: string; measure?: string; timeFrame?: string }>,
-      limit?: number,
+      total?: number,
     ) => {
       lines.push('');
-      const cap = limit && limit > 0 ? limit : list.length;
-      const headerSuffix =
-        limit != null && list.length > cap
-          ? ` (showing ${cap} of ${list.length}, outcomeLimit=${limit})`
-          : limit != null && limit === 0
-            ? ` (${list.length} total, outcomeLimit=0 — unlimited)`
-            : '';
-      lines.push(`## ${heading}${headerSuffix}`);
-      const shown = list.slice(0, cap);
-      for (const o of shown) {
+      const suffix = total != null && total > list.length ? ` (${list.length} of ${total})` : '';
+      lines.push(`## ${heading}${suffix}`);
+      for (const o of list) {
         lines.push(`- ${o.measure}${o.timeFrame ? ` [${o.timeFrame}]` : ''}`);
-      }
-      if (list.length > cap) {
-        lines.push(`... and ${list.length - cap} more`);
       }
     };
     if (outcomes.primaryOutcomes?.length)
       renderOutcomeList('Primary Outcomes', outcomes.primaryOutcomes);
     if (outcomes.secondaryOutcomes?.length)
-      renderOutcomeList('Secondary Outcomes', outcomes.secondaryOutcomes, outcomeLimit);
+      renderOutcomeList(
+        'Secondary Outcomes',
+        outcomes.secondaryOutcomes,
+        meta.totalSecondaryOutcomes,
+      );
     if (outcomes.otherOutcomes?.length)
-      renderOutcomeList('Other Outcomes', outcomes.otherOutcomes, outcomeLimit);
+      renderOutcomeList('Other Outcomes', outcomes.otherOutcomes, meta.totalOtherOutcomes);
 
     // Results summary stub — counts only; full data via clinicaltrials_get_study_results
     if (s.hasResults && s.resultsSection) {
@@ -364,47 +464,30 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       }
     }
 
-    // Locations — optional geo filter, then RECRUITING-first preference, then locationLimit cap.
+    // Locations — render every site present in the (already filtered) study.
     if (contacts.locations?.length) {
-      const locs = contacts.locations;
-      const cap = locationLimit > 0 ? locationLimit : locs.length;
+      const locs = contacts.locations as LocationWithDistance[];
+      const total = meta.totalLocations ?? locs.length;
       lines.push('');
-
-      let scoped: Array<StudyLocation & { _distMi?: number }> = locs;
-      if (nearLocation) {
-        const { lat, lon, radiusMi } = nearLocation;
-        const withGeo = locs.filter(
-          (l): l is StudyLocation & { geoPoint: { lat: number; lon: number } } =>
-            l.geoPoint != null,
-        );
-        const droppedNoGeo = locs.length - withGeo.length;
-        scoped = withGeo
-          .map((l) => ({ ...l, _distMi: haversineMi({ lat, lon }, l.geoPoint) }))
-          .filter((l) => l._distMi <= radiusMi)
-          .sort((a, b) => a._distMi - b._distMi);
-        lines.push(
-          `## Locations (${scoped.length} within ${radiusMi} mi of ${lat.toFixed(3)},${lon.toFixed(3)} — of ${locs.length} total${droppedNoGeo > 0 ? `, ${droppedNoGeo} without coordinates skipped` : ''})`,
-        );
+      let header = `## Locations (${locs.length}`;
+      if (meta.nearLocation) {
+        header += ` within ${meta.nearLocation.radiusMi} mi of ${meta.nearLocation.lat.toFixed(3)},${meta.nearLocation.lon.toFixed(3)} of ${total} total`;
+        if (meta.locationsWithoutGeo) {
+          header += `, ${meta.locationsWithoutGeo} without coordinates skipped`;
+        }
+        header += ')';
+      } else if (total > locs.length) {
+        header += ` of ${total} total)`;
       } else {
-        const recruiting = locs.filter((l) => l.status === 'RECRUITING');
-        scoped = recruiting.length > 0 ? recruiting : locs;
-        const capNote =
-          locationLimit === 0
-            ? ` — locationLimit=0 (unlimited)`
-            : scoped.length > cap
-              ? ` — showing ${cap}, locationLimit=${locationLimit}`
-              : '';
-        lines.push(`## Locations (${locs.length} total${capNote})`);
+        header += ` total)`;
       }
-
-      const toShow = scoped.slice(0, cap);
-      for (const loc of toShow) {
+      lines.push(header);
+      for (const loc of locs) {
         const parts = [loc.facility, loc.city, loc.state, loc.country].filter(Boolean);
         const statusNote = loc.status ? ` [${loc.status}]` : '';
-        const distNote = loc._distMi != null ? ` (${loc._distMi.toFixed(1)} mi)` : '';
+        const distNote = loc.distanceMi != null ? ` (${loc.distanceMi.toFixed(1)} mi)` : '';
         lines.push(`- ${parts.join(', ')}${statusNote}${distNote}`);
       }
-      if (scoped.length > cap) lines.push(`... and ${scoped.length - cap} more`);
     }
 
     // IPD sharing
@@ -438,30 +521,37 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     if (references.references?.length || references.seeAlsoLinks?.length) {
       lines.push('');
       lines.push('## References');
-      const refs = references.references ?? [];
-      const shown = refs.slice(0, 10);
-      for (const r of shown) {
+      for (const r of references.references ?? []) {
         const pmid = r.pmid ? ` (PMID: ${r.pmid})` : '';
         const type = r.type ? ` [${r.type}]` : '';
         lines.push(`- ${r.citation ?? 'Citation unavailable'}${pmid}${type}`);
       }
-      if (refs.length > 10) lines.push(`... and ${refs.length - 10} more`);
       for (const link of references.seeAlsoLinks ?? []) {
         lines.push(`- See also: ${link.label ?? link.url}${link.url ? ` — ${link.url}` : ''}`);
       }
     }
 
-    // Render-settings footer guarantees every output field appears in the
-    // text surface (format-parity), even when the conditional location/outcome
-    // sections aren't reached for a sparse study record.
-    const settingsParts = [`locationLimit=${locationLimit}`, `outcomeLimit=${outcomeLimit}`];
-    if (nearLocation) {
-      settingsParts.push(
-        `nearLocation=(lat=${nearLocation.lat}, lon=${nearLocation.lon}, radiusMi=${nearLocation.radiusMi})`,
+    // Filters Applied footer — guarantees every filtersApplied field appears
+    // in content[] too (format-parity), independent of which sections rendered.
+    const filterParts: string[] = [];
+    if (meta.locationLimit != null) filterParts.push(`locationLimit=${meta.locationLimit}`);
+    if (meta.outcomeLimit != null) filterParts.push(`outcomeLimit=${meta.outcomeLimit}`);
+    if (meta.totalLocations != null) filterParts.push(`totalLocations=${meta.totalLocations}`);
+    if (meta.locationsWithoutGeo != null)
+      filterParts.push(`locationsWithoutGeo=${meta.locationsWithoutGeo}`);
+    if (meta.totalSecondaryOutcomes != null)
+      filterParts.push(`totalSecondaryOutcomes=${meta.totalSecondaryOutcomes}`);
+    if (meta.totalOtherOutcomes != null)
+      filterParts.push(`totalOtherOutcomes=${meta.totalOtherOutcomes}`);
+    if (meta.nearLocation) {
+      filterParts.push(
+        `nearLocation=(lat=${meta.nearLocation.lat}, lon=${meta.nearLocation.lon}, radiusMi=${meta.nearLocation.radiusMi})`,
       );
     }
-    lines.push('');
-    lines.push(`*Rendering: ${settingsParts.join(', ')}*`);
+    if (filterParts.length) {
+      lines.push('');
+      lines.push(`*Filters applied: ${filterParts.join(', ')}*`);
+    }
 
     return [{ type: 'text', text: lines.join('\n') }];
   },

@@ -50,7 +50,7 @@ describe('getStudy', () => {
       const ctx = createMockContext();
       const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx);
 
-      expect(result.study).toBe(study);
+      expect(result.study).toStrictEqual(study);
       expect(mockService.getStudy).toHaveBeenCalledWith('NCT12345678', ctx);
     });
 
@@ -60,6 +60,221 @@ describe('getStudy', () => {
       await expect(
         getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx),
       ).rejects.toThrow('Not found');
+    });
+  });
+
+  describe('filter parity — structuredContent and format() carry the same data (#46)', () => {
+    const buildStudy = (overrides: Record<string, unknown> = {}) => ({
+      protocolSection: {
+        identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+        ...overrides,
+      },
+    });
+
+    const getStructuredLocations = (result: { study: Record<string, unknown> }) => {
+      const ps = (
+        result.study as {
+          protocolSection?: { contactsLocationsModule?: { locations?: unknown[] } };
+        }
+      ).protocolSection;
+      return ps?.contactsLocationsModule?.locations ?? [];
+    };
+
+    const getStructuredSecondary = (result: { study: Record<string, unknown> }) => {
+      const ps = (
+        result.study as { protocolSection?: { outcomesModule?: { secondaryOutcomes?: unknown[] } } }
+      ).protocolSection;
+      return ps?.outcomesModule?.secondaryOutcomes ?? [];
+    };
+
+    it('locationLimit caps locations in both surfaces and records the upstream total', async () => {
+      const locations = Array.from({ length: 30 }, (_, i) => ({
+        facility: `Hospital ${i}`,
+        country: 'US',
+      }));
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({ contactsLocationsModule: { locations } }),
+      );
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({ nctId: 'NCT12345678', locationLimit: 5 }),
+        ctx,
+      );
+
+      expect(getStructuredLocations(result)).toHaveLength(5);
+      expect(result.filtersApplied.totalLocations).toBe(30);
+      expect(result.filtersApplied.locationLimit).toBe(5);
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      expect(text).toContain('## Locations (5 of 30 total)');
+      for (let i = 0; i < 5; i++) expect(text).toContain(`Hospital ${i}`);
+      expect(text).not.toContain('Hospital 5,');
+      expect(text).not.toContain('Hospital 29');
+    });
+
+    it('locationLimit omitted (default) leaves the full list intact in both surfaces', async () => {
+      const locations = Array.from({ length: 30 }, (_, i) => ({
+        facility: `Hospital ${i}`,
+        country: 'US',
+      }));
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({ contactsLocationsModule: { locations } }),
+      );
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx);
+
+      expect(getStructuredLocations(result)).toHaveLength(30);
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      expect(text).toContain('## Locations (30 total)');
+      for (let i = 0; i < 30; i++) expect(text).toContain(`Hospital ${i}`);
+    });
+
+    it('outcomeLimit caps secondary and other outcomes in both surfaces', async () => {
+      const secondaryOutcomes = Array.from({ length: 20 }, (_, i) => ({
+        measure: `Secondary ${i}`,
+      }));
+      const otherOutcomes = Array.from({ length: 8 }, (_, i) => ({
+        measure: `Other ${i}`,
+      }));
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({ outcomesModule: { secondaryOutcomes, otherOutcomes } }),
+      );
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({ nctId: 'NCT12345678', outcomeLimit: 3 }),
+        ctx,
+      );
+
+      expect(getStructuredSecondary(result)).toHaveLength(3);
+      expect(result.filtersApplied.totalSecondaryOutcomes).toBe(20);
+      expect(result.filtersApplied.totalOtherOutcomes).toBe(8);
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      expect(text).toContain('## Secondary Outcomes (3 of 20)');
+      expect(text).toContain('## Other Outcomes (3 of 8)');
+      expect(text).toContain('Secondary 2');
+      expect(text).not.toContain('Secondary 3');
+    });
+
+    it('nearLocation filters by radius, sorts by distance, and annotates distanceMi in both surfaces', async () => {
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({
+          contactsLocationsModule: {
+            locations: [
+              {
+                facility: 'Boston General',
+                country: 'US',
+                geoPoint: { lat: 42.3601, lon: -71.0589 },
+              },
+              {
+                facility: 'Portland Clinic',
+                country: 'US',
+                geoPoint: { lat: 45.5152, lon: -122.6784 },
+              },
+              {
+                facility: 'Seattle Med',
+                country: 'US',
+                geoPoint: { lat: 47.6062, lon: -122.3321 },
+              },
+            ],
+          },
+        }),
+      );
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({
+          nctId: 'NCT12345678',
+          nearLocation: { lat: 47.6062, lon: -122.3321, radiusMi: 250 },
+        }),
+        ctx,
+      );
+
+      const locs = getStructuredLocations(result) as Array<{
+        facility: string;
+        distanceMi?: number;
+      }>;
+      expect(locs.map((l) => l.facility)).toEqual(['Seattle Med', 'Portland Clinic']);
+      expect(locs[0]?.distanceMi).toBeCloseTo(0, 0);
+      expect(locs[1]?.distanceMi).toBeGreaterThan(100);
+      expect(result.filtersApplied.totalLocations).toBe(3);
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      expect(text).toContain('within 250 mi');
+      expect(text).toContain('of 3 total');
+      expect(text).toContain('Seattle Med');
+      expect(text).toContain('Portland Clinic');
+      expect(text).not.toContain('Boston General');
+      expect(text.indexOf('Seattle Med')).toBeLessThan(text.indexOf('Portland Clinic'));
+      expect(text).toMatch(/Seattle Med.*\(0\.0 mi\)/);
+    });
+
+    it('nearLocation drops locations without coordinates and records the count', async () => {
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({
+          contactsLocationsModule: {
+            locations: [
+              { facility: 'Has Coords', geoPoint: { lat: 47.6062, lon: -122.3321 } },
+              { facility: 'No Coords' },
+              { facility: 'Also No Coords' },
+            ],
+          },
+        }),
+      );
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({
+          nctId: 'NCT12345678',
+          nearLocation: { lat: 47.6062, lon: -122.3321, radiusMi: 50 },
+        }),
+        ctx,
+      );
+
+      expect(getStructuredLocations(result)).toHaveLength(1);
+      expect(result.filtersApplied.locationsWithoutGeo).toBe(2);
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      expect(text).toContain('Has Coords');
+      expect(text).toContain('2 without coordinates skipped');
+      expect(text).not.toContain('No Coords,');
+    });
+
+    it('nearLocation combined with locationLimit applies both in both surfaces', async () => {
+      const here = { lat: 47.6062, lon: -122.3321 };
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({
+          contactsLocationsModule: {
+            locations: Array.from({ length: 6 }, (_, i) => ({
+              facility: `Site ${i}`,
+              geoPoint: { lat: here.lat + i * 0.01, lon: here.lon },
+            })),
+          },
+        }),
+      );
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({
+          nctId: 'NCT12345678',
+          nearLocation: { ...here, radiusMi: 100 },
+          locationLimit: 3,
+        }),
+        ctx,
+      );
+
+      const locs = getStructuredLocations(result) as Array<{ facility: string }>;
+      expect(locs).toHaveLength(3);
+      expect(locs.map((l) => l.facility)).toEqual(['Site 0', 'Site 1', 'Site 2']);
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      expect(text).toContain('Site 0');
+      expect(text).toContain('Site 2');
+      expect(text).not.toContain('Site 3');
     });
   });
 
@@ -301,7 +516,7 @@ describe('getStudy', () => {
       expect(text).toContain('ORR');
     });
 
-    it('truncates secondary outcomes beyond 5', () => {
+    it('renders every secondary outcome without truncation (regression for #46)', () => {
       const secondaryOutcomes = Array.from({ length: 8 }, (_, i) => ({
         measure: `Outcome ${i}`,
       }));
@@ -313,7 +528,9 @@ describe('getStudy', () => {
           },
         },
       });
-      expect((blocks[0] as { text: string }).text).toContain('... and 3 more');
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).not.toContain('... and');
+      for (let i = 0; i < 8; i++) expect(text).toContain(`Outcome ${i}`);
     });
 
     it('renders central contacts', () => {
@@ -543,24 +760,7 @@ describe('getStudy', () => {
       expect(text).toContain('Masking: DOUBLE');
     });
 
-    it('truncates locations beyond 10', () => {
-      const locations = Array.from({ length: 15 }, (_, i) => ({
-        facility: `Hospital ${i}`,
-        city: `City ${i}`,
-        country: 'US',
-      }));
-      const blocks = getStudy.format!({
-        study: {
-          protocolSection: {
-            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
-            contactsLocationsModule: { locations },
-          },
-        },
-      });
-      expect((blocks[0] as { text: string }).text).toContain('... and 5 more');
-    });
-
-    it('honors locationLimit input (caller-controlled cap)', () => {
+    it('renders every location without truncation (regression for #46)', () => {
       const locations = Array.from({ length: 30 }, (_, i) => ({
         facility: `Hospital ${i}`,
         country: 'US',
@@ -572,135 +772,29 @@ describe('getStudy', () => {
             contactsLocationsModule: { locations },
           },
         },
-        locationLimit: 25,
       });
-      expect((blocks[0] as { text: string }).text).toContain('... and 5 more');
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('## Locations (30 total)');
+      expect(text).not.toContain('... and');
+      for (let i = 0; i < 30; i++) expect(text).toContain(`Hospital ${i}`);
     });
 
-    it('locationLimit=0 disables the cap', () => {
-      const locations = Array.from({ length: 30 }, (_, i) => ({
-        facility: `Hospital ${i}`,
-        country: 'US',
+    it('renders every reference without truncation (regression for #46)', () => {
+      const references = Array.from({ length: 15 }, (_, i) => ({
+        pmid: `${10000 + i}`,
+        citation: `Citation ${i}.`,
       }));
       const blocks = getStudy.format!({
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
-            contactsLocationsModule: { locations },
+            referencesModule: { references },
           },
         },
-        locationLimit: 0,
       });
       const text = (blocks[0] as { text: string }).text;
       expect(text).not.toContain('... and');
-      expect(text).toContain('Hospital 29');
-    });
-
-    it('honors outcomeLimit input on secondary outcomes', () => {
-      const secondaryOutcomes = Array.from({ length: 20 }, (_, i) => ({
-        measure: `Outcome ${i}`,
-      }));
-      const blocks = getStudy.format!({
-        study: {
-          protocolSection: {
-            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
-            outcomesModule: { secondaryOutcomes },
-          },
-        },
-        outcomeLimit: 12,
-      });
-      expect((blocks[0] as { text: string }).text).toContain('... and 8 more');
-    });
-
-    it('outcomeLimit=0 renders all secondary outcomes', () => {
-      const secondaryOutcomes = Array.from({ length: 30 }, (_, i) => ({
-        measure: `Outcome ${i}`,
-      }));
-      const blocks = getStudy.format!({
-        study: {
-          protocolSection: {
-            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
-            outcomesModule: { secondaryOutcomes },
-          },
-        },
-        outcomeLimit: 0,
-      });
-      const text = (blocks[0] as { text: string }).text;
-      expect(text).not.toContain('... and');
-      expect(text).toContain('Outcome 29');
-    });
-
-    it('nearLocation filters and sorts locations by distance', () => {
-      // Seattle, Portland, Boston coords; nearLocation around Seattle.
-      const blocks = getStudy.format!({
-        study: {
-          protocolSection: {
-            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
-            contactsLocationsModule: {
-              locations: [
-                {
-                  facility: 'Boston General',
-                  city: 'Boston',
-                  country: 'US',
-                  geoPoint: { lat: 42.3601, lon: -71.0589 },
-                },
-                {
-                  facility: 'Portland Clinic',
-                  city: 'Portland',
-                  country: 'US',
-                  geoPoint: { lat: 45.5152, lon: -122.6784 },
-                },
-                {
-                  facility: 'Seattle Med',
-                  city: 'Seattle',
-                  country: 'US',
-                  geoPoint: { lat: 47.6062, lon: -122.3321 },
-                },
-              ],
-            },
-          },
-        },
-        locationLimit: 10,
-        nearLocation: { lat: 47.6062, lon: -122.3321, radiusMi: 250 },
-      });
-      const text = (blocks[0] as { text: string }).text;
-      // Seattle (0 mi) and Portland (~145 mi) inside 250 mi; Boston excluded.
-      expect(text).toContain('2 within 250 mi');
-      expect(text).toContain('Seattle Med');
-      expect(text).toContain('Portland Clinic');
-      expect(text).not.toContain('Boston General');
-      // Sorted nearest first — Seattle line appears before Portland.
-      const seattleIdx = text.indexOf('Seattle Med');
-      const portlandIdx = text.indexOf('Portland Clinic');
-      expect(seattleIdx).toBeLessThan(portlandIdx);
-      // Distance annotation included.
-      expect(text).toMatch(/Seattle Med.*\(0\.0 mi\)/);
-    });
-
-    it('nearLocation skips locations without coordinates and notes the count', () => {
-      const blocks = getStudy.format!({
-        study: {
-          protocolSection: {
-            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
-            contactsLocationsModule: {
-              locations: [
-                {
-                  facility: 'Has Coords',
-                  geoPoint: { lat: 47.6062, lon: -122.3321 },
-                },
-                { facility: 'No Coords' },
-                { facility: 'Also No Coords' },
-              ],
-            },
-          },
-        },
-        nearLocation: { lat: 47.6062, lon: -122.3321, radiusMi: 50 },
-      });
-      const text = (blocks[0] as { text: string }).text;
-      expect(text).toContain('1 within 50 mi');
-      expect(text).toContain('2 without coordinates skipped');
-      expect(text).toContain('Has Coords');
-      expect(text).not.toContain('No Coords');
+      for (let i = 0; i < 15; i++) expect(text).toContain(`Citation ${i}.`);
     });
   });
 });

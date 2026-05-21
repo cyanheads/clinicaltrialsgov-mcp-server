@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.4.11](changelog/2.4.x/2.4.11.md) — 2026-05-21
+
+Description hardening — `advancedFilter` anchors `AREA[FieldName]value` with composition examples ([#47](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues/47)); `path_not_found` hint on `clinicaltrials_get_field_definitions` promotes `query` mode ([#48](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues/48)).
+
 ## [2.4.10](changelog/2.4.x/2.4.10.md) — 2026-05-20
 
 Fix `clinicaltrials_get_study_record` surface divergence ([#46](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues/46)) — `locationLimit` / `outcomeLimit` / `nearLocation` now trim both surfaces identically, defaults flip to no cap, upstream totals surface in `filtersApplied`.

@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** clinicaltrialsgov-mcp-server
-**Version:** 2.4.11
+**Version:** 2.4.12
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 
@@ -48,17 +48,18 @@ MCP server wrapping the [ClinicalTrials.gov REST API v2](https://clinicaltrials.
 
 ## What's Next?
 
-When the user asks what to do next, what's left, or needs direction, suggest relevant options based on the current project state:
+When the user asks what's next or needs direction, suggest options based on the current project state. Common next steps:
 
-1. **Add services** — scaffold the `ClinicalTrialsService` using the `add-service` skill
-2. **Add tools/resources/prompts** — scaffold definitions using `add-tool`, `add-resource`, `add-prompt` skills
-3. **Add tests** — scaffold tests using the `add-test` skill
-4. **Field-test definitions** — exercise tools/resources/prompts with real inputs using the `field-test` skill
-5. **Run `devcheck`** — lint, format, typecheck, and security audit
-6. **Run the `security-pass` skill** — audit handlers for MCP-specific security gaps: output injection, scope blast radius, input sinks, tenant isolation
-7. **Run the `tool-defs-analysis` skill** — audit definition language across every tool/resource/prompt: voice, internal leaks, recovery hints, cross-references
-8. **Run the `polish-docs-meta` skill** — finalize README, CHANGELOG, metadata for shipping
-9. **Run the `maintenance` skill** — sync skills and dependencies after framework updates
+1. **Re-run the `setup` skill** — ensures CLAUDE.md, skills, structure, and metadata are populated and up to date with the current codebase
+2. **Run the `design-mcp-server` skill** — if the tool/resource surface hasn't been mapped yet, work through domain design
+3. **Add tools/resources/prompts** — scaffold new definitions using the `add-tool`, `add-app-tool`, `add-resource`, `add-prompt` skills
+4. **Add services** — scaffold domain service integrations using the `add-service` skill
+5. **Add tests** — scaffold tests for existing definitions using the `add-test` skill
+6. **Field-test definitions** — exercise tools/resources/prompts with real inputs using the `field-test` skill, get a report of issues and pain points
+7. **Run `devcheck`** — lint, format, typecheck, and security audit
+8. **Run the `security-pass` skill** — audit handlers for MCP-specific security gaps: output injection, scope blast radius, input sinks, tenant isolation
+9. **Run the `polish-docs-meta` skill** — finalize README, CHANGELOG, metadata, and agent protocol for shipping
+10. **Run the `maintenance` skill** — investigate changelogs, adopt upstream changes, and sync skills after `bun update --latest`
 
 Tailor suggestions to what's actually missing or stale — don't recite the full list every time.
 
@@ -313,35 +314,36 @@ Skills are modular instructions in `skills/` at the project root. Read them dire
 
 Available skills:
 
-| Skill                    | Purpose                                                                           |
-| :----------------------- | :-------------------------------------------------------------------------------- |
-| `setup`                  | Post-init project orientation                                                     |
-| `design-mcp-server`      | Design tool surface, resources, and services for a new server                     |
-| `add-tool`               | Scaffold a new tool definition                                                    |
-| `add-resource`           | Scaffold a new resource definition                                                |
-| `add-prompt`             | Scaffold a new prompt definition                                                  |
-| `add-service`            | Scaffold a new service integration                                                |
-| `add-test`               | Scaffold test file for a tool, resource, or service                               |
-| `field-test`             | Exercise tools/resources/prompts with real inputs, verify behavior, report issues |
-| `security-pass`          | Audit handlers for MCP-specific security gaps (injection, scopes, input sinks)    |
-| `tool-defs-analysis`     | Audit definition language across the surface (voice, leaks, recovery, cross-refs) |
-| `devcheck`               | Lint, format, typecheck, audit                                                    |
-| `polish-docs-meta`       | Finalize docs, README, metadata, and agent protocol for shipping                  |
-| `maintenance`            | Sync skills and dependencies after updates                                        |
-| `release-and-publish`    | Post-wrapup ship workflow: verification gate, push, publish to npm/GHCR           |
-| `report-issue-framework` | File a bug or feature request against `@cyanheads/mcp-ts-core` via `gh` CLI       |
-| `report-issue-local`     | File a bug or feature request against this server's own repo via `gh` CLI         |
-| `api-auth`               | Auth modes, scopes, JWT/OAuth                                                     |
-| `api-canvas`             | DataCanvas primitive — SQL/analytical workspace (Tier 3, opt-in)                  |
-| `api-config`             | AppConfig, parseConfig, env vars                                                  |
-| `api-context`            | Context interface, logger, state, progress                                        |
-| `api-errors`             | McpError, JsonRpcErrorCode, error patterns, typed contracts                       |
-| `api-linter`             | Definition lint rule reference — look up rule IDs reported by `lint:mcp`/devcheck |
-| `api-services`           | LLM, Speech, Graph services                                                       |
-| `api-telemetry`          | OTel catalog: spans, metrics, completion logs, env config, cardinality rules      |
-| `api-testing`            | createMockContext, test patterns                                                  |
-| `api-utils`              | Formatting, parsing, security, pagination, scheduling, `httpErrorFromResponse`    |
-| `api-workers`            | Cloudflare Workers runtime                                                        |
+| Skill                    | Purpose                                                                                    |
+| :----------------------- | :----------------------------------------------------------------------------------------- |
+| `setup`                  | Post-init project orientation                                                              |
+| `design-mcp-server`      | Design tool surface, resources, and services for a new server                              |
+| `add-tool`               | Scaffold a new tool definition                                                             |
+| `add-app-tool`           | Scaffold an MCP App tool + paired UI resource                                              |
+| `add-resource`           | Scaffold a new resource definition                                                         |
+| `add-prompt`             | Scaffold a new prompt definition                                                           |
+| `add-service`            | Scaffold a new service integration                                                         |
+| `add-test`               | Scaffold test file for a tool, resource, or service                                        |
+| `field-test`             | Exercise tools/resources/prompts with real inputs, verify behavior, report issues          |
+| `security-pass`          | Audit server for MCP-flavored security gaps: output injection, scope blast radius, input sinks, tenant isolation |
+| `tool-defs-analysis`     | Audit definition language across the surface (voice, leaks, recovery, cross-refs)         |
+| `devcheck`               | Lint, format, typecheck, audit                                                             |
+| `polish-docs-meta`       | Finalize docs, README, metadata, and agent protocol for shipping                           |
+| `maintenance`            | Investigate changelogs, adopt upstream changes, sync skills to agent dirs                  |
+| `release-and-publish`    | Post-wrapup ship workflow: verification gate, push, publish to npm/GHCR                    |
+| `report-issue-framework` | File a bug or feature request against `@cyanheads/mcp-ts-core` via `gh` CLI               |
+| `report-issue-local`     | File a bug or feature request against this server's own repo via `gh` CLI                  |
+| `api-auth`               | Auth modes, scopes, JWT/OAuth                                                              |
+| `api-canvas`             | DataCanvas: register tabular data, run SQL, export, plus the `spillover()` helper for big result sets — Tier 3 opt-in |
+| `api-config`             | AppConfig, parseConfig, env vars                                                           |
+| `api-context`            | Context interface, logger, state, progress                                                 |
+| `api-errors`             | McpError, JsonRpcErrorCode, error patterns, typed contracts                                |
+| `api-linter`             | Definition lint rule reference — look up rule IDs reported by `lint:mcp`/devcheck         |
+| `api-services`           | LLM, Speech, Graph services                                                                |
+| `api-telemetry`          | OTel catalog: spans, metrics, completion logs, env config, cardinality rules               |
+| `api-testing`            | createMockContext, test patterns                                                           |
+| `api-utils`              | Formatting, parsing, security, pagination, scheduling, telemetry helpers                   |
+| `api-workers`            | Cloudflare Workers runtime                                                                 |
 
 When you complete a skill's checklist, check the boxes and add a completion timestamp at the end (e.g., `Completed: 2026-03-11`).
 
@@ -349,19 +351,29 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 ## Commands
 
-| Command               | Purpose                              |
-| :-------------------- | :----------------------------------- |
-| `bun run build`       | Compile TypeScript                   |
-| `bun run rebuild`     | Clean + build                        |
-| `bun run devcheck`    | Lint + format + typecheck + security |
-| `bun run tree`        | Generate directory structure doc     |
-| `bun run format`      | Auto-fix formatting                  |
-| `bun run test`        | Run tests (Vitest)                   |
-| `bun run start:stdio` | Production mode (stdio)              |
-| `bun run start:http`  | Production mode (HTTP)               |
-| `bun run inspector`   | Launch MCP Inspector                 |
-| `bun run changelog:build` | Regenerate `CHANGELOG.md` from `changelog/*.md` |
-| `bun run changelog:check` | Verify `CHANGELOG.md` is in sync (used by devcheck) |
+| Command                   | Purpose                                                       |
+| :------------------------ | :------------------------------------------------------------ |
+| `bun run build`           | Compile TypeScript                                            |
+| `bun run rebuild`         | Clean + build                                                 |
+| `bun run devcheck`        | Lint + format + typecheck + security + changelog sync         |
+| `bun run tree`            | Generate directory structure doc                              |
+| `bun run format`          | Auto-fix formatting                                           |
+| `bun run test`            | Run tests (Vitest)                                            |
+| `bun run start:stdio`     | Production mode (stdio)                                       |
+| `bun run start:http`      | Production mode (HTTP)                                        |
+| `bun run inspector`       | Launch MCP Inspector                                          |
+| `bun run changelog:build` | Regenerate `CHANGELOG.md` from `changelog/*.md`               |
+| `bun run changelog:check` | Verify `CHANGELOG.md` is in sync (used by devcheck)           |
+| `bun run bundle`          | Build and pack as `.mcpb` for one-click Claude Desktop install |
+| `bun run audit:refresh`   | Delete `bun.lock`, reinstall, re-audit. Use when `devcheck` flags a transitive advisory — stale lockfile can mask already-patched deps. If advisory survives, it's real. |
+
+---
+
+## Bundling
+
+`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
+
+**Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match.
 
 ---
 

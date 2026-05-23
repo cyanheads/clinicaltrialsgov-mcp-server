@@ -1,0 +1,55 @@
+{
+  "manifest_version": "0.3",
+  "name": "clinicaltrialsgov-mcp-server",
+  "version": "2.4.12",
+  "description": "MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details and results, and match patients to eligible trials.",
+  "author": { "name": "cyanheads" },
+  "server": {
+    "type": "node",
+    "entry_point": "dist/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": ["${__dirname}/dist/index.js"],
+      "env": {
+        "MCP_TRANSPORT_TYPE": "stdio",
+        "MCP_AUTH_MODE": "none",
+        "NODE_ENV": "production"
+      }
+    }
+  },
+  "compatibility": {
+    "runtimes": { "node": ">=24.0.0" }
+  },
+  "tools_generated": true,
+  "prompts_generated": true,
+  "user_config": {
+    "CT_API_BASE_URL": {
+      "title": "ClinicalTrials.gov API base URL",
+      "description": "Base URL for the ClinicalTrials.gov v2 API.",
+      "type": "string",
+      "required": false,
+      "default": "https://clinicaltrials.gov/api/v2"
+    },
+    "CT_REQUEST_TIMEOUT_MS": {
+      "title": "Request timeout (ms)",
+      "description": "Per-request timeout in milliseconds.",
+      "type": "string",
+      "required": false,
+      "default": "30000"
+    },
+    "CT_MAX_PAGE_SIZE": {
+      "title": "Maximum page size",
+      "description": "Maximum page size cap for API responses.",
+      "type": "string",
+      "required": false,
+      "default": "200"
+    },
+    "MCP_LOG_LEVEL": {
+      "title": "Log level",
+      "description": "Minimum log level for output (debug, info, warn, error).",
+      "type": "string",
+      "required": false,
+      "default": "info"
+    }
+  }
+}

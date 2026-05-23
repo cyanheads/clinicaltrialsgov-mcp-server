@@ -1,12 +1,12 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
-  "description": "ClinicalTrials.gov MCP server. Search studies, retrieve results, match patients to eligible trials.",
+  "description": "Search ClinicalTrials.gov — find studies, retrieve results, match patients to eligible trials.",
   "repository": {
     "url": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server",
     "source": "github"
   },
-  "version": "2.4.11",
+  "version": "2.4.12",
   "remotes": [
     {
       "type": "streamable-http",
@@ -19,7 +19,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
       "runtimeHint": "bun",
-      "version": "2.4.11",
+      "version": "2.4.12",
       "packageArguments": [
         {
           "type": "positional",
@@ -69,7 +69,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
       "runtimeHint": "bun",
-      "version": "2.4.11",
+      "version": "2.4.12",
       "packageArguments": [
         {
           "type": "positional",

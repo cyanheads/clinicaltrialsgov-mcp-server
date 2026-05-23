@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.4.12](changelog/2.4.x/2.4.12.md) — 2026-05-23
+
+mcp-ts-core ^0.9.1 → ^0.9.6, zod added as direct dep, manifest.json + .mcpbignore scaffolded for MCPB bundle support, install badges added to README.
+
 ## [2.4.11](changelog/2.4.x/2.4.11.md) — 2026-05-21
 
 Description hardening — `advancedFilter` anchors `AREA[FieldName]value` with composition examples ([#47](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues/47)); `path_not_found` hint on `clinicaltrials_get_field_definitions` promotes `query` mode ([#48](https://github.com/cyanheads/clinicaltrialsgov-mcp-server/issues/48)).

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.5.1](changelog/2.5.x/2.5.1.md) — 2026-05-25
+
+mcp-ts-core ^0.9.6 → ^0.9.9 (git-wrapup skill, release artifact verification, tag annotation format)
+
 ## [2.5.0](changelog/2.5.x/2.5.0.md) — 2026-05-25
 
 get_field_definitions mode discriminator, enum error translation, funnel-aware no-match hints, transport framing removed from get_study_record description

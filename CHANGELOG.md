@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.5.0](changelog/2.5.x/2.5.0.md) — 2026-05-25
+
+get_field_definitions mode discriminator, enum error translation, funnel-aware no-match hints, transport framing removed from get_study_record description
+
 ## [2.4.12](changelog/2.4.x/2.4.12.md) — 2026-05-23
 
 mcp-ts-core ^0.9.1 → ^0.9.6, zod added as direct dep, manifest.json + .mcpbignore scaffolded for MCPB bundle support, install badges added to README.

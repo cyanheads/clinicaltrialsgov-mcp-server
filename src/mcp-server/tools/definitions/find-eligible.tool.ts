@@ -252,29 +252,63 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       }
     }
 
+    const conditionMatched = conditionStage.totalCount ?? 0;
+    const locationMatched = locationStage.totalCount ?? 0;
+    const demographicsMatched = result.totalCount ?? 0;
+
     let noMatchHints: string[] | undefined;
     if (result.studies.length === 0) {
       noMatchHints = [
         `No studies found for "${input.conditions.join(', ')}" matching the specified criteria.`,
       ];
-      if (input.age <= 1 || input.age >= 100)
+
+      if (conditionMatched > 0 && locationMatched === 0) {
+        // Location is the collapse point — lead with location-specific suggestions.
         noMatchHints.push(
-          `Age ${input.age} is at the extreme of typical trial ranges. Few trials enroll this age group.`,
+          `${conditionMatched} studies match the condition, but none are in the specified location. Try broadening the location: search with just the country, or use clinicaltrials_search_studies with geoFilter for radius-based matching.`,
         );
-      if (input.sex !== 'ALL')
-        noMatchHints.push('Try sex="ALL" to include studies not restricted by sex.');
-      if (input.healthyVolunteer)
+        if (input.location.city || input.location.state)
+          noMatchHints.push('Remove city/state to widen the location search to the full country.');
+      } else if (locationMatched > 0 && demographicsMatched === 0) {
+        // Demographics/status is the collapse point — lead with age/sex/status suggestions.
         noMatchHints.push(
-          'Many studies do not accept healthy volunteers. Set healthyVolunteer=false if the patient has a relevant condition.',
+          `${locationMatched} studies match condition + location, but none pass the age/sex/status filters.`,
         );
-      if (input.recruitingOnly)
-        noMatchHints.push(
-          'Set recruitingOnly=false to include completed, active, and not-yet-recruiting studies.',
-        );
-      if (input.location.city || input.location.state)
-        noMatchHints.push(
-          'Try searching with just the country to find studies in other cities/states.',
-        );
+        if (input.age <= 1 || input.age >= 100)
+          noMatchHints.push(
+            `Age ${input.age} is at the extreme of typical trial ranges. Few trials enroll this age group.`,
+          );
+        if (input.sex !== 'ALL')
+          noMatchHints.push('Try sex="ALL" to include studies not restricted by sex.');
+        if (input.recruitingOnly)
+          noMatchHints.push(
+            'Set recruitingOnly=false to include completed, active, and not-yet-recruiting studies.',
+          );
+        if (input.healthyVolunteer)
+          noMatchHints.push(
+            'Many studies do not accept healthy volunteers. Set healthyVolunteer=false if the patient has a relevant condition.',
+          );
+      } else {
+        // Either conditionMatched === 0, or an unexpected state — emit generic suggestions.
+        if (input.age <= 1 || input.age >= 100)
+          noMatchHints.push(
+            `Age ${input.age} is at the extreme of typical trial ranges. Few trials enroll this age group.`,
+          );
+        if (input.sex !== 'ALL')
+          noMatchHints.push('Try sex="ALL" to include studies not restricted by sex.');
+        if (input.healthyVolunteer)
+          noMatchHints.push(
+            'Many studies do not accept healthy volunteers. Set healthyVolunteer=false if the patient has a relevant condition.',
+          );
+        if (input.recruitingOnly)
+          noMatchHints.push(
+            'Set recruitingOnly=false to include completed, active, and not-yet-recruiting studies.',
+          );
+        if (input.location.city || input.location.state)
+          noMatchHints.push(
+            'Try searching with just the country to find studies in other cities/states.',
+          );
+      }
     }
 
     return {
@@ -287,9 +321,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         sex: input.sex,
       },
       funnel: {
-        conditionMatched: conditionStage.totalCount ?? 0,
-        locationMatched: locationStage.totalCount ?? 0,
-        demographicsMatched: result.totalCount ?? 0,
+        conditionMatched,
+        locationMatched,
+        demographicsMatched,
       },
       ...(noMatchHints ? { noMatchHints } : {}),
     };

@@ -80,36 +80,48 @@ describe('getFieldDefinitions', () => {
   });
 
   describe('input validation', () => {
-    it('accepts no parameters (top-level overview)', () => {
-      expect(() => getFieldDefinitions.input!.parse({})).not.toThrow();
+    it('requires mode parameter', () => {
+      expect(() => getFieldDefinitions.input!.parse({})).toThrow();
     });
 
-    it('accepts a path parameter', () => {
-      const input = getFieldDefinitions.input!.parse({ path: 'protocolSection.statusModule' });
+    it('accepts overview mode', () => {
+      const input = getFieldDefinitions.input!.parse({ mode: 'overview' });
+      expect(input.mode).toBe('overview');
+    });
+
+    it('accepts drill mode with path', () => {
+      const input = getFieldDefinitions.input!.parse({
+        mode: 'drill',
+        path: 'protocolSection.statusModule',
+      });
       expect(input.path).toBe('protocolSection.statusModule');
     });
 
-    it('accepts a query parameter', () => {
-      const input = getFieldDefinitions.input!.parse({ query: 'enrollment' });
+    it('accepts search mode with query', () => {
+      const input = getFieldDefinitions.input!.parse({ mode: 'search', query: 'enrollment' });
       expect(input.query).toBe('enrollment');
     });
 
-    it('accepts includeIndexedOnly flag', () => {
-      const input = getFieldDefinitions.input!.parse({ includeIndexedOnly: true });
+    it('accepts includeIndexedOnly flag with drill mode', () => {
+      const input = getFieldDefinitions.input!.parse({
+        mode: 'drill',
+        path: 'protocolSection',
+        includeIndexedOnly: true,
+      });
       expect(input.includeIndexedOnly).toBe(true);
     });
 
-    it('defaults limit to 20', () => {
-      const input = getFieldDefinitions.input!.parse({ query: 'sponsor' });
+    it('defaults limit to 20 in search mode', () => {
+      const input = getFieldDefinitions.input!.parse({ mode: 'search', query: 'sponsor' });
       expect(input.limit).toBe(20);
     });
   });
 
   describe('handler', () => {
-    it('returns top-level overview when no path provided', async () => {
+    it('returns top-level overview in overview mode', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
       const ctx = createMockContext();
-      const input = getFieldDefinitions.input!.parse({});
+      const input = getFieldDefinitions.input!.parse({ mode: 'overview' });
       const result = await getFieldDefinitions.handler(input, ctx);
 
       expect(result.fields).toHaveLength(2);
@@ -122,7 +134,10 @@ describe('getFieldDefinitions', () => {
     it('includes child summaries in overview', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
       const ctx = createMockContext();
-      const result = await getFieldDefinitions.handler(getFieldDefinitions.input!.parse({}), ctx);
+      const result = await getFieldDefinitions.handler(
+        getFieldDefinitions.input!.parse({ mode: 'overview' }),
+        ctx,
+      );
 
       const protocolChildren = result.fields[0]!.children!;
       expect(protocolChildren[0]!).toMatchObject({
@@ -135,16 +150,20 @@ describe('getFieldDefinitions', () => {
     it('returns totalFields count for overview', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
       const ctx = createMockContext();
-      const result = await getFieldDefinitions.handler(getFieldDefinitions.input!.parse({}), ctx);
+      const result = await getFieldDefinitions.handler(
+        getFieldDefinitions.input!.parse({ mode: 'overview' }),
+        ctx,
+      );
 
       // 2 top-level sections + 2 children of protocolSection + 1 child of resultsSection = 5
       expect(result.totalFields).toBe(5);
     });
 
-    it('navigates to a path and returns flattened children', async () => {
+    it('navigates to a path in drill mode', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
       const ctx = createMockContext();
       const input = getFieldDefinitions.input!.parse({
+        mode: 'drill',
         path: 'protocolSection.identificationModule',
       });
       const result = await getFieldDefinitions.handler(input, ctx);
@@ -157,10 +176,13 @@ describe('getFieldDefinitions', () => {
       expect(result.fields[1]!.name).toBe('briefTitle');
     });
 
-    it('throws on invalid path', async () => {
+    it('throws on invalid path in drill mode', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
       const ctx = createMockContext({ errors: getFieldDefinitions.errors });
-      const input = getFieldDefinitions.input!.parse({ path: 'nonexistent.path' });
+      const input = getFieldDefinitions.input!.parse({
+        mode: 'drill',
+        path: 'nonexistent.path',
+      });
 
       await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow(
         /Path 'nonexistent.path' not found/,
@@ -170,7 +192,7 @@ describe('getFieldDefinitions', () => {
     it('includes available section names in error for invalid path', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
       const ctx = createMockContext({ errors: getFieldDefinitions.errors });
-      const input = getFieldDefinitions.input!.parse({ path: 'badSection' });
+      const input = getFieldDefinitions.input!.parse({ mode: 'drill', path: 'badSection' });
 
       await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow(
         /protocolSection.*resultsSection/,
@@ -180,7 +202,7 @@ describe('getFieldDefinitions', () => {
     it('navigates single-level path', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
       const ctx = createMockContext();
-      const input = getFieldDefinitions.input!.parse({ path: 'protocolSection' });
+      const input = getFieldDefinitions.input!.parse({ mode: 'drill', path: 'protocolSection' });
       const result = await getFieldDefinitions.handler(input, ctx);
 
       expect(result.resolvedPath).toBe('protocolSection');
@@ -190,33 +212,40 @@ describe('getFieldDefinitions', () => {
     it('recursively flattens nested children', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
       const ctx = createMockContext();
-      const input = getFieldDefinitions.input!.parse({ path: 'protocolSection' });
+      const input = getFieldDefinitions.input!.parse({ mode: 'drill', path: 'protocolSection' });
       const result = await getFieldDefinitions.handler(input, ctx);
 
       // identificationModule + its 2 children + statusModule + its 1 child = 5
       expect(result.totalFields).toBe(5);
     });
 
-    it('passes includeIndexedOnly to service', async () => {
-      mockService.getMetadata.mockResolvedValue([]);
+    it('passes includeIndexedOnly to service in drill mode', async () => {
+      mockService.getMetadata.mockResolvedValue(sampleTree);
       const ctx = createMockContext();
       await getFieldDefinitions.handler(
-        getFieldDefinitions.input!.parse({ includeIndexedOnly: true }),
+        getFieldDefinitions.input!.parse({
+          mode: 'drill',
+          path: 'protocolSection',
+          includeIndexedOnly: true,
+        }),
         ctx,
       );
 
       expect(mockService.getMetadata).toHaveBeenCalledWith(true, ctx);
     });
 
-    it('defaults includeIndexedOnly to false', async () => {
-      mockService.getMetadata.mockResolvedValue([]);
+    it('defaults includeIndexedOnly to false in drill mode', async () => {
+      mockService.getMetadata.mockResolvedValue(sampleTree);
       const ctx = createMockContext();
-      await getFieldDefinitions.handler(getFieldDefinitions.input!.parse({}), ctx);
+      await getFieldDefinitions.handler(
+        getFieldDefinitions.input!.parse({ mode: 'drill', path: 'protocolSection' }),
+        ctx,
+      );
 
       expect(mockService.getMetadata).toHaveBeenCalledWith(false, ctx);
     });
 
-    it('routes to searchFieldDefinitions when query is provided', async () => {
+    it('routes to searchFieldDefinitions in search mode', async () => {
       mockService.searchFieldDefinitions.mockResolvedValue([
         {
           name: 'enrollmentInfo',
@@ -226,7 +255,11 @@ describe('getFieldDefinitions', () => {
         },
       ]);
       const ctx = createMockContext();
-      const input = getFieldDefinitions.input!.parse({ query: 'enrollment', limit: 5 });
+      const input = getFieldDefinitions.input!.parse({
+        mode: 'search',
+        query: 'enrollment',
+        limit: 5,
+      });
       const result = await getFieldDefinitions.handler(input, ctx);
 
       expect(mockService.searchFieldDefinitions).toHaveBeenCalledWith('enrollment', 5, ctx);
@@ -236,16 +269,18 @@ describe('getFieldDefinitions', () => {
       expect(result.fields[0]!.piece).toBe('EnrollmentCount');
     });
 
-    it('rejects providing both query and path', async () => {
+    it('rejects search mode without query', async () => {
       const ctx = createMockContext();
-      const input = getFieldDefinitions.input!.parse({
-        query: 'enrollment',
-        path: 'protocolSection',
-      });
+      const input = getFieldDefinitions.input!.parse({ mode: 'search' });
 
-      await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow(
-        /Provide either `query` or `path`/,
-      );
+      await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow(/requires `query`/);
+    });
+
+    it('rejects drill mode without path', async () => {
+      const ctx = createMockContext();
+      const input = getFieldDefinitions.input!.parse({ mode: 'drill' });
+
+      await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow(/requires `path`/);
     });
   });
 

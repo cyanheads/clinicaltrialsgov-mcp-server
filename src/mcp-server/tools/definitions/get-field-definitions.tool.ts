@@ -1,6 +1,6 @@
 /**
  * @fileoverview Discover valid field names from the ClinicalTrials.gov data model.
- * Supports keyword search, path-based drill-down, and top-level overview.
+ * Supports keyword search, path-based drill-down, and top-level overview via an explicit mode field.
  * @module mcp-server/tools/definitions/get-field-definitions.tool
  */
 
@@ -46,7 +46,7 @@ function indexEntryToResult(entry: FieldIndexEntry): FieldDefResult {
 
 export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', {
   description:
-    'Resolve valid field names from the ClinicalTrials.gov data model. Returns canonical PascalCase identifiers (OverallStatus, EnrollmentCount, LeadSponsorName) — the exact names accepted by the `fields`, `advancedFilter`, and `sort` parameters of other tools and as input to clinicaltrials_get_field_values. Three usage modes: pass `query` for keyword search by concept (e.g., "enrollment", "sponsor", "adverse events") returning a ranked list of matches; pass `path` for drill-down into a section by dot-notation (e.g., "protocolSection.designModule") returning its individual fields; omit both for a top-level overview of all sections.',
+    'Resolve valid field names from the ClinicalTrials.gov data model — the canonical PascalCase identifiers (OverallStatus, EnrollmentCount, LeadSponsorName) accepted by the `fields`, `advancedFilter`, and `sort` parameters of other tools, and as input to clinicaltrials_get_field_values. Select a mode: `"search"` — keyword search returning ranked matches (pass `query`, e.g. "enrollment", "sponsor", "adverse events"); `"drill"` — drill into a specific section by dot-notation path (pass `path`, e.g. "protocolSection.designModule"); `"overview"` — top-level summary of all sections (no additional args).',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -70,17 +70,22 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
   ],
 
   input: z.object({
+    mode: z
+      .enum(['search', 'drill', 'overview'])
+      .describe(
+        'Operation mode. "search" — keyword search (requires `query`); "drill" — drill into a section by path (requires `path`); "overview" — list all top-level sections (no other args needed).',
+      ),
     query: z
       .string()
       .optional()
       .describe(
-        `Keyword to search field names by — e.g., "enrollment", "sponsor", "adverse events". Returns matching field names ranked by relevance with their full paths and data types. Cannot be combined with \`path\`.`,
+        'search mode only. Keyword to search field names by — e.g., "enrollment", "sponsor", "adverse events". Returns matching field names ranked by relevance with their full paths and data types.',
       ),
     path: z
       .string()
       .optional()
       .describe(
-        `Dot-notation path to drill into a section. E.g., "protocolSection.designModule", "protocolSection.eligibilityModule", "resultsSection". Returns the section's individual fields. Cannot be combined with \`query\`. Omit both \`path\` and \`query\` for a top-level overview.`,
+        'drill mode only. Dot-notation path to drill into — e.g., "protocolSection.designModule", "protocolSection.eligibilityModule", "resultsSection". Returns the section\'s individual fields.',
       ),
     limit: z
       .number()
@@ -88,13 +93,11 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
       .min(1)
       .max(100)
       .default(20)
-      .describe('Maximum results to return when using `query`. Default: 20.'),
+      .describe('search mode only. Maximum results to return. Default: 20.'),
     includeIndexedOnly: z
       .boolean()
       .optional()
-      .describe(
-        'Only return indexed (searchable) fields. Default: false. Has no visible effect at the top level — use with `path` to filter.',
-      ),
+      .describe('drill mode only. Only return indexed (searchable) fields. Default: false.'),
   }),
 
   output: z.object({
@@ -118,68 +121,73 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
             children: z
               .array(z.record(z.string(), z.unknown()))
               .optional()
-              .describe('Child fields (top-level overview only).'),
+              .describe('Child fields (overview mode only).'),
           })
           .describe('A single field definition node.'),
       )
-      .describe('Field definitions, ordered by relevance when `query` is used.'),
+      .describe('Field definitions, ordered by relevance when mode is "search".'),
     totalFields: z.number().describe('Total fields returned.'),
-    resolvedPath: z.string().optional().describe('Resolved path when `path` was used.'),
-    searchQuery: z.string().optional().describe('Echo of the keyword when `query` was used.'),
+    resolvedPath: z.string().optional().describe('Resolved path when mode is "drill".'),
+    searchQuery: z.string().optional().describe('Echo of the keyword when mode is "search".'),
   }),
 
   async handler(input, ctx) {
-    if (input.query && input.path) {
-      throw validationError(
-        'Provide either `query` or `path`, not both. Use `query` for keyword search; use `path` to drill into a known section.',
-      );
-    }
-
     const service = getClinicalTrialsService();
 
-    if (input.query) {
-      const matches = await service.searchFieldDefinitions(input.query, input.limit, ctx);
-      const fields = matches.map(indexEntryToResult);
-      ctx.log.info('Field search completed', { query: input.query, matchCount: fields.length });
-      return { fields, totalFields: fields.length, searchQuery: input.query };
-    }
+    switch (input.mode) {
+      case 'search': {
+        if (!input.query) {
+          throw validationError('mode="search" requires `query`. Pass a keyword to search by.');
+        }
+        const matches = await service.searchFieldDefinitions(input.query, input.limit, ctx);
+        const fields = matches.map(indexEntryToResult);
+        ctx.log.info('Field search completed', { query: input.query, matchCount: fields.length });
+        return { fields, totalFields: fields.length, searchQuery: input.query };
+      }
 
-    const tree = await service.getMetadata(input.includeIndexedOnly ?? false, ctx);
+      case 'drill': {
+        if (!input.path) {
+          throw validationError(
+            'mode="drill" requires `path`. Pass a dot-notation path such as "protocolSection.designModule".',
+          );
+        }
+        const tree = await service.getMetadata(input.includeIndexedOnly ?? false, ctx);
+        const node = navigateToPath(tree, input.path);
+        if (!node) {
+          throw ctx.fail(
+            'path_not_found',
+            `Path '${input.path}' not found. Top-level sections: ${tree.map((n) => n.name).join(', ')}.`,
+            { ...ctx.recoveryFor('path_not_found') },
+          );
+        }
+        const fields = flattenChildren(node, input.path);
+        ctx.log.info('Field path resolved', { path: input.path, fieldCount: fields.length });
+        return { fields, totalFields: fields.length, resolvedPath: input.path };
+      }
 
-    if (input.path) {
-      const node = navigateToPath(tree, input.path);
-      if (!node) {
-        throw ctx.fail(
-          'path_not_found',
-          `Path '${input.path}' not found. Top-level sections: ${tree.map((n) => n.name).join(', ')}.`,
-          { ...ctx.recoveryFor('path_not_found') },
+      case 'overview': {
+        const tree = await service.getMetadata(false, ctx);
+        const overview: FieldDefResult[] = tree.map((section) => {
+          const r = toFieldResult(section, section.name);
+          if (section.children) {
+            r.children = section.children.map((child) => ({
+              name: child.name,
+              ...(child.piece != null && { piece: child.piece }),
+              ...(child.type != null && { type: child.type }),
+              ...(child.isEnum != null && { isEnum: child.isEnum }),
+              hasChildren: (child.children?.length ?? 0) > 0,
+            }));
+          }
+          return r;
+        });
+        const total = overview.reduce(
+          (n, s) => n + 1 + (Array.isArray(s.children) ? s.children.length : 0),
+          0,
         );
+        ctx.log.info('Field overview returned', { sections: overview.length, totalFields: total });
+        return { fields: overview, totalFields: total };
       }
-      const fields = flattenChildren(node, input.path);
-      ctx.log.info('Field path resolved', { path: input.path, fieldCount: fields.length });
-      return { fields, totalFields: fields.length, resolvedPath: input.path };
     }
-
-    /** No path or query — return top-level overview (2 levels deep). */
-    const overview: FieldDefResult[] = tree.map((section) => {
-      const r = toFieldResult(section, section.name);
-      if (section.children) {
-        r.children = section.children.map((child) => ({
-          name: child.name,
-          ...(child.piece != null && { piece: child.piece }),
-          ...(child.type != null && { type: child.type }),
-          ...(child.isEnum != null && { isEnum: child.isEnum }),
-          hasChildren: (child.children?.length ?? 0) > 0,
-        }));
-      }
-      return r;
-    });
-    const total = overview.reduce(
-      (n, s) => n + 1 + (Array.isArray(s.children) ? s.children.length : 0),
-      0,
-    );
-    ctx.log.info('Field overview returned', { sections: overview.length, totalFields: total });
-    return { fields: overview, totalFields: total };
   },
 
   format: (result) => {

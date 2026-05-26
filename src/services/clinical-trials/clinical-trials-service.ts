@@ -399,6 +399,34 @@ export class ClinicalTrialsService {
         }
         if (res.status === 400) {
           const text = await res.text();
+          // Upstream enum errors reference internal API param names (e.g. `overallStatus`)
+          // rather than the tool's input param names (e.g. `statusFilter`). Translate so
+          // error messages name the param the caller actually used.
+          if (text.includes('Invalid value in parameter')) {
+            // Maps upstream filter.* param name → { toolParam, pieceName for clinicaltrials_get_field_values }
+            const upstreamParamInfo: Record<string, { toolParam: string; pieceName: string }> = {
+              overallStatus: { toolParam: 'statusFilter', pieceName: 'OverallStatus' },
+              phase: { toolParam: 'phaseFilter', pieceName: 'Phase' },
+            };
+            const match = text.match(/Invalid value in parameter\s+`([^`]+)`:\s*`([^`]+)`/i);
+            const upstreamParam = match?.[1];
+            const badValue = match?.[2];
+            const info = upstreamParam ? upstreamParamInfo[upstreamParam] : undefined;
+            const paramRef = info ? `\`${info.toolParam}\`` : 'the filter parameter';
+            const pieceName = info?.pieceName ?? 'OverallStatus';
+            const valueRef = badValue ? ` '${badValue}' is not a valid value.` : '';
+            throw validationError(
+              `Invalid value for ${paramRef}.${valueRef} Call clinicaltrials_get_field_values with fields=["${pieceName}"] to discover valid enum values.`,
+              {
+                reason: 'enum_invalid',
+                recovery: {
+                  hint: `Call clinicaltrials_get_field_values with fields=["${pieceName}"] to see valid values.`,
+                },
+                ...(info ? { param: info.toolParam } : {}),
+                ...(badValue ? { value: badValue } : {}),
+              },
+            );
+          }
           if (text.includes('contains invalid field name')) {
             const match = text.match(/invalid field name: ['"]([^'"]+)['"]/);
             const offender = match

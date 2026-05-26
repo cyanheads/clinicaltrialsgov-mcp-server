@@ -105,7 +105,7 @@ function applyFilters(
 
 export const getStudy = tool('clinicaltrials_get_study_record', {
   description:
-    'Fetch a single clinical trial study by NCT ID from ClinicalTrials.gov. Returns the full study record including protocol details, eligibility criteria, outcomes, arms, interventions, contacts, and locations. Optional locationLimit / outcomeLimit / nearLocation parameters trim locations and outcomes — when present, the same trimmed view is reflected in both structuredContent and the formatted text.',
+    'Fetch a single clinical trial study by NCT ID from ClinicalTrials.gov. Returns the full study record including protocol details, eligibility criteria, outcomes, arms, interventions, contacts, and locations. Optional locationLimit / outcomeLimit / nearLocation parameters trim locations and outcomes — original totals are preserved in `filtersApplied` whenever a cap is applied.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,

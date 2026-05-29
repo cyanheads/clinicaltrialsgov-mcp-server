@@ -1,0 +1,20 @@
+{
+  "name": "clinicaltrialsgov-mcp-server",
+  "version": "2.5.2",
+  "description": "MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details and results, and match patients to eligible trials.",
+  "author": {
+    "name": "cyanheads"
+  },
+  "homepage": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server#readme",
+  "repository": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server",
+  "license": "Apache-2.0",
+  "mcpServers": {
+    "clinicaltrialsgov-mcp-server": {
+      "command": "npx",
+      "args": ["-y", "clinicaltrialsgov-mcp-server"],
+      "env": {
+        "MCP_TRANSPORT_TYPE": "stdio"
+      }
+    }
+  }
+}

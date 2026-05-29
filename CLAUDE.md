@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** clinicaltrialsgov-mcp-server
-**Version:** 2.5.1
+**Version:** 2.5.2
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 
@@ -72,7 +72,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 - **Read-only server.** No `ctx.state` needed — the ClinicalTrials.gov API is stateless and public.
 - **Secrets in env vars only** — never hardcoded. (This server has no secrets — public API, no auth.)
 - **Rate limit awareness.** The API allows ~1 req/sec. Service layer handles retry/backoff.
-- **Close the loop on issues.** When implementing work tracked by a GitHub issue, comment on the issue with what landed before moving on. The comment is for future readers — state the concrete changes, not the conversation that produced them.
+- **Close the loop on issues.** When implementing work tracked by a GitHub issue, comment on the issue with what landed and close it. Do both — a comment without a close leaves stale issues open; a close without a comment leaves no record of what shipped. The comment is for future readers — state the concrete changes, not the conversation that produced them.
 
 ---
 
@@ -225,6 +225,8 @@ Handlers throw — the framework catches, classifies, and formats.
 **Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable? }]` on `tool()` / `resource()` to receive a typed `ctx.fail(reason, …)` keyed by the declared reason union. TypeScript catches `ctx.fail('typo')` at compile time, `data.reason` is auto-populated for observability, and the linter enforces conformance against the handler body. The `recovery` field is required descriptive metadata (≥ 5 words, lint-validated); for the wire payload's `data.recovery.hint` (which the framework mirrors into `content[]` text), spread `ctx.recoveryFor('reason')` for the contract default, or pass `{ recovery: { hint: '...' } }` explicitly when dynamic context matters. Baseline codes (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`, `SerializationError`) bubble freely and don't need declaring.
 
 ```ts
+import { JsonRpcErrorCode } from "@cyanheads/mcp-ts-core/errors";
+
 errors: [
   { reason: "path_not_found", code: JsonRpcErrorCode.NotFound,
     when: "Field path doesn't match the data model tree",
@@ -328,6 +330,7 @@ Available skills:
 | `field-test`             | Exercise tools/resources/prompts with real inputs, verify behavior, report issues          |
 | `security-pass`          | Audit server for MCP-flavored security gaps: output injection, scope blast radius, input sinks, tenant isolation |
 | `tool-defs-analysis`     | Audit definition language across the surface (voice, leaks, recovery, cross-refs)         |
+| `code-simplifier`        | Post-session cleanup against `git diff` — modernize syntax, consolidate duplication, align with the codebase |
 | `devcheck`               | Lint, format, typecheck, audit                                                             |
 | `polish-docs-meta`       | Finalize docs, README, metadata, and agent protocol for shipping                           |
 | `maintenance`            | Investigate changelogs, adopt upstream changes, sync skills to agent dirs                  |
@@ -367,7 +370,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run changelog:build` | Regenerate `CHANGELOG.md` from `changelog/*.md`               |
 | `bun run changelog:check` | Verify `CHANGELOG.md` is in sync (used by devcheck)           |
 | `bun run bundle`          | Build and pack as `.mcpb` for one-click Claude Desktop install |
-| `bun run audit:refresh`   | Delete `bun.lock`, reinstall, re-audit. Use when `devcheck` flags a transitive advisory — stale lockfile can mask already-patched deps. If advisory survives, it's real. |
+| `bun run audit:refresh`   | Delete `bun.lock`, reinstall, and re-run `bun audit`. Use when `devcheck` flags a transitive advisory — Bun's `update` is sticky on transitive resolutions, so the advisory may be a stale-lockfile false positive. If it survives the refresh, it's real. |
 
 ---
 
@@ -376,6 +379,8 @@ When you complete a skill's checklist, check the boxes and add a completion time
 `bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
 
 **Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match.
+
+**README install badges** (Claude Desktop `.mcpb`, Cursor, VS Code) and the `base64` / `encodeURIComponent` config-generation commands are ship-time concerns — run the `polish-docs-meta` skill, which carries the badge format, layout, and generation snippets in `skills/polish-docs-meta/references/readme.md`.
 
 ---
 
@@ -387,15 +392,18 @@ Each per-version file opens with YAML frontmatter:
 
 ```markdown
 ---
-summary: One-line headline, ≤350 chars  # required — powers the rollup index
-breaking: false                          # optional — true flags breaking changes
+summary: "One-line headline, ≤350 chars"  # required — powers the rollup index
+breaking: false                            # optional — true flags breaking changes
+security: false                            # optional — true flags security fixes
 ---
 
 # 2.4.0 — YYYY-MM-DD
 ...
 ```
 
-`breaking: true` renders a `· ⚠️ Breaking` badge in the rollup — use it when consumers must update code on upgrade.
+`breaking: true` renders a `· ⚠️ Breaking` badge — use it when consumers must update code on upgrade (signature changes, removed APIs, config renames). `security: true` renders a `· 🛡️ Security` badge and pairs with a `## Security` body section. When both are set, badges render `· ⚠️ Breaking · 🛡️ Security`.
+
+`agent-notes` is an optional free-form field for maintenance agents processing the release downstream. Content here won't appear in the rendered CHANGELOG — it's consumed by agents running the `maintenance` skill. Omit entirely when there's nothing to say.
 
 ---
 
@@ -452,4 +460,7 @@ import { getServerConfig } from "@/config/server-config.js";
 - [ ] Tests include at least one sparse payload case with omitted upstream fields
 - [ ] Registered in `createApp()` arrays (directly or via barrel exports)
 - [ ] Tests use `createMockContext()` from `@cyanheads/mcp-ts-core/testing`
+- [ ] `.codex-plugin/plugin.json` populated — `name`, `version`, `description`, `repository`, `license` from `package.json`; `interface.displayName` = package name; `interface.shortDescription` from `package.json` description
+- [ ] `.codex-plugin/mcp.json` updated — server name key matches `package.json` name; env vars added for any required API keys
+- [ ] `.claude-plugin/plugin.json` populated — `name`, `version`, `description`, `repository`, `license` from `package.json`; inline `mcpServers` entry with server name key, env vars for any required API keys
 - [ ] `bun run devcheck` passes

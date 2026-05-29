@@ -4,7 +4,7 @@ description: >
   Reference for core and server configuration in `@cyanheads/mcp-ts-core`. Covers env var tables with defaults, priority order, server-specific Zod schema pattern, and Workers lazy-parsing requirement.
 metadata:
   author: cyanheads
-  version: "1.4"
+  version: "1.5"
   audience: external
   type: reference
 ---
@@ -52,6 +52,7 @@ Managed by `@cyanheads/mcp-ts-core`. Validated via Zod from environment variable
 | `MCP_HTTP_PORT` | `mcpHttpPort` | `3010` | Port for HTTP transport |
 | `MCP_HTTP_HOST` | `mcpHttpHost` | `127.0.0.1` | Bind address |
 | `MCP_HTTP_ENDPOINT_PATH` | `mcpHttpEndpointPath` | `/mcp` | HTTP endpoint path |
+| `MCP_HTTP_MAX_BODY_BYTES` | `mcpHttpMaxBodyBytes` | `1048576` (1 MiB) | Max **inbound** JSON-RPC request body; oversized requests get `413` before per-request allocation. Does **not** cap upstream data staged into a canvas or response sizes. `0` disables (defer to runtime/proxy). |
 | `MCP_HTTP_MAX_PORT_RETRIES` | `mcpHttpMaxPortRetries` | `15` | Retry count if port is busy |
 | `MCP_HTTP_PORT_RETRY_DELAY_MS` | `mcpHttpPortRetryDelayMs` | `50` | Delay between port retries (ms) |
 | `MCP_SESSION_MODE` | `mcpSessionMode` | `auto` | `stateless` \| `stateful` \| `auto` |
@@ -59,6 +60,10 @@ Managed by `@cyanheads/mcp-ts-core`. Validated via Zod from environment variable
 | `MCP_RESPONSE_VERBOSITY` | `mcpResponseVerbosity` | `standard` | `minimal` \| `standard` \| `full` |
 | `MCP_ALLOWED_ORIGINS` | `mcpAllowedOrigins` | — | Comma-separated list; omit to allow all |
 | `MCP_SERVER_RESOURCE_IDENTIFIER` | `mcpServerResourceIdentifier` | — | RFC 8707 resource indicator URL |
+| `MCP_PUBLIC_URL` | `mcpPublicUrl` | — | Public-facing origin for reverse proxies (Cloudflare Tunnel, nginx, ALB) so emitted URLs carry the correct scheme |
+| `MCP_HEARTBEAT_INTERVAL_MS` | `mcpHeartbeatIntervalMs` | `0` (disabled) | Heartbeat ping interval; 0 disables |
+| `MCP_HEARTBEAT_MISS_THRESHOLD` | `mcpHeartbeatMissThreshold` | `3` | Missed heartbeats before session is considered stale |
+| `MCP_GC_PRESSURE_INTERVAL_MS` | `mcpGcPressureIntervalMs` | `0` (disabled) | Bun-only opt-in forced GC loop for HTTP deployments with heap growth |
 
 ---
 
@@ -75,6 +80,8 @@ Managed by `@cyanheads/mcp-ts-core`. Validated via Zod from environment variable
 | `OAUTH_JWKS_COOLDOWN_MS` | `oauthJwksCooldownMs` | `300000` | 5 min; min time between JWKS refetches |
 | `OAUTH_JWKS_TIMEOUT_MS` | `oauthJwksTimeoutMs` | `5000` | JWKS fetch timeout (ms) |
 | `DEV_MCP_AUTH_BYPASS` | `devMcpAuthBypass` | `false` | Skip auth in development; blocked in `production` |
+| `MCP_JWT_EXPECTED_ISSUER` | `mcpJwtExpectedIssuer` | — | Optional issuer validation for JWT mode |
+| `MCP_JWT_EXPECTED_AUDIENCE` | `mcpJwtExpectedAudience` | — | Optional audience validation for JWT mode |
 | `DEV_MCP_CLIENT_ID` | `devMcpClientId` | — | Dev-only: override client ID |
 | `DEV_MCP_SCOPES` | `devMcpScopes` | — | Dev-only: comma-separated scope overrides |
 

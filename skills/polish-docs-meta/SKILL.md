@@ -4,7 +4,7 @@ description: >
   Finalize documentation and project metadata for a ship-ready MCP server. Use after implementation is complete, tests pass, and devcheck is clean. Safe to run at any stage — each step checks current state and only acts on what still needs work.
 metadata:
   author: cyanheads
-  version: "2.2"
+  version: "2.4"
   audience: external
   type: workflow
 ---
@@ -72,7 +72,9 @@ Compare `.env.example` against the server config Zod schema. Add any missing ser
 
 Check for empty or placeholder metadata fields. Read `references/package-meta.md` for which fields matter and why. Fill in anything still missing — skip fields that are already correct.
 
-Key fields: `description`, `repository`, `author`, `homepage`, `bugs`, `keywords`.
+Key fields: `name`, `description`, `repository`, `author`, `homepage`, `bugs`, `keywords`.
+
+**`name` must communicate the server's domain at a glance.** See `references/package-meta.md` for the naming convention — ambiguous abbreviations and acronym-only names fail the scannability test for humans and agents alike.
 
 **`description` is the canonical source.** Every other surface (README header, `server.json`, Dockerfile OCI label, GitHub repo description) derives from it. Write it here first, then propagate.
 
@@ -163,7 +165,24 @@ Never hand-edit `CHANGELOG.md` when using this pattern — it's a build artifact
 
 **Monolithic** — maintain `CHANGELOG.md` directly in [Keep a Changelog](https://keepachangelog.com/) format. To collapse from the template default: delete the `changelog/` directory, remove `changelog:build` and `changelog:check` from `package.json` scripts (and from `devcheck.config.json` if referenced), and drop `"changelog/"` from the `files` array. The `release` skill's directory-specific steps then don't apply — just edit `CHANGELOG.md` and bump version at release time.
 
-### 10. MCPB Bundling Artifacts
+### 10. Plugin Metadata (Codex / Claude Code)
+
+If `.codex-plugin/plugin.json` exists, verify it's populated and in sync with `package.json` and `server.json`:
+
+- `name` matches `package.json` `name`
+- `version` matches `package.json` `version`
+- `description` matches `package.json` `description`
+- `repository` matches `package.json` `repository.url`
+- `license` matches `package.json` `license`
+- `interface.displayName` = `package.json` `name`
+- `interface.shortDescription` matches `package.json` `description`
+- `interface.category` is set to a meaningful category
+
+If `.codex-plugin/mcp.json` exists, verify the server name key matches `package.json` `name` and env vars include any required API keys from the server config schema.
+
+If `.claude-plugin/plugin.json` exists, apply the same checks: `name`, `version`, `description`, `repository`, `license` from `package.json`. Verify the inline `mcpServers` entry key matches `package.json` `name` and env vars include any required API keys.
+
+### 11. MCPB Bundling Artifacts
 
 If the project ships as an `.mcpb` bundle for Claude Desktop (check for `manifest.json` at the project root), verify the full artifact set is present and consistent. If the project doesn't ship `.mcpb` bundles, skip this step.
 
@@ -183,6 +202,7 @@ If the project ships as an `.mcpb` bundle for Claude Desktop (check for `manifes
 - Env var names in `manifest.json` (`mcp_config.env` + `user_config`) match `server.json` `environmentVariables` — `lint:packaging` enforces this, but verify the set is complete
 - `manifest.json` `name` matches `package.json` name **without the npm scope prefix** (e.g. `bls-mcp-server`, not `@cyanheads/bls-mcp-server`); `description` matches `package.json`
 - `manifest.json` `user_config` entries must include `title` and `type` fields — `mcpb pack` validates these
+- For each `user_config` entry referenced as `${user_config.X}` in `mcp_config.env`: if it's not `required: true`, set `"default": ""`. MCPB hosts (Claude Desktop included) pass the literal placeholder string through to the process when an optional field is left blank without a default — strict consumer validators (`z.email()`, `z.url()`, `.regex()`) then crash at lazy config load, exiting silently after `initialize`. Server-side: pair every optional env-backed strict-validator field with a `z.preprocess` that strips `${...}` placeholders to `undefined`.
 - `server.json` env var `isRequired` must match the upstream API's actual requirement — if the API works without the value (rate-limited, DEMO_KEY fallback, polite pool), mark `isRequired: false` and describe the tradeoff in the description
 - Server description aligned across all surfaces: `package.json`, `manifest.json`, `server.json` (condensed, hard 100-char limit), README header `<p><b>`, and GitHub repo description (`gh repo edit --description`)
 - `package.json` `keywords` include baseline terms: `mcp`, `mcp-server`, `model-context-protocol`, `typescript`, `bun`, `stdio`, `streamable-http`, plus data-domain terms. GitHub repo topics (`gh repo edit --add-topic`) should match.
@@ -192,13 +212,12 @@ If the project ships as an `.mcpb` bundle for Claude Desktop (check for `manifes
 - If `manifest.json` exists, the README should include the Claude Desktop install badge linking to `releases/latest/download/<name>.mcpb`
 - If the package is published to npm, include Cursor and VS Code install badges
 - See `references/readme.md` for badge format and config generation commands
-- See the **Bundling** section of `templates/CLAUDE.md` for `base64` / `encodeURIComponent` generation
 
-### 11. `LICENSE`
+### 12. `LICENSE`
 
 Confirm a license file exists. If not, ask the user which license to use (default: Apache-2.0, matching the scaffolded `package.json`). Create the file.
 
-### 12. `Dockerfile`
+### 13. `Dockerfile`
 
 If a `Dockerfile` exists, verify the OCI labels and runtime config match the actual server:
 
@@ -209,7 +228,7 @@ If a `Dockerfile` exists, verify the OCI labels and runtime config match the act
 
 If no `Dockerfile` exists and the server is deployed via HTTP transport, consider scaffolding one — the template is available via `npx @cyanheads/mcp-ts-core init`.
 
-### 13. `docs/tree.md`
+### 14. `docs/tree.md`
 
 Regenerate the directory structure:
 
@@ -219,7 +238,7 @@ bun run tree
 
 Review the output for anything unexpected (leftover files, missing directories).
 
-### 14. Final Verification
+### 15. Final Verification
 
 Run the full check suite one last time:
 
@@ -241,6 +260,9 @@ Both must pass clean.
 - [ ] GitHub repo description matches `package.json` description; topics ↔ keywords in sync
 - [ ] `bunfig.toml` present
 - [ ] Changelog current — either monolithic `CHANGELOG.md` (hand-edited, Keep a Changelog) or directory-based (`changelog/<minor>.x/<version>.md` + rollup regenerated and in sync)
+- [ ] `.codex-plugin/plugin.json` populated and in sync with `package.json` (if present)
+- [ ] `.codex-plugin/mcp.json` server name and env vars current (if present)
+- [ ] `.claude-plugin/plugin.json` populated and in sync with `package.json` (if present)
 - [ ] MCPB artifacts consistent (if `manifest.json` present) — version synced, env vars match `server.json`, `bundle` + `lint:packaging` scripts exist, README install badges present
 - [ ] `LICENSE` file present
 - [ ] `Dockerfile` OCI labels and runtime config accurate (if present)

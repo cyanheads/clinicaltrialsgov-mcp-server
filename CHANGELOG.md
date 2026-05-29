@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.5.2](changelog/2.5.x/2.5.2.md) — 2026-05-28
+
+mcp-ts-core ^0.9.9 → ^0.9.13: 413 body cap, HTTP session-init gate, quieter 401/403/400/404 logging, GET /mcp surfaces keywords; landing.requireAuth explicit; plugin metadata scaffolded
+
 ## [2.5.1](changelog/2.5.x/2.5.1.md) — 2026-05-25
 
 mcp-ts-core ^0.9.6 → ^0.9.9 (git-wrapup skill, release artifact verification, tag annotation format)

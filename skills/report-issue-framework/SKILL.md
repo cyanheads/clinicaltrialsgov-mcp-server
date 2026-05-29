@@ -4,7 +4,7 @@ description: >
   File a bug or feature request against @cyanheads/mcp-ts-core when you hit a framework issue. Use when a builder, utility, context method, or config behaves contrary to the documented API — not for server-specific application bugs.
 metadata:
   author: cyanheads
-  version: "1.6"
+  version: "1.7"
   audience: external
   type: workflow
 ---
@@ -32,6 +32,8 @@ For general `gh` CLI workflows outside issue filing (PRs, workflows, API access)
 ```bash
 gh issue list -R cyanheads/mcp-ts-core --search "your error message or keyword"
 ```
+
+5. **For documentation- or contract-shaped requests, audit all three doc layers first** — proposals to add reference docs, public-API conventions, attribute/event catalogs, or stability commitments often duplicate surface that already exists. Check `src/` for behavior, `docs/` for human-facing reference, and `skills/` for agent-facing reference. Skill files marked `audience: external` are the framework's public contract — treat them as authoritative when evaluating whether a documentation gap exists. Also verify the constants or types you'd reference aren't already exported from `@cyanheads/mcp-ts-core` or one of its subpaths.
 
 ## Writing Well-Structured Issues
 
@@ -180,12 +182,12 @@ Combine labels: `--label "bug" --label "regression"`.
 
 ### Attaching logs or stack traces
 
-For long output, write to a file and attach:
+For long output, write to a file and attach. Note: `--body-file` replaces the entire body — it does not supplement a `--body` flag. For structured bugs with logs, either embed the log content in the `Additional context` section of a normal `--body`, or file the issue first and add the log as a comment:
 
 ```bash
 bun run rebuild && bun run start:stdio 2>&1 | head -100 > /tmp/mcp-error.log
 
-# As part of a new issue
+# As part of a new issue (the log becomes the entire body — no template fields)
 gh issue create -R cyanheads/mcp-ts-core \
   --title "bug(transport): stdio crashes on large payload" \
   --label "bug" \
@@ -286,5 +288,8 @@ gh issue list -R cyanheads/mcp-ts-core --author @me
 - [ ] Confirmed bug is in `@cyanheads/mcp-ts-core`, not server code
 - [ ] Running latest (or documented) framework version
 - [ ] Searched existing issues — no duplicate found
+- [ ] If documentation or contract enhancement: confirmed `src/`, `docs/`, `skills/`, and public exports don't already cover the surface
 - [ ] All secrets, credentials, and tokens redacted
-- [ ] Issue filed with: version, runtime, repro code, actual vs expected behavior
+- [ ] Primary label assigned (`bug` / `enhancement` / `documentation`)
+- [ ] If bug: version, runtime, repro code, actual vs expected behavior included
+- [ ] If feature: Proposal and Scope sections present; Out of scope defined

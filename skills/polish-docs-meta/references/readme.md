@@ -54,7 +54,21 @@ Centered HTML. The `<h1>` is the server name — use the scoped package name if 
 </div>
 ```
 
-See the **Bundling** section of `templates/CLAUDE.md` (or `templates/AGENTS.md`) for how to generate the `<BASE64_CONFIG>` and `<URLENCODED_JSON>` payloads. Omit any install badge whose target doesn't apply (e.g. no `.mcpb` bundle → drop the Claude Desktop badge).
+Generate the `<BASE64_CONFIG>` (Cursor) and `<URLENCODED_JSON>` (VS Code) payloads — replace `<PACKAGE_NAME>` / `<SHORT_NAME>` and add `env` only for required API keys:
+
+```bash
+# Cursor: base64-encoded JSON. Split command/args, add env when keys are needed.
+echo -n '{"command":"npx","args":["-y","<PACKAGE_NAME>"],"env":{"API_KEY":"your-api-key"}}' | base64
+# Without env (no required keys):
+echo -n '{"command":"npx","args":["-y","<PACKAGE_NAME>"]}' | base64
+
+# VS Code: URL-encoded JSON. Same shape plus a `name` field.
+node -p 'encodeURIComponent(JSON.stringify({name:"<SHORT_NAME>",command:"npx",args:["-y","<PACKAGE_NAME>"],env:{API_KEY:"your-api-key"}}))'
+# Without env:
+node -p 'encodeURIComponent(JSON.stringify({name:"<SHORT_NAME>",command:"npx",args:["-y","<PACKAGE_NAME>"]}))'
+```
+
+Both clients use the same `{command, args, env}` shape; VS Code adds a top-level `name`. Omit `env` entirely when no API keys are needed — don't include empty objects or framework-only vars like `MCP_TRANSPORT_TYPE`. Install links route through HTTPS endpoints (`cursor.com/en/install-mcp`, `vscode.dev/redirect`) because GitHub-rendered markdown strips non-HTTP schemes — a raw `cursor://` or `vscode:` link won't click through. Omit any install badge whose target doesn't apply (e.g. no `.mcpb` bundle → drop the Claude Desktop badge).
 
 The header tagline must match the `package.json` `description`.
 
@@ -182,7 +196,7 @@ Derive all tool/resource/prompt rows directly from the actual definitions. Use t
 
 ### Features
 
-Two subsection groups: framework capabilities, then domain-specific capabilities. Bullet lists, not prose.
+Three subsection groups: framework capabilities, domain-specific capabilities, then agent-friendly output design. Bullet lists, not prose.
 
 ```markdown
 ## Features
@@ -201,7 +215,20 @@ Acme-specific:
 - Type-safe client for the Acme v2 API
 - Automatic cleaning and simplification of API responses for agent consumption
 - Workflow tools parallelize related sub-requests under a configurable concurrency limit
+
+Agent-friendly output:
+
+- Provenance on every response — source labels, effective-query echo, and confidence/coverage caveats so agents can reason about trust
+- Graceful partial failure — batch tools return per-item success/error rows instead of failing the request, with structured status codes and actionable next-step text
+- Discriminated output contracts — typed status and source fields let callers branch on data, not string parsing
 ```
+
+The **Agent-friendly output** subsection documents output-design choices that make the server work well as an AI-agent backend. Include it when the server exhibits at least two of these patterns. Write bullets grounded in the server's actual behavior — not aspirational framework capabilities. Examples of what fits:
+
+- Provenance: source labels (`viaSource`, `source`), license/access-level fields, effective-query echo, best-effort warnings on lossy tiers
+- Partial failure: per-item status in batch operations, structured error rows alongside successes, recovery hints ("Next Step" text)
+- Discriminated outputs: union types on `source` or `status` fields, typed `unavailable` reasons, per-tier outcome traces (`triedTiers`)
+- Response shaping: stripping upstream noise, normalizing inconsistent schemas, deduplicating nested structures
 
 ### Getting Started
 

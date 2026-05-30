@@ -96,15 +96,33 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
 
   output: z.object({
     totalCount: z.number().describe('Total studies matching the query/filters.'),
+  }),
+
+  // Agent-facing context — query echo and empty-result guidance, disjoint from output.
+  enrichment: {
     searchCriteria: z
       .record(z.string(), z.unknown())
       .optional()
-      .describe('Echo of query/filter criteria used.'),
-    noMatchHints: z
-      .array(z.string())
+      .describe('Echo of active query/filter criteria applied to this count.'),
+    notice: z
+      .string()
       .optional()
-      .describe('Suggestions when no studies match (totalCount is 0).'),
-  }),
+      .describe(
+        'Recovery guidance when totalCount is 0 — suggests how to broaden the query or filters.',
+      ),
+  },
+
+  enrichmentTrailer: {
+    searchCriteria: {
+      render: (criteria) => {
+        if (!criteria || Object.keys(criteria).length === 0) return '';
+        const parts = Object.entries(criteria).map(([k, v]) =>
+          Array.isArray(v) ? `- **${k}:** [${(v as unknown[]).join(', ')}]` : `- **${k}:** ${v}`,
+        );
+        return `**Search Criteria:**\n${parts.join('\n')}`;
+      },
+    },
+  },
 
   async handler(input, ctx) {
     const service = getClinicalTrialsService();
@@ -134,22 +152,13 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     if (input.phaseFilter) criteria.phaseFilter = input.phaseFilter;
     if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
 
-    return {
-      totalCount,
-      ...(Object.keys(criteria).length > 0 ? { searchCriteria: criteria } : {}),
-      ...(totalCount === 0 ? { noMatchHints: ['Try broader search terms or fewer filters.'] } : {}),
-    };
+    if (Object.keys(criteria).length > 0) ctx.enrich({ searchCriteria: criteria });
+    if (totalCount === 0) ctx.enrich.notice('Try broader search terms or fewer filters.');
+
+    return { totalCount };
   },
 
-  format: (result) => {
-    const lines: string[] = [`${result.totalCount} studies match the specified criteria.`];
-    if (result.searchCriteria && Object.keys(result.searchCriteria).length > 0) {
-      const parts = Object.entries(result.searchCriteria).map(([k, v]) =>
-        Array.isArray(v) ? `${k}=[${v.join(', ')}]` : `${k}=${v}`,
-      );
-      lines.push(`Criteria: ${parts.join(', ')}`);
-    }
-    for (const hint of result.noMatchHints ?? []) lines.push(hint);
-    return [{ type: 'text', text: lines.join('\n') }];
-  },
+  format: (result) => [
+    { type: 'text', text: `${result.totalCount} studies match the specified criteria.` },
+  ],
 });

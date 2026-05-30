@@ -183,21 +183,39 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .optional()
       .describe('Total matching studies (first page only when countTotal=true).'),
     nextPageToken: z.string().optional().describe('Token for the next page. Absent on last page.'),
-    searchCriteria: z
-      .record(z.string(), z.unknown())
-      .optional()
-      .describe('Echo of query/filter criteria used. Present when results are empty.'),
     requestedFields: z
       .array(z.string())
       .optional()
       .describe(
         'Echo of the explicit fields parameter — present only when the caller passed fields. Lifts the default truncation cap so all requested leaves render in full.',
       ),
-    noMatchHints: z
-      .array(z.string())
-      .optional()
-      .describe('Suggestions for broadening the search when no results are found.'),
   }),
+
+  // Agent-facing context — query echo and empty-result guidance, disjoint from output.
+  enrichment: {
+    searchCriteria: z
+      .record(z.string(), z.unknown())
+      .optional()
+      .describe('Echo of active query/filter criteria. Present when results are empty.'),
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Recovery guidance when no studies matched — echoes the constraint and suggests how to broaden. Absent on pages with results.',
+      ),
+  },
+
+  enrichmentTrailer: {
+    searchCriteria: {
+      render: (criteria) => {
+        if (!criteria || Object.keys(criteria).length === 0) return '';
+        const parts = Object.entries(criteria).map(([k, v]) =>
+          Array.isArray(v) ? `- **${k}:** [${(v as unknown[]).join(', ')}]` : `- **${k}:** ${v}`,
+        );
+        return `**Search Criteria:**\n${parts.join('\n')}`;
+      },
+    },
+  },
 
   async handler(input, ctx) {
     const service = getClinicalTrialsService();
@@ -228,7 +246,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       totalCount: result.totalCount,
     });
 
-    // Echo search criteria on empty results so callers know what produced zero matches
+    // Echo search criteria and recovery guidance on empty results
     if (result.studies.length === 0) {
       const criteria: Record<string, unknown> = {};
       if (input.query) criteria.query = input.query;
@@ -244,7 +262,6 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       if (input.geoFilter) criteria.geoFilter = input.geoFilter;
       if (input.nctIds) criteria.nctIds = input.nctIds;
 
-      const hints: string[] = [];
       const hasQuery =
         input.query ||
         input.conditionQuery ||
@@ -258,22 +275,20 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         input.advancedFilter ||
         input.geoFilter ||
         input.locationQuery;
+
+      const noticeParts: string[] = [];
       if (hasQuery && hasFilter)
-        hints.push('Try removing filters to broaden results, or use broader search terms.');
-      else if (hasQuery) hints.push('Try broader or alternative search terms.');
-      else if (hasFilter) hints.push('Try removing or broadening filters.');
+        noticeParts.push('Try removing filters to broaden results, or use broader search terms.');
+      else if (hasQuery) noticeParts.push('Try broader or alternative search terms.');
+      else if (hasFilter) noticeParts.push('Try removing or broadening filters.');
       if (input.statusFilter)
-        hints.push(
+        noticeParts.push(
           'Remove statusFilter to include studies in all statuses (completed, terminated, etc.).',
         );
-      if (input.phaseFilter) hints.push('Remove phaseFilter to include all trial phases.');
+      if (input.phaseFilter) noticeParts.push('Remove phaseFilter to include all trial phases.');
 
-      return {
-        ...result,
-        searchCriteria: criteria,
-        noMatchHints: hints,
-        ...(input.fields?.length ? { requestedFields: input.fields } : {}),
-      };
+      if (Object.keys(criteria).length > 0) ctx.enrich({ searchCriteria: criteria });
+      if (noticeParts.length > 0) ctx.enrich.notice(noticeParts.join(' '));
     }
 
     return {
@@ -292,19 +307,8 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     } else {
       lines.push(`Found ${count} studies`);
     }
-    if (result.searchCriteria && Object.keys(result.searchCriteria).length > 0) {
-      const parts = Object.entries(result.searchCriteria).map(([k, v]) =>
-        Array.isArray(v) ? `${k}=[${v.join(', ')}]` : `${k}=${v}`,
-      );
-      lines.push(`Criteria: ${parts.join(', ')}`);
-    }
     if (result.requestedFields?.length) {
       lines.push(`Requested fields: ${result.requestedFields.join(', ')}`);
-    }
-    if (result.noMatchHints?.length) {
-      for (const hint of result.noMatchHints) lines.push(hint);
-    } else if (count === 0) {
-      lines.push('Try broader search terms or fewer filters.');
     }
     // Lift the per-study truncation cap when the caller asked for explicit
     // fields — they've already opted into payload control, so silently dropping

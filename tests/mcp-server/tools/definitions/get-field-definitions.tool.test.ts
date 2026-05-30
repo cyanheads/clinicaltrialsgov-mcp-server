@@ -3,7 +3,7 @@
  * @module tests/mcp-server/tools/definitions/get-field-definitions.tool
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetService } = vi.hoisted(() => ({
@@ -264,7 +264,8 @@ describe('getFieldDefinitions', () => {
 
       expect(mockService.searchFieldDefinitions).toHaveBeenCalledWith('enrollment', 5, ctx);
       expect(mockService.getMetadata).not.toHaveBeenCalled();
-      expect(result.searchQuery).toBe('enrollment');
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.searchQuery).toBe('enrollment');
       expect(result.fields).toHaveLength(1);
       expect(result.fields[0]!.piece).toBe('EnrollmentCount');
     });
@@ -325,7 +326,7 @@ describe('getFieldDefinitions', () => {
       expect((blocks[0] as { text: string }).text).toContain('No fields found');
     });
 
-    it('renders search results with the query in the header', () => {
+    it('renders search results with field piece names', () => {
       const blocks = getFieldDefinitions.format!({
         fields: [
           {
@@ -336,11 +337,10 @@ describe('getFieldDefinitions', () => {
           },
         ],
         totalFields: 1,
-        searchQuery: 'enrollment',
       });
       const text = (blocks[0] as { text: string }).text;
-      expect(text).toContain("matching 'enrollment'");
       expect(text).toContain('EnrollmentCount');
+      expect(text).toContain('enrollmentInfo');
     });
   });
 });

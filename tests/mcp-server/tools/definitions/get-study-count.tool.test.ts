@@ -3,7 +3,7 @@
  * @module tests/mcp-server/tools/definitions/get-study-count.tool
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetService } = vi.hoisted(() => ({
@@ -53,22 +53,23 @@ describe('getStudyCount', () => {
       );
     });
 
-    it('echoes populated criteria in searchCriteria', async () => {
+    it('echoes populated criteria in enrichment', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 5 });
       const ctx = createMockContext();
       const input = getStudyCount.input!.parse({
         conditionQuery: 'cancer',
         statusFilter: 'RECRUITING',
       });
-      const result = await getStudyCount.handler(input, ctx);
+      await getStudyCount.handler(input, ctx);
 
-      expect(result.searchCriteria).toEqual({
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.searchCriteria).toEqual({
         conditionQuery: 'cancer',
         statusFilter: 'RECRUITING',
       });
     });
 
-    it('echoes all provided criteria', async () => {
+    it('echoes all provided criteria in enrichment', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 1 });
       const ctx = createMockContext();
       const input = getStudyCount.input!.parse({
@@ -80,9 +81,10 @@ describe('getStudyCount', () => {
         phaseFilter: 'PHASE3',
         advancedFilter: 'AREA[StudyType]INTERVENTIONAL',
       });
-      const result = await getStudyCount.handler(input, ctx);
+      await getStudyCount.handler(input, ctx);
 
-      expect(result.searchCriteria).toEqual({
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.searchCriteria).toEqual({
         query: 'test',
         conditionQuery: 'cancer',
         interventionQuery: 'chemo',
@@ -93,12 +95,13 @@ describe('getStudyCount', () => {
       });
     });
 
-    it('omits searchCriteria when no criteria provided', async () => {
+    it('omits searchCriteria enrichment when no criteria provided', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 100 });
       const ctx = createMockContext();
-      const result = await getStudyCount.handler(getStudyCount.input!.parse({}), ctx);
+      await getStudyCount.handler(getStudyCount.input!.parse({}), ctx);
 
-      expect(result.searchCriteria).toBeUndefined();
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.searchCriteria).toBeUndefined();
     });
 
     it('passes phase filter through buildAdvancedFilter', async () => {
@@ -117,27 +120,23 @@ describe('getStudyCount', () => {
       );
     });
 
-    it('provides noMatchHints when totalCount is 0', async () => {
+    it('provides notice in enrichment when totalCount is 0', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await getStudyCount.handler(
-        getStudyCount.input!.parse({ conditionQuery: 'xyz' }),
-        ctx,
-      );
+      await getStudyCount.handler(getStudyCount.input!.parse({ conditionQuery: 'xyz' }), ctx);
 
-      expect(result.noMatchHints).toBeDefined();
-      expect(result.noMatchHints).toContain('Try broader search terms or fewer filters.');
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.notice).toBeDefined();
+      expect(enrichment.notice).toContain('Try broader search terms or fewer filters.');
     });
 
-    it('omits noMatchHints when totalCount > 0', async () => {
+    it('omits notice enrichment when totalCount > 0', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 5 });
       const ctx = createMockContext();
-      const result = await getStudyCount.handler(
-        getStudyCount.input!.parse({ conditionQuery: 'diabetes' }),
-        ctx,
-      );
+      await getStudyCount.handler(getStudyCount.input!.parse({ conditionQuery: 'diabetes' }), ctx);
 
-      expect(result.noMatchHints).toBeUndefined();
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.notice).toBeUndefined();
     });
 
     it('converts statusFilter string to array', async () => {
@@ -158,40 +157,9 @@ describe('getStudyCount', () => {
       expect((blocks[0] as { text: string }).text).toBe('42 studies match the specified criteria.');
     });
 
-    it('shows suggestion for zero results', () => {
-      const blocks = getStudyCount.format!({
-        totalCount: 0,
-        noMatchHints: ['Try broader search terms or fewer filters.'],
-      });
+    it('shows count for zero results', () => {
+      const blocks = getStudyCount.format!({ totalCount: 0 });
       expect((blocks[0] as { text: string }).text).toContain('0 studies match');
-      expect((blocks[0] as { text: string }).text).toContain('Try broader');
-    });
-
-    it('includes criteria in zero-result message', () => {
-      const blocks = getStudyCount.format!({
-        totalCount: 0,
-        searchCriteria: { conditionQuery: 'rare disease' },
-      });
-      expect((blocks[0] as { text: string }).text).toContain('conditionQuery=rare disease');
-    });
-
-    it('omits criteria line when searchCriteria absent', () => {
-      const blocks = getStudyCount.format!({ totalCount: 0 });
-      expect((blocks[0] as { text: string }).text).not.toContain('Criteria:');
-    });
-
-    it('renders hints from result.noMatchHints verbatim', () => {
-      const blocks = getStudyCount.format!({
-        totalCount: 0,
-        noMatchHints: ['Try without statusFilter.', 'Try without phaseFilter.'],
-      });
-      expect((blocks[0] as { text: string }).text).toContain('Try without statusFilter.');
-      expect((blocks[0] as { text: string }).text).toContain('Try without phaseFilter.');
-    });
-
-    it('emits no hint lines when noMatchHints is absent', () => {
-      const blocks = getStudyCount.format!({ totalCount: 0 });
-      expect((blocks[0] as { text: string }).text).not.toContain('Try broader');
     });
   });
 });

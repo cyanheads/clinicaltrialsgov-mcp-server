@@ -3,7 +3,7 @@
  * @module tests/mcp-server/tools/definitions/search-studies.tool
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetService } = vi.hoisted(() => ({
@@ -190,7 +190,7 @@ describe('searchStudies', () => {
       );
     });
 
-    it('echoes search criteria when results are empty', async () => {
+    it('echoes search criteria in enrichment when results are empty', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       const result = await searchStudies.handler(
@@ -199,16 +199,17 @@ describe('searchStudies', () => {
       );
 
       expect(result.studies).toEqual([]);
-      expect(result.searchCriteria).toEqual({
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.searchCriteria).toEqual({
         conditionQuery: 'rare disease',
         statusFilter: 'RECRUITING',
       });
     });
 
-    it('provides noMatchHints for query + filter combo', async () => {
+    it('provides notice in enrichment for query + filter combo', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await searchStudies.handler(
+      await searchStudies.handler(
         searchStudies.input!.parse({
           conditionQuery: 'rare disease',
           statusFilter: 'RECRUITING',
@@ -217,49 +218,47 @@ describe('searchStudies', () => {
         ctx,
       );
 
-      expect(result.noMatchHints).toBeDefined();
-      expect(result.noMatchHints!.some((h: string) => h.includes('removing filters'))).toBe(true);
-      expect(result.noMatchHints!.some((h: string) => h.includes('statusFilter'))).toBe(true);
-      expect(result.noMatchHints!.some((h: string) => h.includes('phaseFilter'))).toBe(true);
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.notice).toBeDefined();
+      expect(enrichment.notice).toContain('removing filters');
+      expect(enrichment.notice).toContain('statusFilter');
+      expect(enrichment.notice).toContain('phaseFilter');
     });
 
-    it('provides noMatchHints for query-only empty results', async () => {
+    it('provides notice in enrichment for query-only empty results', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await searchStudies.handler(
-        searchStudies.input!.parse({ conditionQuery: 'xyz' }),
-        ctx,
-      );
+      await searchStudies.handler(searchStudies.input!.parse({ conditionQuery: 'xyz' }), ctx);
 
-      expect(result.noMatchHints).toBeDefined();
-      expect(result.noMatchHints!.some((h: string) => h.includes('broader'))).toBe(true);
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.notice).toBeDefined();
+      expect(enrichment.notice).toContain('broader');
     });
 
-    it('provides noMatchHints for filter-only empty results', async () => {
+    it('provides notice in enrichment for filter-only empty results', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await searchStudies.handler(
+      await searchStudies.handler(
         searchStudies.input!.parse({ statusFilter: 'SUSPENDED', geoFilter: 'distance(0,0,1mi)' }),
         ctx,
       );
 
-      expect(result.noMatchHints).toBeDefined();
-      expect(result.noMatchHints!.some((h: string) => h.includes('broadening filters'))).toBe(true);
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.notice).toBeDefined();
+      expect(enrichment.notice).toContain('broadening filters');
     });
 
-    it('omits searchCriteria when results exist', async () => {
+    it('omits searchCriteria enrichment when results exist', async () => {
       mockService.searchStudies.mockResolvedValue({
         studies: [{ nctId: 'NCT12345678' }],
         totalCount: 1,
       });
       const ctx = createMockContext();
-      const result = await searchStudies.handler(
-        searchStudies.input!.parse({ conditionQuery: 'diabetes' }),
-        ctx,
-      );
+      await searchStudies.handler(searchStudies.input!.parse({ conditionQuery: 'diabetes' }), ctx);
 
-      expect(result.searchCriteria).toBeUndefined();
-      expect(result.noMatchHints).toBeUndefined();
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.searchCriteria).toBeUndefined();
+      expect(enrichment.notice).toBeUndefined();
     });
 
     it('passes nextPageToken through', async () => {
@@ -335,24 +334,9 @@ describe('searchStudies', () => {
   });
 
   describe('format', () => {
-    it('shows no-match message with criteria for empty results', () => {
-      const blocks = searchStudies.format!({
-        studies: [],
-        searchCriteria: { conditionQuery: 'xyz' },
-      });
+    it('shows no-match message for empty results', () => {
+      const blocks = searchStudies.format!({ studies: [] });
       expect((blocks[0] as { text: string }).text).toContain('No studies matched');
-      expect((blocks[0] as { text: string }).text).toContain('conditionQuery=xyz');
-      expect((blocks[0] as { text: string }).text).toContain('Try broader');
-    });
-
-    it('shows noMatchHints when provided', () => {
-      const blocks = searchStudies.format!({
-        studies: [],
-        searchCriteria: { query: 'test' },
-        noMatchHints: ['Try broader terms.', 'Remove statusFilter.'],
-      });
-      expect((blocks[0] as { text: string }).text).toContain('Try broader terms.');
-      expect((blocks[0] as { text: string }).text).toContain('Remove statusFilter.');
     });
 
     it('shows study count with totalCount', () => {

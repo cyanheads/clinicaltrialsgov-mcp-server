@@ -3,7 +3,7 @@
  * @module tests/mcp-server/tools/definitions/find-eligible.tool
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetService } = vi.hoisted(() => ({
@@ -251,12 +251,13 @@ describe('findEligible', () => {
       expect(call.fields).toContain('CentralContactEMail');
     });
 
-    it('echoes search criteria in output', async () => {
+    it('echoes search criteria in enrichment', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
-      expect(result.searchCriteria).toEqual({
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.searchCriteria).toEqual({
         conditions: ['Type 2 Diabetes'],
         location: 'Seattle, Washington, United States',
         age: 30,
@@ -264,80 +265,77 @@ describe('findEligible', () => {
       });
     });
 
-    it('provides noMatchHints when no studies found', async () => {
+    it('provides notice in enrichment when no studies found', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
-      expect(result.noMatchHints).toBeDefined();
-      expect(result.noMatchHints!.length).toBeGreaterThan(0);
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.notice).toBeDefined();
+      expect(enrichment.notice!.length).toBeGreaterThan(0);
     });
 
-    it('hints about extreme age', async () => {
+    it('hints about extreme age in enrichment notice', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await findEligible.handler(
-        findEligible.input!.parse({ ...baseInput, age: 120 }),
-        ctx,
-      );
+      await findEligible.handler(findEligible.input!.parse({ ...baseInput, age: 120 }), ctx);
 
-      expect(result.noMatchHints!.some((h: string) => h.includes('extreme'))).toBe(true);
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.notice).toContain('extreme');
     });
 
-    it('hints about sex restriction', async () => {
+    it('hints about sex restriction in enrichment notice', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await findEligible.handler(
-        findEligible.input!.parse({ ...baseInput, sex: 'MALE' }),
-        ctx,
-      );
+      await findEligible.handler(findEligible.input!.parse({ ...baseInput, sex: 'MALE' }), ctx);
 
-      expect(result.noMatchHints!.some((h: string) => h.includes('sex="ALL"'))).toBe(true);
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.notice).toContain('sex="ALL"');
     });
 
-    it('hints about healthy volunteer restriction', async () => {
+    it('hints about healthy volunteer restriction in enrichment notice', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await findEligible.handler(
+      await findEligible.handler(
         findEligible.input!.parse({ ...baseInput, healthyVolunteer: true }),
         ctx,
       );
 
-      expect(result.noMatchHints!.some((h: string) => h.includes('healthy volunteers'))).toBe(true);
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.notice).toContain('healthy volunteers');
     });
 
-    it('hints about recruiting-only restriction', async () => {
+    it('hints about recruiting-only restriction in enrichment notice', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
-      expect(result.noMatchHints!.some((h: string) => h.includes('recruitingOnly=false'))).toBe(
-        true,
-      );
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.notice).toContain('recruitingOnly=false');
     });
 
-    it('hints about narrowing location', async () => {
+    it('hints about narrowing location in enrichment notice', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
-      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
-      expect(result.noMatchHints!.some((h: string) => h.includes('just the country'))).toBe(true);
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.notice).toContain('just the country');
     });
 
-    it('omits noMatchHints when studies are found', async () => {
+    it('omits notice enrichment when studies are found', async () => {
       const study = { protocolSection: { identificationModule: { nctId: 'NCT12345678' } } };
       mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
 
       const ctx = createMockContext();
-      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
-      expect(result.noMatchHints).toBeUndefined();
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.notice).toBeUndefined();
     });
   });
 
   describe('format', () => {
-    const baseFunnel = { conditionMatched: 0, locationMatched: 0, demographicsMatched: 0 };
-
     it('renders study list with eligibility', () => {
       const blocks = findEligible.format!({
         studies: [
@@ -355,8 +353,6 @@ describe('findEligible', () => {
           },
         ],
         totalCount: 1,
-        searchCriteria: { conditions: ['Diabetes'], location: 'US', age: 30, sex: 'ALL' },
-        funnel: { ...baseFunnel, demographicsMatched: 1 },
       });
       const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('Found 1 eligible studies');
@@ -384,8 +380,6 @@ describe('findEligible', () => {
           },
         ],
         totalCount: 1,
-        searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'ALL' },
-        funnel: baseFunnel,
       });
       expect((blocks[0] as { text: string }).text).toContain('Hospital A');
       expect((blocks[0] as { text: string }).text).toContain('Locations:');
@@ -407,24 +401,14 @@ describe('findEligible', () => {
           },
         ],
         totalCount: 1,
-        searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'ALL' },
-        funnel: baseFunnel,
       });
       expect((blocks[0] as { text: string }).text).toContain('Contact:');
       expect((blocks[0] as { text: string }).text).toContain('Dr. Smith');
     });
 
-    it('renders no-match hints', () => {
-      const blocks = findEligible.format!({
-        studies: [],
-        totalCount: 0,
-        searchCriteria: { conditions: ['Rare'], location: 'US', age: 30, sex: 'ALL' },
-        funnel: baseFunnel,
-        noMatchHints: ['No studies found', 'Try broader terms'],
-      });
+    it('shows no-match message for empty results', () => {
+      const blocks = findEligible.format!({ studies: [], totalCount: 0 });
       expect((blocks[0] as { text: string }).text).toContain('No eligible studies found');
-      expect((blocks[0] as { text: string }).text).toContain('No studies found');
-      expect((blocks[0] as { text: string }).text).toContain('Try broader terms');
     });
 
     it('shows total when more results exist', () => {
@@ -433,21 +417,8 @@ describe('findEligible', () => {
           { protocolSection: { identificationModule: { nctId: 'NCT00000001', briefTitle: 'A' } } },
         ],
         totalCount: 50,
-        searchCriteria: { conditions: ['X'], location: 'US', age: 30, sex: 'ALL' },
-        funnel: { conditionMatched: 200, locationMatched: 80, demographicsMatched: 50 },
       });
       expect((blocks[0] as { text: string }).text).toContain('50 eligible studies (showing 1)');
-    });
-
-    it('renders the funnel line (regression for #37)', () => {
-      const blocks = findEligible.format!({
-        studies: [],
-        totalCount: 2,
-        searchCriteria: { conditions: ['RA'], location: 'Seattle', age: 58, sex: 'FEMALE' },
-        funnel: { conditionMatched: 298, locationMatched: 47, demographicsMatched: 2 },
-      });
-      const text = (blocks[0] as { text: string }).text;
-      expect(text).toContain('Funnel: 298 condition → 47 + location → 2 + demographics');
     });
 
     it('renders sites in pre-sorted order without recruiting-priority override (regression for #37)', () => {
@@ -472,8 +443,6 @@ describe('findEligible', () => {
           },
         ],
         totalCount: 1,
-        searchCriteria: { conditions: ['X'], location: 'Seattle', age: 30, sex: 'ALL' },
-        funnel: { conditionMatched: 1, locationMatched: 1, demographicsMatched: 1 },
       });
       const text = (blocks[0] as { text: string }).text;
       const seattleIdx = text.indexOf('Seattle Site');
@@ -485,7 +454,7 @@ describe('findEligible', () => {
   });
 
   describe('handler — funnel + location sort', () => {
-    it('populates funnel from condition + location + main-search counts (regression for #37)', async () => {
+    it('populates funnel enrichment from condition + location + main-search counts (regression for #37)', async () => {
       mockService.searchStudies.mockImplementation(async (params: { queryLocn?: string }) => {
         // Distinguish the three calls by which params are present:
         //   - main: queryLocn + filterAdvanced + fields
@@ -498,9 +467,10 @@ describe('findEligible', () => {
       });
 
       const ctx = createMockContext();
-      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
-      expect(result.funnel).toEqual({
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.funnel).toEqual({
         conditionMatched: 298,
         locationMatched: 47,
         demographicsMatched: 2,

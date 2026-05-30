@@ -128,8 +128,21 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
       .describe('Field definitions, ordered by relevance when mode is "search".'),
     totalFields: z.number().describe('Total fields returned.'),
     resolvedPath: z.string().optional().describe('Resolved path when mode is "drill".'),
-    searchQuery: z.string().optional().describe('Echo of the keyword when mode is "search".'),
   }),
+
+  // Agent-facing context — query echo and no-match guidance for search mode.
+  enrichment: {
+    searchQuery: z
+      .string()
+      .optional()
+      .describe('Echo of the keyword used in search mode. Absent for drill and overview.'),
+    notice: z
+      .string()
+      .optional()
+      .describe(
+        'Recovery guidance when search mode returns no matches — suggests alternative keywords.',
+      ),
+  },
 
   async handler(input, ctx) {
     const service = getClinicalTrialsService();
@@ -142,7 +155,13 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
         const matches = await service.searchFieldDefinitions(input.query, input.limit, ctx);
         const fields = matches.map(indexEntryToResult);
         ctx.log.info('Field search completed', { query: input.query, matchCount: fields.length });
-        return { fields, totalFields: fields.length, searchQuery: input.query };
+        ctx.enrich({ searchQuery: input.query });
+        if (fields.length === 0) {
+          ctx.enrich.notice(
+            `No fields matched "${input.query}". Try a broader keyword (e.g. "enrollment", "sponsor", "eligibility") or use mode="overview" to see all top-level sections.`,
+          );
+        }
+        return { fields, totalFields: fields.length };
       }
 
       case 'drill': {
@@ -193,9 +212,6 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
   format: (result) => {
     const lines: string[] = [];
 
-    if (result.searchQuery) {
-      lines.push(`**${result.totalFields} field(s) matching '${result.searchQuery}':**\n`);
-    }
     if (result.resolvedPath) {
       lines.push(`**${result.resolvedPath}** (${result.totalFields} fields):\n`);
     }

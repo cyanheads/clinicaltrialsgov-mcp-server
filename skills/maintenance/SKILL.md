@@ -4,7 +4,7 @@ description: >
   Investigate, adopt, and verify dependency updates — with special handling for `@cyanheads/mcp-ts-core`. Captures what changed, understands why, cross-references against the codebase, adopts framework improvements, syncs project skills, and runs final checks. Supports two entry modes: run the full flow end-to-end, or review updates you already applied.
 metadata:
   author: cyanheads
-  version: "2.4"
+  version: "2.5"
   audience: external
   type: workflow
 ---
@@ -48,11 +48,11 @@ Capture the `↑ package old → new` lines from stdout — these feed Step 3. A
 
 Invoke the **`changelog`** skill with the captured list of updated packages. It resolves each repo, fetches release notes (or CHANGELOG entries) between old and new versions, and cross-references changes against actual imports in `src/`. Output per package: what changed, impact on this project, action items.
 
-Do not redo this investigation inline — the `changelog` skill handles tag-format detection, monorepo patterns, and fallbacks.
+Do not redo this investigation inline — the `changelog` skill handles tag-format detection, monorepo patterns, and fallbacks. If the skill cannot resolve a package (private repo, no tags, no CHANGELOG), note it in Step 8 under "Open decisions" and proceed.
 
 ### 4. Framework review (`@cyanheads/mcp-ts-core`)
 
-**Skill-version paradox.** If `node_modules/@cyanheads/mcp-ts-core/skills/maintenance/SKILL.md`'s `version` exceeds the one running, run Step 5 Phase A first and re-invoke `maintenance` — otherwise feature-adoption rows added in the new version silently don't surface.
+**Skill-version paradox.** If `node_modules/@cyanheads/mcp-ts-core/skills/maintenance/SKILL.md`'s `version` exceeds the one running, run Step 5 Phase A first and re-invoke `maintenance` — otherwise feature-adoption rows added in the new version silently don't surface. After Phase A, confirm the running skill version matches the package before continuing. If the session still has the old skill loaded, exit and restart.
 
 If `@cyanheads/mcp-ts-core` was updated, do a deeper pass beyond what the `changelog` skill covers. The framework ships a **directory-based changelog** grouped by minor series (`.x` semver-wildcard convention) — one file per released version at `node_modules/@cyanheads/mcp-ts-core/changelog/<major.minor>.x/<version>.md`. Read only the files between old and new rather than scanning a monolithic file.
 
@@ -78,13 +78,14 @@ Scan specifically for:
 | Config changes | New env vars, renamed keys, changed defaults |
 | Linter rules | New definition-lint rules that may now flag existing tools/resources |
 | New or materially-changed skills | Note new skills or workflow changes (renamed steps, new checklist items) worth surfacing at end-of-run. Don't auto-invoke — some skills (e.g. `security-pass`) are user-triggered. The per-version changelog entries (e.g. 0.6.14 calling out `skills/security-pass/ (v1.0)`) name what changed. |
-| New template-scaffolded files | Compare `templates/` in the package against the project root. Files that `init` would create for a new project but don't exist in this project are adoption candidates — create them with project-specific values (version, name, description, env vars from `server.json`). Examples: `manifest.json`, `.mcpbignore`. Skip files the project has intentionally opted out of (documented in CLAUDE.md or a code comment). |
+| New template-scaffolded files | Compare `templates/` in the package against the project root. Files that `init` would create for a new project but don't exist in this project are adoption candidates — create them with project-specific values (version, name, description, env vars from `server.json`). Examples: `manifest.json`, `.mcpbignore`, `.codex-plugin/`, `.claude-plugin/`. Skip files the project has intentionally opted out of (documented in CLAUDE.md/AGENTS.md or a code comment). |
+| Changelog `agent-notes` | Read `agent-notes` frontmatter from each new per-version changelog file — these carry release-specific adoption instructions for downstream consumers (new files to create, fields to populate, one-time migration steps). Apply them alongside other adoption work in Step 6. |
 
 Cross-reference each finding against the server's code. Collect adoption opportunities for Step 6.
 
 **Template review.** The framework also ships `templates/CLAUDE.md` and `templates/AGENTS.md` as scaffolding for consumer agent protocol files. The consumer's `CLAUDE.md`/`AGENTS.md` was copied at init time and has since diverged (local customizations, echo replacements, server-specific sections). Read the upstream template fresh at `node_modules/@cyanheads/mcp-ts-core/templates/CLAUDE.md`.
 
-Read the upstream template end-to-end, mentally comparing against the current `CLAUDE.md`/`AGENTS.md`. Apply framework-authored updates directly — new skill references in the skills table, new entries in the "What's Next?" section, updated convention callouts, clarified patterns. These are factual updates, not taste decisions; the consumer's agent protocol file is meant to track the framework's. Only surface a decision when a template change conflicts with a section the consumer has intentionally customized (server-specific domain context, bespoke checklists, etc.) — in that case, note the conflict and ask.
+Read the upstream template end-to-end, mentally comparing against the current `CLAUDE.md`/`AGENTS.md`. Apply framework-authored updates directly — new skill references in the skills table, new entries in the "What's Next?" section, updated convention callouts, clarified patterns. These are factual updates, not taste decisions; the consumer's agent protocol file is meant to track the framework's. Only surface a decision when a template change conflicts with a section the consumer has intentionally customized — a section is "intentionally customized" when it contains server-specific domain context, bespoke checklists, or content that doesn't originate from the template. In that case, note the conflict and ask.
 
 ### 5. Sync project skills and scripts
 
@@ -102,7 +103,8 @@ Procedure:
    - If missing in project `skills/`, copy the full directory
    - If present, compare `metadata.version` — replace if the package version is newer
    - If the local version is equal or newer, skip (local override)
-3. Do not touch skills in `skills/` that don't exist in the package (server-specific)
+3. Leave skills in `skills/` that lack `metadata.audience: external` untouched — they're server-specific or sourced elsewhere, not framework-managed.
+4. **Prune framework skills deleted upstream.** A skill in `skills/` that *carries* `metadata.audience: external` but is **absent** from the package was removed upstream (e.g. `migrate-mcp-ts-template`, removed in 0.9.12) and lingers because sync was previously add/update-only. Delete it from `skills/` (and from the agent mirrors in Phase B). The `audience: external` marker is the provenance: it scopes the prune to framework-managed skills, so a server's own skills — which never carry it — are never touched. Before deleting, scan the skill for local edits worth keeping; if any exist, reconcile or surface them rather than discarding silently.
 
 **Skill diffs are adoption signal, not just sync output.** After replacing files in `skills/`, run `git diff skills/` to read what changed. Updated skill bodies describe new patterns, refined workflows, or new conventions — apply them to the codebase in Step 6 the same way you'd apply a framework API addition. The file copy is the *trigger*, not the work. The work is what the updated skill now says to do.
 
@@ -121,7 +123,7 @@ The `setup` skill instructs consumers to copy `skills/*` into their agent's skil
 For each agent directory that exists:
 
 1. For every directory in project `skills/`, copy it into the agent dir (overwrite on match, add if missing)
-2. Do **not** delete skills in the agent dir that aren't in project `skills/` — they may be general-purpose skills sourced elsewhere (e.g., `code-security`, `cloudflare`, `changelog`)
+2. Do **not** delete skills in the agent dir that aren't in project `skills/` — they may be general-purpose skills sourced elsewhere (e.g., `code-security`, `cloudflare`, `changelog`). **Exception:** a framework skill pruned in Phase A step 4 — delete that same-named directory from each agent dir too. Match by the specific name you just removed, never by a blanket "absent from `skills/`" sweep (which would catch the externally-sourced skills above).
 
 If no agent directory exists, skip Phase B — the project hasn't opted in to per-agent skill copies.
 
@@ -153,7 +155,7 @@ Scripts in `scripts/` that aren't present in the package directory are project-s
 |:--|:--|
 | `templates/changelog/template.md` | `changelog/template.md` |
 
-Apply the same compare-and-overwrite logic. Add new entries here only when a template is explicitly documented as pristine in the framework's CLAUDE.md or its own header.
+Apply the same compare-and-overwrite logic. Add new entries here only when a template is explicitly documented as pristine in the framework's CLAUDE.md/AGENTS.md or its own header.
 
 If the consumer customized a framework script or pristine reference (against guidance), the overwrite discards those changes. After the sync runs, diff `scripts/` and the affected template paths to surface replacements — review before committing. If a specific local customization needs to be preserved, revert that file using your git tools.
 
@@ -180,7 +182,7 @@ The consumer opted into the framework; its templates, skills, scripts, linter ru
 
 | ❌ Not a valid reason to defer | ✅ Valid reason to defer |
 |:-------------------------------|:-------------------------|
-| "Larger change than fits this pass" | Code-commented or `CLAUDE.md`-documented local override that intentionally diverges from the framework convention |
+| "Larger change than fits this pass" | Code-commented or `CLAUDE.md`/`AGENTS.md`-documented local override that intentionally diverges from the framework convention |
 | "Marginal benefit / leaving as-is" | Breaking change with multiple migration paths that need user input |
 | "Per-tool refactor — worth doing as a focused follow-up" | Feature genuinely doesn't apply (the surface doesn't exist in this server) |
 | "Existing helper has rich domain messages we'd lose" | — (port the messages onto the framework path) |
@@ -205,7 +207,7 @@ bun run test
 
 `rebuild` (clean + build) catches API surface and type-alignment issues that `devcheck` alone may miss — module resolution, path aliases, post-build processing. `devcheck` includes `bun audit` and `bun outdated`, so no separate audit step is needed.
 
-In **Mode B**, the user already ran rebuild + test before invoking this skill, but run them again here — Step 6 made code changes that need verification.
+In **Mode B**, the user already ran rebuild + test before invoking this skill, but run them again here — Step 6 made code changes that need re-verification.
 
 Fix anything that fails. Re-run until clean.
 
@@ -220,19 +222,21 @@ Present a concise numbered summary to the user:
 3. **Features adopted** — new framework APIs now in use
 4. **Skills synced** — added/updated with versions (Phase A) and agent directories refreshed (Phase B)
 5. **New/changed skills available** — skills that appeared in Phase A for the first time or had materially-changed step sequences. Frame as "consider running when the time is right" rather than immediate actions; the user decides when to invoke them.
-6. **Open decisions** — genuinely ambiguous items only. Valid: breaking changes with multiple migration paths needing user input, framework changes that conflict with a code-commented or `CLAUDE.md`-documented local override, third-party adoptions where cost/benefit is close. **Not valid:** framework adoptions deferred for scope, effort, or marginal-benefit reasoning — those were already adopted in Step 6 and belong under "Features adopted." If this section is empty, that's the expected outcome of a clean framework upgrade.
+6. **Open decisions** — genuinely ambiguous items only. Valid: breaking changes with multiple migration paths needing user input, framework changes that conflict with a code-commented or `CLAUDE.md`/`AGENTS.md`-documented local override, third-party adoptions where cost/benefit is close. **Not valid:** framework adoptions deferred for scope, effort, or marginal-benefit reasoning — those were already adopted in Step 6 and belong under "Features adopted." If this section is empty, that's the expected outcome of a clean framework upgrade.
 7. **Status** — rebuild / devcheck / test results
 
 ## Checklist
 
 - [ ] Update applied (`bun update --latest`) — Mode A, or already done by user — Mode B
+- [ ] Skill-version paradox checked — if package maintenance skill version > running version, Phase A run first and skill re-invoked
 - [ ] `changelog` skill invoked for each updated package
 - [ ] Framework CHANGELOG reviewed if `@cyanheads/mcp-ts-core` was updated
-- [ ] Every applicable framework adoption opportunity applied in this pass — no scope/effort/marginal-benefit deferrals; third-party adoptions evaluated on cost/benefit
+- [ ] Framework `CLAUDE.md`/`AGENTS.md` template reviewed; applicable updates applied or conflicts surfaced
+- [ ] Step 6 complete — all applicable framework adoption sites updated; third-party adoption decisions recorded
 - [ ] Project `skills/` synced from package (Phase A), with a change report
 - [ ] Agent skill directories (`.claude/skills/`, `.agents/skills/`, etc.) refreshed from project `skills/` (Phase B)
 - [ ] Framework `scripts/` and pristine reference files resynced from package via content-hash compare (Phase C), with a change report; diffs reviewed before committing
-- [ ] `bun run rebuild` succeeds
+- [ ] `bun run rebuild` succeeds (re-run after Step 6, even in Mode B)
 - [ ] `bun run devcheck` passes (includes audit + outdated)
 - [ ] `bun run test` passes
 - [ ] Numbered summary presented to user

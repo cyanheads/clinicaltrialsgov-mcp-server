@@ -4,25 +4,23 @@ description: >
   Scaffold a new MCP tool definition. Use when the user asks to add a tool, create a new tool, or implement a new capability for the server.
 metadata:
   author: cyanheads
-  version: "2.9"
+  version: "2.11"
   audience: external
   type: reference
 ---
 
 ## Context
 
-Tools use the `tool()` builder from `@cyanheads/mcp-ts-core`. Each tool lives in `src/mcp-server/tools/definitions/` with a `.tool.ts` suffix and is registered into `createApp()` in `src/index.ts`. Some larger repos later add `definitions/index.ts` barrels; match the pattern already used by the project you're editing.
-
-For the full `tool()` API, `Context` interface, and error codes, read `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md`.
+Tools use the `tool()` builder from `@cyanheads/mcp-ts-core`. Each tool lives in `src/mcp-server/tools/definitions/` with a `.tool.ts` suffix. The standard registration pattern uses a `definitions/index.ts` barrel that collects all tools into an `allToolDefinitions` array for `createApp()`. Fresh scaffolds from `init` start with direct imports in `src/index.ts` — the barrel is introduced as definitions grow. Match the pattern already used by the project you're editing.
 
 ## Steps
 
-1. **Ask the user** for the tool's name, purpose, and input/output shape
+1. **Gather** the tool's name, purpose, and input/output shape from the user's request — ask only if genuinely absent
 2. **Determine if long-running** — if the tool involves streaming, polling, or
    multi-step async work, it should use `task: true`
 3. **Create the file** at `src/mcp-server/tools/definitions/{{tool-name}}.tool.ts`
 4. **Register** the tool in the project's existing `createApp()` tool list (directly in `src/index.ts` for fresh scaffolds, or via a barrel if the repo already has one)
-5. **Run `bun run devcheck`** to verify
+5. **Run `bun run devcheck`** to verify — if Biome reports formatting issues, run `bun run format` to auto-fix, then re-run devcheck
 6. **Smoke-test** with `bun run rebuild && bun run start:stdio` (or `start:http`)
 
 ## Naming
@@ -58,6 +56,15 @@ export const {{TOOL_EXPORT}} = tool('{{tool_name}}', {
   output: z.object({
     // All fields need .describe(). Only JSON-Schema-serializable Zod types allowed.
   }),
+  // Agent-facing context on the success path — empty-result notices, the query as
+  // the server parsed it, pagination totals. The counterpart to errors[]: merged
+  // into structuredContent AND mirrored into content[] automatically (no format()
+  // entry needed, never touched by format-parity). Populate via ctx.enrich(...) in
+  // the handler or service layer. Keys must be disjoint from output. Delete if unused.
+  enrichment: {
+    effectiveQuery: z.string().describe('The query as the server parsed it.'),
+    totalCount: z.number().describe('Total matches before any limit was applied.'),
+  },
   // auth: ['tool:{{tool_name}}:read'],
 
   // Each entry declares a domain-specific failure mode and types
@@ -77,9 +84,6 @@ export const {{TOOL_EXPORT}} = tool('{{tool_name}}', {
   // single source of truth for what flows to the wire — opt in at the throw
   // site by spreading `ctx.recoveryFor('reason')` into the `data` arg.
   errors: [
-    { reason: 'no_match', code: JsonRpcErrorCode.NotFound,
-      when: 'No items matched the query.',
-      recovery: 'Broaden the query or check the spelling and try again.' },
     { reason: 'queue_full', code: JsonRpcErrorCode.RateLimited,
       when: 'Local queue at capacity.', retryable: true,
       recovery: 'Wait a few seconds before retrying or reduce batch size.' },
@@ -91,17 +95,19 @@ export const {{TOOL_EXPORT}} = tool('{{tool_name}}', {
     // With an `errors[]` contract: `throw ctx.fail('reason_id', message?, data?)`.
     // Without: throw via factories (`notFound`, `validationError`, …) or plain `Error`.
     const items = await search(input);
-    if (items.length === 0) {
-      // Dynamic recovery — interpolate runtime context, override the contract default.
-      throw ctx.fail('no_match', `No items matched "${input.query}"`, {
-        recovery: { hint: `Try a broader query than "${input.query}", or check the spelling.` },
-      });
-    }
     if (queue.full()) {
       // Static recovery — resolve from the contract via ctx.recoveryFor('reason').
       // Single source of truth: the string lives in errors[] above; this spread
       // pulls it onto the wire so format()-only clients see the recovery hint.
       throw ctx.fail('queue_full', undefined, { ...ctx.recoveryFor('queue_full') });
+    }
+    // Surface what the agent reasons with — echoed query, true total — on BOTH
+    // client surfaces, with no format() plumbing. An empty result is a notice,
+    // not a throw: reserve ctx.fail for genuine failures (queue full, upstream down).
+    ctx.enrich.echo(input.query);
+    ctx.enrich.total(items.length);
+    if (items.length === 0) {
+      ctx.enrich.notice(`No items matched "${input.query}". Try broader terms or check the spelling.`);
     }
     return { items };
   },
@@ -136,6 +142,7 @@ export const {{TOOL_EXPORT}} = tool('{{tool_name}}', {
   output: z.object({ /* ... */ }),
 
   async handler(input, ctx) {
+    // ctx.progress is guaranteed non-null when task: true — the ! assertion is safe here.
     await ctx.progress!.setTotal(totalSteps);
     for (const step of steps) {
       if (ctx.signal.aborted) break;
@@ -207,6 +214,44 @@ The wrapper composes with both standard and task tools, and preserves all origin
 
 Tool responses are the LLM's only window into what happened. Every response should leave the agent informed about outcome, current state, and what to do next. This applies to success, partial success, empty results, and errors alike.
 
+### Agent-facing context belongs in `enrichment`
+
+Empty-result notices, the query/filter as the server parsed it, pagination totals — the context an agent *reasons with*, as opposed to the domain payload itself — must reach **both** client surfaces: `structuredContent` (from `output`) and `content[]` (from `format()`). Hand-authored into `format()` text alone, this context reaches `content[]` but is invisible to `structuredContent`-only clients (Claude Code, MCP-SDK API callers).
+
+Declare it as an `enrichment` block — the success-path counterpart to `errors[]` — and populate it via `ctx.enrich(...)` (or the kind-tagged helpers `ctx.enrich.notice()` / `.total()` / `.echo()`). The framework merges enrichment into `structuredContent`, advertises `output.extend(enrichment)` as the tool's `outputSchema`, and mirrors it into a `content[]` trailer — both surfaces, no `format()` entry, never touched by `format-parity`. `ctx.enrich` lives on the base `Context` (like `ctx.log`), so the service layer can populate it too.
+
+```typescript
+enrichment: {
+  effectiveQuery: z.string().describe('The query as the server parsed it.'),
+  totalCount: z.number().describe('Total matches before the limit.'),
+  notice: z.string().optional().describe('Guidance when nothing matched.'),
+},
+async handler(input, ctx) {
+  const res = await search(input.query, input.limit);
+  ctx.enrich.echo(res.parsed);   // → structuredContent.effectiveQuery + "Query: …" trailer
+  ctx.enrich.total(res.total);   // → structuredContent.totalCount + "N total" trailer
+  if (res.items.length === 0) ctx.enrich.notice(`No matches for "${input.query}".`);
+  return { items: res.items };   // enrichment never rides in the domain return
+},
+```
+
+A *required* enrichment field the handler never populates fails the effective-output parse — surfacing the bug rather than dropping it silently. Enrichment keys must be disjoint from `output` keys (lint-enforced). The sections below are applications of this rule.
+
+**Trailer rendering is a per-field call.** Each field's `content[]` trailer line resolves as: its kind-tag if set (`notice`/`total`/`echo`/`delta`), else the definition's per-field `enrichmentTrailer.render`/`label`, else the generic `**key:** value` (objects/arrays `JSON.stringify`'d). A structured (object/array) field with no `render` ships as a one-line JSON blob — the `enrichment-trailer-render` lint rule errors on that. Give it a renderer, or a `label` to relabel a scalar key:
+
+```typescript
+enrichment: {
+  totalFound: z.number().describe('Matches before the page limit.'),
+  appliedFilters: z.object({ /* … */ }).describe('Filters the server applied.'),
+},
+enrichmentTrailer: {
+  totalFound: { label: 'Total Found' },                                  // → "**Total Found:** 2990"
+  appliedFilters: { render: (f) => `### Filters\n- Range: ${f.dateRange}` }, // markdown, not JSON
+},
+```
+
+`structuredContent` always keeps the full structured value; `enrichmentTrailer` only controls the human-facing `content[]` line.
+
 ### Communicate filtering and exclusions
 
 If the tool omitted, truncated, or filtered anything, say what and how to get it back. Silent omission is invisible to the agent — it can't act on what it doesn't know about.
@@ -259,39 +304,30 @@ Single-item tools don't need this — they either succeed or throw. The partial 
 
 ### Empty results need context
 
-An empty array with no explanation is a dead end. Echo back the criteria that produced zero results and, where possible, suggest how to broaden the search. The recovery hint needs three pieces working together — schema entry, handler return, and `format()` rendering — or the `format-parity` lint will flag the missing field.
+An empty array with no explanation is a dead end. Echo back the criteria that produced zero results and suggest how to broaden. This is the canonical `enrichment` case — a notice is agent-facing context, not domain payload, and an empty result is a notice, **not** a throw:
 
 ```typescript
-// 1. Output schema — declare the recovery field so the linter sees it
-output: z.object({
-  items: z.array(ItemSchema).describe('Matching items.'),
-  totalCount: z.number().describe('Total matches before pagination.'),
-  message: z.string().optional()
-    .describe('Recovery hint when results are empty — echoes filters and suggests how to broaden. Absent on successful result pages.'),
-}),
+// 1. Declare the notice as enrichment — reaches structuredContent AND content[],
+//    no output field, no format() entry, no format-parity concern.
+enrichment: {
+  notice: z.string().optional()
+    .describe('Recovery hint when results are empty — echoes filters and suggests how to broaden.'),
+},
 
-// 2. Handler — populate `message` when the result is empty
+// 2. Handler — populate via ctx.enrich.notice() when the result is empty.
 async handler(input, ctx) {
   const results = await search(input);
   if (results.length === 0) {
-    return {
-      items: [],
-      totalCount: 0,
-      message: `No items matched status="${input.status}" in project "${input.project}". `
+    ctx.enrich.notice(
+      `No items matched status="${input.status}" in project "${input.project}". `
         + `Try a broader status filter or verify the project name.`,
-    };
+    );
   }
   return { items: results, totalCount: results.length };
 },
-
-// 3. format() — render the recovery hint so content[]-only clients see it too
-format: (result) => {
-  const lines = [`**Total:** ${result.totalCount}`];
-  if (result.message) lines.push(`\n> ${result.message}`);
-  for (const item of result.items) lines.push(`- ${item.name}`);
-  return [{ type: 'text', text: lines.join('\n') }];
-},
 ```
+
+The notice lands in `structuredContent.notice` and renders as a `content[]` blockquote automatically — both surfaces, zero `format()` plumbing.
 
 ### Mutator response design
 
@@ -307,6 +343,19 @@ output: z.object({
 ```
 
 The agent reads `created: true, previousSizeInBytes: 0, currentSizeInBytes: 68` and knows: brand new target, the full file content is the body. If that matches intent, fine; if not (typo path, uninitialized periodic note), the agent self-corrects without re-fetching. Anti-pattern: server-side `>=` integrity throws on mutators — the server can't distinguish intentional shrink from bug, so it throws on every shrink, including the deliberate ones.
+
+When the before/after is agent-facing context rather than primary payload, the `enrichment`-native form is `ctx.enrich.delta({ field, before, after })` — it writes `{ before, after }` to `structuredContent` and renders `**field:** before → after` in the `content[]` trailer. Declare the field in the `enrichment` block as `z.object({ before, after })`; the linter recognizes the shape, so it needs no custom `enrichmentTrailer.render`. Same stance — surface raw state, never a verdict:
+
+```typescript
+enrichment: {
+  sizeInBytes: z.object({
+    before: z.number().describe('Byte size before the mutation.'),
+    after: z.number().describe('Byte size after the mutation.'),
+  }).describe('Raw size before/after — the agent judges whether a shrink was intended.'),
+},
+// handler:
+ctx.enrich.delta({ field: 'sizeInBytes', before: prev, after: next });
+```
 
 ### Sparse upstream data must stay honest
 
@@ -471,6 +520,8 @@ throw invalidParams(
 
 Counts, applied filters, truncation notices, and chaining IDs help the agent decide its next action without extra round trips.
 
+Counts, applied-filter summaries, and query echo that describe the *result set* (rather than being the result) are textbook `enrichment` — `ctx.enrich.total(n)`, `ctx.enrich.echo(parsedQuery)`, or `ctx.enrich({ appliedFilters })` put them on both client surfaces with no `format()` entry (a structured field like `appliedFilters` also needs an `enrichmentTrailer.render` so its trailer line is markdown, not a JSON blob — see **Tool Response Design**). Reserve domain `output` for the payload itself and post-action state (e.g. `currentStatus` after a write), as below:
+
 ```typescript
 return {
   commits: formattedCommits,
@@ -528,18 +579,27 @@ Large payloads burn the agent's context window. Default to curated summaries; of
 ## Checklist
 
 - [ ] File created at `src/mcp-server/tools/definitions/{{tool-name}}.tool.ts`
+- [ ] Tool name passed to `tool()` uses snake_case
+- [ ] `title` field set
+- [ ] `annotations` set correctly — `readOnlyHint: false` for write tools, `destructiveHint: true` for delete/overwrite tools
 - [ ] All Zod schema fields have `.describe()` annotations
 - [ ] Numeric `output` fields carry units in the field name (`sizeInBytes`, `durationInMs`, `priceInCents`, `latencyInMs`) — `.describe()` may be summarized away or truncated, but the field name persists into the JSON the agent reads. Exempt: dimensionless counts (`totalCount`, `itemCount`), indices (`index`, `position`)
 - [ ] Schemas use only JSON-Schema-serializable types (no `z.custom()`, `z.date()`, `z.transform()`, `z.bigint()`, `z.symbol()`, `z.void()`, `z.map()`, `z.set()`)
 - [ ] JSDoc `@fileoverview` and `@module` header present
 - [ ] Optional nested objects guarded for empty inner values from form-based clients (check `?.field` truthiness, not just object presence)
-- [ ] `handler(input, ctx)` is pure — throws on failure, no try/catch
+- [ ] No `console` calls — use `ctx.log` for handler logging
+- [ ] `handler(input, ctx)` is pure — throws on failure, no try/catch (exception: batch tools with per-item isolation use try/catch inside the loop — that's intentional, don't remove it)
 - [ ] `format()` renders every field in the output schema — enforced at lint time via sentinel injection, startup fails with `format-parity` errors otherwise. Different clients forward different surfaces (Claude Code → `structuredContent`, Claude Desktop → `content[]`); both must carry the same data. Primary fix: render the missing field in `format()` (use `z.discriminatedUnion` for list/detail variants). Escape hatch: if the output schema was over-typed for a genuinely dynamic upstream API, relax it (`z.object({}).passthrough()`) rather than maintaining aspirational typing
+- [ ] Agent-facing context (empty-result notices, query/filter echo, pagination totals) declared in an `enrichment` block and populated via `ctx.enrich(...)` — reaches both `structuredContent` and `content[]` automatically, not authored solely in `format()` text. Enrichment keys disjoint from `output` keys
 - [ ] If wrapping external API: output schema and `format()` preserve uncertainty from sparse upstream payloads instead of inventing concrete values
 - [ ] `auth` scopes declared if the tool needs authorization
 - [ ] `errors: [...]` contract declared for the tool's domain-specific failure modes — or block deleted if no domain failures apply (baseline codes bubble freely)
 - [ ] Error contract declared inline on this tool — not imported from a shared module, even when other tools have near-identical entries
 - [ ] `task: true` added if the tool is long-running
+- [ ] If `task: true`: handler checks `ctx.signal.aborted` in its loop for cancellation support
+- [ ] If tool returns unbounded arrays: pagination with total count, or `spillover()` / DataCanvas for tabular working sets
+- [ ] If tool is feature-gated: evaluated whether `disabledTool()` wrapper is appropriate (present in manifest but uncallable)
 - [ ] Registered in the project's existing `createApp()` tool list (directly or via barrel)
+- [ ] Test file created via `add-test` skill, or handler tested directly with `createMockContext()`
 - [ ] `bun run devcheck` passes
 - [ ] Smoke-tested with `bun run rebuild && bun run start:stdio` (or `start:http`)

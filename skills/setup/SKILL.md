@@ -4,7 +4,7 @@ description: >
   Post-init orientation for an MCP server built on @cyanheads/mcp-ts-core. Use after running `@cyanheads/mcp-ts-core init` to understand the project structure, conventions, and skill sync model. Also use when onboarding to an existing project for the first time.
 metadata:
   author: cyanheads
-  version: "1.7"
+  version: "1.8"
   audience: external
   type: workflow
 ---
@@ -15,14 +15,9 @@ This skill assumes `bunx @cyanheads/mcp-ts-core init [name]` has already run. Th
 
 ## Agent Protocol File
 
-The init CLI generates both `CLAUDE.md` and `AGENTS.md` with the same purpose. Keep one authoritative file for the agent you actually use:
+The init CLI generates both `CLAUDE.md` and `AGENTS.md` with identical content — `CLAUDE.md` is read by Claude Code, `AGENTS.md` by Codex, Cursor, Windsurf, and other agents. **Keep both.** Shipping both keeps the project agent-agnostic, and they're cheap to hold in sync: edit one, then `cp CLAUDE.md AGENTS.md` (the framework keeps its own pair byte-identical the same way, enforced by `check-docs-sync`). Only delete one if you're certain the project will never be opened by the other family of agents.
 
-- **Claude Code** — keep `CLAUDE.md`, discard `AGENTS.md`
-- **All other agents** (Codex, Cursor, Windsurf, etc.) — keep `AGENTS.md`, discard `CLAUDE.md`
-
-Both files serve the same purpose: project-specific agent instructions. Prefer committing one authoritative copy rather than trying to keep both in sync by hand.
-
-For the full framework docs, read `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` once per session. It contains the exports catalog, tool/resource/prompt contracts, error codes, context API, and common import patterns.
+For the full framework docs, read `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` (or its identical twin `AGENTS.md`) once per session. It contains the exports catalog, tool/resource/prompt contracts, error codes, context API, and common import patterns.
 
 ## Project Structure
 
@@ -45,7 +40,7 @@ Dockerfile                                      # Starter multi-stage image
 .vscode/                                        # Recommended extensions + editor settings
 server.json                                     # MCP Registry publishing metadata
 changelog/template.md                           # Format reference for per-version changelog files
-scripts/                                        # build, clean, devcheck, lint-mcp, build-changelog, tree, check-docs-sync
+scripts/                                        # build, clean, devcheck, lint-mcp, list-skills, build-changelog, tree, check-docs-sync
 skills/                                         # External skills copied from the package (source of truth)
 src/
   index.ts                                      # createApp() entry point
@@ -94,7 +89,7 @@ After init:
 
 1. **Clean up what you don't need.** If your server has no prompts, delete the echo prompt and its registration in `src/index.ts`. Same for resources, or the app-tool pair if you're not targeting UI-capable clients.
 2. **Rename and replace what you keep.** The echo definitions and their tests show the pattern — swap them out for your real tools/resources/prompts.
-3. **Definitions register directly in `src/index.ts`.** No barrel files, just import and add to the `tools` / `resources` / `prompts` arrays.
+3. **Definitions register directly in `src/index.ts`.** The init scaffold uses direct imports — no barrel files yet. As the definition count grows, the `add-tool`/`add-resource`/`add-prompt` skills introduce `definitions/index.ts` barrels per the framework convention.
 
 See the `add-tool`, `add-app-tool`, `add-resource`, `add-prompt`, `add-service`, and `add-test` skills for the scaffolding patterns when you start adding real definitions.
 
@@ -126,11 +121,13 @@ This step is the **bootstrap** — it creates the agent directory. From then on,
 
 ## Project Scaffolding
 
-After `bun install`, complete these one-time setup tasks:
+Complete these one-time setup tasks:
 
-1. **Update dependencies to latest** — `bun update --latest`. The scaffolded `package.json` pins minimum versions from when the framework was published; updating ensures you start with the latest compatible releases.
-2. **Initialize git** — use your git tools: init the repo, stage all files, and commit with message `chore: scaffold from @cyanheads/mcp-ts-core`
-3. **Verify the substituted server name** — when `init` runs without a `[name]` argument, the package name defaults to the cwd directory name. If that's not what you want as the published server name, update `package.json`, `CLAUDE.md`/`AGENTS.md`, and `server.json` to your actual server name.
+1. **Install dependencies** — `bun install`
+2. **Update dependencies to latest** — `bun update --latest`. The scaffolded `package.json` pins minimum versions from when the framework was published; updating ensures you start with the latest compatible releases.
+3. **Initialize git** — use your git tools: init the repo, stage all files, and commit with message `chore: scaffold from @cyanheads/mcp-ts-core`
+4. **Verify the substituted server name** — when `init` runs without a `[name]` argument, the package name defaults to the cwd directory name. If that's not what you want as the published server name, update `package.json`, `CLAUDE.md`/`AGENTS.md`, and `server.json` to your actual server name.
+5. **Verify the scaffold builds clean** — `bun run devcheck`. Fix any issues before starting real work.
 
 ## Changelog Convention
 
@@ -153,9 +150,12 @@ Skip or reorder as the project calls for it. The agent protocol's "What's Next?"
 
 ## Checklist
 
-- [ ] Agent protocol file selected — keep one authoritative file (`CLAUDE.md` or `AGENTS.md`)
+- [ ] Agent protocol files kept — both `CLAUDE.md` and `AGENTS.md` present and in sync (or the unused one deliberately deleted)
+- [ ] `bun install` run
+- [ ] Dependencies updated (`bun update --latest`)
+- [ ] Git repo initialized and initial commit made (`chore: scaffold from @cyanheads/mcp-ts-core`)
 - [ ] Substituted server name verified in `package.json`, agent protocol file, and `server.json`
-- [ ] Framework docs read (`node_modules/@cyanheads/mcp-ts-core/CLAUDE.md`)
+- [ ] Framework docs read (`node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` or `AGENTS.md`)
 - [ ] Unused echo definitions cleaned up (and unregistered from `src/index.ts`)
 - [ ] Skills copied to agent directory (`cp -R skills/* .claude/skills/` or equivalent)
 - [ ] Project structure understood (definitions directories, entry point)

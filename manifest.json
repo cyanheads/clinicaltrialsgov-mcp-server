@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "2.5.2",
+  "version": "2.5.3",
   "description": "MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details and results, and match patients to eligible trials.",
   "author": {
     "name": "cyanheads"

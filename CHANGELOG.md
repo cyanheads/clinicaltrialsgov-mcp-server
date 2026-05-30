@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.5.3](changelog/2.5.x/2.5.3.md) — 2026-05-30
+
+Enrichment adoption: search/field/eligibility tools now surface query echoes, result totals, and empty-result guidance in a typed enrichment block reaching both structuredContent and content[] trailer
+
 ## [2.5.2](changelog/2.5.x/2.5.2.md) — 2026-05-28
 
 mcp-ts-core ^0.9.9 → ^0.9.13: 413 body cap, HTTP session-init gate, quieter 401/403/400/404 logging, GET /mcp surfaces keywords; landing.requireAuth explicit; plugin metadata scaffolded

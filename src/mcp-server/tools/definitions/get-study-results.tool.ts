@@ -364,12 +364,6 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       recovery: RECOVERY_HINTS.study_not_found,
     },
     {
-      reason: 'ids_not_found',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'A batch lookup rejected because one or more NCT IDs are not present.',
-      recovery: RECOVERY_HINTS.ids_not_found,
-    },
-    {
       reason: 'rate_limited',
       code: JsonRpcErrorCode.RateLimited,
       when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',

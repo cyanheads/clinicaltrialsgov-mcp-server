@@ -1026,6 +1026,33 @@ describe('ClinicalTrialsService', () => {
       ).rejects.toThrow(/Invalid field name: 'BriefSubtitle'/);
     });
 
+    it('auto-corrects a colloquial alias to its canonical piece (#60)', async () => {
+      // "RecruitmentStatus" is the CT.gov UI label for the OverallStatus enum but
+      // is not a v2 piece name. The rename map rewrites it before validation, like
+      // the case/whitespace fixes, so the call succeeds instead of erroring.
+      const metadata: FieldNode[] = [
+        {
+          name: 'protocolSection',
+          children: [
+            {
+              name: 'statusModule',
+              children: [{ name: 'overallStatus', piece: 'OverallStatus', type: 'STRING' }],
+            },
+          ],
+        },
+      ];
+      mockByRoute({ metadata: jsonResponse(metadata), primary: jsonResponse([]) });
+      const ctx = createMockContext();
+
+      await validatingService.getFieldValues(['RecruitmentStatus'], ctx);
+
+      const valuesCall = mockFetch.mock.calls
+        .map((c) => (typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString()))
+        .find((u) => u.includes('/stats/field/values'));
+      expect(valuesCall).toBeDefined();
+      expect(new URL(valuesCall!).searchParams.get('fields')).toBe('OverallStatus');
+    });
+
     it('attaches reason=field_invalid and recovery hint on validation failure', async () => {
       mockByRoute();
       const ctx = createMockContext({

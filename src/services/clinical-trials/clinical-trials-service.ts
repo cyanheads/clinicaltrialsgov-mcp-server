@@ -41,6 +41,19 @@ const MIN_INTERVAL_MS = 1000;
  */
 const ENROLLMENT_SENTINEL_FILTER = 'AREA[EnrollmentCount]RANGE[0, 99999998]';
 
+/**
+ * Colloquial / legacy field labels that map unambiguously to a canonical v2
+ * piece. ClinicalTrials.gov's UI and legacy facets surface labels like
+ * "Recruitment Status" that aren't API v2 piece names, so models reach for them
+ * by reflex. Applied in normalizeFields as an auto-correct (mirroring the
+ * case/whitespace fix) so the call succeeds instead of erroring with a
+ * did-you-mean. Keyed by lowercased, separator-stripped input.
+ */
+const KNOWN_FIELD_RENAMES: Record<string, string> = {
+  recruitmentstatus: 'OverallStatus',
+  recruitingstatus: 'OverallStatus',
+};
+
 /** Constructor options for overriding retry/backoff/validation behavior (primarily for tests). */
 export interface ClinicalTrialsServiceOptions {
   baseBackoffMs?: number;
@@ -244,6 +257,11 @@ export class ClinicalTrialsService {
       if (folded) {
         corrections.push({ from: f, to: folded });
         return folded;
+      }
+      const renamed = KNOWN_FIELD_RENAMES[trimmed.toLowerCase().replace(/[\s_]+/g, '')];
+      if (renamed) {
+        corrections.push({ from: f, to: renamed });
+        return renamed;
       }
       return f;
     });

@@ -351,4 +351,22 @@ describe('nearestPieces', () => {
     const results = nearestPieces('AbcXXX', e, 3);
     expect(results).toContain('AbcDef');
   });
+
+  it('ranks the short canonical field above longer fields sharing one token (#60)', () => {
+    // All three share only "status"; "recruitment" matches none. Field-token
+    // coverage must lift the 2-token OverallStatus above the 3- and 6-token
+    // fields, which otherwise tie on a single common token and break by index
+    // order — sinking the canonical enum below a DATE and a niche long field.
+    const e = [
+      {
+        piece: 'ExpandedAccessStatusForNCTId',
+        path: 'x.expandedAccessStatusForNCTId',
+        name: 'expandedAccessStatusForNCTId',
+      },
+      { piece: 'StatusVerifiedDate', path: 'x.statusVerifiedDate', name: 'statusVerifiedDate' },
+      { piece: 'OverallStatus', path: 'x.overallStatus', name: 'overallStatus' },
+    ];
+    const results = nearestPieces('RecruitmentStatus', e, 3);
+    expect(results[0]).toBe('OverallStatus');
+  });
 });

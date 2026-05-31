@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.5.4](changelog/2.5.x/2.5.4.md) — 2026-05-30
+
+get-study-results: drop unreachable ids_not_found contract; get-field-values: auto-correct RecruitmentStatus/RecruitingStatus to OverallStatus, ranking favors fields matched tokens cover more fully
+
 ## [2.5.3](changelog/2.5.x/2.5.3.md) — 2026-05-30
 
 Enrichment adoption: search/field/eligibility tools now surface query echoes, result totals, and empty-result guidance in a typed enrichment block reaching both structuredContent and content[] trailer

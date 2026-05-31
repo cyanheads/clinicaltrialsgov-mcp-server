@@ -124,8 +124,16 @@ function scoreEntry(query: string, entry: FieldIndexEntry): number {
     if (descTokens.has(qt)) descHits += 1;
   }
 
+  // Reward fields whose identity the match mostly covers: hitting 1 of
+  // OverallStatus's 2 tokens beats 1 of ExpandedAccessStatusForNCTId's 6.
+  // Without this, every field sharing one common token (e.g. "Status") ties and
+  // breaks by index order, sinking the canonical short field below long ones.
+  const pieceCoverage = pieceHits / Math.max(1, pieceTokens.size);
+
   const denom = Math.max(1, qSet.size);
-  return Math.round((pieceHits * 200 + pathHits * 60 + descHits * 30) / denom);
+  return Math.round(
+    (pieceHits * 200 + pieceCoverage * 300 + pathHits * 60 + descHits * 30) / denom,
+  );
 }
 
 /** Rank entries by relevance to query and return the top `limit`. */

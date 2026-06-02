@@ -61,6 +61,51 @@ describe('getStudy', () => {
         getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx),
       ).rejects.toThrow('Not found');
     });
+
+    it('omits the heavy resultsSection and returns compact resultsSummary counts (#63)', async () => {
+      const study = {
+        hasResults: true,
+        protocolSection: {
+          identificationModule: { nctId: 'NCT02130466', briefTitle: 'Results Study' },
+        },
+        resultsSection: {
+          outcomeMeasuresModule: { outcomeMeasures: [{ title: 'A' }, { title: 'B' }] },
+          adverseEventsModule: {
+            seriousEvents: Array.from({ length: 87 }, (_, i) => ({ term: `S${i}` })),
+            otherEvents: Array.from({ length: 328 }, (_, i) => ({ term: `O${i}` })),
+          },
+          participantFlowModule: { periods: [{ title: 'Overall' }] },
+          baselineCharacteristicsModule: { measures: [{ title: 'Age' }] },
+        },
+      };
+      mockService.getStudy.mockResolvedValue(study);
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'NCT02130466' }), ctx);
+
+      // The full resultsSection must not ride along in structuredContent.
+      expect((result.study as { resultsSection?: unknown }).resultsSection).toBeUndefined();
+      expect(result.resultsSummary).toEqual({
+        outcomeMeasures: 2,
+        seriousAdverseEvents: 87,
+        otherAdverseEvents: 328,
+        participantFlowPeriods: 1,
+        baselineMeasures: 1,
+      });
+    });
+
+    it('omits resultsSummary when the study has no posted results (#63)', async () => {
+      mockService.getStudy.mockResolvedValue({
+        hasResults: false,
+        protocolSection: {
+          identificationModule: { nctId: 'NCT12345678', briefTitle: 'No Results' },
+        },
+      });
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx);
+      expect(result.resultsSummary).toBeUndefined();
+    });
   });
 
   describe('filter parity — structuredContent and format() carry the same data (#46)', () => {
@@ -795,6 +840,30 @@ describe('getStudy', () => {
       const text = (blocks[0] as { text: string }).text;
       expect(text).not.toContain('... and');
       for (let i = 0; i < 15; i++) expect(text).toContain(`Citation ${i}.`);
+    });
+
+    it('renders resultsSummary counts and points to get_study_results (#63)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: { identificationModule: { nctId: 'NCT02130466', briefTitle: 'X' } },
+          hasResults: true,
+        },
+        resultsSummary: {
+          outcomeMeasures: 2,
+          seriousAdverseEvents: 87,
+          otherAdverseEvents: 328,
+          participantFlowPeriods: 1,
+          baselineMeasures: 1,
+        },
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('## Results Summary');
+      expect(text).toContain('2 outcome measures');
+      expect(text).toContain('87 serious adverse events');
+      expect(text).toContain('328 other adverse events');
+      expect(text).toContain('1 participant flow periods');
+      expect(text).toContain('1 baseline measures');
+      expect(text).toContain('Use clinicaltrials_get_study_results for full data.');
     });
   });
 });

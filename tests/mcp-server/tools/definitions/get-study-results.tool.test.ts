@@ -236,6 +236,91 @@ describe('getStudyResults', () => {
       expect(ae.groupCount).toBe(1);
       expect(ae.seriousEventCount).toBe(1);
       expect(ae.otherEventCount).toBe(2);
+      // topEvents lists every serious + other term (no stats here → 0 affected).
+      expect(ae.topEvents).toHaveLength(3);
+    });
+
+    it('ranks topEvents by participants affected across arms in summary mode (#61)', async () => {
+      const study = makeStudy('NCT02130466', true, {
+        adverseEventsModule: {
+          timeFrame: '3 years',
+          eventGroups: [
+            { id: 'G1', title: 'Placebo' },
+            { id: 'G2', title: 'Drug' },
+          ],
+          seriousEvents: [
+            {
+              term: 'Anaemia',
+              organSystem: 'Blood and lymphatic system disorders',
+              stats: [
+                { groupId: 'G1', numAffected: 5, numAtRisk: 100 },
+                { groupId: 'G2', numAffected: 12, numAtRisk: 100 },
+              ],
+            },
+          ],
+          otherEvents: [
+            {
+              term: 'Headache',
+              organSystem: 'Nervous system disorders',
+              stats: [
+                { groupId: 'G1', numAffected: 30, numAtRisk: 100 },
+                { groupId: 'G2', numAffected: 40, numAtRisk: 100 },
+              ],
+            },
+          ],
+        },
+      });
+      mockService.getStudiesBatch.mockResolvedValue([study]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input!.parse({
+        nctIds: 'NCT02130466',
+        sections: 'adverseEvents',
+        summary: true,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      const topEvents = result.results[0]!.adverseEvents!.topEvents as Array<{
+        term: string;
+        organSystem: string;
+        kind: string;
+        numAffected: number;
+        numAtRisk: number;
+      }>;
+
+      expect(topEvents).toHaveLength(2);
+      // Headache (30+40=70 affected) outranks Anaemia (5+12=17).
+      expect(topEvents[0]).toEqual({
+        term: 'Headache',
+        organSystem: 'Nervous system disorders',
+        kind: 'other',
+        numAffected: 70,
+        numAtRisk: 200,
+      });
+      expect(topEvents[1]).toMatchObject({ term: 'Anaemia', kind: 'serious', numAffected: 17 });
+      // Raw event arrays must not leak into summary mode.
+      expect(result.results[0]!.adverseEvents!.seriousEvents).toBeUndefined();
+    });
+
+    it('caps topEvents at 20 entries ranked by affected count (#61)', async () => {
+      const otherEvents = Array.from({ length: 30 }, (_, i) => ({
+        term: `Event ${i}`,
+        stats: [{ groupId: 'G1', numAffected: i, numAtRisk: 100 }],
+      }));
+      const study = makeStudy('NCT02130466', true, {
+        adverseEventsModule: { eventGroups: [{ id: 'G1' }], otherEvents },
+      });
+      mockService.getStudiesBatch.mockResolvedValue([study]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input!.parse({
+        nctIds: 'NCT02130466',
+        sections: 'adverseEvents',
+        summary: true,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      const topEvents = result.results[0]!.adverseEvents!.topEvents as Array<{ term: string }>;
+      expect(topEvents).toHaveLength(20);
+      expect(topEvents[0]!.term).toBe('Event 29');
     });
 
     it('summarizes participant flow in summary mode', async () => {
@@ -593,6 +678,86 @@ describe('getStudyResults', () => {
       const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('Adverse Events');
       expect(text).toContain('12 months');
+    });
+
+    it('renders the topEvents table in summary-mode adverse events (#61)', () => {
+      const blocks = getStudyResults.format!({
+        results: [
+          {
+            nctId: 'NCT02130466',
+            title: 'AE Study',
+            hasResults: true,
+            adverseEvents: {
+              timeFrame: '3 years',
+              seriousEventCount: 1,
+              otherEventCount: 1,
+              topEvents: [
+                {
+                  term: 'Headache',
+                  organSystem: 'Nervous system disorders',
+                  kind: 'other',
+                  numAffected: 70,
+                  numAtRisk: 200,
+                },
+                {
+                  term: 'Anaemia',
+                  organSystem: 'Blood and lymphatic system disorders',
+                  kind: 'serious',
+                  numAffected: 17,
+                  numAtRisk: 200,
+                },
+              ],
+            },
+          },
+        ],
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('Most frequent events');
+      expect(text).toContain('Headache');
+      expect(text).toContain('70/200 affected');
+      expect(text).toContain('[other]');
+    });
+
+    it('renders every adverse event in full mode without a row cap (#63)', () => {
+      const seriousEvents = Array.from({ length: 25 }, (_, i) => ({
+        term: `SeriousEvent${i}`,
+        stats: [{ groupId: 'G1', numAffected: 1, numAtRisk: 10 }],
+      }));
+      const blocks = getStudyResults.format!({
+        results: [
+          {
+            nctId: 'NCT02130466',
+            title: 'Big AE Study',
+            hasResults: true,
+            adverseEvents: { eventGroups: [{ id: 'G1', title: 'Arm' }], seriousEvents },
+          },
+        ],
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('SeriousEvent0');
+      expect(text).toContain('SeriousEvent24');
+      expect(text).not.toContain('more');
+    });
+
+    it('renders every baseline measure in full mode without a row cap (#63)', () => {
+      const measures = Array.from({ length: 20 }, (_, i) => ({
+        title: `Measure${i}`,
+        classes: [{ categories: [{ measurements: [{ groupId: 'G1', value: `${i}` }] }] }],
+      }));
+      const blocks = getStudyResults.format!({
+        results: [
+          {
+            nctId: 'NCT02130466',
+            title: 'Big BL Study',
+            hasResults: true,
+            baseline: { groups: [{ id: 'G1', title: 'Arm' }], measures },
+          },
+        ],
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('Measure0');
+      expect(text).toContain('Measure19');
+      expect(text).not.toContain('more');
     });
 
     it('renders participant flow with summary data', () => {

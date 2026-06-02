@@ -1,6 +1,6 @@
 {
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "2.5.5",
+  "version": "2.6.0",
   "mcpName": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
   "description": "Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to eligible trials via MCP. STDIO or Streamable HTTP.",
   "main": "dist/index.js",

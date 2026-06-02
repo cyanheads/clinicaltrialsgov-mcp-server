@@ -94,14 +94,62 @@ function summarizeOutcome(o: Record<string, unknown>) {
   };
 }
 
-/** Condense the adverse events module to counts. */
+const TOP_EVENTS_LIMIT = 20;
+
+interface TopAdverseEvent {
+  kind: 'serious' | 'other';
+  numAffected: number;
+  numAtRisk: number;
+  organSystem: string;
+  term: string;
+}
+
+/** Sum an adverse event's per-group stats into trial-wide affected/at-risk totals. */
+function aggregateEventStats(ev: Record<string, unknown>): {
+  numAffected: number;
+  numAtRisk: number;
+} {
+  const stats = (ev.stats as Array<Record<string, unknown>> | undefined) ?? [];
+  let numAffected = 0;
+  let numAtRisk = 0;
+  for (const s of stats) {
+    numAffected += Number(s.numAffected) || 0;
+    numAtRisk += Number(s.numAtRisk) || 0;
+  }
+  return { numAffected, numAtRisk };
+}
+
+/**
+ * Rank the most frequent adverse events across serious and other groups,
+ * aggregating each term's affected/at-risk counts across all arms. Trial-wide
+ * incidence view for summary mode — "which AEs and how common" in ~5KB rather
+ * than the full ~450KB nested structure.
+ */
+function topAdverseEvents(ae: Record<string, unknown>): TopAdverseEvent[] {
+  const collect = (events: unknown, kind: 'serious' | 'other'): TopAdverseEvent[] =>
+    Array.isArray(events)
+      ? (events as Array<Record<string, unknown>>).map((ev) => ({
+          term: (ev.term as string) ?? 'Unspecified',
+          organSystem: (ev.organSystem as string) ?? '',
+          kind,
+          ...aggregateEventStats(ev),
+        }))
+      : [];
+  return [...collect(ae.seriousEvents, 'serious'), ...collect(ae.otherEvents, 'other')]
+    .sort((a, b) => b.numAffected - a.numAffected)
+    .slice(0, TOP_EVENTS_LIMIT);
+}
+
+/** Condense the adverse events module to counts plus a ranked top-events view. */
 function summarizeAdverseEvents(ae: Record<string, unknown>) {
   const events = ae.eventGroups as Array<Record<string, unknown>> | undefined;
+  const topEvents = topAdverseEvents(ae);
   return {
     timeFrame: ae.timeFrame,
     groupCount: Array.isArray(events) ? events.length : undefined,
     seriousEventCount: Array.isArray(ae.seriousEvents) ? ae.seriousEvents.length : undefined,
     otherEventCount: Array.isArray(ae.otherEvents) ? ae.otherEvents.length : undefined,
+    ...(topEvents.length > 0 ? { topEvents } : {}),
   };
 }
 
@@ -216,7 +264,7 @@ function formatAdverseEvents(ae: RO, lines: string[]) {
   const serious = ae.seriousEvents as Array<RO> | undefined;
   const other = ae.otherEvents as Array<RO> | undefined;
 
-  // Summary shape — only counts, no event arrays
+  // Summary shape — counts plus the ranked top-events view, no raw event arrays
   if (!serious && !other) {
     const parts = [
       gm.size ? `${gm.size} groups` : '',
@@ -224,13 +272,23 @@ function formatAdverseEvents(ae: RO, lines: string[]) {
       ae.otherEventCount != null ? `${ae.otherEventCount} other events` : '',
     ].filter(Boolean);
     if (parts.length) lines.push(parts.join(' | '));
+    const topEvents = ae.topEvents as Array<RO> | undefined;
+    if (topEvents?.length) {
+      lines.push(`\n**Most frequent events** (top ${topEvents.length} by participants affected)`);
+      for (const ev of topEvents) {
+        const sys = ev.organSystem ? ` _(${ev.organSystem})_` : '';
+        lines.push(`- ${ev.term}${sys} — ${ev.numAffected}/${ev.numAtRisk} affected [${ev.kind}]`);
+      }
+    }
     return;
   }
 
   // Full shape — render actual events with per-group stats
+  // Render every event the handler returned — payload control is summary mode
+  // (which condenses per item), never a format()-side row cap (channel parity).
   const renderEvents = (label: string, events: RO[]) => {
     lines.push(`\n**${label}** (${events.length})`);
-    for (const ev of events.slice(0, 20)) {
+    for (const ev of events) {
       const stats = ev.stats as Array<RO> | undefined;
       const statStr = (stats ?? [])
         .map((s) => {
@@ -240,7 +298,6 @@ function formatAdverseEvents(ae: RO, lines: string[]) {
         .join(', ');
       lines.push(`- ${ev.term}${statStr ? ` — ${statStr}` : ''}`);
     }
-    if (events.length > 20) lines.push(`  ... and ${events.length - 20} more`);
   };
 
   if (serious?.length) renderEvents('Serious Events', serious);
@@ -306,18 +363,17 @@ function formatBaseline(bl: RO, lines: string[]) {
     !(firstMeasure.classes as Array<RO> | undefined)?.length
   ) {
     if (gm.size) lines.push(`${gm.size} groups`);
-    for (const m of measures.slice(0, 10)) {
+    for (const m of measures) {
       const unit = (m.unitOfMeasure as string) ? ` (${m.unitOfMeasure as string})` : '';
       lines.push(`- ${(m.title as string) ?? 'Measure'}${unit}`);
     }
-    if (measures.length > 10) lines.push(`... and ${measures.length - 10} more`);
     return;
   }
 
   // Full shape — render per-group values
   if (gm.size) lines.push(`Groups: ${[...gm.values()].map((g) => shortGroup(g)).join(', ')}`);
 
-  for (const m of (measures ?? []).slice(0, 15)) {
+  for (const m of measures ?? []) {
     const title = (m.title as string) ?? 'Measure';
     const unit = (m.unitOfMeasure as string) ? ` (${m.unitOfMeasure as string})` : '';
     const paramType = (m.paramType as string) ?? '';
@@ -345,7 +401,6 @@ function formatBaseline(bl: RO, lines: string[]) {
       }
     }
   }
-  if ((measures ?? []).length > 15) lines.push(`... and ${(measures ?? []).length - 15} more`);
 }
 
 export const getStudyResults = tool('clinicaltrials_get_study_results', {
@@ -416,7 +471,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
               .record(z.string(), z.unknown())
               .optional()
               .describe(
-                'Adverse events. Summary mode: timeFrame, groupCount, seriousEventCount, otherEventCount. Full mode: adds eventGroups, seriousEvents, otherEvents with per-event term and per-group affected/at-risk stats.',
+                'Adverse events. Summary mode: timeFrame, groupCount, seriousEventCount, otherEventCount, plus topEvents — the most frequent events ranked by participants affected, aggregated across arms (term, organSystem, kind, numAffected, numAtRisk). Full mode: adds eventGroups, seriousEvents, otherEvents with per-event term and per-group affected/at-risk stats.',
               ),
             participantFlow: z
               .record(z.string(), z.unknown())

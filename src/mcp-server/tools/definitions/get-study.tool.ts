@@ -103,6 +103,37 @@ function applyFilters(
   return { study: { ...study, protocolSection: nextPs }, meta };
 }
 
+interface ResultsSummary {
+  baselineMeasures?: number;
+  otherAdverseEvents?: number;
+  outcomeMeasures?: number;
+  participantFlowPeriods?: number;
+  seriousAdverseEvents?: number;
+}
+
+/**
+ * Compact counts of a study's posted results, computed before the heavy
+ * resultsSection is dropped from this record-level tool's payload. Returns
+ * undefined when the study has no posted results.
+ */
+function summarizeResults(study: RawStudyShape): ResultsSummary | undefined {
+  if (!study.hasResults || !study.resultsSection) return;
+  const rs = study.resultsSection;
+  const om = rs.outcomeMeasuresModule as { outcomeMeasures?: unknown[] } | undefined;
+  const ae = rs.adverseEventsModule as
+    | { otherEvents?: unknown[]; seriousEvents?: unknown[] }
+    | undefined;
+  const pf = rs.participantFlowModule as { periods?: unknown[] } | undefined;
+  const bl = rs.baselineCharacteristicsModule as { measures?: unknown[] } | undefined;
+  const summary: ResultsSummary = {};
+  if (om?.outcomeMeasures?.length) summary.outcomeMeasures = om.outcomeMeasures.length;
+  if (ae?.seriousEvents?.length) summary.seriousAdverseEvents = ae.seriousEvents.length;
+  if (ae?.otherEvents?.length) summary.otherAdverseEvents = ae.otherEvents.length;
+  if (pf?.periods?.length) summary.participantFlowPeriods = pf.periods.length;
+  if (bl?.measures?.length) summary.baselineMeasures = bl.measures.length;
+  return Object.keys(summary).length > 0 ? summary : undefined;
+}
+
 export const getStudy = tool('clinicaltrials_get_study_record', {
   description:
     'Fetch a single clinical trial study by NCT ID from ClinicalTrials.gov. Returns the full study record including protocol details, eligibility criteria, outcomes, arms, interventions, contacts, and locations. Optional locationLimit / outcomeLimit / nearLocation parameters trim locations and outcomes — original totals are preserved in `filtersApplied` whenever a cap is applied.',
@@ -166,7 +197,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     study: z
       .record(z.string(), z.unknown())
       .describe(
-        'Full study record with caller-requested filters already applied to locations and outcomes. Top-level keys: protocolSection (identification, status, sponsor, conditions, design, arms/interventions, outcomes, eligibility, contacts/locations), derivedSection (MeSH-normalized terms), hasResults, resultsSection, documentSection. Use clinicaltrials_get_field_definitions to explore the schema.',
+        'Full study record with caller-requested filters already applied to locations and outcomes. Top-level keys: protocolSection (identification, status, sponsor, conditions, design, arms/interventions, outcomes, eligibility, contacts/locations), derivedSection (MeSH-normalized terms), hasResults, documentSection. The heavy resultsSection is omitted — see resultsSummary for counts and clinicaltrials_get_study_results for full results data. Use clinicaltrials_get_field_definitions to explore the schema.',
       ),
     filtersApplied: z
       .object({
@@ -204,12 +235,41 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
           .describe('Echo of the nearLocation input.'),
       })
       .describe('Metadata about the filtering applied to `study`.'),
+    resultsSummary: z
+      .object({
+        outcomeMeasures: z.number().int().optional().describe('Posted outcome measures.'),
+        seriousAdverseEvents: z
+          .number()
+          .int()
+          .optional()
+          .describe('Distinct serious adverse-event terms.'),
+        otherAdverseEvents: z
+          .number()
+          .int()
+          .optional()
+          .describe('Distinct other (non-serious) adverse-event terms.'),
+        participantFlowPeriods: z.number().int().optional().describe('Participant-flow periods.'),
+        baselineMeasures: z.number().int().optional().describe('Baseline characteristic measures.'),
+      })
+      .optional()
+      .describe(
+        'Compact counts of posted results, present when hasResults is true. The full resultsSection is intentionally omitted from this record-level tool — fetch it via clinicaltrials_get_study_results or the clinicaltrials://{nctId} resource.',
+      ),
   }),
 
   async handler(input, ctx) {
     const service = getClinicalTrialsService();
     const raw = await service.getStudy(input.nctId, ctx);
     const { study, meta } = applyFilters(raw as RawStudyShape, input);
+
+    // Drop the heavy resultsSection (can exceed ~450KB) from this record-level
+    // tool — carry only compact counts so structuredContent and format() stay
+    // in parity. Full results live in clinicaltrials_get_study_results and the
+    // clinicaltrials://{nctId} resource.
+    const resultsSummary = summarizeResults(study);
+    const studyOut: Record<string, unknown> = { ...study };
+    delete studyOut.resultsSection;
+
     ctx.log.info('Study fetched', {
       nctId: input.nctId,
       locationLimit: input.locationLimit,
@@ -217,7 +277,8 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       nearLocation: input.nearLocation != null,
     });
     return {
-      study: study as Record<string, unknown>,
+      study: studyOut,
+      ...(resultsSummary ? { resultsSummary } : {}),
       filtersApplied: {
         ...meta,
         ...(input.locationLimit != null ? { locationLimit: input.locationLimit } : {}),
@@ -430,21 +491,21 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     if (outcomes.otherOutcomes?.length)
       renderOutcomeList('Other Outcomes', outcomes.otherOutcomes, meta.totalOtherOutcomes);
 
-    // Results summary stub — counts only; full data via clinicaltrials_get_study_results
-    if (s.hasResults && s.resultsSection) {
-      const rs = s.resultsSection;
-      const om = rs.outcomeMeasuresModule as { outcomeMeasures?: unknown[] } | undefined;
-      const ae = rs.adverseEventsModule as
-        | { otherEvents?: unknown[]; seriousEvents?: unknown[] }
-        | undefined;
-      const pf = rs.participantFlowModule as { periods?: unknown[] } | undefined;
-      const bl = rs.baselineCharacteristicsModule as { measures?: unknown[] } | undefined;
-      const aeCount = ae ? (ae.seriousEvents?.length ?? 0) + (ae.otherEvents?.length ?? 0) : 0;
+    // Results summary — compact counts mirrored from the resultsSummary output
+    // field (the heavy resultsSection is omitted from this tool). Renders every
+    // resultsSummary field so content[] and structuredContent stay in parity.
+    const rsum = result.resultsSummary;
+    if (rsum) {
       const parts = [
-        om?.outcomeMeasures?.length ? `${om.outcomeMeasures.length} outcome measures` : '',
-        aeCount ? `${aeCount} adverse events` : '',
-        pf?.periods?.length ? `${pf.periods.length} participant flow periods` : '',
-        bl?.measures?.length ? `${bl.measures.length} baseline measures` : '',
+        rsum.outcomeMeasures != null ? `${rsum.outcomeMeasures} outcome measures` : '',
+        rsum.seriousAdverseEvents != null
+          ? `${rsum.seriousAdverseEvents} serious adverse events`
+          : '',
+        rsum.otherAdverseEvents != null ? `${rsum.otherAdverseEvents} other adverse events` : '',
+        rsum.participantFlowPeriods != null
+          ? `${rsum.participantFlowPeriods} participant flow periods`
+          : '',
+        rsum.baselineMeasures != null ? `${rsum.baselineMeasures} baseline measures` : '',
       ].filter(Boolean);
       if (parts.length) {
         lines.push('');

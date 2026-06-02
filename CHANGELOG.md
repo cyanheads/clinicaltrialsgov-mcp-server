@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.5.5](changelog/2.5.x/2.5.5.md) — 2026-06-02
+
+adopt @cyanheads/mcp-ts-core 0.9.21: per-request log context fix, fetchWithTimeout secret scrubbing, withRetry fail-fast on non-retryable errors
+
 ## [2.5.4](changelog/2.5.x/2.5.4.md) — 2026-05-30
 
 get-study-results: drop unreachable ids_not_found contract; get-field-values: auto-correct RecruitmentStatus/RecruitingStatus to OverallStatus, ranking favors fields matched tokens cover more fully

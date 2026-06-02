@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** clinicaltrialsgov-mcp-server
-**Version:** 2.5.4
+**Version:** 2.5.5
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 
@@ -340,6 +340,7 @@ Available skills:
 | `report-issue-local`     | File a bug or feature request against this server's own repo via `gh` CLI                  |
 | `api-auth`               | Auth modes, scopes, JWT/OAuth                                                              |
 | `api-canvas`             | DataCanvas: register tabular data, run SQL, export, plus the `spillover()` helper for big result sets — Tier 3 opt-in |
+| `api-mirror`             | MirrorService: persistent SQLite-backed local mirror of a bulk upstream dataset — Tier 3 opt-in |
 | `api-config`             | AppConfig, parseConfig, env vars                                                           |
 | `api-context`            | Context interface, logger, state, progress                                                 |
 | `api-errors`             | McpError, JsonRpcErrorCode, error patterns, typed contracts                                |
@@ -349,6 +350,7 @@ Available skills:
 | `api-testing`            | createMockContext, test patterns                                                           |
 | `api-utils`              | Formatting, parsing, security, pagination, scheduling, telemetry helpers                   |
 | `api-workers`            | Cloudflare Workers runtime                                                                 |
+| `orchestrations`         | Chain task skills into a gated multi-phase pipeline — build-out, QA-fix, update-ship — when you can spawn sub-agents |
 
 When you complete a skill's checklist, check the boxes and add a completion timestamp at the end (e.g., `Completed: 2026-03-11`).
 

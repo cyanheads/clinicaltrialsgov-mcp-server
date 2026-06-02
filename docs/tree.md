@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-05-29 05:01:12
+Generated on: 2026-06-02 13:58:02
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -40,12 +40,14 @@ clinicaltrialsgov-mcp-server/
 │   ├── build.ts
 │   ├── check-docs-sync.ts
 │   ├── check-framework-antipatterns.ts
+│   ├── check-skill-versions.ts
 │   ├── check-skills-sync.ts
 │   ├── clean.ts
 │   ├── devcheck.ts
 │   ├── lint-mcp.ts
 │   ├── lint-packaging.ts
 │   ├── list-skills.ts
+│   ├── release-github.ts
 │   └── tree.ts
 ├── skills/
 │   ├── add-app-tool/
@@ -72,6 +74,8 @@ clinicaltrialsgov-mcp-server/
 │   │   └── SKILL.md
 │   ├── api-linter/
 │   │   └── SKILL.md
+│   ├── api-mirror/
+│   │   └── SKILL.md
 │   ├── api-services/
 │   │   ├── references/
 │   │   │   ├── graph.md
@@ -94,13 +98,18 @@ clinicaltrialsgov-mcp-server/
 │   │   └── SKILL.md
 │   ├── design-mcp-server/
 │   │   └── SKILL.md
-│   ├── devcheck/
-│   │   └── SKILL.md
 │   ├── field-test/
 │   │   └── SKILL.md
 │   ├── git-wrapup/
 │   │   └── SKILL.md
 │   ├── maintenance/
+│   │   └── SKILL.md
+│   ├── orchestrations/
+│   │   ├── workflows/
+│   │   │   ├── field-test-fix.md
+│   │   │   ├── fix-wrapup-release.md
+│   │   │   ├── greenfield-build.md
+│   │   │   └── maintenance-release.md
 │   │   └── SKILL.md
 │   ├── polish-docs-meta/
 │   │   ├── references/
@@ -176,12 +185,15 @@ clinicaltrialsgov-mcp-server/
 │   │       │   ├── get-study.tool.test.ts
 │   │       │   ├── search-studies.fuzz.test.ts
 │   │       │   └── search-studies.tool.test.ts
-│   │       └── utils/
-│   │           ├── format-helpers.test.ts
-│   │           └── query-helpers.test.ts
+│   │       ├── utils/
+│   │       │   ├── format-helpers.test.ts
+│   │       │   ├── query-helpers.test.ts
+│   │       │   └── utils-shared.test.ts
+│   │       └── security.test.ts
 │   └── services/
 │       └── clinical-trials/
-│           └── clinical-trials-service.test.ts
+│           ├── clinical-trials-service.test.ts
+│           └── field-search.test.ts
 ├── .dockerignore
 ├── .env.example
 ├── .gitignore

@@ -1,7 +1,7 @@
 {
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "2.5.2",
-  "description": "MCP server for the ClinicalTrials.gov v2 API. Search trials, retrieve study details and results, and match patients to eligible trials.",
+  "version": "2.5.5",
+  "description": "Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to eligible trials via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads",
     "email": "casey@caseyjhand.com",
@@ -14,7 +14,7 @@
   "mcpServers": "./.codex-plugin/mcp.json",
   "interface": {
     "displayName": "clinicaltrialsgov-mcp-server",
-    "shortDescription": "MCP server for the ClinicalTrials.gov v2 API — search trials, retrieve study details and results, and match patients to eligible trials.",
+    "shortDescription": "Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to eligible trials.",
     "longDescription": "",
     "developerName": "cyanheads",
     "category": "",

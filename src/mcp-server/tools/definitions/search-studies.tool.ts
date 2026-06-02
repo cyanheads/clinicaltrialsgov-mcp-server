@@ -48,6 +48,12 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       recovery: RECOVERY_HINTS.field_invalid,
     },
     {
+      reason: 'enum_invalid',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'statusFilter or phaseFilter contains a value ClinicalTrials.gov does not accept.',
+      recovery: RECOVERY_HINTS.enum_invalid,
+    },
+    {
       reason: 'query_parse_error',
       code: JsonRpcErrorCode.ValidationError,
       when: 'A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a reserved character ([, ], (, ), or comma) in a query/conditionQuery/etc. value.',
@@ -196,7 +202,9 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     searchCriteria: z
       .record(z.string(), z.unknown())
       .optional()
-      .describe('Echo of active query/filter criteria. Present when results are empty.'),
+      .describe(
+        'Echo of active query/filter criteria applied to this search, including sentinelFilterActive when the default unknown-enrollment exclusion is in effect. Present on every response.',
+      ),
     notice: z
       .string()
       .optional()
@@ -246,22 +254,29 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       totalCount: result.totalCount,
     });
 
-    // Echo search criteria and recovery guidance on empty results
-    if (result.studies.length === 0) {
-      const criteria: Record<string, unknown> = {};
-      if (input.query) criteria.query = input.query;
-      if (input.conditionQuery) criteria.conditionQuery = input.conditionQuery;
-      if (input.interventionQuery) criteria.interventionQuery = input.interventionQuery;
-      if (input.locationQuery) criteria.locationQuery = input.locationQuery;
-      if (input.sponsorQuery) criteria.sponsorQuery = input.sponsorQuery;
-      if (input.titleQuery) criteria.titleQuery = input.titleQuery;
-      if (input.outcomeQuery) criteria.outcomeQuery = input.outcomeQuery;
-      if (input.statusFilter) criteria.statusFilter = input.statusFilter;
-      if (input.phaseFilter) criteria.phaseFilter = input.phaseFilter;
-      if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
-      if (input.geoFilter) criteria.geoFilter = input.geoFilter;
-      if (input.nctIds) criteria.nctIds = input.nctIds;
+    // Echo the applied search criteria on every response (not only empty ones)
+    // so agents can confirm which filters were actually in effect when a result
+    // set is smaller than expected. sentinelFilterActive flags the default
+    // unknown-enrollment exclusion, which silently drops EnrollmentCount=99999999
+    // studies from RANGE/EnrollmentCount:desc queries.
+    const criteria: Record<string, unknown> = {};
+    if (input.query) criteria.query = input.query;
+    if (input.conditionQuery) criteria.conditionQuery = input.conditionQuery;
+    if (input.interventionQuery) criteria.interventionQuery = input.interventionQuery;
+    if (input.locationQuery) criteria.locationQuery = input.locationQuery;
+    if (input.sponsorQuery) criteria.sponsorQuery = input.sponsorQuery;
+    if (input.titleQuery) criteria.titleQuery = input.titleQuery;
+    if (input.outcomeQuery) criteria.outcomeQuery = input.outcomeQuery;
+    if (input.statusFilter) criteria.statusFilter = input.statusFilter;
+    if (input.phaseFilter) criteria.phaseFilter = input.phaseFilter;
+    if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
+    if (input.geoFilter) criteria.geoFilter = input.geoFilter;
+    if (input.nctIds) criteria.nctIds = input.nctIds;
+    if (!input.includeUnknownEnrollment) criteria.sentinelFilterActive = true;
+    if (Object.keys(criteria).length > 0) ctx.enrich({ searchCriteria: criteria });
 
+    // Recovery guidance only when nothing matched.
+    if (result.studies.length === 0) {
       const hasQuery =
         input.query ||
         input.conditionQuery ||
@@ -287,7 +302,6 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         );
       if (input.phaseFilter) noticeParts.push('Remove phaseFilter to include all trial phases.');
 
-      if (Object.keys(criteria).length > 0) ctx.enrich({ searchCriteria: criteria });
       if (noticeParts.length > 0) ctx.enrich.notice(noticeParts.join(' '));
     }
 

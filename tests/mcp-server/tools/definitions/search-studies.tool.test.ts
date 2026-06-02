@@ -203,6 +203,7 @@ describe('searchStudies', () => {
       expect(enrichment.searchCriteria).toEqual({
         conditionQuery: 'rare disease',
         statusFilter: 'RECRUITING',
+        sentinelFilterActive: true,
       });
     });
 
@@ -248,7 +249,7 @@ describe('searchStudies', () => {
       expect(enrichment.notice).toContain('broadening filters');
     });
 
-    it('omits searchCriteria enrichment when results exist', async () => {
+    it('echoes searchCriteria enrichment when results exist (regression for #58)', async () => {
       mockService.searchStudies.mockResolvedValue({
         studies: [{ nctId: 'NCT12345678' }],
         totalCount: 1,
@@ -257,8 +258,26 @@ describe('searchStudies', () => {
       await searchStudies.handler(searchStudies.input!.parse({ conditionQuery: 'diabetes' }), ctx);
 
       const enrichment = getEnrichment(ctx);
-      expect(enrichment.searchCriteria).toBeUndefined();
+      expect(enrichment.searchCriteria).toEqual({
+        conditionQuery: 'diabetes',
+        sentinelFilterActive: true,
+      });
       expect(enrichment.notice).toBeUndefined();
+    });
+
+    it('omits sentinelFilterActive when includeUnknownEnrollment=true (#58)', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [{ nctId: 'NCT12345678' }],
+        totalCount: 1,
+      });
+      const ctx = createMockContext();
+      await searchStudies.handler(
+        searchStudies.input!.parse({ conditionQuery: 'diabetes', includeUnknownEnrollment: true }),
+        ctx,
+      );
+
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.searchCriteria).toEqual({ conditionQuery: 'diabetes' });
     });
 
     it('passes nextPageToken through', async () => {

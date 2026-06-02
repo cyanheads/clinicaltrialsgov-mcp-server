@@ -76,7 +76,10 @@ describe('getStudyCount', () => {
         query: 'test',
         conditionQuery: 'cancer',
         interventionQuery: 'chemo',
+        locationQuery: 'Seattle',
         sponsorQuery: 'NIH',
+        titleQuery: 'phase 3',
+        outcomeQuery: 'survival',
         statusFilter: 'RECRUITING',
         phaseFilter: 'PHASE3',
         advancedFilter: 'AREA[StudyType]INTERVENTIONAL',
@@ -88,7 +91,10 @@ describe('getStudyCount', () => {
         query: 'test',
         conditionQuery: 'cancer',
         interventionQuery: 'chemo',
+        locationQuery: 'Seattle',
         sponsorQuery: 'NIH',
+        titleQuery: 'phase 3',
+        outcomeQuery: 'survival',
         statusFilter: 'RECRUITING',
         phaseFilter: 'PHASE3',
         advancedFilter: 'AREA[StudyType]INTERVENTIONAL',
@@ -115,6 +121,28 @@ describe('getStudyCount', () => {
       expect(mockService.searchStudies).toHaveBeenCalledWith(
         expect.objectContaining({
           filterAdvanced: '(AREA[Phase]PHASE1 OR AREA[Phase]PHASE2)',
+        }),
+        ctx,
+      );
+    });
+
+    it('forwards locationQuery, titleQuery, outcomeQuery to service (#59)', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 3 });
+      const ctx = createMockContext();
+      await getStudyCount.handler(
+        getStudyCount.input!.parse({
+          locationQuery: 'Boston',
+          titleQuery: 'vaccine',
+          outcomeQuery: 'mortality',
+        }),
+        ctx,
+      );
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          queryLocn: 'Boston',
+          queryTitles: 'vaccine',
+          queryOutc: 'mortality',
         }),
         ctx,
       );

@@ -227,7 +227,10 @@ Use for quick statistics or to build breakdowns by calling multiple times with d
 | `query`             | `string?`             | General full-text search.          |
 | `conditionQuery`    | `string?`             | Condition/disease search.          |
 | `interventionQuery` | `string?`             | Intervention/treatment search.     |
+| `locationQuery`     | `string?`             | Location search (city/state/country/facility). Maps to `query.locn`. |
 | `sponsorQuery`      | `string?`             | Sponsor search.                    |
+| `titleQuery`        | `string?`             | Search within study titles/acronyms. Maps to `query.titles`. |
+| `outcomeQuery`      | `string?`             | Search within outcome measures. Maps to `query.outc`. |
 | `statusFilter`      | `string \| string[]?` | Filter by study status.            |
 | `phaseFilter`       | `string \| string[]?` | Filter by phase.                   |
 | `advancedFilter`    | `string?`             | Advanced AREA[] filter expression. |

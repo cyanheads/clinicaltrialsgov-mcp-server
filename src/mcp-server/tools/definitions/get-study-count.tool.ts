@@ -25,6 +25,12 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       recovery: RECOVERY_HINTS.field_invalid,
     },
     {
+      reason: 'enum_invalid',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'statusFilter or phaseFilter contains a value ClinicalTrials.gov does not accept.',
+      recovery: RECOVERY_HINTS.enum_invalid,
+    },
+    {
       reason: 'query_parse_error',
       code: JsonRpcErrorCode.ValidationError,
       when: 'A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a reserved character ([, ], (, ), or comma) in a query/conditionQuery/etc. value.',
@@ -58,11 +64,29 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       .describe(
         'Intervention/treatment search. E.g., "pembrolizumab", "cognitive behavioral therapy". Plain words plus AND/OR/NOT only — reserved chars: [ ] ( ) ,',
       ),
+    locationQuery: z
+      .string()
+      .optional()
+      .describe(
+        'Location search — city, state, country, or facility name. Plain words plus AND/OR/NOT only — reserved chars: [ ] ( ) ,',
+      ),
     sponsorQuery: z
       .string()
       .optional()
       .describe(
         'Sponsor/collaborator name search. Plain words plus AND/OR/NOT only — reserved chars: [ ] ( ) ,',
+      ),
+    titleQuery: z
+      .string()
+      .optional()
+      .describe(
+        'Search within study titles and acronyms only. Plain words plus AND/OR/NOT only — reserved chars: [ ] ( ) ,',
+      ),
+    outcomeQuery: z
+      .string()
+      .optional()
+      .describe(
+        'Search within outcome measure fields. Plain words plus AND/OR/NOT only — reserved chars: [ ] ( ) ,',
       ),
     statusFilter: z
       .union([
@@ -131,7 +155,10 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
         queryTerm: input.query,
         queryCond: input.conditionQuery,
         queryIntr: input.interventionQuery,
+        queryLocn: input.locationQuery,
         querySpons: input.sponsorQuery,
+        queryTitles: input.titleQuery,
+        queryOutc: input.outcomeQuery,
         filterOverallStatus: toArray(input.statusFilter),
         filterAdvanced: buildAdvancedFilter(toArray(input.phaseFilter), input.advancedFilter),
         countTotal: true,
@@ -147,7 +174,10 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     if (input.query) criteria.query = input.query;
     if (input.conditionQuery) criteria.conditionQuery = input.conditionQuery;
     if (input.interventionQuery) criteria.interventionQuery = input.interventionQuery;
+    if (input.locationQuery) criteria.locationQuery = input.locationQuery;
     if (input.sponsorQuery) criteria.sponsorQuery = input.sponsorQuery;
+    if (input.titleQuery) criteria.titleQuery = input.titleQuery;
+    if (input.outcomeQuery) criteria.outcomeQuery = input.outcomeQuery;
     if (input.statusFilter) criteria.statusFilter = input.statusFilter;
     if (input.phaseFilter) criteria.phaseFilter = input.phaseFilter;
     if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;

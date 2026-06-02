@@ -750,6 +750,13 @@ describe('ClinicalTrialsService', () => {
         recovery: 'Call the field-definitions tool to browse valid PascalCase piece names instead.',
       },
       {
+        reason: 'enum_invalid' as const,
+        code: JsonRpcErrorCode.ValidationError,
+        when: 'statusFilter or phaseFilter value not accepted.',
+        recovery:
+          'Call clinicaltrials_get_field_values with fields=["OverallStatus"] to see valid values.',
+      },
+      {
         reason: 'rate_limited' as const,
         code: JsonRpcErrorCode.RateLimited,
         when: 'Rate limited after retries.',
@@ -830,6 +837,25 @@ describe('ClinicalTrialsService', () => {
         const data = (err as McpError).data as Record<string, unknown> | undefined;
         expect(data?.reason).toBe('field_invalid');
         expect((data?.recovery as { hint?: string } | undefined)?.hint).toBeTruthy();
+      }
+    });
+
+    it('attaches reason=enum_invalid + param/value/recovery on a 400 invalid status value (#57)', async () => {
+      mockFetch.mockResolvedValue(
+        textResponse('Invalid value in parameter `overallStatus`: `BADSTATUS`'),
+      );
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies({ filterOverallStatus: ['BADSTATUS'] }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        expect((err as McpError).code).toBe(JsonRpcErrorCode.ValidationError);
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('enum_invalid');
+        expect(data?.param).toBe('statusFilter');
+        expect(data?.value).toBe('BADSTATUS');
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain('OverallStatus');
       }
     });
 

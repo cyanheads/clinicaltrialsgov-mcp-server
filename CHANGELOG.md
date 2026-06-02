@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.6.1](changelog/2.6.x/2.6.1.md) — 2026-06-02
+
+get_study_results gains moreInfo section — limitations & caveats, certain-agreement restrictions, results point of contact
+
 ## [2.6.0](changelog/2.6.x/2.6.0.md) — 2026-06-02 · ⚠️ Breaking
 
 typed enum_invalid contract on search/count tools, always-on searchCriteria echo, get_study_count query parity, topEvents in summary mode, channel parity for results and record

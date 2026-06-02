@@ -7,7 +7,7 @@
 | Name                               | Description                                                                                                                                                       | Key Inputs                                                                                                                                                                               | Annotations                                       |
 | :--------------------------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :------------------------------------------------ |
 | `clinicaltrials_search_studies`    | Search for clinical trial studies using queries, filters, pagination, and field selection.                                                                        | `query`, `conditionQuery`, `interventionQuery`, `locationQuery`, `sponsorQuery`, `statusFilter`, `phaseFilter`, `advancedFilter`, `geoFilter`, `sort`, `fields`, `pageSize`, `pageToken` | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
-| `clinicaltrials_get_study_results` | Extract outcomes, adverse events, participant flow, and baseline characteristics for completed studies with results.                                              | `nctIds`, `sections`                                                                                                                                                                     | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
+| `clinicaltrials_get_study_results` | Extract outcomes, adverse events, participant flow, baseline characteristics, and results metadata for completed studies with results.                            | `nctIds`, `sections`, `summary`                                                                                                                                                          | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_get_field_values`  | Discover valid values for any ClinicalTrials.gov field with study counts per value. Use before constructing searches to find valid filter options.                | `fields`                                                                                                                                                                                 | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_get_study_count`   | Get total study count matching a query without fetching study data. Use for quick stats and building breakdowns by calling multiple times with different filters. | `query`, `conditionQuery`, `interventionQuery`, `statusFilter`, `phaseFilter`, `advancedFilter`                                                                                          | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_get_field_definitions` | Get field definitions from the study data model — piece names, types, nesting. For discovering available fields and AREA[] filter targets.                   | `path`, `includeIndexedOnly`                                                                                                                                                             | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
@@ -120,8 +120,9 @@ hasResults is true. Use search_studies first to find studies with results.
 
 | Parameter  | Type                  | Description                                                                                                                 |
 | :--------- | :-------------------- | :-------------------------------------------------------------------------------------------------------------------------- |
-| `nctIds`   | `string \| string[]`  | One or more NCT IDs (max 5). E.g., `"NCT12345678"` or `["NCT12345678", "NCT87654321"]`.                                     |
-| `sections` | `string \| string[]?` | Filter which sections to return. Values: `outcomes`, `adverseEvents`, `participantFlow`, `baseline`. Omit for all sections. |
+| `nctIds`   | `string \| string[]`  | One or more NCT IDs (max 20). E.g., `"NCT12345678"` or `["NCT12345678", "NCT87654321"]`.                                                |
+| `sections` | `string \| string[]?` | Filter which sections to return. Values: `outcomes`, `adverseEvents`, `participantFlow`, `baseline`, `moreInfo`. Omit for all sections. |
+| `summary`  | `boolean?`            | Return condensed summaries (~5KB) instead of full data (~200KB). Default: `false`.                                                     |
 
 **Output schema:**
 
@@ -612,7 +613,7 @@ See [docs/api-reference.md](api-reference.md) for the complete ClinicalTrials.go
 ### Tool: `clinicaltrials_get_study_results`
 
 - [ ] `src/mcp-server/tools/definitions/get-study-results.tool.ts`
-- [ ] Input schema: `nctIds` (1-5), `sections` filter
+- [ ] Input schema: `nctIds` (1-20), `sections` filter
 - [ ] Output schema: `results[]`, `studiesWithoutResults`, `fetchErrors`
 - [ ] Handler: concurrent fetch via service, extract resultsSection, reshape
 - [ ] Partial success: individual failures in `fetchErrors`, throw only if all fail

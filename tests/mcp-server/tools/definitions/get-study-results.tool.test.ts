@@ -90,6 +90,14 @@ describe('getStudyResults', () => {
       ).toThrow();
     });
 
+    it('accepts the moreInfo section', () => {
+      const input = getStudyResults.input!.parse({
+        nctIds: 'NCT12345678',
+        sections: 'moreInfo',
+      });
+      expect(input.sections).toBe('moreInfo');
+    });
+
     it('defaults summary to false', () => {
       const input = getStudyResults.input!.parse({ nctIds: 'NCT12345678' });
       expect(input.summary).toBe(false);
@@ -368,6 +376,78 @@ describe('getStudyResults', () => {
 
       expect(bl.groupCount).toBe(1);
       expect(bl.measureCount).toBe(2);
+    });
+
+    it('summarizes moreInfo in summary mode — keeps flags + contact, drops otherDetails (#64)', async () => {
+      const study = makeStudy('NCT02130466', true, {
+        moreInfoModule: {
+          limitationsAndCaveats: { description: 'Open-label extension.' },
+          certainAgreement: {
+            piSponsorEmployee: false,
+            restrictiveAgreement: true,
+            restrictionType: 'OTHER',
+            otherDetails: 'Sponsor reviews abstracts 45 days prior to submission.',
+          },
+          pointOfContact: {
+            title: 'SVP, Global Clinical Development',
+            organization: 'Acme Pharma',
+            email: 'disclosure@example.com',
+            phone: '1-800-000-0000',
+          },
+        },
+      });
+      mockService.getStudiesBatch.mockResolvedValue([study]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input!.parse({
+        nctIds: 'NCT02130466',
+        sections: 'moreInfo',
+        summary: true,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      const mi = result.results[0]!.moreInfo!;
+      const agreement = mi.certainAgreement as Record<string, unknown>;
+
+      expect(mi.limitationsAndCaveats).toEqual({ description: 'Open-label extension.' });
+      expect(agreement.restrictiveAgreement).toBe(true);
+      expect(agreement.restrictionType).toBe('OTHER');
+      expect(agreement.piSponsorEmployee).toBe(false);
+      // Verbose prose dropped in summary mode.
+      expect(agreement.otherDetails).toBeUndefined();
+      expect(mi.pointOfContact).toBeDefined();
+    });
+
+    it('returns full moreInfo in non-summary mode, including otherDetails (#64)', async () => {
+      const study = makeStudy('NCT02130466', true, {
+        moreInfoModule: {
+          certainAgreement: { restrictiveAgreement: true, otherDetails: 'Full agreement text.' },
+          pointOfContact: { title: 'Contact', email: 'x@example.com' },
+        },
+      });
+      mockService.getStudiesBatch.mockResolvedValue([study]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input!.parse({
+        nctIds: 'NCT02130466',
+        sections: 'moreInfo',
+        summary: false,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      const agreement = result.results[0]!.moreInfo!.certainAgreement as Record<string, unknown>;
+      expect(agreement.otherDetails).toBe('Full agreement text.');
+    });
+
+    it('includes moreInfo among the default (all) sections (#64)', async () => {
+      const study = makeStudy('NCT02130466', true, {
+        outcomeMeasuresModule: { outcomeMeasures: [{ title: 'X' }] },
+        moreInfoModule: { pointOfContact: { email: 'x@example.com' } },
+      });
+      mockService.getStudiesBatch.mockResolvedValue([study]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input!.parse({ nctIds: 'NCT02130466' });
+      const result = await getStudyResults.handler(input, ctx);
+      expect(result.results[0]!.moreInfo).toBeDefined();
     });
 
     it('lifts topAnalysis (p-value, CI, method) into summary mode when analyses present', async () => {
@@ -797,6 +877,30 @@ describe('getStudyResults', () => {
       const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('Baseline');
       expect(text).toContain('Age');
+    });
+
+    it('renders the moreInfo section — limitations, agreement, contact (#64)', () => {
+      const blocks = getStudyResults.format!({
+        results: [
+          {
+            nctId: 'NCT02130466',
+            title: 'MoreInfo Study',
+            hasResults: true,
+            moreInfo: {
+              limitationsAndCaveats: { description: 'Open-label extension.' },
+              certainAgreement: { restrictiveAgreement: true, restrictionType: 'OTHER' },
+              pointOfContact: { title: 'SVP', organization: 'Acme', email: 'x@example.com' },
+            },
+          },
+        ],
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('More Info');
+      expect(text).toContain('Limitations & Caveats:');
+      expect(text).toContain('Open-label extension.');
+      expect(text).toContain('Certain Agreement:');
+      expect(text).toContain('Point of Contact:');
+      expect(text).toContain('x@example.com');
     });
 
     it('renders fetch errors', () => {

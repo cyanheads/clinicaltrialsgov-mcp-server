@@ -1,5 +1,5 @@
 /**
- * @fileoverview Extract outcomes, adverse events, participant flow, and baseline from completed studies.
+ * @fileoverview Extract outcomes, adverse events, participant flow, baseline, and results metadata from completed studies.
  * @module mcp-server/tools/definitions/get-study-results.tool
  */
 
@@ -10,7 +10,13 @@ import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
-const VALID_SECTIONS = ['outcomes', 'adverseEvents', 'participantFlow', 'baseline'] as const;
+const VALID_SECTIONS = [
+  'outcomes',
+  'adverseEvents',
+  'participantFlow',
+  'baseline',
+  'moreInfo',
+] as const;
 type Section = (typeof VALID_SECTIONS)[number];
 
 /** Map section names to resultsSection module keys. */
@@ -19,6 +25,7 @@ const SECTION_MAP: Record<Section, string> = {
   adverseEvents: 'adverseEventsModule',
   participantFlow: 'participantFlowModule',
   baseline: 'baselineCharacteristicsModule',
+  moreInfo: 'moreInfoModule',
 };
 
 /**
@@ -177,6 +184,27 @@ function summarizeBaseline(bl: Record<string, unknown>) {
           unitOfMeasure: m.unitOfMeasure,
         }))
       : undefined,
+  };
+}
+
+/**
+ * Condense the more-info module — keep the small metadata (limitations, contact,
+ * agreement flags) and drop only the verbose `certainAgreement.otherDetails` prose.
+ */
+function summarizeMoreInfo(mi: Record<string, unknown>) {
+  const agreement = mi.certainAgreement as Record<string, unknown> | undefined;
+  return {
+    ...(mi.limitationsAndCaveats ? { limitationsAndCaveats: mi.limitationsAndCaveats } : {}),
+    ...(agreement
+      ? {
+          certainAgreement: {
+            piSponsorEmployee: agreement.piSponsorEmployee,
+            restrictiveAgreement: agreement.restrictiveAgreement,
+            restrictionType: agreement.restrictionType,
+          },
+        }
+      : {}),
+    ...(mi.pointOfContact ? { pointOfContact: mi.pointOfContact } : {}),
   };
 }
 
@@ -403,8 +431,36 @@ function formatBaseline(bl: RO, lines: string[]) {
   }
 }
 
+function formatMoreInfo(mi: RO, lines: string[]) {
+  // Header is unconditional, matching the sibling section renderers — keeps the
+  // section visible on the content[] channel for format-parity, whose synthetic
+  // sample for an opaque record carries none of the named sub-keys below.
+  lines.push('\n### More Info');
+  const lim = mi.limitationsAndCaveats as { description?: string } | undefined;
+  const agr = mi.certainAgreement as RO | undefined;
+  const poc = mi.pointOfContact as RO | undefined;
+  if (lim?.description) lines.push(`**Limitations & Caveats:** ${lim.description}`);
+  if (agr) {
+    const parts = [
+      agr.restrictiveAgreement != null
+        ? `Restrictive agreement: ${agr.restrictiveAgreement ? 'yes' : 'no'}`
+        : '',
+      agr.restrictionType ? `Type: ${agr.restrictionType as string}` : '',
+      agr.piSponsorEmployee != null
+        ? `PI is sponsor employee: ${agr.piSponsorEmployee ? 'yes' : 'no'}`
+        : '',
+    ].filter(Boolean);
+    if (parts.length) lines.push(`**Certain Agreement:** ${parts.join(' | ')}`);
+    if (agr.otherDetails) lines.push(`  ${agr.otherDetails as string}`);
+  }
+  if (poc) {
+    const parts = [poc.title, poc.organization, poc.email, poc.phone].filter(Boolean);
+    if (parts.length) lines.push(`**Point of Contact:** ${parts.join(' | ')}`);
+  }
+}
+
 export const getStudyResults = tool('clinicaltrials_get_study_results', {
-  description: `Fetch clinical trial results data from ClinicalTrials.gov for completed studies — outcome measures with statistics, adverse events, participant flow, and baseline characteristics. Only available for studies where hasResults is true. Use clinicaltrials_search_studies first to find studies with results.`,
+  description: `Fetch clinical trial results data from ClinicalTrials.gov for completed studies — outcome measures with statistics, adverse events, participant flow, baseline characteristics, and results metadata (limitations & caveats, certain-agreement disclosure restrictions, results point of contact). Only available for studies where hasResults is true. Use clinicaltrials_search_studies first to find studies with results.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -443,7 +499,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       ])
       .optional()
       .describe(
-        `Filter which sections to return. Values: outcomes, adverseEvents, participantFlow, baseline. Omit for all sections.`,
+        `Filter which sections to return. Values: outcomes, adverseEvents, participantFlow, baseline, moreInfo. Omit for all sections.`,
       ),
     summary: z
       .boolean()
@@ -485,6 +541,12 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
               .describe(
                 'Baseline characteristics. Summary mode: groupCount, measureCount, and measures (title, paramType, unitOfMeasure). Full mode: adds groups and measures with per-group classes/categories/measurements.',
               ),
+            moreInfo: z
+              .record(z.string(), z.unknown())
+              .optional()
+              .describe(
+                'Results metadata from moreInfoModule. Summary mode: limitationsAndCaveats, certainAgreement flags (piSponsorEmployee, restrictiveAgreement, restrictionType), and pointOfContact. Full mode: adds certainAgreement.otherDetails.',
+              ),
           })
           .describe('Extracted results for one study.'),
       )
@@ -518,6 +580,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       adverseEvents?: Record<string, unknown>;
       baseline?: Record<string, unknown>;
       hasResults: boolean;
+      moreInfo?: Record<string, unknown>;
       nctId: string;
       outcomes?: Record<string, unknown>[];
       participantFlow?: Record<string, unknown>;
@@ -592,6 +655,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
             else if (section === 'participantFlow')
               entry.participantFlow = summarizeParticipantFlow(data);
             else if (section === 'baseline') entry.baseline = summarizeBaseline(data);
+            else if (section === 'moreInfo') entry.moreInfo = summarizeMoreInfo(data);
           } else {
             entry[section] = data;
           }
@@ -627,6 +691,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       if (r.adverseEvents) formatAdverseEvents(r.adverseEvents, lines);
       if (r.participantFlow) formatParticipantFlow(r.participantFlow, lines);
       if (r.baseline) formatBaseline(r.baseline, lines);
+      if (r.moreInfo) formatMoreInfo(r.moreInfo, lines);
       lines.push('');
     }
 

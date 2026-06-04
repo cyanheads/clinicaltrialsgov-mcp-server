@@ -5,10 +5,13 @@
  */
 
 import { createApp } from '@cyanheads/mcp-ts-core';
+import { schedulerService } from '@cyanheads/mcp-ts-core/utils';
+import { getMirrorConfig } from './config/server-config.js';
 import { allPromptDefinitions } from './mcp-server/prompts/definitions/index.js';
 import { allResourceDefinitions } from './mcp-server/resources/definitions/index.js';
 import { allToolDefinitions } from './mcp-server/tools/definitions/index.js';
 import { initClinicalTrialsService } from './services/clinical-trials/clinical-trials-service.js';
+import { getClinicalTrialsMirror, initMirror } from './services/clinical-trials/mirror/index.js';
 
 await createApp({
   tools: allToolDefinitions,
@@ -18,7 +21,30 @@ await createApp({
   landing: {
     requireAuth: false,
   },
-  setup() {
+  async setup({ config }) {
     initClinicalTrialsService();
+
+    const mirrorConfig = getMirrorConfig();
+    if (mirrorConfig.enabled) {
+      initMirror(mirrorConfig);
+
+      // Schedule incremental refresh on HTTP transport only — stdio operators
+      // run the server per-request and don't benefit from a persistent cron.
+      // The full init must be run out-of-band (bootstrap script, CLI, or manual runSync).
+      if (config.mcpTransportType === 'http') {
+        const mirror = getClinicalTrialsMirror();
+        if (mirror) {
+          await schedulerService.schedule(
+            'ct-mirror-refresh',
+            mirrorConfig.refreshCron,
+            async (_ctx) => {
+              await mirror.runSync({ mode: 'refresh' });
+            },
+            'Incremental ClinicalTrials.gov mirror refresh',
+          );
+          schedulerService.start('ct-mirror-refresh');
+        }
+      }
+    }
   },
 });

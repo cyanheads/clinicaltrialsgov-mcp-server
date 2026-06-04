@@ -15,6 +15,6 @@
     "ignorePatterns": []
   },
   "outdated": {
-    "allowlist": ["@cyanheads/mcp-ts-core"]
+    "allowlist": ["@cyanheads/mcp-ts-core", "@cloudflare/workers-types"]
   }
 }

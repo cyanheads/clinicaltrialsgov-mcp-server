@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-06-02 18:33:59
+Generated on: 2026-06-04 06:35:24
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -160,6 +160,10 @@ clinicaltrialsgov-mcp-server/
 │   │           └── recovery-hints.ts
 │   ├── services/
 │   │   └── clinical-trials/
+│   │       ├── mirror/
+│   │       │   ├── index.ts
+│   │       │   ├── ingester.ts
+│   │       │   └── types.ts
 │   │       ├── clinical-trials-service.ts
 │   │       ├── field-search.ts
 │   │       └── types.ts
@@ -193,6 +197,8 @@ clinicaltrialsgov-mcp-server/
 │   │       └── security.test.ts
 │   └── services/
 │       └── clinical-trials/
+│           ├── mirror/
+│           │   └── mirror.test.ts
 │           ├── clinical-trials-service.test.ts
 │           └── field-search.test.ts
 ├── .dockerignore

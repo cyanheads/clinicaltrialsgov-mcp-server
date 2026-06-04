@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.6.2](changelog/2.6.x/2.6.2.md) — 2026-06-04
+
+Opt-in local SQLite mirror for offline study search and count (CT_MIRROR_* env vars)
+
 ## [2.6.1](changelog/2.6.x/2.6.1.md) — 2026-06-02
 
 get_study_results gains moreInfo section — limitations & caveats, certain-agreement restrictions, results point of contact

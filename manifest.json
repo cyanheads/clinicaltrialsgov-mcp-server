@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "2.6.1",
+  "version": "2.6.2",
   "description": "Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to eligible trials via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads"
@@ -60,6 +60,34 @@
       "type": "string",
       "required": false,
       "default": "info"
+    },
+    "CT_MIRROR_ENABLED": {
+      "title": "Enable local study mirror",
+      "description": "Set to true to activate a self-refreshing SQLite+FTS5 local mirror of the study corpus.",
+      "type": "string",
+      "required": false,
+      "default": "false"
+    },
+    "CT_MIRROR_PATH": {
+      "title": "Mirror database path",
+      "description": "Filesystem path for the mirror SQLite database.",
+      "type": "string",
+      "required": false,
+      "default": "./clinical-trials-mirror.db"
+    },
+    "CT_MIRROR_REFRESH_CRON": {
+      "title": "Mirror refresh cron",
+      "description": "Cron expression for incremental mirror refresh (default: 3 AM daily).",
+      "type": "string",
+      "required": false,
+      "default": "0 3 * * *"
+    },
+    "CT_MIRROR_FALLBACK_LIVE": {
+      "title": "Fallback to live API",
+      "description": "Fall back to the live API when the mirror is not yet bootstrapped.",
+      "type": "string",
+      "required": false,
+      "default": "true"
     }
   }
 }

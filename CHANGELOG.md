@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.6.3](changelog/2.6.x/2.6.3.md) — 2026-06-04
+
+node-cron declared as direct dep; CT_MIRROR_ENABLED and CT_MIRROR_FALLBACK_LIVE now parse z.stringbool() so \"false\" disables correctly
+
 ## [2.6.2](changelog/2.6.x/2.6.2.md) — 2026-06-04
 
 Opt-in local SQLite mirror for offline study search and count (CT_MIRROR_* env vars)

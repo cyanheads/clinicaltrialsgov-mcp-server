@@ -6,7 +6,7 @@
     "url": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server",
     "source": "github"
   },
-  "version": "2.6.2",
+  "version": "2.6.3",
   "remotes": [
     {
       "type": "streamable-http",
@@ -19,7 +19,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
       "runtimeHint": "bun",
-      "version": "2.6.2",
+      "version": "2.6.3",
       "packageArguments": [
         {
           "type": "positional",
@@ -97,7 +97,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
       "runtimeHint": "bun",
-      "version": "2.6.2",
+      "version": "2.6.3",
       "packageArguments": [
         {
           "type": "positional",

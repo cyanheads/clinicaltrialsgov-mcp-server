@@ -188,7 +188,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     ].filter(Boolean);
     const locationQuery = locationParts.join(', ');
 
-    const statusFilter = input.recruitingOnly ? ['RECRUITING', 'NOT_YET_RECRUITING'] : undefined;
+    const statusFilter = input.recruitingOnly ? ['RECRUITING'] : undefined;
 
     const advancedParts: string[] = [
       `AREA[MinimumAge]RANGE[MIN, ${input.age} years]`,

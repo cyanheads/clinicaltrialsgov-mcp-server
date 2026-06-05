@@ -153,7 +153,7 @@ describe('findEligible', () => {
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
         expect.objectContaining({
-          filterOverallStatus: ['RECRUITING', 'NOT_YET_RECRUITING'],
+          filterOverallStatus: ['RECRUITING'],
         }),
         ctx,
       );

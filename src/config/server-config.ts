@@ -17,7 +17,7 @@ const ServerConfigSchema = z.object({
 
 /** Mirror-specific configuration parsed separately from the flat env var set. */
 const MirrorConfigSchema = z.object({
-  enabled: z.coerce.boolean().default(false).describe('Enable the local SQLite study mirror'),
+  enabled: z.stringbool().default(false).describe('Enable the local SQLite study mirror'),
   path: z
     .string()
     .default('./clinical-trials-mirror.db')
@@ -26,8 +26,8 @@ const MirrorConfigSchema = z.object({
     .string()
     .default('0 3 * * *')
     .describe('Cron expression for incremental mirror refresh (default: 3 AM daily)'),
-  fallbackLive: z.coerce
-    .boolean()
+  fallbackLive: z
+    .stringbool()
     .default(true)
     .describe('Fall back to live API when mirror is not ready'),
 });

@@ -6,7 +6,7 @@
     "url": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server",
     "source": "github"
   },
-  "version": "2.6.3",
+  "version": "2.6.4",
   "remotes": [
     {
       "type": "streamable-http",
@@ -19,7 +19,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
       "runtimeHint": "bun",
-      "version": "2.6.3",
+      "version": "2.6.4",
       "packageArguments": [
         {
           "type": "positional",
@@ -53,34 +53,6 @@
           "default": "200"
         },
         {
-          "name": "CT_MIRROR_ENABLED",
-          "description": "Enable the local SQLite study mirror.",
-          "format": "string",
-          "isRequired": false,
-          "default": "false"
-        },
-        {
-          "name": "CT_MIRROR_PATH",
-          "description": "Filesystem path for the mirror SQLite database.",
-          "format": "string",
-          "isRequired": false,
-          "default": "./clinical-trials-mirror.db"
-        },
-        {
-          "name": "CT_MIRROR_REFRESH_CRON",
-          "description": "Cron expression for incremental mirror refresh.",
-          "format": "string",
-          "isRequired": false,
-          "default": "0 3 * * *"
-        },
-        {
-          "name": "CT_MIRROR_FALLBACK_LIVE",
-          "description": "Fall back to live API when mirror is not yet bootstrapped.",
-          "format": "string",
-          "isRequired": false,
-          "default": "true"
-        },
-        {
           "name": "MCP_LOG_LEVEL",
           "description": "Sets the minimum log level for output (e.g., 'debug', 'info', 'warn').",
           "format": "string",
@@ -97,7 +69,7 @@
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "clinicaltrialsgov-mcp-server",
       "runtimeHint": "bun",
-      "version": "2.6.3",
+      "version": "2.6.4",
       "packageArguments": [
         {
           "type": "positional",
@@ -129,34 +101,6 @@
           "format": "string",
           "isRequired": false,
           "default": "200"
-        },
-        {
-          "name": "CT_MIRROR_ENABLED",
-          "description": "Enable the local SQLite study mirror.",
-          "format": "string",
-          "isRequired": false,
-          "default": "false"
-        },
-        {
-          "name": "CT_MIRROR_PATH",
-          "description": "Filesystem path for the mirror SQLite database.",
-          "format": "string",
-          "isRequired": false,
-          "default": "./clinical-trials-mirror.db"
-        },
-        {
-          "name": "CT_MIRROR_REFRESH_CRON",
-          "description": "Cron expression for incremental mirror refresh.",
-          "format": "string",
-          "isRequired": false,
-          "default": "0 3 * * *"
-        },
-        {
-          "name": "CT_MIRROR_FALLBACK_LIVE",
-          "description": "Fall back to live API when mirror is not yet bootstrapped.",
-          "format": "string",
-          "isRequired": false,
-          "default": "true"
         },
         {
           "name": "MCP_HTTP_HOST",

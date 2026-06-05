@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** clinicaltrialsgov-mcp-server
-**Version:** 2.6.3
+**Version:** 2.6.4
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core)
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 
@@ -446,10 +446,6 @@ import { getServerConfig } from "@/config/server-config.js";
 | `CT_API_BASE_URL`            | No       | `https://clinicaltrials.gov/api/v2` | API base URL override                    |
 | `CT_REQUEST_TIMEOUT_MS`      | No       | `30000`                             | Per-request timeout in ms                |
 | `CT_MAX_PAGE_SIZE`           | No       | `200`                               | Maximum page size cap                    |
-| `CT_MIRROR_ENABLED`          | No       | `false`                             | Enable the local SQLite study mirror     |
-| `CT_MIRROR_PATH`             | No       | `./clinical-trials-mirror.db`       | Filesystem path for the mirror database  |
-| `CT_MIRROR_REFRESH_CRON`     | No       | `0 3 * * *`                         | Cron schedule for incremental mirror sync|
-| `CT_MIRROR_FALLBACK_LIVE`    | No       | `true`                              | Fall back to live API when mirror is not yet bootstrapped|
 
 ---
 

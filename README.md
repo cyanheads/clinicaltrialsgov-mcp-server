@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![Version](https://img.shields.io/badge/Version-2.6.3-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![Version](https://img.shields.io/badge/Version-2.6.4-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![TypeScript](https://img.shields.io/badge/TypeScript-^6.0-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -177,20 +177,12 @@ All configuration is optional — the server works with defaults and no API keys
 | `CT_API_BASE_URL`            | ClinicalTrials.gov API base URL.            | `https://clinicaltrials.gov/api/v2` |
 | `CT_REQUEST_TIMEOUT_MS`      | Per-request timeout in milliseconds.        | `30000`                             |
 | `CT_MAX_PAGE_SIZE`           | Maximum page size cap.                      | `200`                               |
-| `CT_MIRROR_ENABLED`          | Enable the local SQLite study mirror.       | `false`                             |
-| `CT_MIRROR_PATH`             | Filesystem path for the mirror database.   | `./clinical-trials-mirror.db`       |
-| `CT_MIRROR_REFRESH_CRON`     | Cron schedule for incremental mirror sync. | `0 3 * * *` (3 AM daily)            |
-| `CT_MIRROR_FALLBACK_LIVE`    | Fall back to live API when mirror is not yet bootstrapped. | `true`         |
 | `MCP_TRANSPORT_TYPE`         | Transport: `stdio` or `http`.               | `stdio`                             |
 | `MCP_HTTP_PORT`              | Port for HTTP server.                       | `3010`                              |
 | `MCP_AUTH_MODE`              | Auth mode: `none`, `jwt`, or `oauth`.       | `none`                              |
 | `MCP_LOG_LEVEL`              | Log level (RFC 5424).                       | `info`                              |
 | `LOGS_DIR`                   | Directory for log files (Node.js only).     | `<project-root>/logs`               |
 | `OTEL_ENABLED`               | Enable OpenTelemetry tracing.               | `false`                             |
-
-### Local study mirror (opt-in)
-
-Setting `CT_MIRROR_ENABLED=true` activates a self-refreshing SQLite+FTS5 local mirror of the ~577K-study corpus. Search and count queries route to the mirror first, with transparent fallback to the live API when the mirror is not yet ready (`CT_MIRROR_FALLBACK_LIVE=true`, the default). The mirror must be bootstrapped out-of-band before it becomes ready — while enabled but not yet bootstrapped it falls through to the live API identically to the disabled state. Once bootstrapped, the mirror eliminates live-API round-trips for most search and lookup operations. Full-record lookups (`clinicaltrials_get_study_record`), results data, field definitions, and field values remain live-API only.
 
 ## Running the Server
 

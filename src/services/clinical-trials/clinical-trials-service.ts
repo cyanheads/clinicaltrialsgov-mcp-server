@@ -1,8 +1,5 @@
 /**
  * @fileoverview ClinicalTrials.gov REST API v2 client with retry, rate limiting, and timeout.
- * Routes search and count operations to the local mirror when enabled and ready,
- * falling back to the live API when the mirror is unavailable or the query requires
- * features the mirror cannot answer (geo filters, complex AREA[] expressions).
  * @module services/clinical-trials/clinical-trials-service
  */
 
@@ -15,17 +12,14 @@ import {
   serviceUnavailable,
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
-import type { Mirror, MirrorStatus, QueryFilter } from '@cyanheads/mcp-ts-core/mirror';
 import { httpErrorFromResponse } from '@cyanheads/mcp-ts-core/utils';
-import { getMirrorConfig, getServerConfig, type ServerConfig } from '@/config/server-config.js';
+import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
 import {
   type FieldIndexEntry,
   flattenMetadata,
   nearestPieces,
   searchFields,
 } from './field-search.js';
-import { getClinicalTrialsMirror } from './mirror/index.js';
-import type { StudyMetaRow } from './mirror/types.js';
 import type {
   FieldNode,
   FieldValueStats,
@@ -102,13 +96,6 @@ export class ClinicalTrialsService {
 
   /** Search studies with query, filters, pagination, and field selection. */
   async searchStudies(params: SearchParams, ctx: Context): Promise<PagedStudiesResponse> {
-    // Route to the local mirror when it is ready and the query is mirrorable.
-    const mirror = getClinicalTrialsMirror();
-    if (mirror) {
-      const mirrorResult = await this.tryMirrorSearch(params, mirror, ctx);
-      if (mirrorResult !== null) return mirrorResult;
-    }
-
     if (this.validateFieldsLocally && params.fields?.length) {
       const normalized = await this.normalizeFields(params.fields, ctx);
       await this.validateFields(normalized, ctx);
@@ -128,18 +115,6 @@ export class ClinicalTrialsService {
   /** Fetch multiple studies by NCT IDs in a single request. Returns identification and results section data. */
   async getStudiesBatch(nctIds: string[], ctx: Context): Promise<Study[]> {
     ctx.log.debug('getStudiesBatch', { count: nctIds.length });
-
-    // Route to mirror for ID-targeted lookups when mirror is ready.
-    const mirror = getClinicalTrialsMirror();
-    if (mirror && (await mirror.ready())) {
-      const rows = await mirror.getByIds(nctIds);
-      if (rows.length > 0) {
-        ctx.log.debug('getStudiesBatch served from mirror', { count: rows.length });
-        return rows.map(mirrorRowToStudy);
-      }
-      // Mirror has no rows for these IDs → fall through to live API.
-    }
-
     const response = await this.searchStudies(
       {
         filterIds: nctIds,
@@ -151,16 +126,6 @@ export class ClinicalTrialsService {
       ctx,
     );
     return response.studies;
-  }
-
-  /**
-   * Return current mirror status, or `undefined` when the mirror is disabled.
-   * Exposed so tools can surface mirror state to agents when useful.
-   */
-  async mirrorStatus(): Promise<MirrorStatus | undefined> {
-    const mirror = getClinicalTrialsMirror();
-    if (!mirror) return;
-    return await mirror.status();
   }
 
   /** Get field definitions (metadata tree) from the data model. */
@@ -220,117 +185,6 @@ export class ClinicalTrialsService {
     ctx.log.debug('searchFieldDefinitions', { query, limit });
     const { entries } = await this.getFieldIndex(ctx);
     return searchFields(query, entries, limit);
-  }
-
-  /* ------------------------------------------------------------------ */
-  /*  Mirror routing                                                     */
-  /* ------------------------------------------------------------------ */
-
-  /**
-   * Attempt to serve a `searchStudies` call from the local mirror.
-   *
-   * Returns `null` when the mirror is not ready, or when the query uses
-   * features the mirror cannot answer (geo filters, complex AREA[] advanced
-   * filters, field selection beyond the metadata tier, or pageToken
-   * continuation from a previous live-API page). In all of those cases the
-   * caller falls through to the live API.
-   */
-  private async tryMirrorSearch(
-    params: SearchParams,
-    mirror: Mirror,
-    ctx: Context,
-  ): Promise<PagedStudiesResponse | null> {
-    // Only serve from mirror when a full sync has ever completed.
-    const ready = await mirror.ready();
-    if (!ready) {
-      const fallback = getMirrorConfig().fallbackLive;
-      if (!fallback) {
-        throw serviceUnavailable(
-          'Clinical-trials mirror is not ready and CT_MIRROR_FALLBACK_LIVE is disabled.',
-          { hint: 'Run the mirror init script to bootstrap the local database.' },
-        );
-      }
-      ctx.log.debug('Mirror not ready — falling back to live API');
-      return null;
-    }
-
-    // Mirror cannot handle: geo filters, advanced AREA[] expressions, or
-    // pageToken continuation (tokens belong to the live API's pagination state).
-    if (params.filterGeo || params.filterAdvanced || params.pageToken) {
-      ctx.log.debug('Query not mirrorable — falling back to live API', {
-        reason: params.filterGeo
-          ? 'geo_filter'
-          : params.filterAdvanced
-            ? 'advanced_filter'
-            : 'page_token',
-      });
-      return null;
-    }
-
-    // Build FTS match string from free-text query parameters.
-    const ftsTerms: string[] = [];
-    if (params.queryTerm) ftsTerms.push(sanitizeFts(params.queryTerm));
-    if (params.queryCond) ftsTerms.push(sanitizeFts(params.queryCond));
-    if (params.queryIntr) ftsTerms.push(sanitizeFts(params.queryIntr));
-    if (params.querySpons) ftsTerms.push(sanitizeFts(params.querySpons));
-    if (params.queryTitles) ftsTerms.push(sanitizeFts(params.queryTitles));
-    // queryLocn and queryOutc are not in the FTS index — fall through to live.
-    if (params.queryLocn || params.queryOutc) {
-      ctx.log.debug('Query uses non-indexed fields — falling back to live API', {
-        reason: params.queryLocn ? 'location_query' : 'outcome_query',
-      });
-      return null;
-    }
-    const match = ftsTerms.join(' ') || undefined;
-
-    // Build structured filters for indexed columns.
-    const filters: QueryFilter[] = [];
-    if (params.filterOverallStatus?.length === 1) {
-      filters.push({
-        column: 'overall_status',
-        op: 'eq',
-        value: params.filterOverallStatus[0] as string,
-      });
-    } else if (params.filterOverallStatus?.length) {
-      filters.push({ column: 'overall_status', op: 'in', value: params.filterOverallStatus });
-    }
-
-    // ID filter — if filterIds set, use getByIds for O(1) lookup.
-    if (params.filterIds?.length) {
-      const rows = await mirror.getByIds(params.filterIds);
-      ctx.log.debug('Mirror ID lookup', { requested: params.filterIds.length, found: rows.length });
-      const studies = rows.map(mirrorRowToStudy);
-      return {
-        studies,
-        totalCount: studies.length,
-      };
-    }
-
-    const limit = Math.min(params.pageSize ?? 10, this.maxPageSize);
-    const offset = 0; // pageToken-based continuation not supported for mirror
-
-    const result = await mirror.query({
-      match,
-      filters,
-      sort: match ? 'relevance' : undefined,
-      limit,
-      offset,
-    });
-
-    ctx.log.debug('Mirror search', {
-      match,
-      filters: filters.length,
-      total: result.total,
-      returned: result.rows.length,
-    });
-
-    const studies = result.rows.map(mirrorRowToStudy);
-    return {
-      studies,
-      // countTotal support: return total when params.countTotal !== false (default true)
-      ...(params.countTotal !== false ? { totalCount: result.total } : {}),
-      // No nextPageToken — mirror queries don't use cursor pagination
-    };
   }
 
   /* ------------------------------------------------------------------ */
@@ -680,103 +534,6 @@ export class ClinicalTrialsService {
       ...(lastStatus != null ? { lastStatus } : {}),
     });
   }
-}
-
-/* ------------------------------------------------------------------ */
-/*  Mirror helpers                                                     */
-/* ------------------------------------------------------------------ */
-
-/**
- * Convert a mirror row back to the nested study shape that tool handlers expect.
- * Only metadata-tier fields are populated; fields not stored in the mirror
- * (e.g., full eligibility details, derived MeSH terms, results section) are
- * omitted. Callers that need the full ~70KB record must use the live API.
- */
-function mirrorRowToStudy(rawRow: Record<string, unknown>): Study {
-  const row = rawRow as unknown as StudyMetaRow;
-  return {
-    protocolSection: {
-      identificationModule: {
-        ...(row.nct_id && { nctId: row.nct_id }),
-        ...(row.brief_title && { briefTitle: row.brief_title }),
-        ...(row.official_title && { officialTitle: row.official_title }),
-      },
-      statusModule: {
-        ...(row.overall_status && { overallStatus: row.overall_status }),
-        ...(row.start_date && { startDateStruct: { date: row.start_date } }),
-        ...(row.primary_completion_date && {
-          primaryCompletionDateStruct: { date: row.primary_completion_date },
-        }),
-        ...(row.last_update_post_date && {
-          lastUpdatePostDateStruct: { date: row.last_update_post_date },
-        }),
-      },
-      designModule: {
-        ...(row.study_type && { studyType: row.study_type }),
-        ...(row.phases && { phases: row.phases.split('|').filter(Boolean) }),
-        ...(row.enrollment_count != null && {
-          enrollmentInfo: { count: row.enrollment_count },
-        }),
-      },
-      sponsorCollaboratorsModule: {
-        ...(row.lead_sponsor_name || row.lead_sponsor_class
-          ? {
-              leadSponsor: {
-                ...(row.lead_sponsor_name && { name: row.lead_sponsor_name }),
-                ...(row.lead_sponsor_class && { class: row.lead_sponsor_class }),
-              },
-            }
-          : {}),
-      },
-      conditionsModule: {
-        ...(row.conditions && { conditions: row.conditions.split('|').filter(Boolean) }),
-      },
-      armsInterventionsModule: {
-        ...(row.interventions && {
-          interventions: row.interventions
-            .split('|')
-            .filter(Boolean)
-            .map((name) => ({ name })),
-        }),
-      },
-      eligibilityModule: {
-        ...(row.eligibility_criteria && { eligibilityCriteria: row.eligibility_criteria }),
-        ...(row.minimum_age && { minimumAge: row.minimum_age }),
-        ...(row.maximum_age && { maximumAge: row.maximum_age }),
-        ...(row.sex && { sex: row.sex }),
-        ...(row.std_ages && { stdAges: row.std_ages.split('|').filter(Boolean) }),
-        ...(row.healthy_volunteers != null && {
-          healthyVolunteers: row.healthy_volunteers === 1,
-        }),
-      },
-      contactsLocationsModule: {
-        ...(row.locations && {
-          locations: row.locations
-            .split('|')
-            .filter(Boolean)
-            .map((loc) => {
-              const [city, state, country] = loc.split(', ');
-              return {
-                ...(city && { city }),
-                ...(state && { state }),
-                ...(country && { country }),
-              };
-            }),
-        }),
-      },
-    },
-    ...(row.has_results != null && { hasResults: row.has_results === 1 }),
-  };
-}
-
-/**
- * Sanitize a free-text query for FTS5 MATCH syntax.
- * Strips characters that FTS5 treats as special operators unless the caller
- * intentionally uses them. Preserves AND/OR/NOT boolean operators.
- */
-function sanitizeFts(query: string): string {
-  // Remove characters that break FTS5 MATCH parsing.
-  return query.replace(/["*^()[\]]/g, ' ').trim();
 }
 
 /* ------------------------------------------------------------------ */

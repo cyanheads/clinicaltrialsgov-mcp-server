@@ -34,6 +34,14 @@ const DEFAULT_MAX_BACKOFF_MS = 30_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MIN_INTERVAL_MS = 1000;
 /**
+ * Maps the trailing segment of an Essie field path (lowercased) to the
+ * corresponding tool param name. Used to translate "Allowed values for enum
+ * field `…path…`" errors into human-readable param references.
+ */
+const ESSIE_ENUM_PARAM_MAP: Record<string, string> = {
+  phases: 'phaseFilter',
+};
+/**
  * ClinicalTrials.gov uses 99999999 as a sentinel for "unknown enrollment
  * count". The filter below excludes studies carrying the sentinel by
  * default — `RANGE[5000, MAX]` and `EnrollmentCount:desc` otherwise surface
@@ -422,9 +430,10 @@ export class ClinicalTrialsService {
           // error messages name the param the caller actually used.
           if (text.includes('Invalid value in parameter')) {
             // Maps upstream filter.* param name → { toolParam, pieceName for clinicaltrials_get_field_values }
+            // Note: `phase` is intentionally absent — phaseFilter routes through filter.advanced
+            // (AREA[Phase]value) so the API never emits "Invalid value in parameter `phase`".
             const upstreamParamInfo: Record<string, { toolParam: string; pieceName: string }> = {
               overallStatus: { toolParam: 'statusFilter', pieceName: 'OverallStatus' },
-              phase: { toolParam: 'phaseFilter', pieceName: 'Phase' },
             };
             const match = text.match(/Invalid value in parameter\s+`([^`]+)`:\s*`([^`]+)`/i);
             const upstreamParam = match?.[1];
@@ -463,6 +472,14 @@ export class ClinicalTrialsService {
                 { reason: 'study_not_found', ...ctx.recoveryFor('study_not_found') },
               );
             }
+            // sort param rejection — detected before filter.ids since a malformed
+            // sort on a non-/studies/ path hits this same branch.
+            if (params.sort) {
+              throw validationError(
+                `Invalid value for \`sort\`: '${params.sort}'. Format must be FieldName:asc or FieldName:desc (e.g. "LastUpdatePostDate:desc", "EnrollmentCount:asc"). Max 2 fields comma-separated.`,
+                { reason: 'sort_invalid' },
+              );
+            }
             // filter.ids rejection — the API may reject IDs that match the
             // regex but don't exist (e.g. NCT00000000). Surface the actual
             // IDs so the caller knows which ones failed.
@@ -477,9 +494,11 @@ export class ClinicalTrialsService {
             throw validationError(`Invalid request format. API response: ${text}`);
           }
           // Essie parser errors share the `Error parsing query in <where>: …` prefix.
-          // Two shapes show up: `Unknown area name: \`X\`` (bad field in AREA[X])
-          // and `no viable alternative at input '… ['` (reserved char like [ ] ( ) ,
-          // in a free-text field).
+          // Three shapes show up:
+          //   1. `Unknown area name: \`X\`` — bad field in AREA[X]
+          //   2. `Allowed values for enum field \`<path>\` are \`V1\`, \`V2\`, …` — invalid enum
+          //      value in an AREA[Phase] expression (phaseFilter routes through filter.advanced)
+          //   3. `no viable alternative at input '… ['` — reserved char in a free-text field
           if (text.startsWith('Error parsing query in')) {
             const areaMatch = text.match(/Unknown area name:\s*`([^`]+)`/);
             if (areaMatch) {
@@ -487,6 +506,26 @@ export class ClinicalTrialsService {
                 `${text.trim()} '${areaMatch[1]}' is not a recognized AREA[]-compatible field. Call clinicaltrials_get_field_definitions to look up valid PascalCase piece names.`,
                 { reason: 'field_invalid', ...ctx.recoveryFor('field_invalid') },
               );
+            }
+            const enumMatch = text.match(
+              /Allowed values for enum field\s+`[^`]*\.([^`.]+)`\s+are\s+(.+)/i,
+            );
+            if (enumMatch) {
+              const fieldSuffix = enumMatch[1]?.toLowerCase() ?? '';
+              const rawValues = enumMatch[2] ?? '';
+              // Extract backtick-quoted values: `NA`, `EARLY_PHASE1`, …
+              const validValues = [...rawValues.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
+              const toolParam = ESSIE_ENUM_PARAM_MAP[fieldSuffix];
+              const paramRef = toolParam ? `\`${toolParam}\`` : 'the filter';
+              const valuesStr = validValues.length > 0 ? validValues.join(', ') : rawValues.trim();
+              throw validationError(`Invalid value for ${paramRef}. Valid values: ${valuesStr}.`, {
+                reason: 'enum_invalid',
+                recovery: {
+                  hint: `Use one of the valid values: ${valuesStr}.`,
+                },
+                ...(toolParam ? { param: toolParam } : {}),
+                validValues,
+              });
             }
             throw validationError(text.trim(), {
               reason: 'query_parse_error',

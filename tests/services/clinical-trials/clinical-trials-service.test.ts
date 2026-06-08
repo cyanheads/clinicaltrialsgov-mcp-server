@@ -859,6 +859,67 @@ describe('ClinicalTrialsService', () => {
       }
     });
 
+    it('translates Essie enum error for phaseFilter to param-named message with valid values (#71)', async () => {
+      mockFetch.mockResolvedValue(
+        textResponse(
+          'Error parsing query in advanced filter: Allowed values for enum field `protocolSection.designModule.phases` are `NA`, `EARLY_PHASE1`, `PHASE1`, `PHASE2`, `PHASE3`, `PHASE4`',
+        ),
+      );
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies({ filterAdvanced: 'AREA[Phase]PHASE5' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        expect((err as McpError).code).toBe(JsonRpcErrorCode.ValidationError);
+        const msg = (err as McpError).message;
+        expect(msg).toContain('phaseFilter');
+        expect(msg).toContain('EARLY_PHASE1');
+        expect(msg).toContain('PHASE4');
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('enum_invalid');
+        expect(data?.param).toBe('phaseFilter');
+        expect(Array.isArray(data?.validValues)).toBe(true);
+        expect(data?.validValues).toContain('NA');
+      }
+    });
+
+    it('translates sort "incorrect format" error to param-named message with format hint (#71)', async () => {
+      mockFetch.mockResolvedValue(textResponse('Item 1 in parameter `sort` has incorrect format'));
+      const ctx = createMockContext();
+      try {
+        await service.searchStudies({ sort: 'EnrollmentCount:descending' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        const msg = (err as McpError).message;
+        expect(msg).toContain('sort');
+        expect(msg).toContain('EnrollmentCount:descending');
+        expect(msg).toContain('FieldName:asc');
+        expect(msg).toContain('FieldName:desc');
+      }
+    });
+
+    it('dead code: "Invalid value in parameter `phase`" never fires (phase always routes through filter.advanced)', async () => {
+      // Verify the upstreamParamInfo no longer has a `phase` entry — the API
+      // only uses filter.advanced (AREA[Phase]) so this error shape never
+      // appears in practice. The test confirms the removed mapping doesn't
+      // silently restore itself.
+      mockFetch.mockResolvedValue(textResponse('Invalid value in parameter `phase`: `PHASE5`'));
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies({}, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        // Should still surface as enum_invalid but WITHOUT a `param` entry
+        // since the `phase` upstream key is no longer in upstreamParamInfo.
+        expect(data?.reason).toBe('enum_invalid');
+        expect(data?.param).toBeUndefined();
+      }
+    });
+
     it('attaches reason=rate_limited after 429 retries exhaust', async () => {
       mockFetch.mockResolvedValue(jsonResponse(null, 429));
       const ctx = createMockContext({ errors: allReasons });

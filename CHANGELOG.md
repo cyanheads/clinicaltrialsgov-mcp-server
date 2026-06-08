@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.6.5](changelog/2.6.x/2.6.5.md) — 2026-06-08
+
+Fix phaseFilter/sort error messages and correct reserved-char docs for free-text query params
+
 ## [2.6.4](changelog/2.6.x/2.6.4.md) — 2026-06-05
 
 Remove local SQLite study mirror (CT_MIRROR_*); fix find_eligible recruitingOnly to exclude NOT_YET_RECRUITING

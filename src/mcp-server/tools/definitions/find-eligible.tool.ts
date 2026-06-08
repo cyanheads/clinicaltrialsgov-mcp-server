@@ -100,7 +100,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       .array(z.string())
       .min(1)
       .describe(
-        'Medical conditions or diagnoses. E.g., ["Type 2 Diabetes", "Hypertension"]. Plain words only — reserved chars `[ ] ( ) ,` inside an entry will fail.',
+        'Medical conditions or diagnoses. E.g., ["Type 2 Diabetes", "Hypertension"]. Plain words plus AND/OR/NOT. `[ ]` are reserved; `( )` group sub-expressions when matched; `,` acts as AND.',
       ),
     location: z
       .object({

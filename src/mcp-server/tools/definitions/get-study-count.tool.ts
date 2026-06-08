@@ -33,7 +33,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     {
       reason: 'query_parse_error',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a reserved character ([, ], (, ), or comma) in a query/conditionQuery/etc. value.',
+      when: 'A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically `[ ]` (AREA[]-reserved) or an unmatched `(` / `)` in a query/conditionQuery/etc. value.',
       recovery: RECOVERY_HINTS.query_parse_error,
     },
     {
@@ -50,43 +50,43 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       .string()
       .optional()
       .describe(
-        'General free-text search across all fields. Plain words plus AND, OR, NOT only — reserved chars `[ ] ( ) ,` will fail. For field-scoped searches, use the dedicated *Query parameters (conditionQuery, interventionQuery, etc.) or advancedFilter with AREA[FieldName]value.',
+        'General free-text search across all fields. Plain words plus AND, OR, NOT. `[ ]` are reserved (advancedFilter AREA[] only); `( )` group sub-expressions and work when matched; `,` acts as AND. For field-scoped searches, use the dedicated *Query parameters (conditionQuery, interventionQuery, etc.) or advancedFilter with AREA[FieldName]value.',
       ),
     conditionQuery: z
       .string()
       .optional()
       .describe(
-        'Condition/disease-specific search. E.g., "Type 2 Diabetes", "non-small cell lung cancer". Plain words plus AND/OR/NOT only — reserved chars: [ ] ( ) ,',
+        'Condition/disease-specific search. E.g., "Type 2 Diabetes", "non-small cell lung cancer". Plain words plus AND/OR/NOT. `[ ]` are reserved; `( )` group sub-expressions when matched; `,` acts as AND.',
       ),
     interventionQuery: z
       .string()
       .optional()
       .describe(
-        'Intervention/treatment search. E.g., "pembrolizumab", "cognitive behavioral therapy". Plain words plus AND/OR/NOT only — reserved chars: [ ] ( ) ,',
+        'Intervention/treatment search. E.g., "pembrolizumab", "cognitive behavioral therapy". Plain words plus AND/OR/NOT. `[ ]` are reserved; `( )` group sub-expressions when matched; `,` acts as AND.',
       ),
     locationQuery: z
       .string()
       .optional()
       .describe(
-        'Location search — city, state, country, or facility name. Plain words plus AND/OR/NOT only — reserved chars: [ ] ( ) ,',
+        'Location search — city, state, country, or facility name. Plain words plus AND/OR/NOT. `[ ]` are reserved; `( )` group sub-expressions when matched; `,` acts as AND.',
       ),
     sponsorQuery: z
       .string()
       .optional()
       .describe(
-        'Sponsor/collaborator name search. Plain words plus AND/OR/NOT only — reserved chars: [ ] ( ) ,',
+        'Sponsor/collaborator name search. Plain words plus AND/OR/NOT. `[ ]` are reserved; `( )` group sub-expressions when matched; `,` acts as AND.',
       ),
     titleQuery: z
       .string()
       .optional()
       .describe(
-        'Search within study titles and acronyms only. Plain words plus AND/OR/NOT only — reserved chars: [ ] ( ) ,',
+        'Search within study titles and acronyms only. Plain words plus AND/OR/NOT. `[ ]` are reserved; `( )` group sub-expressions when matched; `,` acts as AND.',
       ),
     outcomeQuery: z
       .string()
       .optional()
       .describe(
-        'Search within outcome measure fields. Plain words plus AND/OR/NOT only — reserved chars: [ ] ( ) ,',
+        'Search within outcome measure fields. Plain words plus AND/OR/NOT. `[ ]` are reserved; `( )` group sub-expressions when matched; `,` acts as AND.',
       ),
     statusFilter: z
       .union([

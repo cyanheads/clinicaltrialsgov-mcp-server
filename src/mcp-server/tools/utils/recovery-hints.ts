@@ -17,7 +17,7 @@ export const RECOVERY_HINTS = {
   enum_invalid:
     'Call clinicaltrials_get_field_values with fields=["OverallStatus"] or fields=["Phase"] to see the valid enum values the filter accepts.',
   query_parse_error:
-    'Field-scoped search uses advancedFilter with AREA[FieldName]value (call clinicaltrials_get_field_definitions to look up the right FieldName); free-text fields (query, conditionQuery, etc.) take plain words plus AND, OR, NOT — brackets, parentheses, and commas are reserved by the upstream parser.',
+    'Field-scoped search uses advancedFilter with AREA[FieldName]value (call clinicaltrials_get_field_definitions to look up the right FieldName); free-text fields (query, conditionQuery, etc.) take plain words plus AND, OR, NOT — `[ ]` are reserved (advancedFilter AREA[] only); `( )` group sub-expressions and are safe when matched; `,` acts as AND.',
   path_not_found:
     'Call clinicaltrials_get_field_definitions with `query` (e.g., "phase", "enrollment") to find the field path by concept, or omit both arguments for a top-level overview.',
   rate_limited:

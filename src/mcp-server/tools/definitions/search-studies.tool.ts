@@ -156,7 +156,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        `Sort order. Format: FieldName:asc or FieldName:desc. E.g., "LastUpdatePostDate:desc", "EnrollmentCount:desc". Max 2 fields comma-separated. Use clinicaltrials_get_field_definitions to find sortable field names.`,
+        `Sort order. Format: FieldName:asc or FieldName:desc. E.g., "LastUpdatePostDate:desc", "EnrollmentCount:desc". Max 2 fields comma-separated. For "largest trials" queries, pair EnrollmentCount:desc with advancedFilter "AREA[StudyType]INTERVENTIONAL" — the top enrollment counts are observational registry/claims studies enrolling tens of millions. Enrollment counts are sponsor-reported and not validated upstream beyond the unknown-enrollment sentinel exclusion. Use clinicaltrials_get_field_definitions to find sortable field names.`,
       ),
     pageSize: z
       .number()

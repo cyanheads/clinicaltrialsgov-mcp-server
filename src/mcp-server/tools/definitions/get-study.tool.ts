@@ -30,12 +30,14 @@ interface FilterInputs {
   locationLimit?: number | undefined;
   nearLocation?: { lat: number; lon: number; radiusMi: number } | undefined;
   outcomeLimit?: number | undefined;
+  referenceLimit?: number | undefined;
 }
 
 interface FilterMeta {
   locationsWithoutGeo?: number;
   totalLocations?: number;
   totalOtherOutcomes?: number;
+  totalReferences?: number;
   totalSecondaryOutcomes?: number;
 }
 
@@ -100,6 +102,18 @@ function applyFilters(
     nextPs = { ...nextPs, outcomesModule: nextOutcomes };
   }
 
+  const refs = ps.referencesModule;
+  if (refs?.references?.length && input.referenceLimit != null) {
+    meta.totalReferences = refs.references.length;
+    nextPs = {
+      ...nextPs,
+      referencesModule: {
+        ...refs,
+        references: refs.references.slice(0, input.referenceLimit),
+      },
+    };
+  }
+
   return { study: { ...study, protocolSection: nextPs }, meta };
 }
 
@@ -136,7 +150,7 @@ function summarizeResults(study: RawStudyShape): ResultsSummary | undefined {
 
 export const getStudy = tool('clinicaltrials_get_study_record', {
   description:
-    'Fetch a single clinical trial study by NCT ID from ClinicalTrials.gov. Returns the full study record including protocol details, eligibility criteria, outcomes, arms, interventions, contacts, and locations. Optional locationLimit / outcomeLimit / nearLocation parameters trim locations and outcomes — original totals are preserved in `filtersApplied` whenever a cap is applied.',
+    'Fetch a single clinical trial study by NCT ID from ClinicalTrials.gov. Returns the full study record including protocol details, eligibility criteria, outcomes, arms, interventions, contacts, and locations. Optional locationLimit / outcomeLimit / referenceLimit / nearLocation parameters trim locations, outcomes, and references — original totals are preserved in `filtersApplied` whenever a cap is applied.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -181,6 +195,15 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       .describe(
         'Optional cap on the number of secondary and other outcomes returned. Omit for no cap (full upstream lists). Primary outcomes are never capped. Original totals preserved in filtersApplied.totalSecondaryOutcomes / totalOtherOutcomes whenever a cap is applied.',
       ),
+    referenceLimit: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe(
+        'Optional cap on the number of references returned. Omit for no cap (full upstream list). Original total preserved in filtersApplied.totalReferences whenever a cap is applied. seeAlsoLinks are never capped.',
+      ),
     nearLocation: z
       .object({
         lat: z.number().min(-90).max(90).describe('Latitude in decimal degrees.'),
@@ -223,8 +246,14 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
           .int()
           .optional()
           .describe('Upstream other outcomes count before outcomeLimit was applied.'),
+        totalReferences: z
+          .number()
+          .int()
+          .optional()
+          .describe('Upstream reference count before referenceLimit was applied.'),
         locationLimit: z.number().int().optional().describe('Echo of the locationLimit input.'),
         outcomeLimit: z.number().int().optional().describe('Echo of the outcomeLimit input.'),
+        referenceLimit: z.number().int().optional().describe('Echo of the referenceLimit input.'),
         nearLocation: z
           .object({
             lat: z.number().describe('Latitude in decimal degrees.'),
@@ -283,6 +312,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
         ...meta,
         ...(input.locationLimit != null ? { locationLimit: input.locationLimit } : {}),
         ...(input.outcomeLimit != null ? { outcomeLimit: input.outcomeLimit } : {}),
+        ...(input.referenceLimit != null ? { referenceLimit: input.referenceLimit } : {}),
         ...(input.nearLocation ? { nearLocation: input.nearLocation } : {}),
       },
     };
@@ -581,7 +611,12 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     // References
     if (references.references?.length || references.seeAlsoLinks?.length) {
       lines.push('');
-      lines.push('## References');
+      const refCount = references.references?.length ?? 0;
+      const refSuffix =
+        meta.totalReferences != null && meta.totalReferences > refCount
+          ? ` (${refCount} of ${meta.totalReferences})`
+          : '';
+      lines.push(`## References${refSuffix}`);
       for (const r of references.references ?? []) {
         const pmid = r.pmid ? ` (PMID: ${r.pmid})` : '';
         const type = r.type ? ` [${r.type}]` : '';
@@ -597,6 +632,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     const filterParts: string[] = [];
     if (meta.locationLimit != null) filterParts.push(`locationLimit=${meta.locationLimit}`);
     if (meta.outcomeLimit != null) filterParts.push(`outcomeLimit=${meta.outcomeLimit}`);
+    if (meta.referenceLimit != null) filterParts.push(`referenceLimit=${meta.referenceLimit}`);
     if (meta.totalLocations != null) filterParts.push(`totalLocations=${meta.totalLocations}`);
     if (meta.locationsWithoutGeo != null)
       filterParts.push(`locationsWithoutGeo=${meta.locationsWithoutGeo}`);
@@ -604,6 +640,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       filterParts.push(`totalSecondaryOutcomes=${meta.totalSecondaryOutcomes}`);
     if (meta.totalOtherOutcomes != null)
       filterParts.push(`totalOtherOutcomes=${meta.totalOtherOutcomes}`);
+    if (meta.totalReferences != null) filterParts.push(`totalReferences=${meta.totalReferences}`);
     if (meta.nearLocation) {
       filterParts.push(
         `nearLocation=(lat=${meta.nearLocation.lat}, lon=${meta.nearLocation.lon}, radiusMi=${meta.nearLocation.radiusMi})`,

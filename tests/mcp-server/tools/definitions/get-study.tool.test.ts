@@ -289,6 +289,94 @@ describe('getStudy', () => {
       expect(text).not.toContain('No Coords,');
     });
 
+    it('referenceLimit caps references in both surfaces and records the upstream total (#73)', async () => {
+      const references = Array.from({ length: 19 }, (_, i) => ({
+        pmid: `${20000 + i}`,
+        citation: `Reference ${i}.`,
+      }));
+      mockService.getStudy.mockResolvedValue(buildStudy({ referencesModule: { references } }));
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({ nctId: 'NCT12345678', referenceLimit: 5 }),
+        ctx,
+      );
+
+      const ps = (
+        result.study as {
+          protocolSection?: { referencesModule?: { references?: unknown[] } };
+        }
+      ).protocolSection;
+      expect(ps?.referencesModule?.references).toHaveLength(5);
+      expect(result.filtersApplied.totalReferences).toBe(19);
+      expect(result.filtersApplied.referenceLimit).toBe(5);
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      expect(text).toContain('## References (5 of 19)');
+      for (let i = 0; i < 5; i++) expect(text).toContain(`Reference ${i}.`);
+      expect(text).not.toContain('Reference 5.');
+      expect(text).not.toContain('Reference 18.');
+      expect(text).toContain('referenceLimit=5');
+      expect(text).toContain('totalReferences=19');
+    });
+
+    it('referenceLimit omitted (default) leaves the full reference list intact in both surfaces', async () => {
+      const references = Array.from({ length: 19 }, (_, i) => ({
+        pmid: `${20000 + i}`,
+        citation: `Reference ${i}.`,
+      }));
+      mockService.getStudy.mockResolvedValue(buildStudy({ referencesModule: { references } }));
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx);
+
+      const ps = (
+        result.study as {
+          protocolSection?: { referencesModule?: { references?: unknown[] } };
+        }
+      ).protocolSection;
+      expect(ps?.referencesModule?.references).toHaveLength(19);
+      expect(result.filtersApplied.totalReferences).toBeUndefined();
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      expect(text).toContain('## References');
+      expect(text).not.toContain('## References (');
+      for (let i = 0; i < 19; i++) expect(text).toContain(`Reference ${i}.`);
+    });
+
+    it('referenceLimit preserves seeAlsoLinks uncapped (#73)', async () => {
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({
+          referencesModule: {
+            references: Array.from({ length: 4 }, (_, i) => ({ citation: `Reference ${i}.` })),
+            seeAlsoLinks: Array.from({ length: 3 }, (_, i) => ({
+              label: `Link ${i}`,
+              url: `https://example.org/${i}`,
+            })),
+          },
+        }),
+      );
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({ nctId: 'NCT12345678', referenceLimit: 2 }),
+        ctx,
+      );
+
+      const ps = (
+        result.study as {
+          protocolSection?: {
+            referencesModule?: { references?: unknown[]; seeAlsoLinks?: unknown[] };
+          };
+        }
+      ).protocolSection;
+      expect(ps?.referencesModule?.references).toHaveLength(2);
+      expect(ps?.referencesModule?.seeAlsoLinks).toHaveLength(3);
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      for (let i = 0; i < 3; i++) expect(text).toContain(`Link ${i}`);
+    });
+
     it('nearLocation combined with locationLimit applies both in both surfaces', async () => {
       const here = { lat: 47.6062, lon: -122.3321 };
       mockService.getStudy.mockResolvedValue(

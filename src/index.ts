@@ -11,6 +11,8 @@ import { allToolDefinitions } from './mcp-server/tools/definitions/index.js';
 import { initClinicalTrialsService } from './services/clinical-trials/clinical-trials-service.js';
 
 await createApp({
+  name: 'clinicaltrialsgov-mcp-server',
+  title: 'clinicaltrialsgov-mcp-server',
   tools: allToolDefinitions,
   resources: allResourceDefinitions,
   prompts: allPromptDefinitions,

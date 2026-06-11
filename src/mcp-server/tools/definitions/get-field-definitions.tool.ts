@@ -130,17 +130,23 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
     resolvedPath: z.string().optional().describe('Resolved path when mode is "drill".'),
   }),
 
-  // Agent-facing context — query echo and no-match guidance for search mode.
+  // Agent-facing context — query echo, truncation disclosure, and no-match guidance for search mode.
   enrichment: {
     searchQuery: z
       .string()
       .optional()
       .describe('Echo of the keyword used in search mode. Absent for drill and overview.'),
+    truncated: z
+      .boolean()
+      .optional()
+      .describe('True when the field list was capped by the limit parameter (search mode only).'),
+    shown: z.number().optional().describe('Number of fields returned (search mode only).'),
+    cap: z.number().optional().describe('The limit cap applied to this search (search mode only).'),
     notice: z
       .string()
       .optional()
       .describe(
-        'Recovery guidance when search mode returns no matches — suggests alternative keywords.',
+        'Recovery guidance when search mode returns no matches, or a truncation note when results are capped.',
       ),
   },
 
@@ -156,6 +162,7 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
         const fields = matches.map(indexEntryToResult);
         ctx.log.info('Field search completed', { query: input.query, matchCount: fields.length });
         ctx.enrich({ searchQuery: input.query });
+        ctx.enrich.truncated({ shown: fields.length, cap: input.limit });
         if (fields.length === 0) {
           ctx.enrich.notice(
             `No fields matched "${input.query}". Try a broader keyword (e.g. "enrollment", "sponsor", "eligibility") or use mode="overview" to see all top-level sections.`,

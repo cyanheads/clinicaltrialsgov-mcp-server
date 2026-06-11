@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.7.0](changelog/2.7.x/2.7.0.md) — 2026-06-11
+
+find_eligible condition re-rank; get_study_record referenceLimit; search_studies EnrollmentCount:desc guidance
+
 ## [2.6.6](changelog/2.6.x/2.6.6.md) — 2026-06-11
 
 mcp-ts-core 0.9.21 → 0.10.6: createApp identity pair, bundle clean step, .mcpbignore re-anchoring, truncation enrichment on field-definitions, skills sync

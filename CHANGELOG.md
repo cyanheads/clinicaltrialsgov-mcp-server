@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.6.6](changelog/2.6.x/2.6.6.md) — 2026-06-11
+
+mcp-ts-core 0.9.21 → 0.10.6: createApp identity pair, bundle clean step, .mcpbignore re-anchoring, truncation enrichment on field-definitions, skills sync
+
 ## [2.6.5](changelog/2.6.x/2.6.5.md) — 2026-06-08
 
 Fix phaseFilter/sort error messages and correct reserved-char docs for free-text query params

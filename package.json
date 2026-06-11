@@ -1,6 +1,6 @@
 {
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "2.6.5",
+  "version": "2.6.6",
   "mcpName": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
   "description": "Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to eligible trials via MCP. STDIO or Streamable HTTP.",
   "main": "dist/index.js",
@@ -59,7 +59,7 @@
     "audit:refresh": "rm -f bun.lock && bun install && bun audit",
     "list-skills": "bun run scripts/list-skills.ts",
     "lint:packaging": "bun run scripts/lint-packaging.ts",
-    "bundle": "bun run build && bunx -y @anthropic-ai/mcpb pack . dist/clinicaltrialsgov-mcp-server.mcpb",
+    "bundle": "bun run build && bunx -y @anthropic-ai/mcpb pack . dist/clinicaltrialsgov-mcp-server.mcpb && bun run scripts/clean-mcpb.ts dist/clinicaltrialsgov-mcp-server.mcpb",
     "release:github": "bun run scripts/release-github.ts",
     "changelog:build": "bun run scripts/build-changelog.ts",
     "changelog:check": "bun run scripts/build-changelog.ts --check",
@@ -101,15 +101,15 @@
     "node": ">=24.0.0"
   },
   "dependencies": {
-    "@cyanheads/mcp-ts-core": "^0.9.21",
+    "@cyanheads/mcp-ts-core": "^0.10.6",
     "pino-pretty": "^13.1.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.16",
-    "@cloudflare/workers-types": "4.20260605.1",
+    "@cloudflare/workers-types": "4.20260611.1",
     "@types/bun": "^1.3.14",
-    "@types/node": "25.9.2",
+    "@types/node": "25.9.3",
     "@vitest/coverage-istanbul": "^4.1.8",
     "depcheck": "^1.4.7",
     "fast-check": "^4.8.0",

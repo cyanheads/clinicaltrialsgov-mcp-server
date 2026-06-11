@@ -32,6 +32,68 @@ function locationMatchScore(loc: StudyLocation, user: UserLocation): number {
   return score;
 }
 
+/**
+ * Generic condition tokens that carry no disease-specificity. Excluded from
+ * token-overlap scoring so "Cardiovascular Disease" doesn't spuriously match
+ * "Von Willebrand Diseases" on the shared word "disease".
+ */
+const GENERIC_CONDITION_TOKENS = new Set([
+  'disease',
+  'diseases',
+  'disorder',
+  'disorders',
+  'syndrome',
+  'syndromes',
+  'condition',
+  'conditions',
+]);
+
+/** Significant (non-generic) lowercased word tokens of a condition string. */
+function significantTokens(condition: string): Set<string> {
+  return new Set(
+    condition
+      .toLowerCase()
+      .split(/[^a-z0-9]+/)
+      .filter((t) => t.length > 0 && !GENERIC_CONDITION_TOKENS.has(t)),
+  );
+}
+
+/**
+ * Score how directly a study's own listed conditions match the patient's
+ * requested conditions. ClinicalTrials.gov's `query.cond` is a fuzzy relevance
+ * search that pulls in tangential trials via the MeSH umbrella (e.g. a Von
+ * Willebrand bleeding-disorder trial matches "Cardiovascular Disease" through a
+ * distant MeSH ancestor). This score re-ranks those tangential matches below
+ * trials whose own condition list actually names a requested condition — a
+ * transparent, deterministic rule, not a relevance estimate. Recall is
+ * unchanged: every upstream match is still returned, only reordered.
+ *
+ * Tiers (best across the study's conditions × requested conditions):
+ *   3 — exact match (study condition equals a requested condition)
+ *   2 — phrase containment either way ("Atherosclerotic Cardiovascular Disease"
+ *       contains "Cardiovascular Disease")
+ *   1 — a shared significant token ("Type 2 Diabetes" ↔ "Diabetes Mellitus")
+ *   0 — no direct overlap (matched only through upstream fuzziness)
+ */
+function conditionMatchScore(studyConditions: string[], requested: string[]): number {
+  if (studyConditions.length === 0) return 0;
+  const reqNorm = requested.map((c) => ({
+    text: c.toLowerCase().trim(),
+    tokens: significantTokens(c),
+  }));
+  let best = 0;
+  for (const sc of studyConditions) {
+    const text = sc.toLowerCase().trim();
+    const tokens = significantTokens(sc);
+    for (const req of reqNorm) {
+      if (text === req.text) return 3;
+      if (text.includes(req.text) || req.text.includes(text)) best = Math.max(best, 2);
+      else if ([...tokens].some((t) => req.tokens.has(t))) best = Math.max(best, 1);
+    }
+  }
+  return best;
+}
+
 /** Dot-notation prefixes already rendered by the eligible formatter. */
 const ELIGIBLE_RENDERED = new Set([
   'protocolSection.identificationModule',
@@ -72,7 +134,7 @@ const ELIGIBLE_FIELDS = [
 
 export const findEligible = tool('clinicaltrials_find_eligible', {
   description:
-    'Match patient demographics and conditions to eligible recruiting clinical trials. Provide age, sex, conditions, and location to find studies with matching eligibility criteria, contact information, and recruiting locations.',
+    "Match patient demographics and conditions to eligible recruiting clinical trials. Provide age, sex, conditions, and location to find studies with matching eligibility criteria, contact information, and recruiting locations. Results are re-ranked so studies whose own condition matches a requested condition surface above tangential matches from ClinicalTrials.gov's fuzzy condition search.",
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -100,7 +162,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       .array(z.string())
       .min(1)
       .describe(
-        'Medical conditions or diagnoses. E.g., ["Type 2 Diabetes", "Hypertension"]. Plain words plus AND/OR/NOT. `[ ]` are reserved; `( )` group sub-expressions when matched; `,` acts as AND.',
+        'Medical conditions or diagnoses, e.g. ["Type 2 Diabetes", "Hypertension"]. Each entry is matched as a condition (multi-word entries match as a phrase); multiple entries are combined with OR, so studies for any listed condition qualify. Returned studies are re-ranked so those whose own condition list names a requested condition rank above tangential matches the upstream fuzzy search pulls in via the MeSH umbrella.',
       ),
     location: z
       .object({
@@ -254,6 +316,22 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     ctx.log.info('Eligibility search complete', {
       returned: result.studies.length,
       totalCount: result.totalCount,
+    });
+
+    // Re-rank studies so those whose own condition list names a requested
+    // condition surface above tangential upstream matches. query.cond is a
+    // fuzzy relevance search that pulls in trials matching only through a
+    // distant MeSH ancestor (a bleeding-disorder trial under the
+    // "Cardiovascular Disease" umbrella); without this, such a trial can land
+    // at rank #1. Stable sort preserves upstream relevance order within a tier,
+    // and recall is unchanged — nothing is dropped, only reordered.
+    result.studies.sort((a, b) => {
+      const aConds = (a as RawStudyShape).protocolSection?.conditionsModule?.conditions ?? [];
+      const bConds = (b as RawStudyShape).protocolSection?.conditionsModule?.conditions ?? [];
+      return (
+        conditionMatchScore(bConds, input.conditions) -
+        conditionMatchScore(aConds, input.conditions)
+      );
     });
 
     // Sort each study's locations by match to the user's input so the most

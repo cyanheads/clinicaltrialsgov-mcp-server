@@ -289,7 +289,7 @@ for, with match explanations. Internally builds optimized queries with demograph
 8. Sort by location proximity (city > state > country match)
 9. Return top `maxResults`
 
-**Dropped from old server:** Complex condition relevance scoring, healthy volunteer matching, detailed criteria snippet extraction. The post-filter catches the important cases; the LLM can evaluate nuanced eligibility from the returned study data.
+**Dropped from old server:** Complex multi-signal condition relevance scoring, healthy volunteer matching, detailed criteria snippet extraction. A lightweight condition re-rank was reinstated in #72 — results are stable-sorted so studies whose own condition names a requested condition rank above tangential MeSH-umbrella matches (recall preserved, nothing dropped). The LLM can still evaluate nuanced eligibility from the returned study data.
 
 ---
 
@@ -516,7 +516,7 @@ The search tool exposes 14 parameters — intentionally rich. Search is the prim
 
 ### Simplified find_eligible
 
-Dropped from the old server: complex condition relevance scoring (token overlap), healthy volunteer matching, criteria snippet extraction, multi-tier proximity ranking. Kept: demographic AREA[] filter construction, basic post-filtering, location sorting. The LLM can evaluate nuanced eligibility from the returned study data — the tool's job is query construction, not clinical judgment.
+Dropped from the old server: complex multi-signal condition relevance scoring, healthy volunteer matching, criteria snippet extraction, multi-tier proximity ranking. Kept: demographic AREA[] filter construction, basic post-filtering, location sorting, and (reinstated in #72) a lightweight single-pass condition re-rank that keeps tangential MeSH-umbrella matches from outranking on-condition trials. The LLM can evaluate nuanced eligibility from the returned study data — the tool's job is query construction, not clinical judgment.
 
 ### No wrapper for every endpoint
 

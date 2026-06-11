@@ -477,6 +477,87 @@ describe('findEligible', () => {
       });
     });
 
+    it('ranks on-condition studies above tangential MeSH-umbrella matches (regression for #72)', async () => {
+      // Reproduces the reported case: query.cond="Obesity OR Cardiovascular
+      // Disease" pulls a Von Willebrand bleeding-disorder trial to rank #1 via
+      // a distant MeSH ancestor. The re-rank must push studies whose own
+      // condition names a requested condition above it — without dropping any.
+      const upstreamOrder = [
+        { nctId: 'NCT05776069', conditions: ['Von Willebrand Diseases'] }, // tangential — was #1
+        { nctId: 'NCT05611242', conditions: ['Acute Ischemic Stroke'] },
+        { nctId: 'NCT06174389', conditions: ['Obesity'] }, // exact match
+        { nctId: 'NCT06875973', conditions: ['Atherosclerotic Cardiovascular Disease'] }, // phrase contains
+        { nctId: 'NCT06445608', conditions: ['Coronary Artery Disease'] },
+      ];
+      const studies = upstreamOrder.map((s) => ({
+        protocolSection: {
+          identificationModule: { nctId: s.nctId },
+          conditionsModule: { conditions: s.conditions },
+        },
+      }));
+      mockService.searchStudies.mockResolvedValue({ studies, totalCount: 5 });
+
+      const ctx = createMockContext();
+      const result = await findEligible.handler(
+        findEligible.input!.parse({
+          age: 56,
+          sex: 'MALE',
+          conditions: ['Obesity', 'Cardiovascular Disease'],
+          location: { country: 'United States', state: 'Washington', city: 'Seattle' },
+        }),
+        ctx,
+      );
+
+      const order = (
+        result.studies as Array<{ protocolSection: { identificationModule: { nctId: string } } }>
+      ).map((s) => s.protocolSection.identificationModule.nctId);
+      // Direct condition matches (Obesity exact, Atherosclerotic CVD phrase) lead;
+      // the Von Willebrand trial is no longer first.
+      expect(order.slice(0, 2)).toEqual(['NCT06174389', 'NCT06875973']);
+      expect(order[0]).not.toBe('NCT05776069');
+      // Recall preserved — every upstream study is still present.
+      expect(order).toHaveLength(5);
+      expect(new Set(order)).toEqual(new Set(upstreamOrder.map((s) => s.nctId)));
+    });
+
+    it('does not match conditions on the generic "Disease" token alone (regression for #72)', async () => {
+      // "Cardiovascular Disease" must not rank a "Von Willebrand Diseases" trial
+      // via the shared generic word "disease" — only significant tokens count.
+      const studies = [
+        {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT_VWD' },
+            conditionsModule: { conditions: ['Von Willebrand Diseases'] },
+          },
+        },
+        {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT_CVD' },
+            conditionsModule: { conditions: ['Cardiovascular Disease, Other'] },
+          },
+        },
+      ];
+      mockService.searchStudies.mockResolvedValue({ studies, totalCount: 2 });
+
+      const ctx = createMockContext();
+      const result = await findEligible.handler(
+        findEligible.input!.parse({
+          age: 50,
+          sex: 'ALL',
+          conditions: ['Cardiovascular Disease'],
+          location: { country: 'United States' },
+        }),
+        ctx,
+      );
+
+      const order = (
+        result.studies as Array<{ protocolSection: { identificationModule: { nctId: string } } }>
+      ).map((s) => s.protocolSection.identificationModule.nctId);
+      // The genuine CVD study leads; the bleeding-disorder trial stays last
+      // (scored 0 — "disease" is generic, "willebrand" ≠ "cardiovascular").
+      expect(order).toEqual(['NCT_CVD', 'NCT_VWD']);
+    });
+
     it("sorts locations by match to the user's city (regression for #37)", async () => {
       const study = {
         protocolSection: {

@@ -66,6 +66,7 @@ describe('getStudyCount', () => {
       expect(enrichment.searchCriteria).toEqual({
         conditionQuery: 'cancer',
         statusFilter: 'RECRUITING',
+        sentinelFilterActive: true,
       });
     });
 
@@ -98,15 +99,29 @@ describe('getStudyCount', () => {
         statusFilter: 'RECRUITING',
         phaseFilter: 'PHASE3',
         advancedFilter: 'AREA[StudyType]INTERVENTIONAL',
+        sentinelFilterActive: true,
       });
     });
 
-    it('omits searchCriteria enrichment when no criteria provided', async () => {
+    it('echoes sentinelFilterActive by default even with no query criteria (#78)', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 100 });
       const ctx = createMockContext();
       await getStudyCount.handler(getStudyCount.input!.parse({}), ctx);
 
       const enrichment = getEnrichment(ctx);
+      expect(enrichment.searchCriteria).toEqual({ sentinelFilterActive: true });
+    });
+
+    it('omits sentinelFilterActive when includeUnknownEnrollment=true (#78)', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 100 });
+      const ctx = createMockContext();
+      await getStudyCount.handler(
+        getStudyCount.input!.parse({ includeUnknownEnrollment: true }),
+        ctx,
+      );
+
+      const enrichment = getEnrichment(ctx);
+      // Exclusion off and no other criteria → nothing to echo.
       expect(enrichment.searchCriteria).toBeUndefined();
     });
 

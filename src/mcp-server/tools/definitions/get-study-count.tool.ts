@@ -127,7 +127,9 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     searchCriteria: z
       .record(z.string(), z.unknown())
       .optional()
-      .describe('Echo of active query/filter criteria applied to this count.'),
+      .describe(
+        'Echo of active query/filter criteria applied to this count, including sentinelFilterActive when the default unknown-enrollment exclusion is in effect.',
+      ),
     notice: z
       .string()
       .optional()
@@ -181,6 +183,10 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     if (input.statusFilter) criteria.statusFilter = input.statusFilter;
     if (input.phaseFilter) criteria.phaseFilter = input.phaseFilter;
     if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
+    // Flag the default unknown-enrollment exclusion (EnrollmentCount=99999999),
+    // mirroring search_studies — otherwise a count silently differs from an
+    // unfiltered /stats total with no signal that a filter was applied.
+    if (!input.includeUnknownEnrollment) criteria.sentinelFilterActive = true;
 
     if (Object.keys(criteria).length > 0) ctx.enrich({ searchCriteria: criteria });
     if (totalCount === 0) ctx.enrich.notice('Try broader search terms or fewer filters.');

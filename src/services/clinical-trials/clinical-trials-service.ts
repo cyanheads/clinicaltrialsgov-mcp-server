@@ -184,12 +184,15 @@ export class ClinicalTrialsService {
     }
   }
 
-  /** Search the field model by keyword, returning ranked matches with paths and types. */
+  /**
+   * Search the field model by keyword, returning ranked matches with paths and
+   * types plus the pre-cap match total for accurate truncation disclosure.
+   */
   async searchFieldDefinitions(
     query: string,
     limit: number,
     ctx: Context,
-  ): Promise<FieldIndexEntry[]> {
+  ): Promise<{ entries: FieldIndexEntry[]; total: number }> {
     ctx.log.debug('searchFieldDefinitions', { query, limit });
     const { entries } = await this.getFieldIndex(ctx);
     return searchFields(query, entries, limit);

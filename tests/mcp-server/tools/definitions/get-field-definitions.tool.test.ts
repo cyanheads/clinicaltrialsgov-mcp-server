@@ -246,14 +246,17 @@ describe('getFieldDefinitions', () => {
     });
 
     it('routes to searchFieldDefinitions in search mode', async () => {
-      mockService.searchFieldDefinitions.mockResolvedValue([
-        {
-          name: 'enrollmentInfo',
-          piece: 'EnrollmentCount',
-          path: 'protocolSection.designModule.enrollmentInfo.count',
-          type: 'INTEGER',
-        },
-      ]);
+      mockService.searchFieldDefinitions.mockResolvedValue({
+        entries: [
+          {
+            name: 'enrollmentInfo',
+            piece: 'EnrollmentCount',
+            path: 'protocolSection.designModule.enrollmentInfo.count',
+            type: 'INTEGER',
+          },
+        ],
+        total: 1,
+      });
       const ctx = createMockContext();
       const input = getFieldDefinitions.input!.parse({
         mode: 'search',
@@ -268,6 +271,42 @@ describe('getFieldDefinitions', () => {
       expect(enrichment.searchQuery).toBe('enrollment');
       expect(result.fields).toHaveLength(1);
       expect(result.fields[0]!.piece).toBe('EnrollmentCount');
+    });
+
+    it('does not flag truncated when matches are at or below the cap (#77)', async () => {
+      mockService.searchFieldDefinitions.mockResolvedValue({
+        entries: [
+          { name: 'a', piece: 'A', path: 'x.a', type: 'STRING' },
+          { name: 'b', piece: 'B', path: 'x.b', type: 'STRING' },
+          { name: 'c', piece: 'C', path: 'x.c', type: 'STRING' },
+        ],
+        total: 3,
+      });
+      const ctx = createMockContext();
+      const input = getFieldDefinitions.input!.parse({ mode: 'search', query: 'abc', limit: 20 });
+      await getFieldDefinitions.handler(input, ctx);
+
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.truncated).toBeUndefined();
+      expect(enrichment.notice).toBeUndefined();
+    });
+
+    it('flags truncated only when the match set exceeds the cap (#77)', async () => {
+      const entries = Array.from({ length: 5 }, (_, i) => ({
+        name: `f${i}`,
+        piece: `F${i}`,
+        path: `x.f${i}`,
+        type: 'STRING',
+      }));
+      mockService.searchFieldDefinitions.mockResolvedValue({ entries, total: 42 });
+      const ctx = createMockContext();
+      const input = getFieldDefinitions.input!.parse({ mode: 'search', query: 'f', limit: 5 });
+      await getFieldDefinitions.handler(input, ctx);
+
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.truncated).toBe(true);
+      expect(enrichment.shown).toBe(5);
+      expect(enrichment.cap).toBe(5);
     });
 
     it('rejects search mode without query', async () => {

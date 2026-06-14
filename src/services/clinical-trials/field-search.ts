@@ -136,15 +136,19 @@ function scoreEntry(query: string, entry: FieldIndexEntry): number {
   );
 }
 
-/** Rank entries by relevance to query and return the top `limit`. */
+/**
+ * Rank entries by relevance to query and return the top `limit` along with the
+ * pre-cap match total, so callers can disclose truncation accurately — the slice
+ * alone can't distinguish "exactly `limit` matched" from "more than `limit`".
+ */
 export function searchFields(
   query: string,
   entries: FieldIndexEntry[],
   limit: number,
-): FieldIndexEntry[] {
+): { entries: FieldIndexEntry[]; total: number } {
   const scored = entries.map((e) => ({ e, s: scoreEntry(query, e) })).filter((x) => x.s > 0);
   scored.sort((a, b) => b.s - a.s);
-  return scored.slice(0, Math.max(1, limit)).map((x) => x.e);
+  return { entries: scored.slice(0, Math.max(1, limit)).map((x) => x.e), total: scored.length };
 }
 
 /**

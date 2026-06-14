@@ -273,7 +273,7 @@ describe('getFieldDefinitions — path traversal and injection', () => {
     vi.clearAllMocks();
     mockGetService.mockReturnValue(mockService as never);
     mockService.getMetadata.mockResolvedValue([]);
-    mockService.searchFieldDefinitions.mockResolvedValue([]);
+    mockService.searchFieldDefinitions.mockResolvedValue({ entries: [], total: 0 });
   });
 
   it.each([

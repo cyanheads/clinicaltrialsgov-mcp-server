@@ -1204,29 +1204,47 @@ describe('ClinicalTrialsService', () => {
 
     it('returns ranked matches for a keyword search', async () => {
       const ctx = createMockContext();
-      const results = await validatingService.searchFieldDefinitions('enrollment', 5, ctx);
+      const { entries: results } = await validatingService.searchFieldDefinitions(
+        'enrollment',
+        5,
+        ctx,
+      );
       expect(results.length).toBeGreaterThan(0);
       expect(results[0]!.piece).toBe('EnrollmentCount');
     });
 
     it('finds multiple matches sorted by relevance', async () => {
       const ctx = createMockContext();
-      const results = await validatingService.searchFieldDefinitions('sponsor', 5, ctx);
+      const { entries: results } = await validatingService.searchFieldDefinitions(
+        'sponsor',
+        5,
+        ctx,
+      );
       const pieces = results.map((r) => r.piece);
       expect(pieces).toContain('LeadSponsorName');
       expect(pieces).toContain('CollaboratorName');
     });
 
-    it('respects the limit', async () => {
+    it('respects the limit and reports the pre-cap total (#77)', async () => {
       const ctx = createMockContext();
-      const results = await validatingService.searchFieldDefinitions('sponsor', 1, ctx);
+      const { entries: results, total } = await validatingService.searchFieldDefinitions(
+        'sponsor',
+        1,
+        ctx,
+      );
       expect(results).toHaveLength(1);
+      expect(total).toBe(2);
     });
 
-    it('returns an empty array when nothing matches', async () => {
+    it('returns empty entries and zero total when nothing matches', async () => {
       const ctx = createMockContext();
-      const results = await validatingService.searchFieldDefinitions('zzznomatchzzz', 5, ctx);
+      const { entries: results, total } = await validatingService.searchFieldDefinitions(
+        'zzznomatchzzz',
+        5,
+        ctx,
+      );
       expect(results).toEqual([]);
+      expect(total).toBe(0);
     });
   });
 

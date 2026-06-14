@@ -27,7 +27,7 @@ describe('getFieldDefinitions fuzz', () => {
     // overview). Path mode raises a declared `path_not_found` ctx.fail when
     // no node matches — that's a graceful contract throw, not a crash.
     mockService.getMetadata.mockResolvedValue([]);
-    mockService.searchFieldDefinitions.mockResolvedValue([]);
+    mockService.searchFieldDefinitions.mockResolvedValue({ entries: [], total: 0 });
     mockGetService.mockReturnValue(mockService as never);
   });
 

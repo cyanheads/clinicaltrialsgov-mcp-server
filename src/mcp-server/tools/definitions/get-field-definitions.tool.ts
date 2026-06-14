@@ -158,11 +158,23 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
         if (!input.query) {
           throw validationError('mode="search" requires `query`. Pass a keyword to search by.');
         }
-        const matches = await service.searchFieldDefinitions(input.query, input.limit, ctx);
+        const { entries: matches, total } = await service.searchFieldDefinitions(
+          input.query,
+          input.limit,
+          ctx,
+        );
         const fields = matches.map(indexEntryToResult);
-        ctx.log.info('Field search completed', { query: input.query, matchCount: fields.length });
+        ctx.log.info('Field search completed', {
+          query: input.query,
+          matchCount: fields.length,
+          total,
+        });
         ctx.enrich({ searchQuery: input.query });
-        ctx.enrich.truncated({ shown: fields.length, cap: input.limit });
+        // Disclose truncation only when the match set actually exceeded the cap —
+        // otherwise the "raise the cap" notice misleads when shown < cap.
+        if (total > input.limit) {
+          ctx.enrich.truncated({ shown: fields.length, cap: input.limit });
+        }
         if (fields.length === 0) {
           ctx.enrich.notice(
             `No fields matched "${input.query}". Try a broader keyword (e.g. "enrollment", "sponsor", "eligibility") or use mode="overview" to see all top-level sections.`,

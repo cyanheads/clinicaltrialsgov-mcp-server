@@ -227,43 +227,51 @@ describe('flattenMetadata', () => {
 // ---------------------------------------------------------------------------
 
 describe('searchFields', () => {
-  it('returns empty array for empty entries', () => {
-    expect(searchFields('enrollment', [], 5)).toEqual([]);
+  it('returns empty entries and zero total for empty entries', () => {
+    expect(searchFields('enrollment', [], 5)).toEqual({ entries: [], total: 0 });
   });
 
-  it('returns empty array for empty query string', () => {
+  it('returns empty entries for empty query string', () => {
     const e = flattenMetadata(sampleTree);
     // scoreEntry returns 0 for empty query, so nothing passes the filter
-    expect(searchFields('', e, 5)).toEqual([]);
+    expect(searchFields('', e, 5).entries).toEqual([]);
   });
 
-  it('returns empty array when no entries match', () => {
+  it('returns empty entries when no entries match', () => {
     const e = flattenMetadata(sampleTree);
-    expect(searchFields('zzznomatch', e, 5)).toEqual([]);
+    expect(searchFields('zzznomatch', e, 5).entries).toEqual([]);
   });
 
   it('finds exact piece match first', () => {
     const e = flattenMetadata(sampleTree);
-    const results = searchFields('NCTId', e, 5);
+    const { entries: results } = searchFields('NCTId', e, 5);
     expect(results[0]?.piece).toBe('NCTId');
   });
 
   it('finds partial substring match', () => {
     const e = flattenMetadata(sampleTree);
-    const results = searchFields('enrollment', e, 5);
+    const { entries: results } = searchFields('enrollment', e, 5);
     expect(results.some((r) => r.piece === 'EnrollmentCount')).toBe(true);
   });
 
   it('respects the limit parameter', () => {
     const e = flattenMetadata(sampleTree);
-    const results = searchFields('module', e, 2);
+    const { entries: results } = searchFields('module', e, 2);
     expect(results.length).toBeLessThanOrEqual(2);
+  });
+
+  it('reports the pre-cap match total alongside the capped entries (#77)', () => {
+    const e = flattenMetadata(sampleTree);
+    // "module" matches several *Module pieces; cap to 2 and confirm total exceeds it.
+    const { entries: results, total } = searchFields('module', e, 2);
+    expect(results).toHaveLength(2);
+    expect(total).toBeGreaterThan(2);
   });
 
   it('ranks status-related entries before unrelated entries like BriefTitle', () => {
     const e = flattenMetadata(sampleTree);
     // "OverallStatus" and "StatusModule" both contain "status" — both should rank before "BriefTitle"
-    const results = searchFields('status', e, 10);
+    const { entries: results } = searchFields('status', e, 10);
     const overallStatusIdx = results.findIndex((r) => r.piece === 'OverallStatus');
     const briefTitleIdx = results.findIndex((r) => r.piece === 'BriefTitle');
     expect(overallStatusIdx).toBeGreaterThan(-1);
@@ -276,13 +284,13 @@ describe('searchFields', () => {
     // "NCTId" has description "The NCT identifier for the study."
     // Searching "identifier" should surface it.
     const e = flattenMetadata(sampleTree);
-    const results = searchFields('identifier', e, 5);
+    const { entries: results } = searchFields('identifier', e, 5);
     expect(results.some((r) => r.piece === 'NCTId')).toBe(true);
   });
 
   it('handles limit=1 returning only the top match', () => {
     const e = flattenMetadata(sampleTree);
-    const results = searchFields('enrollment', e, 1);
+    const { entries: results } = searchFields('enrollment', e, 1);
     expect(results).toHaveLength(1);
     expect(results[0]?.piece).toBe('EnrollmentCount');
   });

@@ -30,6 +30,19 @@ const SECTION_MAP: Record<Section, string> = {
 };
 
 /**
+ * Resolve a measurement value for the condensed/text channels. The caller's
+ * `!= null` guard drops genuinely-empty cells; the `"NA"`/`"NR"` sentinels are
+ * NOT dropped — for time-to-event MEDIAN measures they encode "median not
+ * reached", and silently dropping them removes an entire arm from the rendered
+ * measure (the comparator then reads as the headline result). Surface that
+ * explicitly for MEDIAN; pass other sentinel-bearing values through unchanged.
+ */
+function displayMeasurementValue(value: unknown, paramType: unknown): string {
+  const v = String(value);
+  return (v === 'NA' || v === 'NR') && paramType === 'MEDIAN' ? 'not reached' : v;
+}
+
+/**
  * Extract top-line per-group stats from a raw outcome object (full mode).
  * Returns undefined if no measurement values are present.
  */
@@ -45,10 +58,10 @@ function extractTopStats(
   if (!measurements?.length) return;
   const groupMap = new Map(groups.map((g) => [g.id as string, (g.title ?? g.id) as string]));
   const stats = measurements
-    .filter((m) => m.value != null && m.value !== 'NA' && m.value !== 'NR')
+    .filter((m) => m.value != null)
     .map((m) => ({
       group: groupMap.get(m.groupId as string) ?? (m.groupId as string),
-      value: m.value as string,
+      value: displayMeasurementValue(m.value, o.paramType),
       ...(m.spread != null ? { spread: m.spread as string } : {}),
     }));
   return stats.length ? stats : undefined;
@@ -419,11 +432,11 @@ function formatBaseline(bl: RO, lines: string[]) {
         const prefix = clsTitle ?? catTitle ?? '';
         const measurements = cat.measurements as Array<RO> | undefined;
         const vals = (measurements ?? [])
-          .filter((v) => v.value != null && v.value !== 'NA' && v.value !== 'NR')
+          .filter((v) => v.value != null)
           .map((v) => {
             const gName = shortGroup(gm.get(v.groupId as string) ?? (v.groupId as string));
             const spread = v.spread != null ? ` ±${v.spread}` : '';
-            return `${gName}: ${v.value}${spread}`;
+            return `${gName}: ${displayMeasurementValue(v.value, paramType)}${spread}`;
           })
           .join(', ');
         if (vals) lines.push(`  ${prefix ? `${prefix}: ` : ''}${vals}`);

@@ -529,6 +529,106 @@ describe('getStudyResults', () => {
       expect(outcome.topAnalysis).toBeUndefined();
     });
 
+    it('retains the not-reached arm and renders "not reached" for MEDIAN measures (#76)', async () => {
+      const study = makeStudy('NCT02819518', true, {
+        outcomeMeasuresModule: {
+          outcomeMeasures: [
+            {
+              type: 'SECONDARY',
+              title: 'Duration of Response',
+              paramType: 'MEDIAN',
+              unitOfMeasure: 'Months',
+              groups: [
+                { id: 'OG000', title: 'Pembrolizumab + Chemotherapy' },
+                { id: 'OG001', title: 'Placebo + Chemotherapy' },
+              ],
+              classes: [
+                {
+                  categories: [
+                    {
+                      measurements: [
+                        { groupId: 'OG000', value: 'NA' },
+                        { groupId: 'OG001', value: '6.5' },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      });
+      mockService.getStudiesBatch.mockResolvedValue([study]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input!.parse({
+        nctIds: 'NCT02819518',
+        sections: 'outcomes',
+        summary: true,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      const topStats = result.results[0]!.outcomes![0]!.topStats as Array<{
+        group: string;
+        value: string;
+      }>;
+
+      // Both arms retained — the not-reached arm is no longer silently dropped.
+      expect(topStats).toHaveLength(2);
+      expect(topStats.find((s) => s.group.startsWith('Pembro'))?.value).toBe('not reached');
+      expect(topStats.find((s) => s.group.startsWith('Placebo'))?.value).toBe('6.5');
+    });
+
+    it('renders NA/NR literally for non-MEDIAN measures but drops empty cells (#76)', async () => {
+      const study = makeStudy('NCT02819518', true, {
+        outcomeMeasuresModule: {
+          outcomeMeasures: [
+            {
+              type: 'SECONDARY',
+              title: 'Count of Responders',
+              paramType: 'COUNT_OF_PARTICIPANTS',
+              groups: [
+                { id: 'G1', title: 'Arm A' },
+                { id: 'G2', title: 'Arm B' },
+                { id: 'G3', title: 'Arm C' },
+              ],
+              classes: [
+                {
+                  categories: [
+                    {
+                      measurements: [
+                        { groupId: 'G1', value: 'NA' },
+                        { groupId: 'G2', value: '12' },
+                        { groupId: 'G3', value: null },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      });
+      mockService.getStudiesBatch.mockResolvedValue([study]);
+
+      const ctx = createMockContext();
+      const input = getStudyResults.input!.parse({
+        nctIds: 'NCT02819518',
+        sections: 'outcomes',
+        summary: true,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      const topStats = result.results[0]!.outcomes![0]!.topStats as Array<{
+        group: string;
+        value: string;
+      }>;
+
+      // NA passes through literally (not MEDIAN); the genuinely-empty cell is dropped.
+      expect(topStats).toHaveLength(2);
+      expect(topStats.find((s) => s.group === 'Arm A')?.value).toBe('NA');
+      expect(topStats.find((s) => s.group === 'Arm B')?.value).toBe('12');
+      expect(topStats.some((s) => s.group === 'Arm C')).toBe(false);
+    });
+
     it('renders topAnalysis line in summary format() output', async () => {
       const study = makeStudy('NCT04074161', true, {
         outcomeMeasuresModule: {
@@ -877,6 +977,47 @@ describe('getStudyResults', () => {
       const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('Baseline');
       expect(text).toContain('Age');
+    });
+
+    it('renders the not-reached arm in full-mode baseline values (#76)', () => {
+      const blocks = getStudyResults.format!({
+        results: [
+          {
+            nctId: 'NCT02819518',
+            title: 'BL Study',
+            hasResults: true,
+            baseline: {
+              groups: [
+                { id: 'G1', title: 'Pembrolizumab' },
+                { id: 'G2', title: 'Placebo' },
+              ],
+              measures: [
+                {
+                  title: 'Time to Event',
+                  paramType: 'MEDIAN',
+                  unitOfMeasure: 'Months',
+                  classes: [
+                    {
+                      categories: [
+                        {
+                          measurements: [
+                            { groupId: 'G1', value: 'NA' },
+                            { groupId: 'G2', value: '6.5' },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        ],
+      });
+      const text = (blocks[0] as { text: string }).text;
+      // The not-reached arm survives instead of being filtered out of the row.
+      expect(text).toContain('Pembrolizumab: not reached');
+      expect(text).toContain('Placebo: 6.5');
     });
 
     it('renders the moreInfo section — limitations, agreement, contact (#64)', () => {

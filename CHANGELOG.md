@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.7.1](changelog/2.7.x/2.7.1.md) — 2026-06-14
+
+toArray tolerates JSON-stringified array arguments from LLM callers — get_field_values fields no longer silently wraps a stringified array into one bogus element
+
 ## [2.7.0](changelog/2.7.x/2.7.0.md) — 2026-06-11
 
 find_eligible condition re-rank; get_study_record referenceLimit; search_studies EnrollmentCount:desc guidance

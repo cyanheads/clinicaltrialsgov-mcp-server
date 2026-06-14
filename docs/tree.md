@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-06-11 21:07:01
+Generated on: 2026-06-14 08:08:05
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -30,6 +30,7 @@ clinicaltrialsgov-mcp-server/
 │   ├── 2.4.x/
 │   ├── 2.5.x/
 │   ├── 2.6.x/
+│   ├── 2.7.x/
 │   └── template.md
 ├── changelogs/
 │   └── archive1.md

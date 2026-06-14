@@ -34,7 +34,11 @@ interface FilterInputs {
 }
 
 interface FilterMeta {
+  locationLimit?: number;
   locationsWithoutGeo?: number;
+  nearLocation?: { lat: number; lon: number; radiusMi: number };
+  outcomeLimit?: number;
+  referenceLimit?: number;
   totalLocations?: number;
   totalOtherOutcomes?: number;
   totalReferences?: number;
@@ -43,8 +47,10 @@ interface FilterMeta {
 
 /**
  * Apply caller-requested filters to the study so structuredContent and format()
- * see the same data. Totals from before filtering are preserved in `meta` and
- * returned alongside the filtered study.
+ * see the same data. A limit (and its corresponding upstream total) is recorded
+ * in `meta` only when it actually reduced the set — reporting a cap that trimmed
+ * nothing would imply a filter was applied when none was. `nearLocation` always
+ * filters (drops non-geo sites, sorts, applies radius), so it is always echoed.
  */
 function applyFilters(
   study: RawStudyShape,
@@ -59,7 +65,6 @@ function applyFilters(
   const origLocations = ps.contactsLocationsModule?.locations;
   const hasLocationFilter = input.nearLocation != null || input.locationLimit != null;
   if (origLocations?.length && hasLocationFilter) {
-    meta.totalLocations = origLocations.length;
     let locations: LocationWithDistance[] = origLocations;
 
     if (input.nearLocation) {
@@ -67,16 +72,25 @@ function applyFilters(
       const withGeo = origLocations.filter(
         (l): l is StudyLocation & { geoPoint: { lat: number; lon: number } } => l.geoPoint != null,
       );
-      meta.locationsWithoutGeo = origLocations.length - withGeo.length;
+      const withoutGeo = origLocations.length - withGeo.length;
+      if (withoutGeo > 0) meta.locationsWithoutGeo = withoutGeo;
       locations = withGeo
         .map((l) => ({ ...l, distanceMi: haversineMi({ lat, lon }, l.geoPoint) }))
         .filter((l) => l.distanceMi <= radiusMi)
         .sort((a, b) => a.distanceMi - b.distanceMi);
+      // nearLocation always filters → always echo it.
+      meta.nearLocation = input.nearLocation;
     }
 
+    const beforeLimit = locations.length;
     if (input.locationLimit != null) {
       locations = locations.slice(0, input.locationLimit);
+      // Echo the limit only when the slice actually trimmed something.
+      if (beforeLimit > input.locationLimit) meta.locationLimit = input.locationLimit;
     }
+
+    // Record the upstream total only when the returned set is smaller than it.
+    if (locations.length < origLocations.length) meta.totalLocations = origLocations.length;
 
     nextPs = {
       ...nextPs,
@@ -91,25 +105,35 @@ function applyFilters(
   if (outcomes && input.outcomeLimit != null) {
     const limit = input.outcomeLimit;
     const nextOutcomes = { ...outcomes };
-    if (outcomes.secondaryOutcomes?.length) {
-      meta.totalSecondaryOutcomes = outcomes.secondaryOutcomes.length;
-      nextOutcomes.secondaryOutcomes = outcomes.secondaryOutcomes.slice(0, limit);
+    let trimmed = false;
+    const secondary = outcomes.secondaryOutcomes;
+    if (secondary && secondary.length > limit) {
+      meta.totalSecondaryOutcomes = secondary.length;
+      nextOutcomes.secondaryOutcomes = secondary.slice(0, limit);
+      trimmed = true;
     }
-    if (outcomes.otherOutcomes?.length) {
-      meta.totalOtherOutcomes = outcomes.otherOutcomes.length;
-      nextOutcomes.otherOutcomes = outcomes.otherOutcomes.slice(0, limit);
+    const other = outcomes.otherOutcomes;
+    if (other && other.length > limit) {
+      meta.totalOtherOutcomes = other.length;
+      nextOutcomes.otherOutcomes = other.slice(0, limit);
+      trimmed = true;
     }
-    nextPs = { ...nextPs, outcomesModule: nextOutcomes };
+    if (trimmed) {
+      meta.outcomeLimit = limit;
+      nextPs = { ...nextPs, outcomesModule: nextOutcomes };
+    }
   }
 
   const refs = ps.referencesModule;
-  if (refs?.references?.length && input.referenceLimit != null) {
+  const referenceLimit = input.referenceLimit;
+  if (refs?.references && referenceLimit != null && refs.references.length > referenceLimit) {
     meta.totalReferences = refs.references.length;
+    meta.referenceLimit = referenceLimit;
     nextPs = {
       ...nextPs,
       referencesModule: {
         ...refs,
-        references: refs.references.slice(0, input.referenceLimit),
+        references: refs.references.slice(0, referenceLimit),
       },
     };
   }
@@ -150,7 +174,7 @@ function summarizeResults(study: RawStudyShape): ResultsSummary | undefined {
 
 export const getStudy = tool('clinicaltrials_get_study_record', {
   description:
-    'Fetch a single clinical trial study by NCT ID from ClinicalTrials.gov. Returns the full study record including protocol details, eligibility criteria, outcomes, arms, interventions, contacts, and locations. Optional locationLimit / outcomeLimit / referenceLimit / nearLocation parameters trim locations, outcomes, and references — original totals are preserved in `filtersApplied` whenever a cap is applied.',
+    'Fetch a single clinical trial study by NCT ID from ClinicalTrials.gov. Returns the full study record including protocol details, eligibility criteria, outcomes, arms, interventions, contacts, and locations. Optional locationLimit / outcomeLimit / referenceLimit / nearLocation parameters trim locations, outcomes, and references — original totals are preserved in `filtersApplied` only when a cap actually trims the set.',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -184,7 +208,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       .max(500)
       .optional()
       .describe(
-        'Optional cap on the number of locations returned. Omit for no cap (full upstream list). Pairs naturally with nearLocation for narrowing a large multi-site trial. Original total preserved in filtersApplied.totalLocations whenever a cap is applied.',
+        'Optional cap on the number of locations returned. Omit for no cap (full upstream list). Pairs naturally with nearLocation for narrowing a large multi-site trial. Original total preserved in filtersApplied.totalLocations only when the cap trims the list.',
       ),
     outcomeLimit: z
       .number()
@@ -193,7 +217,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       .max(100)
       .optional()
       .describe(
-        'Optional cap on the number of secondary and other outcomes returned. Omit for no cap (full upstream lists). Primary outcomes are never capped. Original totals preserved in filtersApplied.totalSecondaryOutcomes / totalOtherOutcomes whenever a cap is applied.',
+        'Optional cap on the number of secondary and other outcomes returned. Omit for no cap (full upstream lists). Primary outcomes are never capped. Original totals preserved in filtersApplied.totalSecondaryOutcomes / totalOtherOutcomes only when the cap trims a list.',
       ),
     referenceLimit: z
       .number()
@@ -202,7 +226,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       .max(100)
       .optional()
       .describe(
-        'Optional cap on the number of references returned. Omit for no cap (full upstream list). Original total preserved in filtersApplied.totalReferences whenever a cap is applied. seeAlsoLinks are never capped.',
+        'Optional cap on the number of references returned. Omit for no cap (full upstream list). Original total preserved in filtersApplied.totalReferences only when the cap trims the list. seeAlsoLinks are never capped.',
       ),
     nearLocation: z
       .object({
@@ -212,7 +236,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       })
       .optional()
       .describe(
-        'Filter returned locations to those within radius of (lat, lon) and sort by distance. Adds distanceMi to each location. Locations without published coordinates are dropped — most US sites carry them; international sites less reliably so. For broader geographic filtering across studies, use clinicaltrials_search_studies with geoFilter.',
+        'Filter returned locations to those within radius of (lat, lon) and sort by distance. Adds distanceMi to each location. Locations without published coordinates are dropped — most US sites carry them; international sites less reliably so. Distances reflect ClinicalTrials.gov geocoding granularity — typically city-centroid, not facility-level — so multiple sites in the same city resolve to near-identical distances. For broader geographic filtering across studies, use clinicaltrials_search_studies with geoFilter.',
       ),
   }),
 
@@ -251,9 +275,25 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
           .int()
           .optional()
           .describe('Upstream reference count before referenceLimit was applied.'),
-        locationLimit: z.number().int().optional().describe('Echo of the locationLimit input.'),
-        outcomeLimit: z.number().int().optional().describe('Echo of the outcomeLimit input.'),
-        referenceLimit: z.number().int().optional().describe('Echo of the referenceLimit input.'),
+        locationLimit: z
+          .number()
+          .int()
+          .optional()
+          .describe(
+            'Echo of the locationLimit input — present only when the cap trimmed the list.',
+          ),
+        outcomeLimit: z
+          .number()
+          .int()
+          .optional()
+          .describe('Echo of the outcomeLimit input — present only when the cap trimmed a list.'),
+        referenceLimit: z
+          .number()
+          .int()
+          .optional()
+          .describe(
+            'Echo of the referenceLimit input — present only when the cap trimmed the list.',
+          ),
         nearLocation: z
           .object({
             lat: z.number().describe('Latitude in decimal degrees.'),
@@ -308,13 +348,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     return {
       study: studyOut,
       ...(resultsSummary ? { resultsSummary } : {}),
-      filtersApplied: {
-        ...meta,
-        ...(input.locationLimit != null ? { locationLimit: input.locationLimit } : {}),
-        ...(input.outcomeLimit != null ? { outcomeLimit: input.outcomeLimit } : {}),
-        ...(input.referenceLimit != null ? { referenceLimit: input.referenceLimit } : {}),
-        ...(input.nearLocation ? { nearLocation: input.nearLocation } : {}),
-      },
+      filtersApplied: meta,
     };
   },
 

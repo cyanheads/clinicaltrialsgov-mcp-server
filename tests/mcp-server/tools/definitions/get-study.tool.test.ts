@@ -377,6 +377,59 @@ describe('getStudy', () => {
       for (let i = 0; i < 3; i++) expect(text).toContain(`Link ${i}`);
     });
 
+    it('omits filtersApplied caps when a limit does not trim anything (#80)', async () => {
+      // 1 location, 2 secondary outcomes, 1 reference — every cap exceeds the data.
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({
+          contactsLocationsModule: { locations: [{ facility: 'Only Site', country: 'US' }] },
+          outcomesModule: { secondaryOutcomes: [{ measure: 'S0' }, { measure: 'S1' }] },
+          referencesModule: { references: [{ citation: 'Ref 0.' }] },
+        }),
+      );
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({
+          nctId: 'NCT12345678',
+          locationLimit: 2,
+          outcomeLimit: 5,
+          referenceLimit: 5,
+        }),
+        ctx,
+      );
+
+      // Nothing was trimmed → no caps or totals are reported.
+      expect(result.filtersApplied).toEqual({});
+      // Full data is still returned intact.
+      expect(getStructuredLocations(result)).toHaveLength(1);
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      expect(text).not.toContain('Filters applied:');
+    });
+
+    it('reports outcomeLimit only for the list it actually trims (#80)', async () => {
+      // secondary (8) is trimmed by limit 3; other (2 ≤ 3) is not.
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({
+          outcomesModule: {
+            secondaryOutcomes: Array.from({ length: 8 }, (_, i) => ({ measure: `S${i}` })),
+            otherOutcomes: [{ measure: 'O0' }, { measure: 'O1' }],
+          },
+        }),
+      );
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({ nctId: 'NCT12345678', outcomeLimit: 3 }),
+        ctx,
+      );
+
+      expect(result.filtersApplied.totalSecondaryOutcomes).toBe(8);
+      expect(result.filtersApplied.totalOtherOutcomes).toBeUndefined();
+      expect(result.filtersApplied.outcomeLimit).toBe(3);
+      expect(getStructuredSecondary(result)).toHaveLength(3);
+    });
+
     it('nearLocation combined with locationLimit applies both in both surfaces', async () => {
       const here = { lat: 47.6062, lon: -122.3321 };
       mockService.getStudy.mockResolvedValue(

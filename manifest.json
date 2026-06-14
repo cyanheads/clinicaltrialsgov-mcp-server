@@ -1,7 +1,7 @@
 {
   "manifest_version": "0.3",
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "2.7.1",
+  "version": "2.7.2",
   "description": "Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to eligible trials via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads"

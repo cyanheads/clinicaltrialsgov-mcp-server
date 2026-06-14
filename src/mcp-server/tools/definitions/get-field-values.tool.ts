@@ -37,7 +37,10 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
     fields: z
       .union([
         z.string().describe('A single PascalCase field name.'),
-        z.array(z.string()).describe('Multiple PascalCase field names.'),
+        z
+          .array(z.string())
+          .min(1)
+          .describe('Multiple PascalCase field names (at least one required).'),
       ])
       .describe(
         `PascalCase field name(s) to get value statistics for. Examples: OverallStatus, Phase, StudyType, Sex, LeadSponsorClass. Use clinicaltrials_get_field_definitions with a query to find more field names.`,
@@ -90,6 +93,13 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
 
   async handler(input, ctx) {
     const fields = toArray(input.fields);
+    if (fields.length === 0) {
+      throw ctx.fail(
+        'field_invalid',
+        'Provide at least one PascalCase field name (e.g. "OverallStatus").',
+        { ...ctx.recoveryFor('field_invalid') },
+      );
+    }
     const service = getClinicalTrialsService();
     const stats = await service.getFieldValues(fields, ctx);
     ctx.log.info('Field values fetched', { fieldCount: stats.length });

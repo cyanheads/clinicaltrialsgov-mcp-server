@@ -38,6 +38,10 @@ describe('getFieldValues', () => {
     it('requires fields parameter', () => {
       expect(() => getFieldValues.input!.parse({})).toThrow();
     });
+
+    it('rejects an empty fields array (#82)', () => {
+      expect(() => getFieldValues.input!.parse({ fields: [] })).toThrow();
+    });
   });
 
   describe('handler', () => {
@@ -95,6 +99,15 @@ describe('getFieldValues', () => {
       await expect(
         getFieldValues.handler(getFieldValues.input!.parse({ fields: 'BadField' }), ctx),
       ).rejects.toThrow('Invalid field');
+    });
+
+    it('rejects an empty stringified array instead of dumping the full catalog (#82)', async () => {
+      const ctx = createMockContext({ errors: getFieldValues.errors });
+      // A genuine JSON string "[]" validates as a string, normalizes to [] in the
+      // handler, and must fail fast rather than omitting the upstream fields param.
+      const input = getFieldValues.input!.parse({ fields: '[]' });
+      await expect(getFieldValues.handler(input, ctx)).rejects.toThrow(/at least one/i);
+      expect(mockService.getFieldValues).not.toHaveBeenCalled();
     });
   });
 

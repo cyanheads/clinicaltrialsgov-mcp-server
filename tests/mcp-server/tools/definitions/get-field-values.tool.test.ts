@@ -78,6 +78,17 @@ describe('getFieldValues', () => {
       expect(mockService.getFieldValues).toHaveBeenCalledWith(fields, ctx);
     });
 
+    it('normalizes a JSON-stringified fields array (regression for #75)', async () => {
+      mockService.getFieldValues.mockResolvedValue([]);
+      const ctx = createMockContext();
+      await getFieldValues.handler(
+        getFieldValues.input!.parse({ fields: '["OverallStatus","Phase"]' }),
+        ctx,
+      );
+
+      expect(mockService.getFieldValues).toHaveBeenCalledWith(['OverallStatus', 'Phase'], ctx);
+    });
+
     it('propagates service errors', async () => {
       mockService.getFieldValues.mockRejectedValue(new Error('Invalid field'));
       const ctx = createMockContext();

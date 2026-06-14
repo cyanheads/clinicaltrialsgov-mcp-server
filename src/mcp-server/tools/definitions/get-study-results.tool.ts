@@ -8,6 +8,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
+import { toArray } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 const VALID_SECTIONS = [
@@ -569,7 +570,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
   }),
 
   async handler(input, ctx) {
-    const nctIds = Array.isArray(input.nctIds) ? input.nctIds : [input.nctIds];
+    const nctIds = toArray(input.nctIds);
     const sections: Section[] = input.sections
       ? Array.isArray(input.sections)
         ? input.sections

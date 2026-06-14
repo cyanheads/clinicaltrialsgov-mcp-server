@@ -190,6 +190,34 @@ describe('searchStudies', () => {
       );
     });
 
+    it('parses a JSON-stringified statusFilter array into filterOverallStatus (regression for #75)', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
+      const ctx = createMockContext();
+      await searchStudies.handler(
+        searchStudies.input!.parse({ statusFilter: '["RECRUITING","COMPLETED"]' }),
+        ctx,
+      );
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterOverallStatus: ['RECRUITING', 'COMPLETED'] }),
+        ctx,
+      );
+    });
+
+    it('parses a JSON-stringified phaseFilter array into the advanced filter (regression for #75)', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
+      const ctx = createMockContext();
+      await searchStudies.handler(
+        searchStudies.input!.parse({ phaseFilter: '["PHASE1","PHASE2"]' }),
+        ctx,
+      );
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterAdvanced: '(AREA[Phase]PHASE1 OR AREA[Phase]PHASE2)' }),
+        ctx,
+      );
+    });
+
     it('echoes search criteria in enrichment when results are empty', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();

@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
+import { toArray } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 export const getFieldValues = tool('clinicaltrials_get_field_values', {
@@ -88,7 +89,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
   }),
 
   async handler(input, ctx) {
-    const fields = Array.isArray(input.fields) ? input.fields : [input.fields];
+    const fields = toArray(input.fields);
     const service = getClinicalTrialsService();
     const stats = await service.getFieldValues(fields, ctx);
     ctx.log.info('Field values fetched', { fieldCount: stats.length });

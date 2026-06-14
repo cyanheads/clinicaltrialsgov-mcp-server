@@ -27,6 +27,30 @@ describe('toArray', () => {
   it('handles empty array', () => {
     expect(toArray([])).toEqual([]);
   });
+
+  it('parses a JSON-stringified string array (#75)', () => {
+    expect(toArray('["RECRUITING","COMPLETED"]')).toEqual(['RECRUITING', 'COMPLETED']);
+  });
+
+  it('parses a single-element JSON-stringified array (#75)', () => {
+    expect(toArray('["OverallStatus"]')).toEqual(['OverallStatus']);
+  });
+
+  it('parses a whitespace-padded JSON-stringified array (#75)', () => {
+    expect(toArray('  ["PHASE1", "PHASE2"]  ')).toEqual(['PHASE1', 'PHASE2']);
+  });
+
+  it('scalar-wraps a truncated "[" string rather than parsing (#75)', () => {
+    expect(toArray('[')).toEqual(['[']);
+  });
+
+  it('scalar-wraps a JSON array with non-string elements (#75)', () => {
+    expect(toArray('[1, 2]')).toEqual(['[1, 2]']);
+  });
+
+  it('scalar-wraps a JSON object string — only [-leading values are parsed (#75)', () => {
+    expect(toArray('{"a":1}')).toEqual(['{"a":1}']);
+  });
 });
 
 describe('buildAdvancedFilter', () => {

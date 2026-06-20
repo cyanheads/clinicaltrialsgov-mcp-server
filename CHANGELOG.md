@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.7.3](changelog/2.7.x/2.7.3.md) — 2026-06-20
+
+mcp-ts-core 0.10.9 maintenance — floating-specifier and plugin-manifest devcheck guards, 14 skill syncs, dependency refresh
+
 ## [2.7.2](changelog/2.7.x/2.7.2.md) — 2026-06-14
 
 Outcome rendering and filter-disclosure correctness — not-reached arms retained in summaries, truncation/cap flags gated on real overflow, empty field lists rejected

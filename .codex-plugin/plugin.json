@@ -1,6 +1,6 @@
 {
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "2.7.2",
+  "version": "2.7.3",
   "description": "Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to eligible trials via MCP. STDIO or Streamable HTTP.",
   "author": {
     "name": "cyanheads",
@@ -15,7 +15,7 @@
   "interface": {
     "displayName": "clinicaltrialsgov-mcp-server",
     "shortDescription": "Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to eligible trials.",
-    "longDescription": "",
+    "longDescription": "MCP server wrapping the ClinicalTrials.gov REST API v2 — the US National Library of Medicine's registry of ~577K clinical trial studies. Search studies with filters and field selection, fetch full study records by NCT ID, extract outcomes and adverse events from completed trials, discover valid field names and enum values, and match patient demographics to recruiting trials. Public, read-only, no API key required. Runs over STDIO or Streamable HTTP.",
     "developerName": "cyanheads",
     "category": "",
     "capabilities": ["Read"],

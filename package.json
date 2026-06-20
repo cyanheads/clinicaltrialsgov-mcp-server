@@ -1,6 +1,6 @@
 {
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "2.7.2",
+  "version": "2.7.3",
   "mcpName": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
   "description": "Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to eligible trials via MCP. STDIO or Streamable HTTP.",
   "main": "dist/index.js",
@@ -101,16 +101,16 @@
     "node": ">=24.0.0"
   },
   "dependencies": {
-    "@cyanheads/mcp-ts-core": "^0.10.6",
+    "@cyanheads/mcp-ts-core": "^0.10.9",
     "pino-pretty": "^13.1.3",
     "zod": "^4.4.3"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.0",
-    "@cloudflare/workers-types": "4.20260613.1",
+    "@cloudflare/workers-types": "4.20260620.1",
     "@types/bun": "^1.3.14",
-    "@types/node": "25.9.3",
-    "@vitest/coverage-istanbul": "^4.1.8",
+    "@types/node": "26.0.0",
+    "@vitest/coverage-istanbul": "^4.1.9",
     "depcheck": "^1.4.7",
     "fast-check": "^4.8.0",
     "husky": "^9.1.7",
@@ -119,7 +119,7 @@
     "typedoc": "^0.28.19",
     "typescript": "^6.0.3",
     "vite": "^8.0.16",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.9"
   },
   "publishConfig": {
     "access": "public"

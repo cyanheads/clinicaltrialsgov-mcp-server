@@ -448,13 +448,8 @@ describe('ClinicalTrialsService', () => {
       }
     });
 
-    it('wraps Essie free-text parser error with query_parse_error reason + recovery hint', async () => {
-      mockFetch.mockResolvedValue(
-        textResponse(
-          "Error parsing query in Other terms: no viable alternative at input 'rosuvastatin BCRP OATP1B1 ['\nmismatched input '[' expecting {<EOF>, '(', ','}",
-        ),
-      );
-      const ctx = createMockContext({
+    const queryParseErrorCtx = () =>
+      createMockContext({
         errors: [
           {
             reason: 'query_parse_error',
@@ -465,14 +460,112 @@ describe('ClinicalTrialsService', () => {
           },
         ],
       });
+
+    it('wraps Essie free-text parser error with query_parse_error reason + recovery hint', async () => {
+      // Combined shape (both a `no viable alternative` line and a `mismatched input`
+      // line). `mismatched input` extraction takes precedence per the documented
+      // order, so the offender is the reserved `[`; the grammar dump is stripped.
+      mockFetch.mockResolvedValue(
+        textResponse(
+          "Error parsing query in Other terms: no viable alternative at input 'rosuvastatin BCRP OATP1B1 ['\nmismatched input '[' expecting {<EOF>, '(', ','}",
+        ),
+      );
+      const ctx = queryParseErrorCtx();
       try {
         await service.searchStudies({ queryTerm: 'foo [diag:0]' }, ctx);
         expect.fail('should have thrown');
       } catch (err) {
         expect(err).toBeInstanceOf(McpError);
+        const msg = (err as McpError).message;
+        // Offender extracted, grammar dump dropped.
+        expect(msg).toContain("near '['");
+        expect(msg).not.toContain('expecting {');
+        expect(msg).not.toContain('StringLiteral');
         const data = (err as McpError).data as Record<string, unknown>;
         expect(data?.reason).toBe('query_parse_error');
         expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain('reserved');
+      }
+    });
+
+    it('wraps the standalone `no viable alternative` shape without the grammar dump (#83)', async () => {
+      // Standalone `no viable alternative` line — exercises that regex branch
+      // directly (no `mismatched input` line to take precedence).
+      mockFetch.mockResolvedValue(
+        textResponse(
+          "Error parsing query in Other terms: no viable alternative at input 'foo bar ['",
+        ),
+      );
+      const ctx = queryParseErrorCtx();
+      try {
+        await service.searchStudies({ queryTerm: 'foo bar [' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        const msg = (err as McpError).message;
+        expect(msg).toContain("near 'foo bar ['");
+        expect(msg).not.toContain('expecting');
+        expect((err as McpError).data).toMatchObject({ reason: 'query_parse_error' });
+      }
+    });
+
+    it('wraps the `mismatched input` bracket shape without the grammar dump (#83)', async () => {
+      // Exact live-API string for a `[` in query.term — a 22-token grammar list.
+      mockFetch.mockResolvedValue(
+        textResponse(
+          "Error parsing query in Other terms: mismatched input '[' expecting {<EOF>, '(', ',', 'NOT', 'AND', 'OR', 'SEARCH', 'AREA', 'RANGE', 'DISTANCE', Coverage, Expansion, 'TILT', 'ALL', 'MISSING', 'MIN', 'MAX', EscapedKeyword, BooleanLiteral, DecimalLiteral, DateLiteral, TimeLiteral, RadiusLiteral, StringLiteral, Term}",
+        ),
+      );
+      const ctx = queryParseErrorCtx();
+      try {
+        await service.searchStudies({ queryTerm: 'diabetes [bracket]' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        const msg = (err as McpError).message;
+        expect(msg).toContain("near '['");
+        expect(msg).toContain('reserved for advancedFilter AREA[]');
+        expect(msg).not.toContain('expecting {');
+        expect(msg).not.toContain('StringLiteral');
+        expect((err as McpError).data).toMatchObject({ reason: 'query_parse_error' });
+      }
+    });
+
+    it('wraps the unmatched-paren `missing` shape (#83)', async () => {
+      // Live-API string for an unbalanced `(` in query.term.
+      mockFetch.mockResolvedValue(
+        textResponse("Error parsing query in Other terms: missing ')' at '<EOF>'"),
+      );
+      const ctx = queryParseErrorCtx();
+      try {
+        await service.searchStudies({ queryTerm: 'diabetes (unmatched' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        const msg = (err as McpError).message;
+        expect(msg).toContain("near ')'");
+        expect(msg).not.toContain('expecting');
+        expect((err as McpError).data).toMatchObject({ reason: 'query_parse_error' });
+      }
+    });
+
+    it('applies the same parse-error shaping to an alternate free-text param (conditionQuery parity, #83)', async () => {
+      // The catch-all is shared by every free-text param; conditionQuery routes
+      // through the identical 400 path with a different `where` prefix.
+      mockFetch.mockResolvedValue(
+        textResponse(
+          "Error parsing query in Conditions or disease: mismatched input '[' expecting {<EOF>, '(', ',', 'NOT', 'AND', 'OR'}",
+        ),
+      );
+      const ctx = queryParseErrorCtx();
+      try {
+        await service.searchStudies({ queryCond: 'diabetes [bracket]' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        const msg = (err as McpError).message;
+        expect(msg).toContain("near '['");
+        expect(msg).not.toContain('expecting {');
+        expect((err as McpError).data).toMatchObject({ reason: 'query_parse_error' });
       }
     });
 
@@ -1138,6 +1231,71 @@ describe('ClinicalTrialsService', () => {
         .find((u) => u.includes('/stats/field/values'));
       expect(valuesCall).toBeDefined();
       expect(new URL(valuesCall!).searchParams.get('fields')).toBe('OverallStatus');
+    });
+
+    // Metadata fixture carrying both an array-typed piece (Phase → Phase[]) and a
+    // scalar piece (OverallStatus → Status) for the multi-valued flag (#85).
+    const cardinalityMetadata: FieldNode[] = [
+      {
+        name: 'protocolSection',
+        children: [
+          {
+            name: 'statusModule',
+            children: [{ name: 'overallStatus', piece: 'OverallStatus', type: 'Status' }],
+          },
+          {
+            name: 'designModule',
+            children: [{ name: 'phases', piece: 'Phase', type: 'Phase[]', isEnum: true }],
+          },
+        ],
+      },
+    ];
+
+    it('flags array-typed fields as multiValued, leaving scalar fields unflagged (#85)', async () => {
+      mockFetch.mockImplementation((url: string | URL) => {
+        const u = typeof url === 'string' ? url : url.toString();
+        if (u.includes('/studies/metadata')) {
+          return Promise.resolve(jsonResponse(cardinalityMetadata));
+        }
+        // /stats/field/values response — type here is the value domain, not the
+        // array marker, so multiValued must come from the metadata node type.
+        return Promise.resolve(
+          jsonResponse([
+            { field: 'Phase', piece: 'Phase', type: 'ENUM', missingStudiesCount: 139770 },
+            {
+              field: 'OverallStatus',
+              piece: 'OverallStatus',
+              type: 'ENUM',
+              missingStudiesCount: 0,
+            },
+          ]),
+        );
+      });
+      const ctx = createMockContext();
+
+      const result = await validatingService.getFieldValues(['Phase', 'OverallStatus'], ctx);
+
+      const phase = result.find((s) => s.piece === 'Phase');
+      const status = result.find((s) => s.piece === 'OverallStatus');
+      expect(phase?.multiValued).toBe(true);
+      // Scalar field: flag is absent (not set to false).
+      expect(status?.multiValued).toBeUndefined();
+    });
+
+    it('does not flag multiValued when the metadata index is unreachable (#85 fail-open)', async () => {
+      mockFetch.mockImplementation((url: string | URL) => {
+        const u = typeof url === 'string' ? url : url.toString();
+        if (u.includes('/studies/metadata')) {
+          return Promise.resolve(jsonResponse(null, 404));
+        }
+        return Promise.resolve(
+          jsonResponse([{ field: 'Phase', piece: 'Phase', type: 'ENUM', missingStudiesCount: 0 }]),
+        );
+      });
+      const ctx = createMockContext();
+
+      const result = await validatingService.getFieldValues(['Phase'], ctx);
+      expect(result[0]?.multiValued).toBeUndefined();
     });
 
     it('attaches reason=field_invalid and recovery hint on validation failure', async () => {

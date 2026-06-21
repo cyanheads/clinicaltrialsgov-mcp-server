@@ -152,12 +152,21 @@ export class ClinicalTrialsService {
       await this.validateFields(fields, ctx);
     }
     try {
-      return await this.fetchJson<FieldValueStats[]>(
+      const stats = await this.fetchJson<FieldValueStats[]>(
         '/stats/field/values',
         { fields: fields.join('|') },
         ctx,
         { jsonFormat: false },
       );
+      // Flag multi-valued fields so callers can read the per-value counts
+      // correctly — array-type fields (e.g. Phase, Condition) let one study carry
+      // several values, so buckets sum above the study total. The metadata index
+      // is already cached by validateFields above, so this adds no round-trip;
+      // skipped when local validation is disabled (no metadata available).
+      if (this.validateFieldsLocally) {
+        await this.annotateMultiValued(stats, ctx);
+      }
+      return stats;
     } catch (err) {
       if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
         // Upstream reports only the first bad name ("Unknown piece name of field
@@ -181,6 +190,27 @@ export class ClinicalTrialsService {
         );
       }
       throw err;
+    }
+  }
+
+  /**
+   * Mark each stat as multi-valued by checking the metadata node `type` for an
+   * array marker (`[]`, e.g. `Phase[]`, `text[]`) — the durable source of
+   * cardinality. Note: the stat's own `type` (`ENUM`/`STRING`) is the value
+   * domain, not the array marker, so the metadata node type is the only signal.
+   * Reuses the cached field index (no round-trip); fails open silently if the
+   * metadata index is unavailable.
+   */
+  private async annotateMultiValued(stats: FieldValueStats[], ctx: Context): Promise<void> {
+    let entries: FieldIndexEntry[];
+    try {
+      ({ entries } = await this.getFieldIndex(ctx));
+    } catch {
+      return;
+    }
+    const arrayPieces = new Set(entries.filter((e) => e.type?.endsWith('[]')).map((e) => e.piece));
+    for (const stat of stats) {
+      if (arrayPieces.has(stat.piece)) stat.multiValued = true;
     }
   }
 
@@ -497,11 +527,13 @@ export class ClinicalTrialsService {
             throw validationError(`Invalid request format. API response: ${text}`);
           }
           // Essie parser errors share the `Error parsing query in <where>: …` prefix.
-          // Three shapes show up:
+          // Several shapes show up:
           //   1. `Unknown area name: \`X\`` — bad field in AREA[X]
           //   2. `Allowed values for enum field \`<path>\` are \`V1\`, \`V2\`, …` — invalid enum
           //      value in an AREA[Phase] expression (phaseFilter routes through filter.advanced)
-          //   3. `no viable alternative at input '… ['` — reserved char in a free-text field
+          //   3. ANTLR syntax errors from a reserved char or unbalanced parens in a free-text
+          //      field — `mismatched input 'X'`, `no viable alternative at input 'X'`, or
+          //      `missing 'X' at …` (the catch-all below; the raw grammar dump is dropped).
           if (text.startsWith('Error parsing query in')) {
             const areaMatch = text.match(/Unknown area name:\s*`([^`]+)`/);
             if (areaMatch) {
@@ -530,7 +562,17 @@ export class ClinicalTrialsService {
                 validValues,
               });
             }
-            throw validationError(text.trim(), {
+            // ANTLR catch-all: extract the offending token from whichever shape
+            // matched and drop the `expecting {…}` grammar dump — the token list is
+            // noise to a caller, so keep only the offender plus the recovery hint.
+            const offender =
+              text.match(/mismatched input '(.+?)'/)?.[1] ??
+              text.match(/no viable alternative at input '(.+?)'/)?.[1] ??
+              text.match(/missing '(.+?)' at /)?.[1];
+            const conciseMsg = offender
+              ? `Query syntax error near '${offender}': '[' and ']' are reserved for advancedFilter AREA[] expressions; an unmatched '(' or ')' also fails. Free-text fields take plain words plus AND, OR, NOT.`
+              : 'Query syntax error: the upstream parser rejected the query. Free-text fields take plain words plus AND, OR, NOT.';
+            throw validationError(conciseMsg, {
               reason: 'query_parse_error',
               ...ctx.recoveryFor('query_parse_error'),
             });

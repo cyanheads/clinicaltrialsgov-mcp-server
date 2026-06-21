@@ -267,5 +267,42 @@ describe('getFieldValues', () => {
       expect(text).toContain('**OverallStatus**');
       expect(text).toContain('**Phase**');
     });
+
+    it('appends the multi-valued note when multiValued is true (#85)', () => {
+      const blocks = getFieldValues.format!({
+        fieldStats: [
+          {
+            field: 'Phase',
+            piece: 'Phase',
+            type: 'ENUM',
+            multiValued: true,
+            uniqueValuesCount: 6,
+            missingStudiesCount: 139770,
+            topValues: [
+              { value: 'PHASE2', studiesCount: 200000 },
+              { value: 'PHASE3', studiesCount: 150000 },
+            ],
+          },
+        ],
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('multi-valued field');
+      expect(text).toContain('counts may exceed the study total');
+    });
+
+    it('omits the multi-valued note when multiValued is false or absent (#85)', () => {
+      const blocks = getFieldValues.format!({
+        fieldStats: [
+          {
+            field: 'OverallStatus',
+            piece: 'OverallStatus',
+            type: 'ENUM',
+            uniqueValuesCount: 14,
+            topValues: [{ value: 'COMPLETED', studiesCount: 200000 }],
+          },
+        ],
+      });
+      expect((blocks[0] as { text: string }).text).not.toContain('multi-valued');
+    });
   });
 });

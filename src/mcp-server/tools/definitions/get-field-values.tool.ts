@@ -59,6 +59,12 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
               .number()
               .optional()
               .describe('Number of studies where this field is absent.'),
+            multiValued: z
+              .boolean()
+              .optional()
+              .describe(
+                'True when the field is array-typed (a study can carry several values, e.g. Phase, Condition), so the per-value studiesCount buckets sum above the study total. Use to avoid computing a percentage against the corpus.',
+              ),
             // ENUM / STRING fields
             uniqueValuesCount: z.number().optional().describe('Number of distinct values.'),
             topValues: z
@@ -72,7 +78,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
               )
               .optional()
               .describe(
-                'Values ranked by frequency (capped at 250 by the API). Present for ENUM/STRING fields.',
+                'Values ranked by frequency (capped at 250 by the API). Present for ENUM/STRING fields. When multiValued is true, studiesCount sums can exceed the study total.',
               ),
             // BOOLEAN fields
             trueCount: z
@@ -136,6 +142,10 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
       }
       if (stat.missingStudiesCount != null && stat.missingStudiesCount > 0)
         lines.push(`  (missing in ${stat.missingStudiesCount} studies)`);
+      if (stat.multiValued)
+        lines.push(
+          '  (multi-valued field — counts may exceed the study total; a study can carry several values)',
+        );
     }
     return [{ type: 'text', text: lines.join('\n') }];
   },

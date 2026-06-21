@@ -164,6 +164,13 @@ export interface FieldValueStats {
   falseCount?: number;
   field: string;
   missingStudiesCount: number;
+  /**
+   * Whether the field is multi-valued (array type in the data model, e.g. `Phase`,
+   * `Condition`). A single study can carry several values, so per-value
+   * `studiesCount` buckets sum above the study total. Derived from the metadata
+   * node `type` ending in `[]`; absent when local validation is disabled.
+   */
+  multiValued?: boolean;
   piece: string;
   topValues?: Array<{ value: string; studiesCount: number }>;
   trueCount?: number;

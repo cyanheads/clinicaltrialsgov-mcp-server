@@ -15,6 +15,7 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
 }));
 
 import { searchStudies } from '@/mcp-server/tools/definitions/search-studies.tool.js';
+import { haversineMi } from '@/mcp-server/tools/utils/geo-helpers.js';
 
 describe('searchStudies', () => {
   const mockService = { searchStudies: vi.fn() };
@@ -380,6 +381,126 @@ describe('searchStudies', () => {
     });
   });
 
+  describe('geoFilter location re-ranking (#84)', () => {
+    // A study whose upstream locations[0] is a far AZ site; the near WA site sits
+    // later; one site has no geoPoint at all.
+    const seattle = { lat: 47.6062, lon: -122.3321 };
+    const studyWithLocations = () => ({
+      protocolSection: {
+        identificationModule: { nctId: 'NCT06897475', briefTitle: 'Multi-site trial' },
+        contactsLocationsModule: {
+          locations: [
+            {
+              facility: 'Phoenix Site',
+              city: 'Phoenix',
+              state: 'AZ',
+              country: 'United States',
+              geoPoint: { lat: 33.4484, lon: -112.074 },
+            },
+            {
+              facility: 'Redmond Site',
+              city: 'Redmond',
+              state: 'WA',
+              country: 'United States',
+              geoPoint: { lat: 47.674, lon: -122.1215 },
+            },
+            { facility: 'No-Geo Site', city: 'Unknown', country: 'United States' },
+          ],
+        },
+      },
+    });
+
+    it('re-sorts each study locations so the nearest matched site is [0] with distanceMi', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [studyWithLocations()],
+        totalCount: 1,
+      });
+      const ctx = createMockContext();
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({ geoFilter: 'distance(47.6062,-122.3321,50mi)' }),
+        ctx,
+      );
+
+      const locs = (
+        result.studies[0] as {
+          protocolSection: {
+            contactsLocationsModule: {
+              locations: Array<{ city?: string; distanceMi?: number }>;
+            };
+          };
+        }
+      ).protocolSection.contactsLocationsModule.locations;
+
+      // Nearest (Redmond, WA) leads with an annotated distance.
+      expect(locs[0]!.city).toBe('Redmond');
+      expect(locs[0]!.distanceMi).toBeDefined();
+      expect(locs[0]!.distanceMi!).toBeLessThan(15);
+      // Phoenix (far) sits below the WA site.
+      expect(locs[1]!.city).toBe('Phoenix');
+      expect(locs[1]!.distanceMi!).toBeGreaterThan(1000);
+      // Never filtered — the no-geoPoint site is preserved at the end, unannotated.
+      expect(locs).toHaveLength(3);
+      expect(locs[2]!.city).toBe('Unknown');
+      expect(locs[2]!.distanceMi).toBeUndefined();
+    });
+
+    it('matches the great-circle distance to the geoFilter center', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [studyWithLocations()],
+        totalCount: 1,
+      });
+      const ctx = createMockContext();
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({ geoFilter: 'distance(47.6062,-122.3321,50mi)' }),
+        ctx,
+      );
+      const locs = (
+        result.studies[0] as {
+          protocolSection: {
+            contactsLocationsModule: { locations: Array<{ distanceMi?: number }> };
+          };
+        }
+      ).protocolSection.contactsLocationsModule.locations;
+      expect(locs[0]!.distanceMi!).toBeCloseTo(
+        haversineMi(seattle, { lat: 47.674, lon: -122.1215 }),
+        4,
+      );
+    });
+
+    it('leaves locations untouched when no geoFilter is set', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [studyWithLocations()],
+        totalCount: 1,
+      });
+      const ctx = createMockContext();
+      const result = await searchStudies.handler(searchStudies.input!.parse({}), ctx);
+      const locs = (
+        result.studies[0] as {
+          protocolSection: {
+            contactsLocationsModule: { locations: Array<{ city?: string; distanceMi?: number }> };
+          };
+        }
+      ).protocolSection.contactsLocationsModule.locations;
+      // Upstream order preserved, no annotation.
+      expect(locs[0]!.city).toBe('Phoenix');
+      expect(locs[0]!.distanceMi).toBeUndefined();
+    });
+
+    it('does not crash when a matched study carries no locations', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [{ protocolSection: { identificationModule: { nctId: 'NCT00000001' } } }],
+        totalCount: 1,
+      });
+      const ctx = createMockContext();
+      await expect(
+        searchStudies.handler(
+          searchStudies.input!.parse({ geoFilter: 'distance(47.6062,-122.3321,50mi)' }),
+          ctx,
+        ),
+      ).resolves.toBeDefined();
+    });
+  });
+
   describe('format', () => {
     it('shows no-match message for empty results', () => {
       const blocks = searchStudies.format!({ studies: [] });
@@ -456,6 +577,86 @@ describe('searchStudies', () => {
       const blocks = searchStudies.format!({ studies: [{}], totalCount: 1 });
       expect((blocks[0] as { text: string }).text).toContain('Found 1 studies');
       expect((blocks[0] as { text: string }).text).toContain('Unknown');
+    });
+
+    it('leads with the matched site and its distance when locations[0] is annotated (#84)', () => {
+      const blocks = searchStudies.format!({
+        studies: [
+          {
+            protocolSection: {
+              identificationModule: { nctId: 'NCT06897475', briefTitle: 'Geo trial' },
+              statusModule: { overallStatus: 'RECRUITING' },
+              contactsLocationsModule: {
+                locations: [
+                  {
+                    facility: 'Redmond Site',
+                    city: 'Redmond',
+                    state: 'WA',
+                    country: 'United States',
+                    distanceMi: 10.9,
+                  },
+                  { facility: 'Phoenix Site', city: 'Phoenix', state: 'AZ' },
+                ],
+              },
+            },
+          },
+        ],
+        totalCount: 1,
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('Nearest site: Redmond Site, Redmond, WA, United States');
+      expect(text).toContain('10.9 mi from geoFilter center');
+      expect(text).toContain('of 2 sites');
+    });
+
+    it('shows the registered site (not a nearest-site line) when no geoFilter is set (#84)', () => {
+      const blocks = searchStudies.format!({
+        studies: [
+          {
+            protocolSection: {
+              identificationModule: { nctId: 'NCT12345678' },
+              contactsLocationsModule: {
+                locations: [{ facility: 'Phoenix Site', city: 'Phoenix', state: 'AZ' }],
+              },
+            },
+          },
+        ],
+        totalCount: 1,
+      });
+      const text = (blocks[0] as { text: string }).text;
+      // Location must still surface without a geoFilter — the headline carries no
+      // location and the field dump suppresses locations[], so a missing Site line
+      // would silently drop where the trial runs.
+      expect(text).toContain('Site: Phoenix Site, Phoenix, AZ');
+      expect(text).not.toContain('Nearest site:');
+    });
+
+    it('discloses the site count on a multi-site study without a geoFilter (#84)', () => {
+      const blocks = searchStudies.format!({
+        studies: [
+          {
+            protocolSection: {
+              identificationModule: { nctId: 'NCT12345678' },
+              contactsLocationsModule: {
+                locations: [
+                  {
+                    facility: 'Boston Site',
+                    city: 'Boston',
+                    state: 'MA',
+                    country: 'United States',
+                  },
+                  { facility: 'Phoenix Site', city: 'Phoenix', state: 'AZ' },
+                  { facility: 'Lincoln Site', city: 'Lincoln', state: 'CA' },
+                ],
+              },
+            },
+          },
+        ],
+        totalCount: 1,
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('Site: Boston Site, Boston, MA, United States (1 of 3 sites)');
+      expect(text).not.toContain('Nearest site:');
     });
   });
 });

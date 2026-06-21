@@ -7,9 +7,14 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getServerConfig } from '@/config/server-config.js';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
-import type { RawStudyShape } from '@/services/clinical-trials/types.js';
+import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
 import { formatRemainingStudyFields } from '../utils/format-helpers.js';
+import {
+  haversineMi,
+  type LocationWithDistance,
+  parseGeoFilterCenter,
+} from '../utils/geo-helpers.js';
 import { buildAdvancedFilter, toArray } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
@@ -24,7 +29,35 @@ const SEARCH_RENDERED = new Set([
   'protocolSection.designModule.enrollmentInfo',
   'protocolSection.sponsorCollaboratorsModule.leadSponsor',
   'protocolSection.conditionsModule.conditions',
+  'protocolSection.contactsLocationsModule.locations',
 ]);
+
+/**
+ * When a geoFilter is active, re-rank each study's `locations[]` by proximity to
+ * the filter center so the matched site leads instead of the upstream-order first
+ * entry — mirroring get_study_record's nearLocation → distanceMi annotation.
+ * Sites with a geoPoint are sorted nearest-first and annotated with distanceMi;
+ * sites without coordinates are preserved at the end (re-rank only, never filter).
+ * Mutates each study's locations array in place.
+ */
+function reRankLocationsByProximity(
+  studies: RawStudyShape[],
+  center: { lat: number; lon: number },
+): void {
+  for (const study of studies) {
+    const locationsModule = study.protocolSection?.contactsLocationsModule;
+    const locations = locationsModule?.locations;
+    if (!locationsModule || !locations?.length) continue;
+    const withGeo = locations
+      .filter(
+        (l): l is StudyLocation & { geoPoint: { lat: number; lon: number } } => l.geoPoint != null,
+      )
+      .map((l) => ({ ...l, distanceMi: haversineMi(center, l.geoPoint) }))
+      .sort((a, b) => a.distanceMi - b.distanceMi);
+    const withoutGeo = locations.filter((l) => l.geoPoint == null);
+    locationsModule.locations = [...withGeo, ...withoutGeo];
+  }
+}
 
 export const searchStudies = tool('clinicaltrials_search_studies', {
   description: `Search for clinical trial studies from ClinicalTrials.gov. Supports full-text and field-specific queries, status/phase/geographic filters, pagination, sorting, and field selection. Use the fields parameter to reduce payload size — full study records are ~70KB each.`,
@@ -137,7 +170,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        `Geographic proximity filter. Format: distance(lat,lon,radius). E.g., "distance(47.6062,-122.3321,50mi)" for studies within 50 miles of Seattle.`,
+        `Geographic proximity filter. Format: distance(lat,lon,radius). E.g., "distance(47.6062,-122.3321,50mi)" for studies within 50 miles of Seattle. When set, each study's locations are re-sorted by proximity to the center so the nearest matched site leads, annotated with its distance in miles; the full location list is preserved.`,
       ),
     nctIds: z
       .union([
@@ -254,6 +287,13 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       totalCount: result.totalCount,
     });
 
+    // With an active geoFilter, lead each study with its matched (nearest) site:
+    // upstream returns locations in registration order, so the first entry is
+    // often a far-away site and the filter reads as broken. Re-rank only — the
+    // full locations[] set is preserved.
+    const geoCenter = parseGeoFilterCenter(input.geoFilter);
+    if (geoCenter) reRankLocationsByProximity(result.studies as RawStudyShape[], geoCenter);
+
     // Echo the applied search criteria on every response (not only empty ones)
     // so agents can confirm which filters were actually in effect when a result
     // set is smaller than expected. sentinelFilterActive flags the default
@@ -350,6 +390,35 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       const statusStr = status ? ` [${status}]` : '';
       const metaStr = meta.length ? `\n  ${meta.join(' | ')}` : '';
       lines.push(`- **${nctId}**${titleStr}${statusStr}${metaStr}`);
+
+      // Surface the study's site so a result row always shows where the trial
+      // runs — the headline carries no location, and locations[] is otherwise
+      // suppressed from the field dump below. With an active geoFilter the handler
+      // re-ranked locations by proximity, so locations[0] is the nearest matched
+      // site: lead with it and its distanceMi. Without one, show the first
+      // registered site. Either way the full locations[] is preserved.
+      const locations = s.protocolSection?.contactsLocationsModule?.locations as
+        | LocationWithDistance[]
+        | undefined;
+      const lead = locations?.[0];
+      if (lead) {
+        const place = [lead.facility, lead.city, lead.state, lead.country]
+          .filter(Boolean)
+          .join(', ');
+        if (place) {
+          const siteCount = locations?.length ?? 0;
+          if (lead.distanceMi != null) {
+            const totalStr = siteCount > 1 ? ` of ${siteCount} sites` : '';
+            lines.push(
+              `  Nearest site: ${place} (${lead.distanceMi.toFixed(1)} mi from geoFilter center${totalStr})`,
+            );
+          } else {
+            const totalStr = siteCount > 1 ? ` (1 of ${siteCount} sites)` : '';
+            lines.push(`  Site: ${place}${totalStr}`);
+          }
+        }
+      }
+
       lines.push(
         ...formatRemainingStudyFields(
           study as Record<string, unknown>,

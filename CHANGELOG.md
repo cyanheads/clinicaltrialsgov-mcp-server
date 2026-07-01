@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.8.0](changelog/2.8.x/2.8.0.md) — 2026-06-30 · ⚠️ Breaking · 🛡️ Security
+
+search_studies bounds structuredContent to a compact per-study index by default (breaking) — pass fields or use get_study_record for full leaves; find_eligible re-rank drops shared-word false friends; @cyanheads/mcp-ts-core ^0.10.10 clears a transitive js-yaml DoS advisory
+
 ## [2.7.4](changelog/2.7.x/2.7.4.md) — 2026-06-21
 
 geoFilter searches lead with the matched site (distanceMi), get_field_values flags multi-valued fields, and query parse errors drop the raw Essie grammar dump

@@ -62,7 +62,7 @@ The primary tool. Wraps `GET /studies` with the full query/filter surface expose
 ```
 Search for clinical trial studies from ClinicalTrials.gov. Supports full-text and
 field-specific queries, status/phase/geographic filters, pagination, sorting, and field
-selection. Use the fields parameter to reduce payload size — full study records are ~70KB each.
+selection. Returns a compact per-study index by default; pass the fields parameter to get specific leaves at full fidelity — full study records are ~70KB each.
 ```
 
 **Input schema:**
@@ -81,7 +81,7 @@ selection. Use the fields parameter to reduce payload size — full study record
 | `advancedFilter`    | `string?`             | Advanced filter using AREA[] Essie syntax. Examples: `AREA[StudyType]INTERVENTIONAL`, `AREA[MinimumAge]RANGE[MIN, 18 years]`, `AREA[EnrollmentCount]RANGE[100, 1000]`. Combine with `AND`/`OR`/`NOT` and parentheses.                                                                                   |
 | `geoFilter`         | `string?`             | Geographic proximity filter. Format: `distance(lat,lon,radius)` where radius is e.g. `50mi` or `100km`. Example: `distance(47.6062,-122.3321,50mi)` for studies within 50 miles of Seattle.                                                                                                             |
 | `nctIds`            | `string \| string[]?` | Filter to specific NCT IDs. Use for batch lookups of known studies.                                                                                                                                                                                                                                     |
-| `fields`            | `string[]?`           | Specific fields to return (PascalCase piece names). **Strongly recommended** — without this, full ~70KB study records are returned. Common fields: `NCTId`, `BriefTitle`, `OverallStatus`, `Phase`, `LeadSponsorName`, `Condition`, `InterventionName`, `BriefSummary`, `EnrollmentCount`, `StartDate`. |
+| `fields`            | `string[]?`           | Specific fields to return (PascalCase piece names). **Strongly recommended** — without this, results are a compact per-study index; pass `fields` to receive those leaves at full fidelity (a full record is ~70KB). Common fields: `NCTId`, `BriefTitle`, `OverallStatus`, `Phase`, `LeadSponsorName`, `Condition`, `InterventionName`, `BriefSummary`, `EnrollmentCount`, `StartDate`. |
 | `sort`              | `string?`             | Sort order. Format: `FieldName:asc` or `FieldName:desc`. E.g., `LastUpdatePostDate:desc`, `EnrollmentCount:desc`. Default: relevance when query params present. Max 2 sort fields comma-separated.                                                                                                      |
 | `pageSize`          | `number?`             | Results per page, 1–1000. Default: 10.                                                                                                                                                                                                                                                                  |
 | `pageToken`         | `string?`             | Pagination cursor from a previous response's `nextPageToken`.                                                                                                                                                                                                                                           |
@@ -91,16 +91,19 @@ selection. Use the fields parameter to reduce payload size — full study record
 
 | Field           | Type      | Description                                                               |
 | :-------------- | :-------- | :------------------------------------------------------------------------ |
-| `studies`       | `Study[]` | Array of matching studies (shape depends on `fields` selection).          |
+| `studies`       | `Study[]` | Matching studies. By default each entry is a **compact index projection** — `nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `leadSponsor`, `conditions`, and a bounded `{ total, nearest }` locations summary — mirroring the rendered summary, **not** the full ~70KB record. With explicit `fields`, each entry carries exactly the requested leaves at full fidelity (e.g. every location). |
 | `totalCount`    | `number?` | Total matching studies (present when `countTotal=true`, first page only). |
 | `nextPageToken` | `string?` | Token for the next page. Absent on last page.                             |
+| `requestedFields` | `string[]?` | Echo of the explicit `fields` input — present only when `fields` was passed. Signals the full-fidelity (non-index) study shape. |
 
 **Error messages:**
 
 - Invalid filter syntax: `"Invalid advancedFilter expression. AREA[] syntax: AREA[FieldName]value. Combine with AND/OR/NOT. Check field names via get_field_values."`
 - No results: returns empty studies array with `totalCount: 0`, not an error.
 
-**Format function:** Summary line (`Found N studies of M total`), then top 5 studies as bullet list (NCT ID, title, status), pagination note if more pages.
+**Format function:** Summary line (`Found N studies (M total matching)`), then **every** study in the page as a compact index row (NCT ID, title, status; a phase/enrollment/sponsor/conditions meta line; and a lead-or-nearest site line with the total site count), pagination note if more pages. With explicit `fields`, each study instead renders every requested leaf, including all locations.
+
+**Output-channel parity (#86):** `structuredContent` is bound to exactly what `format()` renders — the compact index by default, the requested-leaf projection with `fields`. Search is an index: it never carries full ~70KB records in `structuredContent` while summarizing them in `content[]`. This keeps `content[]`-only clients (e.g. Claude Desktop) and `structuredContent` clients (e.g. Claude Code) in parity. Fetch one full record with `clinicaltrials_get_study_record`.
 
 ---
 

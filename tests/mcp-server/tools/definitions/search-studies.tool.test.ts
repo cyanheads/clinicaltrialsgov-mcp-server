@@ -91,8 +91,18 @@ describe('searchStudies', () => {
   });
 
   describe('handler', () => {
-    it('returns studies from service', async () => {
-      const serviceResult = { studies: [{ nctId: 'NCT12345678' }], totalCount: 1 };
+    it('projects studies to compact index entries by default (#86)', async () => {
+      const serviceResult = {
+        studies: [
+          {
+            protocolSection: {
+              identificationModule: { nctId: 'NCT12345678', briefTitle: 'Test' },
+              statusModule: { overallStatus: 'RECRUITING' },
+            },
+          },
+        ],
+        totalCount: 1,
+      };
       mockService.searchStudies.mockResolvedValue(serviceResult);
 
       const ctx = createMockContext();
@@ -101,7 +111,10 @@ describe('searchStudies', () => {
         ctx,
       );
 
-      expect(result.studies).toEqual([{ nctId: 'NCT12345678' }]);
+      // Full record is replaced by the compact index projection.
+      expect(result.studies).toEqual([
+        { nctId: 'NCT12345678', briefTitle: 'Test', overallStatus: 'RECRUITING' },
+      ]);
       expect(result.totalCount).toBe(1);
     });
 
@@ -410,7 +423,16 @@ describe('searchStudies', () => {
       },
     });
 
-    it('re-sorts each study locations so the nearest matched site is [0] with distanceMi', async () => {
+    // Default (no fields) projects to the compact index, so the re-rank surfaces
+    // through locations.nearest / locations.total (the full array is projected away).
+    const indexLocations = (result: { studies: unknown[] }) =>
+      (
+        result.studies[0] as {
+          locations?: { nearest?: { city?: string; distanceMi?: number }; total: number };
+        }
+      ).locations;
+
+    it('projects the nearest matched site as locations.nearest with distanceMi (#84)', async () => {
       mockService.searchStudies.mockResolvedValue({
         studies: [studyWithLocations()],
         totalCount: 1,
@@ -421,30 +443,15 @@ describe('searchStudies', () => {
         ctx,
       );
 
-      const locs = (
-        result.studies[0] as {
-          protocolSection: {
-            contactsLocationsModule: {
-              locations: Array<{ city?: string; distanceMi?: number }>;
-            };
-          };
-        }
-      ).protocolSection.contactsLocationsModule.locations;
-
-      // Nearest (Redmond, WA) leads with an annotated distance.
-      expect(locs[0]!.city).toBe('Redmond');
-      expect(locs[0]!.distanceMi).toBeDefined();
-      expect(locs[0]!.distanceMi!).toBeLessThan(15);
-      // Phoenix (far) sits below the WA site.
-      expect(locs[1]!.city).toBe('Phoenix');
-      expect(locs[1]!.distanceMi!).toBeGreaterThan(1000);
-      // Never filtered — the no-geoPoint site is preserved at the end, unannotated.
-      expect(locs).toHaveLength(3);
-      expect(locs[2]!.city).toBe('Unknown');
-      expect(locs[2]!.distanceMi).toBeUndefined();
+      const loc = indexLocations(result);
+      // Nearest (Redmond, WA) leads with an annotated distance; total discloses all 3 sites.
+      expect(loc?.total).toBe(3);
+      expect(loc?.nearest?.city).toBe('Redmond');
+      expect(loc?.nearest?.distanceMi).toBeDefined();
+      expect(loc?.nearest?.distanceMi).toBeLessThan(15);
     });
 
-    it('matches the great-circle distance to the geoFilter center', async () => {
+    it('annotates the projected nearest site with the great-circle distance (#84)', async () => {
       mockService.searchStudies.mockResolvedValue({
         studies: [studyWithLocations()],
         totalCount: 1,
@@ -454,26 +461,40 @@ describe('searchStudies', () => {
         searchStudies.input!.parse({ geoFilter: 'distance(47.6062,-122.3321,50mi)' }),
         ctx,
       );
-      const locs = (
-        result.studies[0] as {
-          protocolSection: {
-            contactsLocationsModule: { locations: Array<{ distanceMi?: number }> };
-          };
-        }
-      ).protocolSection.contactsLocationsModule.locations;
-      expect(locs[0]!.distanceMi!).toBeCloseTo(
+      expect(indexLocations(result)?.nearest?.distanceMi).toBeCloseTo(
         haversineMi(seattle, { lat: 47.674, lon: -122.1215 }),
         4,
       );
     });
 
-    it('leaves locations untouched when no geoFilter is set', async () => {
+    it('projects the first registered site (no re-rank, no distance) without a geoFilter (#84)', async () => {
       mockService.searchStudies.mockResolvedValue({
         studies: [studyWithLocations()],
         totalCount: 1,
       });
       const ctx = createMockContext();
       const result = await searchStudies.handler(searchStudies.input!.parse({}), ctx);
+      const loc = indexLocations(result);
+      // Upstream order preserved — Phoenix leads, no distance annotation.
+      expect(loc?.total).toBe(3);
+      expect(loc?.nearest?.city).toBe('Phoenix');
+      expect(loc?.nearest?.distanceMi).toBeUndefined();
+    });
+
+    it('preserves the full re-ranked locations array in explicit-fields mode (#84)', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [studyWithLocations()],
+        totalCount: 1,
+      });
+      const ctx = createMockContext();
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({
+          geoFilter: 'distance(47.6062,-122.3321,50mi)',
+          fields: ['NCTId', 'LocationCity', 'LocationGeoPoint'],
+        }),
+        ctx,
+      );
+      // With explicit fields there is no projection — the full re-ranked array survives.
       const locs = (
         result.studies[0] as {
           protocolSection: {
@@ -481,9 +502,12 @@ describe('searchStudies', () => {
           };
         }
       ).protocolSection.contactsLocationsModule.locations;
-      // Upstream order preserved, no annotation.
-      expect(locs[0]!.city).toBe('Phoenix');
-      expect(locs[0]!.distanceMi).toBeUndefined();
+      expect(locs.map((l) => l.city)).toEqual(['Redmond', 'Phoenix', 'Unknown']);
+      expect(locs[0]!.distanceMi!).toBeLessThan(15);
+      expect(locs[1]!.distanceMi!).toBeGreaterThan(1000);
+      expect(locs).toHaveLength(3);
+      expect(locs[2]!.city).toBe('Unknown');
+      expect(locs[2]!.distanceMi).toBeUndefined();
     });
 
     it('does not crash when a matched study carries no locations', async () => {
@@ -509,14 +533,7 @@ describe('searchStudies', () => {
 
     it('shows study count with totalCount', () => {
       const blocks = searchStudies.format!({
-        studies: [
-          {
-            protocolSection: {
-              identificationModule: { nctId: 'NCT12345678', briefTitle: 'Test Study' },
-              statusModule: { overallStatus: 'RECRUITING' },
-            },
-          },
-        ],
+        studies: [{ nctId: 'NCT12345678', briefTitle: 'Test Study', overallStatus: 'RECRUITING' }],
         totalCount: 50,
       });
       expect((blocks[0] as { text: string }).text).toContain('Found 1 studies (50 total matching)');
@@ -537,16 +554,13 @@ describe('searchStudies', () => {
       const blocks = searchStudies.format!({
         studies: [
           {
-            protocolSection: {
-              identificationModule: { nctId: 'NCT12345678', briefTitle: 'Study X' },
-              statusModule: { overallStatus: 'RECRUITING' },
-              designModule: {
-                phases: ['PHASE3'],
-                enrollmentInfo: { count: 500 },
-              },
-              sponsorCollaboratorsModule: { leadSponsor: { name: 'NIH' } },
-              conditionsModule: { conditions: ['Diabetes', 'Hypertension'] },
-            },
+            nctId: 'NCT12345678',
+            briefTitle: 'Study X',
+            overallStatus: 'RECRUITING',
+            phases: ['PHASE3'],
+            enrollmentCount: 500,
+            leadSponsor: 'NIH',
+            conditions: ['Diabetes', 'Hypertension'],
           },
         ],
         totalCount: 1,
@@ -579,24 +593,21 @@ describe('searchStudies', () => {
       expect((blocks[0] as { text: string }).text).toContain('Unknown');
     });
 
-    it('leads with the matched site and its distance when locations[0] is annotated (#84)', () => {
+    it('leads with the matched site and its distance when the projection is annotated (#84)', () => {
       const blocks = searchStudies.format!({
         studies: [
           {
-            protocolSection: {
-              identificationModule: { nctId: 'NCT06897475', briefTitle: 'Geo trial' },
-              statusModule: { overallStatus: 'RECRUITING' },
-              contactsLocationsModule: {
-                locations: [
-                  {
-                    facility: 'Redmond Site',
-                    city: 'Redmond',
-                    state: 'WA',
-                    country: 'United States',
-                    distanceMi: 10.9,
-                  },
-                  { facility: 'Phoenix Site', city: 'Phoenix', state: 'AZ' },
-                ],
+            nctId: 'NCT06897475',
+            briefTitle: 'Geo trial',
+            overallStatus: 'RECRUITING',
+            locations: {
+              total: 2,
+              nearest: {
+                facility: 'Redmond Site',
+                city: 'Redmond',
+                state: 'WA',
+                country: 'United States',
+                distanceMi: 10.9,
               },
             },
           },
@@ -613,11 +624,10 @@ describe('searchStudies', () => {
       const blocks = searchStudies.format!({
         studies: [
           {
-            protocolSection: {
-              identificationModule: { nctId: 'NCT12345678' },
-              contactsLocationsModule: {
-                locations: [{ facility: 'Phoenix Site', city: 'Phoenix', state: 'AZ' }],
-              },
+            nctId: 'NCT12345678',
+            locations: {
+              total: 1,
+              nearest: { facility: 'Phoenix Site', city: 'Phoenix', state: 'AZ' },
             },
           },
         ],
@@ -625,8 +635,7 @@ describe('searchStudies', () => {
       });
       const text = (blocks[0] as { text: string }).text;
       // Location must still surface without a geoFilter — the headline carries no
-      // location and the field dump suppresses locations[], so a missing Site line
-      // would silently drop where the trial runs.
+      // location, so a missing Site line would silently drop where the trial runs.
       expect(text).toContain('Site: Phoenix Site, Phoenix, AZ');
       expect(text).not.toContain('Nearest site:');
     });
@@ -635,19 +644,14 @@ describe('searchStudies', () => {
       const blocks = searchStudies.format!({
         studies: [
           {
-            protocolSection: {
-              identificationModule: { nctId: 'NCT12345678' },
-              contactsLocationsModule: {
-                locations: [
-                  {
-                    facility: 'Boston Site',
-                    city: 'Boston',
-                    state: 'MA',
-                    country: 'United States',
-                  },
-                  { facility: 'Phoenix Site', city: 'Phoenix', state: 'AZ' },
-                  { facility: 'Lincoln Site', city: 'Lincoln', state: 'CA' },
-                ],
+            nctId: 'NCT12345678',
+            locations: {
+              total: 3,
+              nearest: {
+                facility: 'Boston Site',
+                city: 'Boston',
+                state: 'MA',
+                country: 'United States',
               },
             },
           },
@@ -657,6 +661,206 @@ describe('searchStudies', () => {
       const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('Site: Boston Site, Boston, MA, United States (1 of 3 sites)');
       expect(text).not.toContain('Nearest site:');
+    });
+  });
+
+  describe('output-channel parity — structuredContent and content[] carry the same data (#86)', () => {
+    const seattleGeo = 'distance(47.6062,-122.3321,50mi)';
+
+    // The full record upstream returns when no fields param is passed.
+    const fullStudy = () => ({
+      protocolSection: {
+        identificationModule: { nctId: 'NCT03110133', briefTitle: 'Diabetes Prevention' },
+        statusModule: { overallStatus: 'RECRUITING' },
+        designModule: { phases: ['PHASE3'], enrollmentInfo: { count: 300 } },
+        sponsorCollaboratorsModule: { leadSponsor: { name: 'NIDDK' } },
+        conditionsModule: { conditions: ['Type 2 Diabetes'] },
+        contactsLocationsModule: {
+          locations: [
+            {
+              facility: 'Boston Clinic',
+              city: 'Boston',
+              state: 'MA',
+              country: 'United States',
+              geoPoint: { lat: 42.3601, lon: -71.0589 },
+            },
+            {
+              facility: 'Seattle Center',
+              city: 'Seattle',
+              state: 'WA',
+              country: 'United States',
+              geoPoint: { lat: 47.6062, lon: -122.3321 },
+            },
+            { facility: 'Remote Site', city: 'Nowhere', country: 'United States' },
+          ],
+        },
+        eligibilityModule: {
+          eligibilityCriteria: 'Inclusion: adults with T2D',
+          minimumAge: '18 Years',
+        },
+        descriptionModule: { briefSummary: 'A large prevention study.' },
+      },
+      derivedSection: { miscInfoModule: { versionHolder: '2026-06-30' } },
+      hasResults: false,
+    });
+
+    const renderText = (result: Parameters<NonNullable<typeof searchStudies.format>>[0]) =>
+      (searchStudies.format!(result)[0] as { text: string }).text;
+
+    it('default (no fields): structuredContent is a compact index, not the full record, and content[] mirrors it', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [fullStudy()], totalCount: 1 });
+      const ctx = createMockContext();
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({ conditionQuery: 'diabetes' }),
+        ctx,
+      );
+
+      const entry = result.studies[0] as Record<string, unknown>;
+      // Bounded — the heavy record subtrees no longer ride in structuredContent.
+      expect(entry.protocolSection).toBeUndefined();
+      expect(entry.derivedSection).toBeUndefined();
+      expect(entry.nctId).toBe('NCT03110133');
+      expect(entry.overallStatus).toBe('RECRUITING');
+      expect(entry.conditions).toEqual(['Type 2 Diabetes']);
+      // Locations bounded to lead site + total count.
+      expect(entry.locations).toEqual({
+        total: 3,
+        nearest: {
+          facility: 'Boston Clinic',
+          city: 'Boston',
+          state: 'MA',
+          country: 'United States',
+        },
+      });
+
+      // content[] carries the same values reachable in structuredContent.
+      const text = renderText(result);
+      expect(text).toContain('NCT03110133');
+      expect(text).toContain('Diabetes Prevention');
+      expect(text).toContain('RECRUITING');
+      expect(text).toContain('PHASE3');
+      expect(text).toContain('N=300');
+      expect(text).toContain('NIDDK');
+      expect(text).toContain('Type 2 Diabetes');
+      expect(text).toContain('Site: Boston Clinic, Boston, MA, United States (1 of 3 sites)');
+      // Reverse parity: fields absent from structuredContent are absent from content[] too.
+      expect(text).not.toContain('Inclusion:');
+      expect(text).not.toContain('A large prevention study.');
+    });
+
+    it('default non-geoFilter: a multi-site study still renders its site in content[] (#84 non-geo common case)', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [fullStudy()], totalCount: 1 });
+      const ctx = createMockContext();
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({ conditionQuery: 'diabetes' }),
+        ctx,
+      );
+      const entry = result.studies[0] as { locations?: { nearest?: { city?: string } } };
+      const text = renderText(result);
+      // The lead site reaches BOTH channels — the exact regression #84 guarded, here with no geoFilter.
+      expect(entry.locations?.nearest?.city).toBe('Boston');
+      expect(text).toContain('Boston Clinic');
+      expect(text).not.toContain('Nearest site:');
+    });
+
+    it('explicit fields incl. a location leaf: every site (2..N) reaches content[] with value parity', async () => {
+      const trimmed = {
+        protocolSection: {
+          identificationModule: { nctId: 'NCT03110133' },
+          contactsLocationsModule: {
+            locations: [
+              { city: 'Boston', state: 'MA' },
+              { city: 'Seattle', state: 'WA' },
+              { city: 'Austin', state: 'TX' },
+            ],
+          },
+        },
+      };
+      mockService.searchStudies.mockResolvedValue({ studies: [trimmed], totalCount: 1 });
+      const ctx = createMockContext();
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({
+          conditionQuery: 'diabetes',
+          fields: ['NCTId', 'LocationCity', 'LocationState'],
+        }),
+        ctx,
+      );
+
+      // structuredContent carries the full trimmed record — all 3 sites.
+      const locs = (
+        result.studies[0] as {
+          protocolSection: { contactsLocationsModule: { locations: Array<{ city?: string }> } };
+        }
+      ).protocolSection.contactsLocationsModule.locations;
+      expect(locs.map((l) => l.city)).toEqual(['Boston', 'Seattle', 'Austin']);
+
+      // content[] renders EVERY site — sites 2..N no longer suppressed by SEARCH_RENDERED.
+      const text = renderText(result);
+      expect(text).toContain('Locations (3):');
+      for (const city of ['Boston', 'Seattle', 'Austin']) expect(text).toContain(city);
+    });
+
+    it('geoFilter (default): the nearest site + distance reach both channels', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [fullStudy()], totalCount: 1 });
+      const ctx = createMockContext();
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({ conditionQuery: 'diabetes', geoFilter: seattleGeo }),
+        ctx,
+      );
+      const entry = result.studies[0] as {
+        locations?: { total: number; nearest?: { city?: string; distanceMi?: number } };
+      };
+      // Seattle sits on the filter center → nearest, ~0 mi.
+      expect(entry.locations?.total).toBe(3);
+      expect(entry.locations?.nearest?.city).toBe('Seattle');
+      expect(entry.locations?.nearest?.distanceMi).toBeCloseTo(0, 0);
+
+      const text = renderText(result);
+      expect(text).toContain('Nearest site: Seattle Center, Seattle, WA, United States');
+      expect(text).toContain('mi from geoFilter center of 3 sites');
+    });
+
+    it('geoFilter + explicit fields: every re-ranked site (nearest first, with distance) reaches both channels', async () => {
+      const trimmed = {
+        protocolSection: {
+          identificationModule: { nctId: 'NCT03110133' },
+          contactsLocationsModule: {
+            locations: [
+              { city: 'Boston', geoPoint: { lat: 42.3601, lon: -71.0589 } },
+              { city: 'Seattle', geoPoint: { lat: 47.6062, lon: -122.3321 } },
+            ],
+          },
+        },
+      };
+      mockService.searchStudies.mockResolvedValue({ studies: [trimmed], totalCount: 1 });
+      const ctx = createMockContext();
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({
+          conditionQuery: 'diabetes',
+          geoFilter: seattleGeo,
+          fields: ['NCTId', 'LocationCity', 'LocationGeoPoint'],
+        }),
+        ctx,
+      );
+
+      // structuredContent: full re-ranked array, nearest first, annotated.
+      const locs = (
+        result.studies[0] as {
+          protocolSection: {
+            contactsLocationsModule: { locations: Array<{ city?: string; distanceMi?: number }> };
+          };
+        }
+      ).protocolSection.contactsLocationsModule.locations;
+      expect(locs.map((l) => l.city)).toEqual(['Seattle', 'Boston']);
+      expect(locs[0]!.distanceMi).toBeCloseTo(0, 0);
+
+      // content[]: both sites, nearest first, with distance.
+      const text = renderText(result);
+      const seattleIdx = text.indexOf('Seattle');
+      const bostonIdx = text.indexOf('Boston');
+      expect(seattleIdx).toBeGreaterThan(-1);
+      expect(bostonIdx).toBeGreaterThan(seattleIdx);
+      expect(text).toContain('0.0 mi');
     });
   });
 });

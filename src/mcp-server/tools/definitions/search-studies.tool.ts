@@ -59,8 +59,191 @@ function reRankLocationsByProximity(
   }
 }
 
+/** The lead/nearest site of a study, bounded to the fields the formatter renders. */
+interface NearestSite {
+  city?: string;
+  country?: string;
+  distanceMi?: number;
+  facility?: string;
+  state?: string;
+}
+
+/**
+ * The headline fields shared by the compact index projection and the
+ * requested-fields renderer. Loosely optional (`| undefined`) so both a clean
+ * projection and inline record reads (which yield explicit `undefined`) satisfy
+ * it under exactOptionalPropertyTypes.
+ */
+interface StudyHeaderFields {
+  briefTitle?: string | undefined;
+  conditions?: string[] | undefined;
+  enrollmentCount?: number | undefined;
+  leadSponsor?: string | undefined;
+  nctId?: string | undefined;
+  overallStatus?: string | undefined;
+  phases?: string[] | undefined;
+}
+
+/**
+ * Compact per-study index projection returned when the caller passes no explicit
+ * `fields`. It carries exactly what `format()` renders — no more — so a client
+ * reading only `structuredContent` and one reading only `content[]` see the same
+ * data. The full ~70KB record is intentionally NOT carried: search is an index.
+ * Callers who need specific leaves at full fidelity pass `fields`; callers who
+ * need one complete record use clinicaltrials_get_study_record.
+ */
+interface StudyIndexEntry extends StudyHeaderFields {
+  /** Bounded locations summary — the lead/nearest site plus the total site count. */
+  locations?: { nearest?: NearestSite; total: number };
+}
+
+/** Pick the rendered subset of the lead/nearest site for the index projection. */
+function pickNearest(loc: LocationWithDistance): NearestSite {
+  const site: NearestSite = {};
+  if (loc.facility != null) site.facility = loc.facility;
+  if (loc.city != null) site.city = loc.city;
+  if (loc.state != null) site.state = loc.state;
+  if (loc.country != null) site.country = loc.country;
+  if (loc.distanceMi != null) site.distanceMi = loc.distanceMi;
+  return site;
+}
+
+/**
+ * Project a full study record to the compact index entry the formatter renders.
+ * Only keys with a value are set, mirroring the get-study `applyFilters()` /
+ * `summarizeResults()` structural-projection style. With an active geoFilter the
+ * handler has already re-ranked `locations[]`, so `locations[0]` is the nearest
+ * matched site and its `distanceMi` rides along.
+ */
+function projectStudyIndex(study: RawStudyShape): Record<string, unknown> {
+  const ps = study.protocolSection;
+  const id = ps?.identificationModule;
+  const design = ps?.designModule;
+  const entry: StudyIndexEntry = {};
+  if (id?.nctId != null) entry.nctId = id.nctId;
+  if (id?.briefTitle != null) entry.briefTitle = id.briefTitle;
+  const status = ps?.statusModule?.overallStatus;
+  if (status != null) entry.overallStatus = status;
+  if (design?.phases?.length) entry.phases = design.phases;
+  const enrollment = design?.enrollmentInfo?.count;
+  if (enrollment != null) entry.enrollmentCount = enrollment;
+  const sponsor = ps?.sponsorCollaboratorsModule?.leadSponsor?.name;
+  if (sponsor != null) entry.leadSponsor = sponsor;
+  const conditions = ps?.conditionsModule?.conditions;
+  if (conditions?.length) entry.conditions = conditions;
+
+  const locations = ps?.contactsLocationsModule?.locations as LocationWithDistance[] | undefined;
+  if (locations?.length) {
+    const lead = locations[0];
+    const nearest = lead ? pickNearest(lead) : undefined;
+    entry.locations = {
+      total: locations.length,
+      ...(nearest && Object.keys(nearest).length > 0 ? { nearest } : {}),
+    };
+  }
+  // Fresh object literal — assignable to the opaque Record<string, unknown> the
+  // output schema declares (mirrors get-study's `{ ...study }`).
+  return { ...entry };
+}
+
+/** Render the shared `- **NCT**: title [status]` headline + meta line. */
+function renderStudyHeaderLine(e: StudyHeaderFields): string {
+  const nctId = e.nctId ?? 'Unknown';
+  const titleStr = e.briefTitle ? `: ${e.briefTitle}` : '';
+  const statusStr = e.overallStatus ? ` [${e.overallStatus}]` : '';
+  const meta: string[] = [];
+  if (e.phases?.length) meta.push(e.phases.join('/'));
+  if (e.enrollmentCount != null) meta.push(`N=${e.enrollmentCount}`);
+  if (e.leadSponsor) meta.push(e.leadSponsor);
+  if (e.conditions?.length) meta.push(e.conditions.join(', '));
+  const metaStr = meta.length ? `\n  ${meta.join(' | ')}` : '';
+  return `- **${nctId}**${titleStr}${statusStr}${metaStr}`;
+}
+
+/** Render one compact index entry (the default, no-`fields` search projection). */
+function renderIndexEntry(entry: StudyIndexEntry): string[] {
+  const lines: string[] = [renderStudyHeaderLine(entry)];
+
+  // Surface the study's site — the headline carries no location. With an active
+  // geoFilter the projection's nearest site is annotated with distanceMi: lead
+  // with it. Without one, show the lead registered site. Either way the total
+  // site count discloses how many sites the full record holds.
+  const near = entry.locations?.nearest;
+  if (near) {
+    const place = [near.facility, near.city, near.state, near.country].filter(Boolean).join(', ');
+    if (place) {
+      const total = entry.locations?.total ?? 0;
+      if (near.distanceMi != null) {
+        const totalStr = total > 1 ? ` of ${total} sites` : '';
+        lines.push(
+          `  Nearest site: ${place} (${near.distanceMi.toFixed(1)} mi from geoFilter center${totalStr})`,
+        );
+      } else {
+        const totalStr = total > 1 ? ` (1 of ${total} sites)` : '';
+        lines.push(`  Site: ${place}${totalStr}`);
+      }
+    }
+  }
+  return lines;
+}
+
+/**
+ * Render every site in a requested-`fields` study. The field-dump fallback dedups
+ * object-array leaves by label (so it would collapse `locations[]` to the lead
+ * site) and SEARCH_RENDERED suppresses the `locations` subtree from it — a
+ * dedicated loop is the only way sites 2..N reach content[]. Carries every typed
+ * StudyLocation leaf (place, status, distance, geoPoint) so any requested
+ * location field has channel parity. Mirrors get-study's Locations loop.
+ */
+function renderSiteLines(locations: LocationWithDistance[]): string[] {
+  const lines = [`  Locations (${locations.length}):`];
+  for (const loc of locations) {
+    const place = [loc.facility, loc.city, loc.state, loc.country].filter(Boolean).join(', ');
+    const statusNote = loc.status ? ` [${loc.status}]` : '';
+    const distNote = loc.distanceMi != null ? ` (${loc.distanceMi.toFixed(1)} mi)` : '';
+    const geoNote = loc.geoPoint ? ` @${loc.geoPoint.lat},${loc.geoPoint.lon}` : '';
+    lines.push(`    - ${place || '(unnamed site)'}${statusNote}${distNote}${geoNote}`);
+  }
+  return lines;
+}
+
+/**
+ * Render a study when the caller passed explicit `fields` — the record is the
+ * upstream projection (just the requested leaves), carried at full fidelity in
+ * structuredContent. Renders the standard index line, every requested site
+ * distinctly, then the remaining requested leaves via the field dump with the
+ * truncation cap lifted, so content[] mirrors the record leaf-for-leaf.
+ */
+function renderRequestedFieldsStudy(study: Record<string, unknown>): string[] {
+  const s = study as RawStudyShape;
+  const ps = s.protocolSection;
+  const lines: string[] = [
+    renderStudyHeaderLine({
+      nctId: ps?.identificationModule?.nctId,
+      briefTitle: ps?.identificationModule?.briefTitle,
+      overallStatus: ps?.statusModule?.overallStatus,
+      phases: ps?.designModule?.phases,
+      enrollmentCount: ps?.designModule?.enrollmentInfo?.count,
+      leadSponsor: ps?.sponsorCollaboratorsModule?.leadSponsor?.name,
+      conditions: ps?.conditionsModule?.conditions,
+    }),
+  ];
+
+  const locations = ps?.contactsLocationsModule?.locations as LocationWithDistance[] | undefined;
+  if (locations?.length) lines.push(...renderSiteLines(locations));
+
+  // The caller opted into payload control, so render every remaining requested
+  // leaf — silently dropping any of them is the wrong default.
+  lines.push(
+    ...formatRemainingStudyFields(study, SEARCH_RENDERED, {
+      maxLines: Number.POSITIVE_INFINITY,
+    }),
+  );
+  return lines;
+}
+
 export const searchStudies = tool('clinicaltrials_search_studies', {
-  description: `Search for clinical trial studies from ClinicalTrials.gov. Supports full-text and field-specific queries, status/phase/geographic filters, pagination, sorting, and field selection. Use the fields parameter to reduce payload size — full study records are ~70KB each.`,
+  description: `Search for clinical trial studies from ClinicalTrials.gov. Supports full-text and field-specific queries, status/phase/geographic filters, pagination, sorting, and field selection. Returns a compact per-study index by default; pass the fields parameter to get specific leaves at full fidelity — full study records are ~70KB each.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -215,7 +398,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     studies: z
       .array(z.record(z.string(), z.unknown()))
       .describe(
-        'Matching studies. Each entry is a nested ClinicalTrials.gov study record — top-level keys: protocolSection, derivedSection, hasResults, resultsSection, documentSection. Use clinicaltrials_get_field_definitions to explore the schema.',
+        'Matching studies. By default each entry is a COMPACT index projection — nctId, briefTitle, overallStatus, phases, enrollmentCount, leadSponsor, conditions, and a bounded locations summary ({ total, nearest }) — mirroring the rendered result, NOT the full ~70KB record. Pass the fields parameter to receive exactly the requested leaves at full fidelity instead (e.g. all locations). Fetch a full single record with clinicaltrials_get_study_record.',
       ),
     totalCount: z
       .number()
@@ -226,7 +409,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .array(z.string())
       .optional()
       .describe(
-        'Echo of the explicit fields parameter — present only when the caller passed fields. Lifts the default truncation cap so all requested leaves render in full.',
+        'Echo of the explicit fields parameter — present only when the caller passed fields. Signals that studies carry the requested leaves at full fidelity (not the default compact index) and that the rendered truncation cap is lifted so all of them appear.',
       ),
   }),
 
@@ -345,8 +528,21 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       if (noticeParts.length > 0) ctx.enrich.notice(noticeParts.join(' '));
     }
 
+    // Bound structuredContent to what format() renders. Without explicit fields,
+    // search is an index: project each study to the compact entry (rendered
+    // summary + a bounded nearest-site/total-count locations summary) so a
+    // content[]-only client and a structuredContent client see the same data,
+    // not a full ~70KB record in one channel and a summary in the other. With
+    // explicit fields the caller opted into a projection — upstream already
+    // trimmed each record to the requested leaves, so those flow through at full
+    // fidelity and format() renders all of them.
+    const studies: Record<string, unknown>[] = input.fields?.length
+      ? result.studies
+      : (result.studies as RawStudyShape[]).map(projectStudyIndex);
+
     return {
       ...result,
+      studies,
       ...(input.fields?.length ? { requestedFields: input.fields } : {}),
     };
   },
@@ -364,69 +560,19 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     if (result.requestedFields?.length) {
       lines.push(`Requested fields: ${result.requestedFields.join(', ')}`);
     }
-    // Lift the per-study truncation cap when the caller asked for explicit
-    // fields — they've already opted into payload control, so silently dropping
-    // any of them is the wrong default.
-    const overflowOpts = result.requestedFields?.length
-      ? { maxLines: Number.POSITIVE_INFINITY }
-      : undefined;
+
+    // Two render modes, matching the two structuredContent shapes the handler
+    // produces. Default: each study is a compact index entry. Explicit fields:
+    // each study is the upstream-trimmed record, rendered leaf-for-leaf.
+    const explicitFields = Boolean(result.requestedFields?.length);
     for (const study of result.studies) {
-      const s = study as RawStudyShape;
-      const nctId = s.protocolSection?.identificationModule?.nctId ?? 'Unknown';
-      const title = s.protocolSection?.identificationModule?.briefTitle;
-      const status = s.protocolSection?.statusModule?.overallStatus ?? '';
-      const phases = s.protocolSection?.designModule?.phases;
-      const enrollment = s.protocolSection?.designModule?.enrollmentInfo?.count;
-      const sponsor = s.protocolSection?.sponsorCollaboratorsModule?.leadSponsor?.name;
-      const conditions = s.protocolSection?.conditionsModule?.conditions;
-
-      const meta: string[] = [];
-      if (phases?.length) meta.push(phases.join('/'));
-      if (enrollment != null) meta.push(`N=${enrollment}`);
-      if (sponsor) meta.push(sponsor);
-      if (conditions?.length) meta.push(conditions.join(', '));
-
-      const titleStr = title ? `: ${title}` : '';
-      const statusStr = status ? ` [${status}]` : '';
-      const metaStr = meta.length ? `\n  ${meta.join(' | ')}` : '';
-      lines.push(`- **${nctId}**${titleStr}${statusStr}${metaStr}`);
-
-      // Surface the study's site so a result row always shows where the trial
-      // runs — the headline carries no location, and locations[] is otherwise
-      // suppressed from the field dump below. With an active geoFilter the handler
-      // re-ranked locations by proximity, so locations[0] is the nearest matched
-      // site: lead with it and its distanceMi. Without one, show the first
-      // registered site. Either way the full locations[] is preserved.
-      const locations = s.protocolSection?.contactsLocationsModule?.locations as
-        | LocationWithDistance[]
-        | undefined;
-      const lead = locations?.[0];
-      if (lead) {
-        const place = [lead.facility, lead.city, lead.state, lead.country]
-          .filter(Boolean)
-          .join(', ');
-        if (place) {
-          const siteCount = locations?.length ?? 0;
-          if (lead.distanceMi != null) {
-            const totalStr = siteCount > 1 ? ` of ${siteCount} sites` : '';
-            lines.push(
-              `  Nearest site: ${place} (${lead.distanceMi.toFixed(1)} mi from geoFilter center${totalStr})`,
-            );
-          } else {
-            const totalStr = siteCount > 1 ? ` (1 of ${siteCount} sites)` : '';
-            lines.push(`  Site: ${place}${totalStr}`);
-          }
-        }
-      }
-
       lines.push(
-        ...formatRemainingStudyFields(
-          study as Record<string, unknown>,
-          SEARCH_RENDERED,
-          overflowOpts,
-        ),
+        ...(explicitFields
+          ? renderRequestedFieldsStudy(study as Record<string, unknown>)
+          : renderIndexEntry(study as StudyIndexEntry)),
       );
     }
+
     if (result.nextPageToken) {
       lines.push('\n(More results available — pass pageToken to paginate)');
       lines.push(`nextPageToken: ${result.nextPageToken}`);

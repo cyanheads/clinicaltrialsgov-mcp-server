@@ -70,16 +70,31 @@ function significantTokens(condition: string): Set<string> {
  *
  * Tiers (best across the study's conditions × requested conditions):
  *   3 — exact match (study condition equals a requested condition)
- *   2 — phrase containment either way ("Atherosclerotic Cardiovascular Disease"
- *       contains "Cardiovascular Disease")
+ *   2 — every significant token of a multi-word requested condition is present
+ *       in a study condition, so the study names the same concept or a more
+ *       specific subtype — independent of word order ("Type 2 Diabetes" matches
+ *       both "Type 2 Diabetes Mellitus" and "Diabetes Mellitus, Type 2";
+ *       "Cardiovascular Disease" matches "Atherosclerotic Cardiovascular
+ *       Disease"). Gated to multi-word requests so a single word like
+ *       "Hypertension" does not credit the distinct disease "Pulmonary Arterial
+ *       Hypertension" as a subtype — it falls to tier 1, below a genuine
+ *       "Hypertension" exact match at tier 3.
  *   1 — a shared significant token ("Type 2 Diabetes" ↔ "Diabetes Mellitus")
  *   0 — no direct overlap (matched only through upstream fuzziness)
  */
-function conditionMatchScore(studyConditions: string[], requested: string[]): number {
+export function conditionMatchScore(studyConditions: string[], requested: string[]): number {
   if (studyConditions.length === 0) return 0;
   const reqNorm = requested.map((c) => ({
     text: c.toLowerCase().trim(),
     tokens: significantTokens(c),
+    // Raw word count, before generic-token stripping: "Cardiovascular Disease"
+    // is multi-word even though "disease" drops out, while "Hypertension" is a
+    // single word. Only multi-word requests earn tier-2 subtype credit.
+    multiWord:
+      c
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .filter((t) => t.length > 0).length > 1,
   }));
   let best = 0;
   for (const sc of studyConditions) {
@@ -87,8 +102,16 @@ function conditionMatchScore(studyConditions: string[], requested: string[]): nu
     const tokens = significantTokens(sc);
     for (const req of reqNorm) {
       if (text === req.text) return 3;
-      if (text.includes(req.text) || req.text.includes(text)) best = Math.max(best, 2);
-      else if ([...tokens].some((t) => req.tokens.has(t))) best = Math.max(best, 1);
+      // Tier 2 — every significant token of a multi-word requested condition is
+      // present in this study condition, so the study is the same concept or a
+      // more specific subtype (word order independent). The multi-word gate
+      // stops a single shared word from crediting a distinct disease as a
+      // subtype ("Hypertension" vs "Pulmonary Arterial Hypertension").
+      if (req.multiWord && req.tokens.size > 0 && [...req.tokens].every((t) => tokens.has(t))) {
+        best = Math.max(best, 2);
+      } else if ([...tokens].some((t) => req.tokens.has(t))) {
+        best = Math.max(best, 1);
+      }
     }
   }
   return best;

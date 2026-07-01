@@ -14,7 +14,10 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
   getClinicalTrialsService: mockGetService,
 }));
 
-import { findEligible } from '@/mcp-server/tools/definitions/find-eligible.tool.js';
+import {
+  conditionMatchScore,
+  findEligible,
+} from '@/mcp-server/tools/definitions/find-eligible.tool.js';
 
 const baseInput = {
   age: 30,
@@ -558,6 +561,82 @@ describe('findEligible', () => {
       expect(order).toEqual(['NCT_CVD', 'NCT_VWD']);
     });
 
+    it('does not let a single-word false friend outrank a genuine subtype match (regression for #79)', async () => {
+      // query.cond="Type 2 Diabetes" OR Hypertension pulls in a Pulmonary
+      // Arterial Hypertension trial because "hypertension" is a substring of its
+      // condition. The single-word "Hypertension" request must not credit PAH (a
+      // distinct disease) as an on-condition match above a genuine Type 2
+      // Diabetes trial. Upstream had PAH first — the reported bug.
+      const upstreamOrder = [
+        { nctId: 'NCT06053580', conditions: ['Pulmonary Arterial Hypertension'] }, // false friend — was #1
+        { nctId: 'NCT_T2D', conditions: ['Type 2 Diabetes Mellitus'] }, // genuine subtype
+      ];
+      const studies = upstreamOrder.map((s) => ({
+        protocolSection: {
+          identificationModule: { nctId: s.nctId },
+          conditionsModule: { conditions: s.conditions },
+        },
+      }));
+      mockService.searchStudies.mockResolvedValue({ studies, totalCount: 2 });
+
+      const ctx = createMockContext();
+      const result = await findEligible.handler(
+        findEligible.input!.parse({
+          age: 58,
+          sex: 'MALE',
+          conditions: ['Type 2 Diabetes', 'Hypertension'],
+          location: { country: 'United States', state: 'Washington', city: 'Seattle' },
+        }),
+        ctx,
+      );
+
+      const order = (
+        result.studies as Array<{ protocolSection: { identificationModule: { nctId: string } } }>
+      ).map((s) => s.protocolSection.identificationModule.nctId);
+      // The genuine Type 2 Diabetes trial (tier 2) leads; PAH (tier 1 — the
+      // shared single word "hypertension") no longer holds the top slot.
+      expect(order).toEqual(['NCT_T2D', 'NCT06053580']);
+      // Recall preserved — nothing dropped.
+      expect(new Set(order)).toEqual(new Set(upstreamOrder.map((s) => s.nctId)));
+    });
+
+    it('does not split word-order variants of the same concept across tiers (regression for #79)', async () => {
+      // "Type 2 Diabetes Mellitus" and "Diabetes Mellitus, Type 2" are the same
+      // concept; both must score tier 2 for a "Type 2 Diabetes" request. The
+      // reversed-word study is placed first upstream — before the fix it was
+      // demoted to tier 1 (only shared tokens) and sank below the direct-order
+      // study; now both are tier 2 and the stable sort preserves upstream order.
+      const upstreamOrder = [
+        { nctId: 'NCT05780905', conditions: ['Diabetes Mellitus, Type 2'] }, // reversed word order
+        { nctId: 'NCT07228117', conditions: ['Type 2 Diabetes Mellitus'] },
+      ];
+      const studies = upstreamOrder.map((s) => ({
+        protocolSection: {
+          identificationModule: { nctId: s.nctId },
+          conditionsModule: { conditions: s.conditions },
+        },
+      }));
+      mockService.searchStudies.mockResolvedValue({ studies, totalCount: 2 });
+
+      const ctx = createMockContext();
+      const result = await findEligible.handler(
+        findEligible.input!.parse({
+          age: 58,
+          sex: 'MALE',
+          conditions: ['Type 2 Diabetes'],
+          location: { country: 'United States', state: 'Washington', city: 'Seattle' },
+        }),
+        ctx,
+      );
+
+      const order = (
+        result.studies as Array<{ protocolSection: { identificationModule: { nctId: string } } }>
+      ).map((s) => s.protocolSection.identificationModule.nctId);
+      // Both tier 2 → stable sort keeps the reversed-word study in its upstream
+      // position rather than demoting it below the direct-order study.
+      expect(order).toEqual(['NCT05780905', 'NCT07228117']);
+    });
+
     it("sorts locations by match to the user's city (regression for #37)", async () => {
       const study = {
         protocolSection: {
@@ -596,5 +675,45 @@ describe('findEligible', () => {
       // Seattle (city match) wins over WA-state-only and US-country-only sites.
       expect(locs[0]!.facility).toBe('Seattle Site');
     });
+  });
+});
+
+describe('conditionMatchScore (#79 lexical condition re-rank)', () => {
+  it('scores an exact match tier 3, including single-word requests', () => {
+    expect(conditionMatchScore(['Type 2 Diabetes'], ['Type 2 Diabetes'])).toBe(3);
+    expect(conditionMatchScore(['Hypertension'], ['Hypertension'])).toBe(3);
+  });
+
+  it('scores a multi-word subtype tier 2 regardless of word order', () => {
+    expect(conditionMatchScore(['Type 2 Diabetes Mellitus'], ['Type 2 Diabetes'])).toBe(2);
+    expect(conditionMatchScore(['Diabetes Mellitus, Type 2'], ['Type 2 Diabetes'])).toBe(2);
+    // Both word-order variants land in the SAME tier — the word-order fix.
+    expect(conditionMatchScore(['Type 2 Diabetes Mellitus'], ['Type 2 Diabetes'])).toBe(
+      conditionMatchScore(['Diabetes Mellitus, Type 2'], ['Type 2 Diabetes']),
+    );
+    // Multi-word even though "disease" is a generic token → subtype still credited.
+    expect(
+      conditionMatchScore(['Atherosclerotic Cardiovascular Disease'], ['Cardiovascular Disease']),
+    ).toBe(2);
+  });
+
+  it('drops a single-word false friend to tier 1, below a genuine exact match', () => {
+    // "Hypertension" must not credit the distinct disease "Pulmonary Arterial
+    // Hypertension" as a subtype — the multi-word gate sends it to tier 1.
+    expect(conditionMatchScore(['Pulmonary Arterial Hypertension'], ['Hypertension'])).toBe(1);
+    expect(conditionMatchScore(['Pulmonary Arterial Hypertension'], ['Hypertension'])).toBeLessThan(
+      conditionMatchScore(['Hypertension'], ['Hypertension']),
+    );
+  });
+
+  it('scores a sibling subtype as shared-token only (tier 1)', () => {
+    // "Type 1 Diabetes Mellitus" is not a superset of "Type 2 Diabetes" (no "2"),
+    // so it stays tier 1 — a different disease, not a subtype.
+    expect(conditionMatchScore(['Type 1 Diabetes Mellitus'], ['Type 2 Diabetes'])).toBe(1);
+  });
+
+  it('scores no direct overlap tier 0', () => {
+    expect(conditionMatchScore(['Asthma'], ['Type 2 Diabetes'])).toBe(0);
+    expect(conditionMatchScore([], ['Type 2 Diabetes'])).toBe(0);
   });
 });

@@ -266,31 +266,36 @@ for, with match explanations. Internally builds optimized queries with demograph
 | Parameter        | Type       | Description                                                                   |
 | :--------------- | :--------- | :---------------------------------------------------------------------------- |
 | `age`            | `number`   | Patient age in years (0–120).                                                 |
-| `sex`            | `enum`     | Biological sex: `Female`, `Male`, `All`.                                      |
+| `sex`            | `enum`     | Biological sex: `FEMALE`, `MALE`, `ALL`.                                      |
 | `conditions`     | `string[]` | Medical conditions or diagnoses. E.g., `["Type 2 Diabetes", "Hypertension"]`. |
 | `location`       | `object`   | Patient location: `{ country: string, state?: string, city?: string }`.       |
+| `healthyVolunteer` | `boolean?` | Query only studies accepting healthy volunteers. Default: `false`. |
 | `recruitingOnly` | `boolean?` | Only include actively recruiting studies. Default: `true`.                    |
 | `maxResults`     | `number?`  | Maximum results to return, 1–50. Default: `10`.                               |
 
 **Output schema:**
 
-| Field             | Type              | Description                                                                                                                                                                                                                                                 |
-| :---------------- | :---------------- | :---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `eligibleStudies` | `EligibleStudy[]` | Matching studies with: `nctId`, `title`, `briefSummary`, `matchReasons[]`, `eligibility` (age range, sex, healthy volunteers), `locations[]` (facilities in patient's country/region), `contact` info, `studyDetails` (phase, status, enrollment, sponsor). |
-| `totalMatches`    | `number`          | Total eligible studies found (before `maxResults` cap).                                                                                                                                                                                                     |
-| `searchCriteria`  | `object`          | Echo of the search criteria used (conditions, location, demographics).                                                                                                                                                                                      |
+| Field        | Type      | Description                                                                                                                                                                                                                                                                              |
+| :----------- | :-------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `studies`    | `Study[]` | Matching studies, re-ranked and capped at `maxResults`. Each carries the requested eligibility fields: `nctId`, `briefTitle`, `briefSummary`, `overallStatus`, phase/enrollment/sponsor, `conditions`, interventions, `eligibilityModule` (age range, sex, healthy volunteers), full `locations[]` (sorted by match to the patient location), and central contacts. |
+| `totalCount` | `number?` | Total eligible studies matching the full filter set upstream, before the `maxResults` cap.                                                                                                                                                                                               |
+
+**Enrichment (agent-facing context, rendered as a `content[]` trailer):**
+
+- `searchCriteria` — echo of the normalized query (`conditions`, `location`, `age`, `sex`) plus the exact upstream strings needed to reproduce the full match set via `clinicaltrials_search_studies`: `conditionQuery`, `statusFilter`, and `advancedFilter`. `find_eligible` returns only `maxResults`; a caller replays these to page the remaining matches (ranking is not reproduced — the condition/location re-rank runs only over the fetched page).
+- `funnel` — match counts at each filter stage (`conditionMatched` → `locationMatched` → `demographicsMatched`), showing where the funnel collapsed.
+- `notice` — recovery guidance when no studies matched.
 
 **Handler logic (simplified from old server):**
 
 1. Build condition query from `conditions` (quote multi-word terms, join with `OR`)
-2. Build status filter (`RECRUITING`, `NOT_YET_RECRUITING` if `recruitingOnly`)
-3. Build location query from `location`
-4. Build advanced filter for age: `AREA[MinimumAge]RANGE[MIN, {age} years] AND AREA[MaximumAge]RANGE[{age} years, MAX]`
-5. Build sex filter: skip if `All`, otherwise `AREA[Sex]ALL OR AREA[Sex]{sex}`
-6. Search with `pageSize=100` (evaluation pool)
-7. Post-filter: verify age range, sex, country match from study data
-8. Sort by location proximity (city > state > country match)
-9. Return top `maxResults`
+2. Build location query from `location` (join the present city/state/country parts)
+3. Build status filter: `['RECRUITING']` when `recruitingOnly`, otherwise unfiltered
+4. Build advanced filter: age range `AREA[MinimumAge]RANGE[MIN, {age} years] AND AREA[MaximumAge]RANGE[{age} years, MAX]`, plus `(AREA[Sex]ALL OR AREA[Sex]{sex})` when sex ≠ `ALL`, plus `AREA[HealthyVolunteers]true` when `healthyVolunteer`
+5. Run the main search (`pageSize={maxResults}`, `fields=ELIGIBLE_FIELDS`, `countTotal`) alongside two funnel-stage counts (condition-only, condition+location) in parallel
+6. Re-rank studies so those whose own condition list names a requested condition surface above tangential MeSH-umbrella matches (#72/#79), then sort each study's locations by match to the patient location (city > state > country)
+7. Enrich with `searchCriteria` (including the reproducible `conditionQuery`/`statusFilter`/`advancedFilter` strings) and `funnel` diagnostics
+8. Return the re-ranked studies (capped at `maxResults`) with `totalCount`
 
 **Dropped from old server:** Complex multi-signal condition relevance scoring, healthy volunteer matching, detailed criteria snippet extraction. A lightweight condition re-rank was reinstated in #72 — results are stable-sorted so studies whose own condition names a requested condition rank above tangential MeSH-umbrella matches (recall preserved, nothing dropped). The LLM can still evaluate nuanced eligibility from the returned study data.
 

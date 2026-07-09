@@ -254,18 +254,45 @@ describe('findEligible', () => {
       expect(call.fields).toContain('CentralContactEMail');
     });
 
-    it('echoes search criteria in enrichment', async () => {
+    it('echoes search criteria including the reproducible query strings in enrichment (#91)', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext();
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       const enrichment = getEnrichment(ctx);
+      // The exact upstream query strings ride alongside the normalized echo so a
+      // caller can reproduce the full match set via clinicaltrials_search_studies.
       expect(enrichment.searchCriteria).toEqual({
         conditions: ['Type 2 Diabetes'],
         location: 'Seattle, Washington, United States',
         age: 30,
         sex: 'ALL',
+        conditionQuery: '"Type 2 Diabetes"',
+        statusFilter: ['RECRUITING'],
+        advancedFilter:
+          'AREA[MinimumAge]RANGE[MIN, 30 years] AND AREA[MaximumAge]RANGE[30 years, MAX]',
       });
+    });
+
+    it('omits statusFilter and folds sex + healthy-volunteer into the echoed advancedFilter (#91)', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext();
+      await findEligible.handler(
+        findEligible.input!.parse({
+          ...baseInput,
+          sex: 'FEMALE',
+          healthyVolunteer: true,
+          recruitingOnly: false,
+        }),
+        ctx,
+      );
+
+      const sc = getEnrichment(ctx).searchCriteria as Record<string, unknown>;
+      // recruitingOnly=false → no status filter applied, so none is echoed.
+      expect(sc.statusFilter).toBeUndefined();
+      expect(sc.conditionQuery).toBe('"Type 2 Diabetes"');
+      expect(sc.advancedFilter).toContain('(AREA[Sex]ALL OR AREA[Sex]FEMALE)');
+      expect(sc.advancedFilter).toContain('AREA[HealthyVolunteers]true');
     });
 
     it('provides notice in enrichment when no studies found', async () => {
@@ -407,6 +434,91 @@ describe('findEligible', () => {
       });
       expect((blocks[0] as { text: string }).text).toContain('Contact:');
       expect((blocks[0] as { text: string }).text).toContain('Dr. Smith');
+    });
+
+    it('renders all interventions, locations, contacts, and the full summary without caps (#91)', () => {
+      // Reproduces the reported NCT07271186 shape: many sites/interventions and a
+      // long summary that structuredContent carries in full. content[] must match —
+      // no first-3/first-2 previews, no 200-char summary clip.
+      const longSummary = `Study rationale: ${'x'.repeat(400)}`; // > 200 chars
+      const blocks = findEligible.format!({
+        studies: [
+          {
+            protocolSection: {
+              identificationModule: { nctId: 'NCT07271186', briefTitle: 'Big multi-site trial' },
+              statusModule: { overallStatus: 'RECRUITING' },
+              descriptionModule: { briefSummary: longSummary },
+              armsInterventionsModule: {
+                interventions: [
+                  { name: 'Drug A' },
+                  { name: 'Drug B' },
+                  { name: 'Drug C' },
+                  { name: 'Drug D' }, // 4th — beyond the old slice(0, 3)
+                ],
+              },
+              contactsLocationsModule: {
+                locations: [
+                  { facility: 'Site 1', city: 'Huntsville', state: 'Alabama', country: 'US' },
+                  { facility: 'Site 2', city: 'Little Rock', state: 'Arkansas', country: 'US' },
+                  {
+                    facility: 'Site 3',
+                    city: 'Huntington Beach',
+                    state: 'California',
+                    country: 'US',
+                  },
+                  { facility: 'Site 4', city: 'Denver', state: 'Colorado', country: 'US' }, // 4th, 5th —
+                  { facility: 'Site 5', city: 'Miami', state: 'Florida', country: 'US' }, // beyond slice(0, 3)
+                ],
+                centralContacts: [
+                  { name: 'Coord One', phone: '555-0001', email: 'one@test.org' },
+                  { name: 'Coord Two', phone: '555-0002', email: 'two@test.org' },
+                  { name: 'Coord Three', phone: '555-0003', email: 'three@test.org' }, // 3rd — beyond slice(0, 2)
+                ],
+              },
+            },
+          },
+        ],
+        totalCount: 1,
+      });
+      const text = (blocks[0] as { text: string }).text;
+      // Full summary reaches content[] — not clipped at 200 chars, no ellipsis.
+      expect(text).toContain(longSummary);
+      expect(text).not.toContain('...');
+      // Every intervention, including the 4th.
+      for (const drug of ['Drug A', 'Drug B', 'Drug C', 'Drug D']) expect(text).toContain(drug);
+      // Every site, including 4 and 5, with no "(+N more)" tail.
+      for (const site of ['Site 1', 'Site 2', 'Site 3', 'Site 4', 'Site 5'])
+        expect(text).toContain(site);
+      expect(text).not.toContain('more)');
+      // Every central contact, including the 3rd.
+      for (const coord of ['Coord One', 'Coord Two', 'Coord Three']) expect(text).toContain(coord);
+    });
+
+    it('renders the reproducible query strings in the searchCriteria content[] trailer (#91)', () => {
+      // The trailer is content[]'s twin of the searchCriteria enrichment — every
+      // sub-field VALUE must render here, or it reaches structuredContent only.
+      const text = findEligible.enrichmentTrailer!.searchCriteria!.render!({
+        conditions: ['Type 2 Diabetes'],
+        location: 'Seattle, Washington, United States',
+        age: 30,
+        sex: 'ALL',
+        conditionQuery: '"Type 2 Diabetes"',
+        statusFilter: ['RECRUITING'],
+        advancedFilter:
+          'AREA[MinimumAge]RANGE[MIN, 30 years] AND AREA[MaximumAge]RANGE[30 years, MAX]',
+      });
+      expect(text).toContain('conditions=[Type 2 Diabetes]');
+      expect(text).toContain('conditionQuery="Type 2 Diabetes"');
+      // location is an applied upstream filter (queryLocn) — it must ride in the
+      // reproduce set, else a caller replays a broader, all-locations query (#91-C).
+      expect(text).toContain('locationQuery=Seattle, Washington, United States');
+      expect(text).toContain('statusFilter=[RECRUITING]');
+      expect(text).toContain(
+        'advancedFilter=AREA[MinimumAge]RANGE[MIN, 30 years] AND AREA[MaximumAge]RANGE[30 years, MAX]',
+      );
+      // find_eligible always queries includeUnknownEnrollment=true; search_studies
+      // defaults it false, so the reproduce set must carry it for a faithful replay (#91-C).
+      expect(text).toContain('includeUnknownEnrollment=true');
     });
 
     it('shows no-match message for empty results', () => {

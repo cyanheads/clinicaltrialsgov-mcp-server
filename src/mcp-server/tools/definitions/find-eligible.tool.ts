@@ -218,11 +218,35 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     searchCriteria: z
       .object({
         conditions: z.array(z.string()).describe('Conditions searched.'),
-        location: z.string().describe('Location searched.'),
+        location: z
+          .string()
+          .describe(
+            'The exact queryLocn string sent upstream (city/state/country joined). Pass as locationQuery to clinicaltrials_search_studies to reproduce the location filter beyond the maxResults cap.',
+          ),
         age: z.number().describe('Patient age.'),
         sex: z.string().describe('Patient sex.'),
+        conditionQuery: z
+          .string()
+          .optional()
+          .describe(
+            'The exact queryCond string sent upstream (multi-word terms quoted, OR-joined). Pass as conditionQuery to clinicaltrials_search_studies to reproduce the full match set beyond the maxResults cap.',
+          ),
+        statusFilter: z
+          .array(z.string())
+          .optional()
+          .describe(
+            'The status filter applied (["RECRUITING"] when recruitingOnly). Pass as statusFilter to clinicaltrials_search_studies. Absent when recruitingOnly is false.',
+          ),
+        advancedFilter: z
+          .string()
+          .optional()
+          .describe(
+            'The exact AREA[] advancedFilter (age range, plus sex/healthy-volunteer when constrained) sent upstream. Pass as advancedFilter to clinicaltrials_search_studies to reproduce the demographic constraints.',
+          ),
       })
-      .describe('Normalized search criteria applied to this eligibility query.'),
+      .describe(
+        'Normalized search criteria applied to this eligibility query, including the exact upstream query strings needed to reproduce the full match set via clinicaltrials_search_studies (replay with includeUnknownEnrollment=true, which find_eligible always sets).',
+      ),
     funnel: z
       .object({
         conditionMatched: z
@@ -250,8 +274,30 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
 
   enrichmentTrailer: {
     searchCriteria: {
-      render: (sc) =>
-        `**Search:** conditions=[${sc.conditions.join(', ')}] | location=${sc.location} | age=${sc.age} | sex=${sc.sex}`,
+      render: (sc) => {
+        const lines = [
+          `**Search:** conditions=[${sc.conditions.join(', ')}] | location=${sc.location} | age=${sc.age} | sex=${sc.sex}`,
+        ];
+        // Echo the exact upstream query strings so a content[]-only caller can
+        // reproduce the full match set (find_eligible returns only maxResults) by
+        // replaying them through clinicaltrials_search_studies. Every sub-field's
+        // VALUE must render here or it reaches structuredContent but not content[].
+        const repro: string[] = [];
+        if (sc.conditionQuery) repro.push(`conditionQuery=${sc.conditionQuery}`);
+        // location IS an applied upstream filter (queryLocn) — without it in the
+        // repro set a caller replays a broader, all-locations query (#91-C).
+        if (sc.location) repro.push(`locationQuery=${sc.location}`);
+        if (sc.statusFilter?.length) repro.push(`statusFilter=[${sc.statusFilter.join(', ')}]`);
+        if (sc.advancedFilter) repro.push(`advancedFilter=${sc.advancedFilter}`);
+        if (repro.length) {
+          // find_eligible always queries with includeUnknownEnrollment=true (eligibility
+          // ignores enrollment-count quality); search_studies defaults it false and drops
+          // the unknown-enrollment sentinel, so a faithful replay must set it too (#91-C).
+          repro.push('includeUnknownEnrollment=true');
+          lines.push(`**Reproduce via clinicaltrials_search_studies:** ${repro.join(' | ')}`);
+        }
+        return lines.join('\n');
+      },
     },
     funnel: {
       render: (f) =>
@@ -285,6 +331,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     if (input.healthyVolunteer) {
       advancedParts.push('AREA[HealthyVolunteers]true');
     }
+    // Name the joined filter so both the upstream call and the searchCriteria echo
+    // reuse the identical string — the echo is the reproducible query (#91-C).
+    const advancedFilter = advancedParts.join(' AND ');
 
     ctx.log.info('Finding eligible studies', {
       conditions: input.conditions,
@@ -304,7 +353,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
           queryCond: conditionQuery,
           queryLocn: locationQuery,
           filterOverallStatus: statusFilter,
-          filterAdvanced: advancedParts.join(' AND '),
+          filterAdvanced: advancedFilter,
           fields: ELIGIBLE_FIELDS,
           pageSize: input.maxResults,
           countTotal: true,
@@ -374,13 +423,19 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     const locationMatched = locationStage.totalCount ?? 0;
     const demographicsMatched = result.totalCount ?? 0;
 
-    // Always enrich with search echo and funnel diagnostics
+    // Always enrich with search echo and funnel diagnostics. The searchCriteria
+    // echo carries the exact upstream query strings (conditionQuery/statusFilter/
+    // advancedFilter) so callers can reproduce the full match set via
+    // clinicaltrials_search_studies past find_eligible's maxResults cap (#91-C).
     ctx.enrich({
       searchCriteria: {
         conditions: input.conditions,
         location: locationQuery,
         age: input.age,
         sex: input.sex,
+        conditionQuery,
+        ...(statusFilter ? { statusFilter } : {}),
+        advancedFilter,
       },
       funnel: { conditionMatched, locationMatched, demographicsMatched },
     });
@@ -482,18 +537,15 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         if (conditions?.length) studyMeta.push(conditions.join(', '));
         if (studyMeta.length) lines.push(`  ${studyMeta.join(' | ')}`);
         if (interventions?.length) {
-          const names = interventions
-            .map((i) => i.name)
-            .filter(Boolean)
-            .slice(0, 3);
+          // Render every intervention name — content[] must match the full list
+          // carried in structuredContent, not a first-3 preview (#91).
+          const names = interventions.map((i) => i.name).filter(Boolean);
           if (names.length) lines.push(`  Interventions: ${names.join(', ')}`);
         }
         const summary = s.protocolSection?.descriptionModule?.briefSummary;
-        if (summary) {
-          lines.push(
-            `  Summary: ${summary.length > 200 ? `${summary.slice(0, 200)}...` : summary}`,
-          );
-        }
+        // Render the full summary — structuredContent carries it complete, so a
+        // 200-char content[] clip left content-only clients with a partial value (#91).
+        if (summary) lines.push(`  Summary: ${summary}`);
 
         // Eligibility criteria summary
         const eligParts: string[] = [];
@@ -506,28 +558,33 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
           eligParts.push(`Healthy Volunteers: ${elig.healthyVolunteers ? 'Yes' : 'No'}`);
         if (eligParts.length) lines.push(`  Eligibility: ${eligParts.join(' | ')}`);
 
-        // Locations are pre-sorted by match-score in the handler, so the top
-        // 3 are the most relevant sites — typically the user's city/state.
+        // Locations are pre-sorted by match-score in the handler, so the most
+        // relevant sites (typically the user's city/state) lead. Render every
+        // site — structuredContent carries the full list, so a first-3 preview
+        // with a "(+N more)" tail left content-only clients unable to see the
+        // remaining sites (#91).
         if (locs.length > 0) {
-          const toShow = locs.slice(0, 3);
-          const locStr = toShow
+          const locStr = locs
             .map((l) => [l.facility, l.city, l.state, l.country].filter(Boolean).join(', '))
             .join(' | ');
-          const remaining = locs.length - toShow.length;
-          lines.push(`  Locations: ${locStr}${remaining > 0 ? ` (+${remaining} more)` : ''}`);
+          lines.push(`  Locations: ${locStr}`);
         }
 
-        // Central contacts
+        // Central contacts — render all; the full set rides in structuredContent (#91).
         const centralContacts = s.protocolSection?.contactsLocationsModule?.centralContacts ?? [];
         if (centralContacts.length > 0) {
           const contactStr = centralContacts
-            .slice(0, 2)
             .map((c) => [c.name, c.phone, c.email].filter(Boolean).join(', '))
             .join(' | ');
           lines.push(`  Contact: ${contactStr}`);
         }
+        // Lift both caps on the field-dump fallback so any remaining requested leaf
+        // reaches content[] at full length, matching structuredContent (#91, mirrors #89).
         lines.push(
-          ...formatRemainingStudyFields(study as Record<string, unknown>, ELIGIBLE_RENDERED),
+          ...formatRemainingStudyFields(study as Record<string, unknown>, ELIGIBLE_RENDERED, {
+            maxLines: Number.POSITIVE_INFINITY,
+            maxValueLen: Number.POSITIVE_INFINITY,
+          }),
         );
       }
     }

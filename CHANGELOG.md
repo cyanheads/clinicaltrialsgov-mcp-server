@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.8.2](changelog/2.8.x/2.8.2.md) — 2026-07-09
+
+clinicaltrials_get_field_definitions path_not_found recovery hint now names the current mode-based call shape instead of the removed no-args overview; docs/design.md synced to mode/query/path/limit/includeIndexedOnly
+
 ## [2.8.1](changelog/2.8.x/2.8.1.md) — 2026-07-09
 
 search_studies, get_field_values, and find_eligible content-output renders no longer clip long values or cap lists below what structuredContent already carries; find_eligible echoes reproducible upstream query strings; mcp-ts-core ^0.10.14 + Socket/minimumReleaseAge supply-chain guard maintenance

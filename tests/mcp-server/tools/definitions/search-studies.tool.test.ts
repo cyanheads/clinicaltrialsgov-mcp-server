@@ -862,5 +862,38 @@ describe('searchStudies', () => {
       expect(bostonIdx).toBeGreaterThan(seattleIdx);
       expect(text).toContain('0.0 mi');
     });
+
+    it('explicit fields: a long string leaf (BriefSummary) renders unclipped in content[], matching structuredContent (#89)', async () => {
+      // A 543-char summary — the reported NCT00225888 length. structuredContent
+      // carries it whole; content[] must too, not a 200-char slice with an ellipsis.
+      const longSummary = `The purpose of this study is ${'y'.repeat(520)}`;
+      expect(longSummary.length).toBeGreaterThan(500);
+      const trimmed = {
+        protocolSection: {
+          identificationModule: { nctId: 'NCT00225888', briefTitle: 'Food photography study' },
+          descriptionModule: { briefSummary: longSummary },
+        },
+      };
+      mockService.searchStudies.mockResolvedValue({ studies: [trimmed], totalCount: 1 });
+      const ctx = createMockContext();
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({
+          conditionQuery: 'Type 2 Diabetes',
+          fields: ['NCTId', 'BriefTitle', 'BriefSummary'],
+        }),
+        ctx,
+      );
+
+      // structuredContent carries the full summary (upstream-trimmed record passes through).
+      const sc = result.studies[0] as {
+        protocolSection: { descriptionModule: { briefSummary: string } };
+      };
+      expect(sc.protocolSection.descriptionModule.briefSummary).toBe(longSummary);
+
+      // content[] renders it whole — no 200-char clip, no truncation ellipsis.
+      const text = renderText(result);
+      expect(text).toContain(longSummary);
+      expect(text).not.toContain('…');
+    });
   });
 });

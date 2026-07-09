@@ -233,10 +233,14 @@ function renderRequestedFieldsStudy(study: Record<string, unknown>): string[] {
   if (locations?.length) lines.push(...renderSiteLines(locations));
 
   // The caller opted into payload control, so render every remaining requested
-  // leaf — silently dropping any of them is the wrong default.
+  // leaf at full length — silently dropping or clipping any of them is the wrong
+  // default. Lift both caps: maxLines so no leaf is omitted, maxValueLen so a long
+  // primitive (e.g. a 543-char BriefSummary) reaches content[] intact, matching
+  // structuredContent (#89).
   lines.push(
     ...formatRemainingStudyFields(study, SEARCH_RENDERED, {
       maxLines: Number.POSITIVE_INFINITY,
+      maxValueLen: Number.POSITIVE_INFINITY,
     }),
   );
   return lines;

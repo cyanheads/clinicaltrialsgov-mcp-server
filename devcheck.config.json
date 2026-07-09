@@ -6,6 +6,7 @@
       "typescript",
       "tsc-alias",
       "@cyanheads/mcp-ts-core",
+      "@socketsecurity/bun-security-scanner",
       "@biomejs/biome",
       "depcheck",
       "@cloudflare/workers-types",

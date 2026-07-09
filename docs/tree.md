@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-07-01 01:59:59
+Generated on: 2026-07-09 20:42:40
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -16,8 +16,9 @@ clinicaltrialsgov-mcp-server/
 │   │   ├── bug_report.yml
 │   │   ├── config.yml
 │   │   └── feature_request.yml
-│   └── workflows/
-│       └── codeql.yml
+│   ├── workflows/
+│   │   └── codeql.yml
+│   └── SECURITY.md
 ├── .husky/
 ├── .vscode/
 │   ├── extensions.json
@@ -207,6 +208,7 @@ clinicaltrialsgov-mcp-server/
 │           └── field-search.test.ts
 ├── .dockerignore
 ├── .env.example
+├── .gitattributes
 ├── .gitignore
 ├── .mcpbignore
 ├── AGENTS.md

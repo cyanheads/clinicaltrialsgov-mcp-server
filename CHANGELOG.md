@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.8.1](changelog/2.8.x/2.8.1.md) — 2026-07-09
+
+search_studies, get_field_values, and find_eligible content-output renders no longer clip long values or cap lists below what structuredContent already carries; find_eligible echoes reproducible upstream query strings; mcp-ts-core ^0.10.14 + Socket/minimumReleaseAge supply-chain guard maintenance
+
 ## [2.8.0](changelog/2.8.x/2.8.0.md) — 2026-06-30 · ⚠️ Breaking · 🛡️ Security
 
 search_studies bounds structuredContent to a compact per-study index by default (breaking) — pass fields or use get_study_record for full leaves; find_eligible re-rank drops shared-word false friends; @cyanheads/mcp-ts-core ^0.10.10 clears a transitive js-yaml DoS advisory

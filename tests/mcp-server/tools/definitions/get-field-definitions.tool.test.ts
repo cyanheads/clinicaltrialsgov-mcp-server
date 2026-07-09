@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/get-field-definitions.tool
  */
 
+import { McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -197,6 +198,26 @@ describe('getFieldDefinitions', () => {
       await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow(
         /protocolSection.*resultsSection/,
       );
+    });
+
+    it('surfaces the current mode-based recovery hint on invalid drill path (#87)', async () => {
+      mockService.getMetadata.mockResolvedValue(sampleTree);
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
+      const input = getFieldDefinitions.input!.parse({ mode: 'drill', path: 'bad.path' });
+
+      try {
+        await getFieldDefinitions.handler(input, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        const data = (err as McpError).data as Record<string, unknown>;
+        expect(data?.reason).toBe('path_not_found');
+        const hint = (data?.recovery as { hint?: string } | undefined)?.hint ?? '';
+        // No-args overview was removed in #48/#49 — the hint must name the mode-based
+        // shape, not the now-invalid "omit both arguments" call.
+        expect(hint).toContain('mode="overview"');
+        expect(hint).not.toContain('omit both arguments');
+      }
     });
 
     it('navigates single-level path', async () => {

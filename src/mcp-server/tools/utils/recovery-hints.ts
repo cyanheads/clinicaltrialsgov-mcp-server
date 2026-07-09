@@ -19,7 +19,7 @@ export const RECOVERY_HINTS = {
   query_parse_error:
     'Field-scoped search uses advancedFilter with AREA[FieldName]value (call clinicaltrials_get_field_definitions to look up the right FieldName); free-text fields (query, conditionQuery, etc.) take plain words plus AND, OR, NOT — `[ ]` are reserved (advancedFilter AREA[] only); `( )` group sub-expressions and are safe when matched; `,` acts as AND.',
   path_not_found:
-    'Call clinicaltrials_get_field_definitions with `query` (e.g., "phase", "enrollment") to find the field path by concept, or omit both arguments for a top-level overview.',
+    'Call clinicaltrials_get_field_definitions with mode="search" and query="phase" (or "enrollment") to find a path by concept, or mode="overview" for the top-level sections.',
   rate_limited:
     'ClinicalTrials.gov rate-limited the request after several retries; wait about a minute before trying again.',
 } as const;

@@ -10,7 +10,7 @@
 | `clinicaltrials_get_study_results` | Extract outcomes, adverse events, participant flow, baseline characteristics, and results metadata for completed studies with results.                            | `nctIds`, `sections`, `summary`                                                                                                                                                          | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_get_field_values`  | Discover valid values for any ClinicalTrials.gov field with study counts per value. Use before constructing searches to find valid filter options.                | `fields`                                                                                                                                                                                 | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_get_study_count`   | Get total study count matching a query without fetching study data. Use for quick stats and building breakdowns by calling multiple times with different filters. | `query`, `conditionQuery`, `interventionQuery`, `statusFilter`, `phaseFilter`, `advancedFilter`                                                                                          | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
-| `clinicaltrials_get_field_definitions` | Get field definitions from the study data model — piece names, types, nesting. For discovering available fields and AREA[] filter targets.                   | `path`, `includeIndexedOnly`                                                                                                                                                             | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
+| `clinicaltrials_get_field_definitions` | Get field definitions from the study data model — piece names, types, nesting. For discovering available fields and AREA[] filter targets.                   | `mode`, `query`, `path`, `limit`, `includeIndexedOnly`                                                                                                                                                             | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_find_eligible`     | Match patient demographics to recruiting clinical trials. Builds optimized API queries from a patient profile and returns studies with eligibility/location fields. | `age`, `sex`, `conditions`, `location`, `healthyVolunteer`, `recruitingOnly`, `maxResults`                                                                                               | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 
 ### Resources
@@ -173,7 +173,7 @@ InterventionType, StudyType, or LeadSponsorClass values.
 
 ### 4. `clinicaltrials_get_field_definitions`
 
-Discovery tool for the study data model. Wraps `GET /studies/metadata`. Supports top-level overview and subtree browsing via `path`.
+Discovery tool for the study data model. Wraps `GET /studies/metadata`. Requires an explicit `mode`: `"search"` (keyword search), `"drill"` (subtree browsing by `path`), or `"overview"` (top-level sections).
 
 **Description:**
 
@@ -188,8 +188,11 @@ names for AREA[] filter expressions, or explore the study data model structure.
 
 | Parameter          | Type        | Description                                                                                                                                                           |
 | :----------------- | :---------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `path`             | `string?`   | Dot-notation path to get a subtree (e.g., `"protocolSection.designModule"`). Omit for top-level overview (sections + direct children, not full tree).                 |
-| `includeIndexedOnly` | `boolean?` | Only return indexed (searchable) fields. Default: false.                                                                                                             |
+| `mode`             | `enum`      | Required. `"search"` (keyword search, needs `query`), `"drill"` (subtree by `path`), or `"overview"` (top-level sections).                                            |
+| `query`            | `string?`   | search mode only. Keyword to match field names against (e.g., `"enrollment"`, `"sponsor"`).                                                                           |
+| `path`             | `string?`   | drill mode only. Dot-notation path to navigate into (e.g., `"protocolSection.designModule"`).                                                                         |
+| `limit`            | `number?`   | search mode only. Max results to return. Default: 20.                                                                                                                 |
+| `includeIndexedOnly` | `boolean?` | drill mode only. Only return indexed (searchable) fields. Default: false.                                                                                            |
 
 **Output schema:**
 
@@ -197,12 +200,13 @@ names for AREA[] filter expressions, or explore the study data model structure.
 | :------------- | :-------------- | :------------------------------------------------------------------------ |
 | `fields`       | `FieldDef[]`    | Field definitions with name, piece, sourceType, type, isEnum, path.       |
 | `totalFields`  | `number`        | Total fields returned (including nested).                                 |
-| `resolvedPath` | `string?`       | The resolved path (when `path` was provided).                             |
+| `resolvedPath` | `string?`       | The resolved path (when mode is `"drill"`).                               |
 
 **Behavior:**
 
-- No params: returns top-level overview (2 levels deep) — sections and their direct children. Prevents context bloat.
-- `path`: navigates to that subtree and flattens all descendants.
+- `mode="overview"`: returns top-level overview (2 levels deep) — sections and their direct children. Prevents context bloat.
+- `mode="drill"`: navigates to the `path` subtree and flattens all descendants.
+- `mode="search"`: returns keyword matches for `query`, ranked by relevance and capped by `limit`.
 
 **Error messages:**
 
@@ -492,13 +496,13 @@ Each step is independently testable via `bun run rebuild && bun run start:stdio`
 
 ### "What fields can I use in the fields parameter?"
 
-1. `get_field_definitions()` — top-level overview
-2. `get_field_definitions(path="protocolSection.designModule")` — drill into design fields
+1. `get_field_definitions(mode="overview")` — top-level overview
+2. `get_field_definitions(mode="drill", path="protocolSection.designModule")` — drill into design fields
 3. Agent discovers piece names like `DesignAllocation`, `DesignMasking`, uses in search
 
 ### "What fields relate to enrollment?"
 
-1. `get_field_definitions(search="enrollment")`
+1. `get_field_definitions(mode="search", query="enrollment")`
 2. Agent finds `EnrollmentCount`, `EnrollmentType` with paths and types
 
 ### "Get me full details on NCT03722472"
@@ -612,7 +616,7 @@ See [docs/api-reference.md](api-reference.md) for the complete ClinicalTrials.go
 ### Tool: `clinicaltrials_get_field_definitions`
 
 - [x] `src/mcp-server/tools/definitions/get-field-definitions.tool.ts`
-- [x] Input schema: `path`, `search`, `includeIndexedOnly` with `.describe()`
+- [x] Input schema: `mode`, `query`, `path`, `limit`, `includeIndexedOnly` with `.describe()`
 - [x] Output schema: `fields[]` with name, piece, types, path; `totalFields`, `resolvedPath`
 - [x] Handler: call service `getMetadata`, then path navigation / keyword search / top-level overview
 - [x] Format: tree-style for browsing, flat list for search

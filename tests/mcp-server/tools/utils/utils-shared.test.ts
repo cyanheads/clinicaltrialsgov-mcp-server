@@ -135,8 +135,12 @@ describe('RECOVERY_HINTS', () => {
     expect(RECOVERY_HINTS.query_parse_error.toLowerCase()).toMatch(/area\[|reserved/);
   });
 
-  it('path_not_found hint references get_field_definitions or overview', () => {
-    expect(RECOVERY_HINTS.path_not_found.toLowerCase()).toMatch(/field_definitions|overview/);
+  it('path_not_found hint names the mode-based shape, not the removed no-args overview (#87)', () => {
+    const hint = RECOVERY_HINTS.path_not_found;
+    expect(hint).toContain('clinicaltrials_get_field_definitions');
+    expect(hint).toContain('mode="overview"');
+    // The no-args overview call was removed in #48/#49; the hint must not re-teach it.
+    expect(hint).not.toContain('omit both arguments');
   });
 
   it('rate_limited hint references wait time or retry', () => {

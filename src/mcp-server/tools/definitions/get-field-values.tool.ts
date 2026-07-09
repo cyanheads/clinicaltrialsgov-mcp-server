@@ -127,15 +127,19 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
         if (topValues.length === 0) {
           lines.push('  No recorded values for this field.');
         } else {
-          const shown = topValues.slice(0, 15);
-          for (const tv of shown) {
+          // Render every fetched value with its study count — content[] must
+          // carry the same topValues the handler returns in structuredContent,
+          // or content-only clients go blind past the 16th value (#90).
+          for (const tv of topValues) {
             lines.push(`  ${tv.value}: ${tv.studiesCount} studies`);
           }
-          if (topValues.length > shown.length) {
-            const remainder = topValues.length - shown.length;
-            const unique = stat.uniqueValuesCount;
+          // topValues is upstream-capped at 250. When the field has more distinct
+          // values than were fetched, the tail is unreachable (beyond the API cap),
+          // not omitted by us — disclose that honestly rather than implying we trimmed.
+          const unique = stat.uniqueValuesCount;
+          if (unique != null && unique > topValues.length) {
             lines.push(
-              `  … and ${remainder} more${unique != null ? ` (of ${unique} unique; topValues capped at 250)` : ''}`,
+              `  Showing all ${topValues.length} fetched values (of ${unique} unique; topValues capped at 250 by the API).`,
             );
           }
         }

@@ -184,7 +184,7 @@ describe('getFieldValues', () => {
       expect((blocks[0] as { text: string }).text).not.toContain('missing');
     });
 
-    it('truncates to 15 values per field with a "+N more" tail', () => {
+    it('renders every fetched topValue with no truncation tail (#90)', () => {
       const topValues = Array.from({ length: 20 }, (_, i) => ({
         value: `Value${i}`,
         studiesCount: 100 - i,
@@ -194,14 +194,44 @@ describe('getFieldValues', () => {
       });
       const text = (blocks[0] as { text: string }).text;
       const lines = text.split('\n');
-      // 1 header + 15 values + 1 tail = 17 lines
-      expect(lines).toHaveLength(17);
-      expect(text).toContain('and 5 more');
-      expect(text).toContain('of 20 unique');
-      expect(text).toContain('capped at 250');
+      // 1 header + all 20 values, no tail — every fetched value reaches content[],
+      // and uniqueValuesCount === fetched count means nothing was capped.
+      expect(lines).toHaveLength(21);
+      for (let i = 0; i < 20; i++) expect(text).toContain(`Value${i}: ${100 - i} studies`);
+      expect(text).not.toContain('capped at 250');
+      expect(text).not.toContain('Showing all');
     });
 
-    it('does not render "+N more" tail when topValues fits within 15', () => {
+    it('discloses the upstream 250-cap when more unique values exist than were fetched (#90)', () => {
+      // Mirrors the reported Condition case: 250 fetched, ~131k unique upstream.
+      const topValues = Array.from({ length: 250 }, (_, i) => ({
+        value: `Condition ${i}`,
+        studiesCount: 5000 - i,
+      }));
+      const blocks = getFieldValues.format!({
+        fieldStats: [
+          {
+            field: 'Condition',
+            piece: 'Condition',
+            type: 'STRING',
+            uniqueValuesCount: 131547,
+            topValues,
+          },
+        ],
+      });
+      const text = (blocks[0] as { text: string }).text;
+      // The 16th value (index 15) and the last (249) both render — no first-15 cap.
+      expect(text).toContain('Condition 0: 5000 studies');
+      expect(text).toContain('Condition 15: 4985 studies');
+      expect(text).toContain('Condition 249: 4751 studies');
+      // Reframed disclosure: honest that the tail is beyond the API cap, not trimmed by us.
+      expect(text).toContain(
+        'Showing all 250 fetched values (of 131547 unique; topValues capped at 250 by the API).',
+      );
+      expect(text).not.toContain('and 235 more');
+    });
+
+    it('renders no disclosure tail when all unique values are shown (#90)', () => {
       const topValues = Array.from({ length: 10 }, (_, i) => ({
         value: `Value${i}`,
         studiesCount: 100 - i,
@@ -210,7 +240,10 @@ describe('getFieldValues', () => {
         fieldStats: [{ field: 'F', piece: 'F', type: 'ENUM', uniqueValuesCount: 10, topValues }],
       });
       const text = (blocks[0] as { text: string }).text;
-      expect(text).not.toContain('more values');
+      // uniqueValuesCount === fetched count → nothing capped, no disclosure line.
+      expect(text).not.toContain('Showing all');
+      expect(text).not.toContain('capped at 250');
+      for (let i = 0; i < 10; i++) expect(text).toContain(`Value${i}:`);
     });
 
     it('emits empty-values fallback when topValues is missing', () => {

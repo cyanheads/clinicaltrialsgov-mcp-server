@@ -90,15 +90,16 @@ describe('searchStudies — injection and oversized inputs', () => {
     mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
   });
 
-  it.each(
-    INJECTION_PAYLOADS,
-  )('query field passes injection payload %s to the service (Zod does not sanitize strings)', async (payload) => {
-    // Zod does not strip or reject arbitrary strings in free-text fields.
-    // The important invariant is no crash and no prototype pollution.
-    const ctx = createMockContext();
-    const input = searchStudies.input!.parse({ query: payload });
-    await expect(searchStudies.handler(input, ctx)).resolves.toBeDefined();
-  });
+  it.each(INJECTION_PAYLOADS)(
+    'query field passes injection payload %s to the service (Zod does not sanitize strings)',
+    async (payload) => {
+      // Zod does not strip or reject arbitrary strings in free-text fields.
+      // The important invariant is no crash and no prototype pollution.
+      const ctx = createMockContext();
+      const input = searchStudies.input!.parse({ query: payload });
+      await expect(searchStudies.handler(input, ctx)).resolves.toBeDefined();
+    },
+  );
 
   it('rejects NCT ID injection that does not match NCTxxxxxxxx format', () => {
     expect(() => searchStudies.input!.parse({ nctIds: "'; DROP TABLE --" })).toThrow();
@@ -172,13 +173,14 @@ describe('getStudyCount — injection and output safety', () => {
     mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 42 });
   });
 
-  it.each(
-    INJECTION_PAYLOADS,
-  )('accepts free-text payload %s without crashing (no validation on plain strings)', async (payload) => {
-    const ctx = createMockContext();
-    const input = getStudyCount.input!.parse({ conditionQuery: payload });
-    await expect(getStudyCount.handler(input, ctx)).resolves.toBeDefined();
-  });
+  it.each(INJECTION_PAYLOADS)(
+    'accepts free-text payload %s without crashing (no validation on plain strings)',
+    async (payload) => {
+      const ctx = createMockContext();
+      const input = getStudyCount.input!.parse({ conditionQuery: payload });
+      await expect(getStudyCount.handler(input, ctx)).resolves.toBeDefined();
+    },
+  );
 
   it('oversized conditionQuery does not crash', async () => {
     const ctx = createMockContext();
@@ -206,13 +208,12 @@ describe('getStudyResults — injection and output safety', () => {
     mockService.getStudiesBatch.mockResolvedValue([]);
   });
 
-  it.each([
-    "'; DROP TABLE --",
-    '../../../etc/passwd',
-    '__proto__',
-  ])('rejects injection payload %s as NCT ID', (payload) => {
-    expect(() => getStudyResults.input!.parse({ nctIds: payload })).toThrow();
-  });
+  it.each(["'; DROP TABLE --", '../../../etc/passwd', '__proto__'])(
+    'rejects injection payload %s as NCT ID',
+    (payload) => {
+      expect(() => getStudyResults.input!.parse({ nctIds: payload })).toThrow();
+    },
+  );
 
   it('format output does not leak env var names', () => {
     const formatted = getStudyResults.format!({
@@ -240,14 +241,15 @@ describe('getFieldValues — injection and output safety', () => {
     mockService.getFieldValues.mockResolvedValue([]);
   });
 
-  it.each(
-    INJECTION_PAYLOADS,
-  )('passes injection payload %s as field name string to service (no crash)', async (payload) => {
-    const ctx = createMockContext();
-    // Zod accepts any string for field names — the API rejects invalid ones
-    const input = getFieldValues.input!.parse({ fields: payload });
-    await expect(getFieldValues.handler(input, ctx)).resolves.toBeDefined();
-  });
+  it.each(INJECTION_PAYLOADS)(
+    'passes injection payload %s as field name string to service (no crash)',
+    async (payload) => {
+      const ctx = createMockContext();
+      // Zod accepts any string for field names — the API rejects invalid ones
+      const input = getFieldValues.input!.parse({ fields: payload });
+      await expect(getFieldValues.handler(input, ctx)).resolves.toBeDefined();
+    },
+  );
 
   it('output does not contain env var names', async () => {
     mockService.getFieldValues.mockResolvedValue([
@@ -276,24 +278,24 @@ describe('getFieldDefinitions — path traversal and injection', () => {
     mockService.searchFieldDefinitions.mockResolvedValue({ entries: [], total: 0 });
   });
 
-  it.each([
-    '../../../etc/passwd',
-    '..\\windows\\system32',
-    '%2e%2e%2f',
-  ])('drill mode with path traversal payload "%s" throws (path not found) and does not crash', async (payload) => {
-    const ctx = createMockContext({ errors: getFieldDefinitions.errors });
-    const input = getFieldDefinitions.input!.parse({ mode: 'drill', path: payload });
-    // Handler should throw "path not found" since no such node exists — not a crash
-    await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow();
-  });
+  it.each(['../../../etc/passwd', '..\\windows\\system32', '%2e%2e%2f'])(
+    'drill mode with path traversal payload "%s" throws (path not found) and does not crash',
+    async (payload) => {
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
+      const input = getFieldDefinitions.input!.parse({ mode: 'drill', path: payload });
+      // Handler should throw "path not found" since no such node exists — not a crash
+      await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow();
+    },
+  );
 
-  it.each(
-    INJECTION_PAYLOADS,
-  )('search mode passes injection payload %s to searchFieldDefinitions without crash', async (payload) => {
-    const ctx = createMockContext({ errors: getFieldDefinitions.errors });
-    const input = getFieldDefinitions.input!.parse({ mode: 'search', query: payload });
-    await expect(getFieldDefinitions.handler(input, ctx)).resolves.toBeDefined();
-  });
+  it.each(INJECTION_PAYLOADS)(
+    'search mode passes injection payload %s to searchFieldDefinitions without crash',
+    async (payload) => {
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
+      const input = getFieldDefinitions.input!.parse({ mode: 'search', query: payload });
+      await expect(getFieldDefinitions.handler(input, ctx)).resolves.toBeDefined();
+    },
+  );
 
   it('format output does not leak env var names', async () => {
     const ctx = createMockContext();

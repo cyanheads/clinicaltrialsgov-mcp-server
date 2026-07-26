@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.8.3](changelog/2.8.x/2.8.3.md) — 2026-07-26
+
+throttle() serializes concurrent requests instead of firing them together; search_studies classifies malformed geoFilter/sort by reading the offending parameter from the upstream body; Essie query-parse errors name the actual offending token and correct the bracket-reservation rule; mcp-ts-core ^0.11.0 maintenance
+
 ## [2.8.2](changelog/2.8.x/2.8.2.md) — 2026-07-09
 
 clinicaltrials_get_field_definitions path_not_found recovery hint now names the current mode-based call shape instead of the removed no-args overview; docs/design.md synced to mode/query/path/limit/includeIndexedOnly

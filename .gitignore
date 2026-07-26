@@ -69,7 +69,7 @@ worker-configuration.d.ts
 # =============================================================================
 .storage/
 repomix-output*
-data/
+/data/
 docs/api/
 docs/devdocs.md
 .mcp.json

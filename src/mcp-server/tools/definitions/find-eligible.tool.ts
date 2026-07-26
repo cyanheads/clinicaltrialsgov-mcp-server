@@ -565,10 +565,16 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         // relevant sites (typically the user's city/state) lead. Render every
         // site — structuredContent carries the full list, so a first-3 preview
         // with a "(+N more)" tail left content-only clients unable to see the
-        // remaining sites (#91).
+        // remaining sites (#91). Each site's own status rides along: the tool
+        // requests LocationStatus and returns it in structuredContent, and a
+        // site-level status can differ from the study's overall status, so
+        // omitting it made a NOT_YET_RECRUITING site read as currently open (#91).
         if (locs.length > 0) {
           const locStr = locs
-            .map((l) => [l.facility, l.city, l.state, l.country].filter(Boolean).join(', '))
+            .map((l) => {
+              const site = [l.facility, l.city, l.state, l.country].filter(Boolean).join(', ');
+              return l.status ? `${site} [${l.status}]` : site;
+            })
             .join(' | ');
           lines.push(`  Locations: ${locStr}`);
         }

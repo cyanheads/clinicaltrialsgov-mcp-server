@@ -494,6 +494,55 @@ describe('findEligible', () => {
       for (const coord of ['Coord One', 'Coord Two', 'Coord Three']) expect(text).toContain(coord);
     });
 
+    it('renders each site status alongside the site so a non-recruiting site is visible (#91)', () => {
+      // The tool requests LocationStatus and returns it in structuredContent. A
+      // site-level status can differ from the study's overall status, so a
+      // content[]-only caller must see it — otherwise a NOT_YET_RECRUITING site
+      // reads as currently open under recruitingOnly=true.
+      const blocks = findEligible.format!({
+        studies: [
+          {
+            protocolSection: {
+              identificationModule: { nctId: 'NCT12345678', briefTitle: 'Mixed-status trial' },
+              statusModule: { overallStatus: 'RECRUITING' },
+              contactsLocationsModule: {
+                locations: [
+                  {
+                    facility: 'Yale',
+                    city: 'New Haven',
+                    state: 'Connecticut',
+                    country: 'United States',
+                    status: 'RECRUITING',
+                  },
+                  {
+                    facility: 'University of South Florida',
+                    city: 'Tampa',
+                    state: 'Florida',
+                    country: 'United States',
+                    status: 'NOT_YET_RECRUITING',
+                  },
+                  {
+                    facility: 'Unstated Site',
+                    city: 'Boston',
+                    state: 'Massachusetts',
+                    country: 'United States',
+                  },
+                ],
+              },
+            },
+          },
+        ],
+        totalCount: 1,
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain(
+        'Yale, New Haven, Connecticut, United States [RECRUITING] | University of South Florida, Tampa, Florida, United States [NOT_YET_RECRUITING]',
+      );
+      // A site with no published status renders bare — no fabricated status.
+      expect(text).toContain('Unstated Site, Boston, Massachusetts, United States');
+      expect(text).not.toMatch(/Unstated Site[^|\n]*\[/);
+    });
+
     it('renders the reproducible query strings in the searchCriteria content[] trailer (#91)', () => {
       // The trailer is content[]'s twin of the searchCriteria enrichment — every
       // sub-field VALUE must render here, or it reaches structuredContent only.

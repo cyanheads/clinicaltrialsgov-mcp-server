@@ -7,7 +7,15 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
-import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
+import type {
+  BrowseModule,
+  DateStruct,
+  ProtocolOutcome,
+  RawStudyShape,
+  StudyContact,
+  StudyIdInfo,
+  StudyLocation,
+} from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
 import { haversineMi, type LocationWithDistance } from '../utils/geo-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
@@ -156,6 +164,85 @@ function summarizeResults(study: RawStudyShape): ResultsSummary | undefined {
   if (pf?.periods?.length) summary.participantFlowPeriods = pf.periods.length;
   if (bl?.measures?.length) summary.baselineMeasures = bl.measures.length;
   return Object.keys(summary).length > 0 ? summary : undefined;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Format helpers                                                     */
+/* ------------------------------------------------------------------ */
+
+/** Render a `{ date, type }` struct as `date (TYPE)` — the ACTUAL/ESTIMATED qualifier matters. */
+function dateWithType(struct: DateStruct | undefined): string | undefined {
+  if (!struct?.date) return;
+  return struct.type ? `${struct.date} (${struct.type})` : struct.date;
+}
+
+/** Render a boolean flag for display. */
+function yesNo(value: boolean): string {
+  return value ? 'Yes' : 'No';
+}
+
+/**
+ * Join `[label, value]` pairs into `Label: value` segments, dropping pairs that
+ * carry no value. Booleans render Yes/No — `false` is data, not absence.
+ */
+function labeledParts(pairs: Array<[string, boolean | string | undefined]>): string[] {
+  return pairs
+    .filter((pair): pair is [string, boolean | string] => pair[1] != null && pair[1] !== '')
+    .map(([label, value]) => `${label}: ${typeof value === 'boolean' ? yesNo(value) : value}`);
+}
+
+/**
+ * Render an identifier struct (`orgStudyIdInfo`, `secondaryIdInfos[]`) with its
+ * registry provenance — `domain` names the issuing registry and `link` resolves
+ * the ID there, so both are part of the identifier, not decoration.
+ */
+function idWithProvenance(info: StudyIdInfo): string {
+  const core = [info.type, info.id].filter(Boolean).join(': ');
+  const extras = [info.domain, info.link].filter(Boolean);
+  return extras.length ? `${core} (${extras.join(' — ')})` : core;
+}
+
+/** Render a contact (central, per-site, or overall official) as a single line. */
+function contactLine(contact: StudyContact): string {
+  const phone = contact.phoneExt ? `${contact.phone} ext. ${contact.phoneExt}` : contact.phone;
+  return [contact.name, contact.role, phone, contact.email].filter(Boolean).join(' | ');
+}
+
+/**
+ * Render a derivedSection browse module. `meshes`, `browseLeaves`, `ancestors`,
+ * and `browseBranches` are four distinct upstream views of the same
+ * normalization — each gets its own line rather than one standing in for
+ * another, so nothing in the structured payload is unreachable from text.
+ */
+function renderBrowseModule(
+  noun: string,
+  plural: string,
+  mod: BrowseModule | undefined,
+  lines: string[],
+): void {
+  if (!mod) return;
+  const meshes = (mod.meshes ?? [])
+    .map((m) => [m.term, m.id ? `(${m.id})` : ''].filter(Boolean).join(' '))
+    .filter(Boolean);
+  if (meshes.length) lines.push(`**MeSH ${plural}:** ${meshes.join(', ')}`);
+
+  const leaves = (mod.browseLeaves ?? [])
+    .map((l) => {
+      const notes = [l.id, l.relevance, l.asFound ? `as found: ${l.asFound}` : ''].filter(Boolean);
+      return [l.name, notes.length ? `(${notes.join(', ')})` : ''].filter(Boolean).join(' ');
+    })
+    .filter(Boolean);
+  if (leaves.length) lines.push(`**${noun} Browse Terms:** ${leaves.join(', ')}`);
+
+  const ancestors = (mod.ancestors ?? [])
+    .map((a) => [a.term, a.id ? `(${a.id})` : ''].filter(Boolean).join(' '))
+    .filter(Boolean);
+  if (ancestors.length) lines.push(`**${noun} MeSH Ancestors:** ${ancestors.join(', ')}`);
+
+  const branches = (mod.browseBranches ?? [])
+    .map((b) => [b.name, b.abbrev ? `(${b.abbrev})` : ''].filter(Boolean).join(' '))
+    .filter(Boolean);
+  if (branches.length) lines.push(`**${noun} Browse Branches:** ${branches.join(', ')}`);
 }
 
 export const getStudy = tool('clinicaltrials_get_study_record', {
@@ -367,56 +454,87 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     // the header already shows officialTitle and duplicating would be noise.
     if (id.briefTitle && id.officialTitle && id.officialTitle !== id.briefTitle)
       lines.push(`**Official Title:** ${id.officialTitle}`);
-    if (id.orgStudyIdInfo?.id) lines.push(`**Org Study ID:** ${id.orgStudyIdInfo.id}`);
-    if (id.organization?.fullName) lines.push(`**Organization:** ${id.organization.fullName}`);
+    if (id.nctIdAliases?.length) lines.push(`**Previous NCT IDs:** ${id.nctIdAliases.join(', ')}`);
+    const orgStudyId = id.orgStudyIdInfo ? idWithProvenance(id.orgStudyIdInfo) : '';
+    if (orgStudyId) lines.push(`**Org Study ID:** ${orgStudyId}`);
+    if (id.organization?.fullName) {
+      const orgClass = id.organization.class ? ` (${id.organization.class})` : '';
+      lines.push(`**Organization:** ${id.organization.fullName}${orgClass}`);
+    }
     if (id.secondaryIdInfos?.length) {
-      const parts = id.secondaryIdInfos
-        .map((s2) => (s2.type ? `${s2.type}: ${s2.id}` : s2.id))
-        .filter(Boolean);
-      if (parts.length) lines.push(`**Secondary IDs:** ${parts.join(', ')}`);
+      const parts = id.secondaryIdInfos.map(idWithProvenance).filter(Boolean);
+      if (parts.length) lines.push(`**Secondary IDs:** ${parts.join('; ')}`);
     }
 
     // Status / Design
+    const enrollment = design.enrollmentInfo;
     const statusParts: string[] = [
       status.overallStatus,
       design.studyType,
       ...(design.phases ?? []),
-      design.enrollmentInfo?.count != null ? `N=${design.enrollmentInfo.count}` : undefined,
+      enrollment?.count != null
+        ? `N=${enrollment.count}${enrollment.type ? ` (${enrollment.type})` : ''}`
+        : undefined,
     ].filter((v): v is string => v != null);
     if (statusParts.length) lines.push(`**Status:** ${statusParts.join(' | ')}`);
+    if (status.lastKnownStatus) lines.push(`**Last Known Status:** ${status.lastKnownStatus}`);
+    if (status.whyStopped) lines.push(`**Why Stopped:** ${status.whyStopped}`);
 
-    // Design details
+    // Design details — interventional and observational sub-fields are disjoint,
+    // so both sets render; an observational record would otherwise show nothing.
     const di = design.designInfo;
     if (di) {
+      const maskingInfo = di.maskingInfo;
+      const masking = maskingInfo?.masking
+        ? `Masking: ${maskingInfo.masking}${
+            maskingInfo.whoMasked?.length ? ` (${maskingInfo.whoMasked.join(', ')})` : ''
+          }`
+        : '';
       const designParts = [
         di.allocation && `Allocation: ${di.allocation}`,
         di.interventionModel && `Model: ${di.interventionModel}`,
         di.primaryPurpose && `Purpose: ${di.primaryPurpose}`,
-        di.maskingInfo?.masking && `Masking: ${di.maskingInfo.masking}`,
+        di.observationalModel && `Observational Model: ${di.observationalModel}`,
+        di.timePerspective && `Time Perspective: ${di.timePerspective}`,
+        masking,
       ].filter(Boolean);
       if (designParts.length) lines.push(`**Design:** ${designParts.join(' | ')}`);
+      if (di.interventionModelDescription)
+        lines.push(`**Model Description:** ${di.interventionModelDescription}`);
+      if (maskingInfo?.maskingDescription)
+        lines.push(`**Masking Description:** ${maskingInfo.maskingDescription}`);
+    }
+    if (design.targetDuration) lines.push(`**Target Duration:** ${design.targetDuration}`);
+    if (design.patientRegistry != null)
+      lines.push(`**Patient Registry:** ${yesNo(design.patientRegistry)}`);
+    if (design.bioSpec) {
+      const bioParts = [design.bioSpec.retention, design.bioSpec.description].filter(Boolean);
+      if (bioParts.length) lines.push(`**Biospecimens:** ${bioParts.join(' — ')}`);
     }
 
     // Dates
-    const dateParts: string[] = [];
-    if (status.startDateStruct?.date) dateParts.push(`Start: ${status.startDateStruct.date}`);
-    if (status.primaryCompletionDateStruct?.date)
-      dateParts.push(`Primary Completion: ${status.primaryCompletionDateStruct.date}`);
-    if (status.completionDateStruct?.date)
-      dateParts.push(`Completion: ${status.completionDateStruct.date}`);
+    const dateParts = labeledParts([
+      ['Start', dateWithType(status.startDateStruct)],
+      ['Primary Completion', dateWithType(status.primaryCompletionDateStruct)],
+      ['Completion', dateWithType(status.completionDateStruct)],
+    ]);
     if (dateParts.length) lines.push(`**Dates:** ${dateParts.join(' | ')}`);
 
     // Submission / update dates
-    const submissionParts: string[] = [];
-    if (status.studyFirstSubmitDate)
-      submissionParts.push(`First Submit: ${status.studyFirstSubmitDate}`);
-    if (status.studyFirstPostDateStruct?.date)
-      submissionParts.push(`First Post: ${status.studyFirstPostDateStruct.date}`);
-    if (status.lastUpdateSubmitDate)
-      submissionParts.push(`Last Update Submit: ${status.lastUpdateSubmitDate}`);
-    if (status.lastUpdatePostDateStruct?.date)
-      submissionParts.push(`Last Update Post: ${status.lastUpdatePostDateStruct.date}`);
-    if (status.statusVerifiedDate) submissionParts.push(`Verified: ${status.statusVerifiedDate}`);
+    const submissionParts = labeledParts([
+      ['First Submit', status.studyFirstSubmitDate],
+      ['First Submit QC', status.studyFirstSubmitQcDate],
+      ['First Post', dateWithType(status.studyFirstPostDateStruct)],
+      ['Results First Submit', status.resultsFirstSubmitDate],
+      ['Results First Submit QC', status.resultsFirstSubmitQcDate],
+      ['Results First Post', dateWithType(status.resultsFirstPostDateStruct)],
+      ['Disposition First Submit', status.dispFirstSubmitDate],
+      ['Disposition First Submit QC', status.dispFirstSubmitQcDate],
+      ['Disposition First Post', dateWithType(status.dispFirstPostDateStruct)],
+      ['Last Update Submit', status.lastUpdateSubmitDate],
+      ['Last Update Post', dateWithType(status.lastUpdatePostDateStruct)],
+      ['Verified', status.statusVerifiedDate],
+    ]);
     if (submissionParts.length) lines.push(`**Submission:** ${submissionParts.join(' | ')}`);
 
     // Results availability — chaining signal for clinicaltrials_get_study_results
@@ -425,6 +543,19 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
         `**Has Results:** ${s.hasResults ? 'yes — fetch via clinicaltrials_get_study_results' : 'no'}`,
       );
     }
+
+    // Expanded access — an EAP record is a separate NCT ID worth surfacing.
+    const expandedAccess = status.expandedAccessInfo;
+    if (expandedAccess) {
+      const eaParts = labeledParts([
+        ['Available', expandedAccess.hasExpandedAccess],
+        ['Record', expandedAccess.nctId],
+        ['Status', expandedAccess.statusForNctId],
+      ]);
+      if (eaParts.length) lines.push(`**Expanded Access:** ${eaParts.join(' | ')}`);
+    }
+    if (design.nPtrsToThisExpAccNctId != null)
+      lines.push(`**Studies Referencing This Expanded Access:** ${design.nPtrsToThisExpAccNctId}`);
 
     // Sponsor + collaborators
     if (sponsor.leadSponsor?.name) {
@@ -437,33 +568,41 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
         .filter(Boolean);
       if (parts.length) lines.push(`**Collaborators:** ${parts.join(', ')}`);
     }
+    const responsibleParty = sponsor.responsibleParty;
+    if (responsibleParty) {
+      const parts = [
+        responsibleParty.type,
+        responsibleParty.investigatorFullName,
+        responsibleParty.investigatorTitle,
+        responsibleParty.investigatorAffiliation,
+        responsibleParty.oldNameTitle,
+        responsibleParty.oldOrganization,
+      ].filter(Boolean);
+      if (parts.length) lines.push(`**Responsible Party:** ${parts.join(' | ')}`);
+    }
 
     // Conditions + keywords
     if (cond.conditions?.length) lines.push(`**Conditions:** ${cond.conditions.join(', ')}`);
     if (cond.keywords?.length) lines.push(`**Keywords:** ${cond.keywords.join(', ')}`);
 
-    // MeSH-normalized terms from derivedSection — prefer browseLeaves (richer
-    // display-ready view) when present, fall back to meshes (raw MeSH terms).
-    const condMod = s.derivedSection?.conditionBrowseModule;
-    const condTerms =
-      condMod?.browseLeaves?.map((l) => l.name).filter((n): n is string => Boolean(n)) ??
-      condMod?.meshes?.map((m) => m.term).filter((n): n is string => Boolean(n));
-    if (condTerms?.length) lines.push(`**MeSH Conditions:** ${condTerms.join(', ')}`);
-
-    const intrMod = s.derivedSection?.interventionBrowseModule;
-    const intrTerms =
-      intrMod?.browseLeaves?.map((l) => l.name).filter((n): n is string => Boolean(n)) ??
-      intrMod?.meshes?.map((m) => m.term).filter((n): n is string => Boolean(n));
-    if (intrTerms?.length) lines.push(`**MeSH Interventions:** ${intrTerms.join(', ')}`);
+    // MeSH-normalized terms from derivedSection.
+    renderBrowseModule('Condition', 'Conditions', s.derivedSection?.conditionBrowseModule, lines);
+    renderBrowseModule(
+      'Intervention',
+      'Interventions',
+      s.derivedSection?.interventionBrowseModule,
+      lines,
+    );
 
     // Oversight
-    const oversightParts: string[] = [];
-    if (oversight.oversightHasDmc != null)
-      oversightParts.push(`DMC: ${oversight.oversightHasDmc ? 'Yes' : 'No'}`);
-    if (oversight.isFdaRegulatedDrug != null)
-      oversightParts.push(`FDA-Regulated Drug: ${oversight.isFdaRegulatedDrug ? 'Yes' : 'No'}`);
-    if (oversight.isFdaRegulatedDevice != null)
-      oversightParts.push(`FDA-Regulated Device: ${oversight.isFdaRegulatedDevice ? 'Yes' : 'No'}`);
+    const oversightParts = labeledParts([
+      ['DMC', oversight.oversightHasDmc],
+      ['FDA-Regulated Drug', oversight.isFdaRegulatedDrug],
+      ['FDA-Regulated Device', oversight.isFdaRegulatedDevice],
+      ['Unapproved Device', oversight.isUnapprovedDevice],
+      ['US Export', oversight.isUsExport],
+      ['Pediatric Postmarket Surveillance', oversight.isPpsd],
+    ]);
     if (oversightParts.length) lines.push(`**Oversight:** ${oversightParts.join(' | ')}`);
 
     // Brief summary
@@ -489,9 +628,19 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     else if (minAge) lines.push(`**Age:** ≥ ${minAge}`);
     else if (maxAge) lines.push(`**Age:** ≤ ${maxAge}`);
     if (elig.sex) lines.push(`**Sex:** ${elig.sex}`);
+    if (elig.genderBased != null) lines.push(`**Gender Based:** ${yesNo(elig.genderBased)}`);
+    if (elig.genderDescription) lines.push(`**Gender Description:** ${elig.genderDescription}`);
     if (elig.healthyVolunteers != null)
-      lines.push(`**Healthy Volunteers:** ${elig.healthyVolunteers ? 'Yes' : 'No'}`);
+      lines.push(`**Healthy Volunteers:** ${yesNo(elig.healthyVolunteers)}`);
     if (elig.stdAges?.length) lines.push(`**Std Ages:** ${elig.stdAges.join(', ')}`);
+    // Observational studies define their cohort here, separately from
+    // eligibilityCriteria — for those records this is the eligibility surface.
+    if (elig.samplingMethod) lines.push(`**Sampling Method:** ${elig.samplingMethod}`);
+    if (elig.studyPopulation) {
+      lines.push('');
+      lines.push('**Study Population:**');
+      lines.push(elig.studyPopulation.trim());
+    }
     if (elig.eligibilityCriteria) {
       lines.push('');
       lines.push(elig.eligibilityCriteria.trim());
@@ -504,6 +653,9 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       for (const interv of armsInterv.interventions) {
         const desc2 = interv.description ? ` — ${interv.description}` : '';
         lines.push(`- **${interv.type ?? 'Intervention'}:** ${interv.name}${desc2}`);
+        if (interv.otherNames?.length) lines.push(`  Other names: ${interv.otherNames.join(', ')}`);
+        if (interv.armGroupLabels?.length)
+          lines.push(`  Arms: ${interv.armGroupLabels.join(', ')}`);
       }
     }
 
@@ -514,20 +666,19 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       for (const arm of armsInterv.armGroups) {
         const desc2 = arm.description ? `: ${arm.description}` : '';
         lines.push(`- **${arm.label}** (${arm.type ?? 'unknown'})${desc2}`);
+        if (arm.interventionNames?.length)
+          lines.push(`  Interventions: ${arm.interventionNames.join(', ')}`);
       }
     }
 
     // Outcomes — render every item present in the (already filtered) study.
-    const renderOutcomeList = (
-      heading: string,
-      list: Array<{ description?: string; measure?: string; timeFrame?: string }>,
-      total?: number,
-    ) => {
+    const renderOutcomeList = (heading: string, list: ProtocolOutcome[], total?: number) => {
       lines.push('');
       const suffix = total != null && total > list.length ? ` (${list.length} of ${total})` : '';
       lines.push(`## ${heading}${suffix}`);
       for (const o of list) {
         lines.push(`- ${o.measure}${o.timeFrame ? ` [${o.timeFrame}]` : ''}`);
+        if (o.description) lines.push(`  ${o.description.trim()}`);
       }
     };
     if (outcomes.primaryOutcomes?.length)
@@ -570,8 +721,17 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       lines.push('');
       lines.push('## Contacts');
       for (const c of contacts.centralContacts) {
-        const parts = [c.name, c.role, c.phone, c.email].filter(Boolean);
-        lines.push(`- ${parts.join(' | ')}`);
+        lines.push(`- ${contactLine(c)}`);
+      }
+    }
+
+    // Overall officials — study leadership, distinct from the central contacts.
+    if (contacts.overallOfficials?.length) {
+      lines.push('');
+      lines.push('## Overall Officials');
+      for (const official of contacts.overallOfficials) {
+        const parts = [official.name, official.role, official.affiliation].filter(Boolean);
+        if (parts.length) lines.push(`- ${parts.join(' | ')}`);
       }
     }
 
@@ -609,24 +769,42 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
         );
       }
       for (const loc of locs) {
-        const parts = [loc.facility, loc.city, loc.state, loc.country].filter(Boolean);
+        const parts = [loc.facility, loc.city, loc.state, loc.zip, loc.country].filter(Boolean);
         const statusNote = loc.status ? ` [${loc.status}]` : '';
+        const geoNote = loc.geoPoint ? ` (${loc.geoPoint.lat}, ${loc.geoPoint.lon})` : '';
         const distNote = loc.distanceMi != null ? ` (${loc.distanceMi.toFixed(1)} mi)` : '';
-        lines.push(`- ${parts.join(', ')}${statusNote}${distNote}`);
+        lines.push(`- ${parts.join(', ')}${statusNote}${geoNote}${distNote}`);
+        for (const c of loc.contacts ?? []) {
+          const line = contactLine(c);
+          if (line) lines.push(`  Contact: ${line}`);
+        }
       }
     }
 
     // IPD sharing
-    if (ipd.ipdSharing || ipd.description || ipd.timeFrame) {
+    if (
+      ipd.ipdSharing ||
+      ipd.description ||
+      ipd.timeFrame ||
+      ipd.infoTypes?.length ||
+      ipd.accessCriteria ||
+      ipd.url
+    ) {
       lines.push('');
       lines.push('## IPD Sharing');
       if (ipd.ipdSharing) lines.push(`**Plan:** ${ipd.ipdSharing}`);
+      if (ipd.infoTypes?.length) lines.push(`**Info Types:** ${ipd.infoTypes.join(', ')}`);
       if (ipd.timeFrame) lines.push(`**Time Frame:** ${ipd.timeFrame}`);
+      if (ipd.accessCriteria) lines.push(`**Access Criteria:** ${ipd.accessCriteria}`);
+      if (ipd.url) lines.push(`**URL:** ${ipd.url}`);
       if (ipd.description) lines.push(ipd.description.trim());
     }
 
     // Documents (protocol, consent, SAP, etc.)
-    const docs = s.documentSection?.largeDocumentModule?.largeDocs;
+    const docModule = s.documentSection?.largeDocumentModule;
+    const docs = docModule?.largeDocs;
+    if (docModule?.noSap != null)
+      lines.push(`**No Statistical Analysis Plan:** ${yesNo(docModule.noSap)}`);
     if (docs?.length) {
       lines.push('');
       lines.push(`## Documents (${docs.length})`);
@@ -640,11 +818,21 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
         const kindStr = kinds.length ? ` (${kinds.join('+')})` : '';
         const date = d.uploadDate ? ` [${d.uploadDate}]` : '';
         lines.push(`- ${label}${kindStr}${date}`);
+        const detail = [
+          d.typeAbbrev && d.typeAbbrev !== label ? `type: ${d.typeAbbrev}` : '',
+          d.date ? `document date: ${d.date}` : '',
+          d.filename && d.filename !== label ? `file: ${d.filename}` : '',
+          d.size != null ? `${d.size} bytes` : '',
+        ].filter(Boolean);
+        if (detail.length) lines.push(`  ${detail.join(' | ')}`);
       }
     }
-
     // References
-    if (references.references?.length || references.seeAlsoLinks?.length) {
+    if (
+      references.references?.length ||
+      references.seeAlsoLinks?.length ||
+      references.availIpds?.length
+    ) {
       lines.push('');
       const refCount = references.references?.length ?? 0;
       const refSuffix =
@@ -656,9 +844,75 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
         const pmid = r.pmid ? ` (PMID: ${r.pmid})` : '';
         const type = r.type ? ` [${r.type}]` : '';
         lines.push(`- ${r.citation ?? 'Citation unavailable'}${pmid}${type}`);
+        for (const retraction of r.retractions ?? []) {
+          const parts = [
+            retraction.source,
+            retraction.pmid ? `PMID: ${retraction.pmid}` : '',
+          ].filter(Boolean);
+          lines.push(`  Retracted — ${parts.join(', ')}`);
+        }
       }
       for (const link of references.seeAlsoLinks ?? []) {
         lines.push(`- See also: ${link.label ?? link.url}${link.url ? ` — ${link.url}` : ''}`);
+      }
+      for (const availIpd of references.availIpds ?? []) {
+        const parts = [availIpd.type, availIpd.id, availIpd.url, availIpd.comment].filter(Boolean);
+        if (parts.length) lines.push(`- Available IPD: ${parts.join(' — ')}`);
+      }
+    }
+
+    // Annotations — unposted-results and FDAAA violation notices. Rare, but the
+    // reason a completed study has no results is exactly what a caller asking
+    // about results needs to see.
+    const annotation = s.annotationSection?.annotationModule;
+    const unposted = annotation?.unpostedAnnotation;
+    const violation = annotation?.violationAnnotation;
+    if (unposted || violation) {
+      lines.push('');
+      lines.push('## Annotations');
+      if (unposted?.unpostedResponsibleParty)
+        lines.push(`**Unposted Responsible Party:** ${unposted.unpostedResponsibleParty}`);
+      for (const event of unposted?.unpostedEvents ?? []) {
+        const parts = [event.type, event.date, event.dateUnknown ? 'date unknown' : ''].filter(
+          Boolean,
+        );
+        if (parts.length) lines.push(`- Unposted: ${parts.join(' | ')}`);
+      }
+      for (const event of violation?.violationEvents ?? []) {
+        const parts = [
+          event.type,
+          event.creationDate ? `created ${event.creationDate}` : '',
+          event.issuedDate ? `issued ${event.issuedDate}` : '',
+          event.releaseDate ? `released ${event.releaseDate}` : '',
+          event.postedDate ? `posted ${event.postedDate}` : '',
+          event.resetDate ? `reset ${event.resetDate}` : '',
+          event.dateUnknown ? 'date unknown' : '',
+        ].filter(Boolean);
+        lines.push(`- Violation: ${parts.join(' | ')}`);
+        if (event.description) lines.push(`  ${event.description.trim()}`);
+      }
+    }
+
+    // Registry submission tracking from derivedSection.
+    const misc = s.derivedSection?.miscInfoModule;
+    if (misc?.removedCountries?.length)
+      lines.push(`**Removed Countries:** ${misc.removedCountries.join(', ')}`);
+    const tracking = misc?.submissionTracking;
+    if (tracking) {
+      const trackingParts = labeledParts([
+        ['Estimated Results First Submit', tracking.estimatedResultsFirstSubmitDate],
+        ['First MCP Post', dateWithType(tracking.firstMcpInfo?.postDateStruct)],
+      ]);
+      if (trackingParts.length) lines.push(`**Submission Tracking:** ${trackingParts.join(' | ')}`);
+      for (const info of tracking.submissionInfos ?? []) {
+        const parts = [
+          info.mcpReleaseN != null ? `MCP release ${info.mcpReleaseN}` : '',
+          info.releaseDate ? `released ${info.releaseDate}` : '',
+          info.unreleaseDate ? `unreleased ${info.unreleaseDate}` : '',
+          info.unreleaseDateUnknown ? 'unrelease date unknown' : '',
+          info.resetDate ? `reset ${info.resetDate}` : '',
+        ].filter(Boolean);
+        if (parts.length) lines.push(`- Submission: ${parts.join(' | ')}`);
       }
     }
 
@@ -684,6 +938,12 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     if (filterParts.length) {
       lines.push('');
       lines.push(`*Filters applied: ${filterParts.join(', ')}*`);
+    }
+
+    const versionHolder = misc?.versionHolder;
+    if (versionHolder) {
+      lines.push('');
+      lines.push(`*Data version: ${versionHolder}*`);
     }
 
     return [{ type: 'text', text: lines.join('\n') }];

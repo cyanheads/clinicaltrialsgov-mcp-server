@@ -15,6 +15,7 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
 }));
 
 import { getStudy } from '@/mcp-server/tools/definitions/get-study.tool.js';
+import { loadStudyFixture, missingLeaves } from '../../../helpers/format-parity.js';
 
 describe('getStudy', () => {
   const mockService = { getStudy: vi.fn() };
@@ -1111,6 +1112,235 @@ describe('getStudy', () => {
       expect(text).toContain('1 participant flow periods');
       expect(text).toContain('1 baseline measures');
       expect(text).toContain('Use clinicaltrials_get_study_results for full data.');
+    });
+
+    it('renders a date struct type alongside its date (#18)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            statusModule: {
+              startDateStruct: { date: '2024-01-01', type: 'ACTUAL' },
+              completionDateStruct: { date: '2026-01-01', type: 'ESTIMATED' },
+            },
+          },
+        },
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('Start: 2024-01-01 (ACTUAL)');
+      expect(text).toContain('Completion: 2026-01-01 (ESTIMATED)');
+    });
+
+    it('renders outcome descriptions, not just measure and timeFrame (#18)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            outcomesModule: {
+              primaryOutcomes: [
+                {
+                  measure: 'Reactogenicity',
+                  timeFrame: '7 days',
+                  description: 'Number of subjects with solicited injection site reactions.',
+                },
+              ],
+            },
+          },
+        },
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('Reactogenicity [7 days]');
+      expect(text).toContain('Number of subjects with solicited injection site reactions.');
+    });
+
+    it('renders masking detail, secondary ID provenance, and arm interventions (#18)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: {
+              nctId: 'NCT12345678',
+              briefTitle: 'X',
+              secondaryIdInfos: [
+                { id: 'DMID 17-0104', type: 'OTHER', domain: 'NIH/NIAID/DMID' },
+                { id: 'GRANT-1', type: 'NIH', link: 'https://reporter.nih.gov/x' },
+              ],
+            },
+            designModule: {
+              designInfo: {
+                maskingInfo: {
+                  masking: 'QUADRUPLE',
+                  whoMasked: ['PARTICIPANT', 'INVESTIGATOR'],
+                  maskingDescription: 'Pharmacist unblinded.',
+                },
+              },
+            },
+            armsInterventionsModule: {
+              armGroups: [
+                { label: 'Arm A', type: 'EXPERIMENTAL', interventionNames: ['Biological: ID93'] },
+              ],
+            },
+          },
+        },
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('Masking: QUADRUPLE (PARTICIPANT, INVESTIGATOR)');
+      expect(text).toContain('**Masking Description:** Pharmacist unblinded.');
+      expect(text).toContain('OTHER: DMID 17-0104 (NIH/NIAID/DMID)');
+      expect(text).toContain('NIH: GRANT-1 (https://reporter.nih.gov/x)');
+      expect(text).toContain('Interventions: Biological: ID93');
+    });
+
+    it('renders observational design and cohort fields (#18)', () => {
+      const blocks = getStudy.format!({
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            designModule: {
+              studyType: 'OBSERVATIONAL',
+              patientRegistry: false,
+              designInfo: { observationalModel: 'COHORT', timePerspective: 'PROSPECTIVE' },
+              bioSpec: { retention: 'SAMPLES_WITH_DNA', description: 'fasting blood samples' },
+            },
+            eligibilityModule: {
+              samplingMethod: 'NON_PROBABILITY_SAMPLE',
+              studyPopulation: 'Vegans, vegetarians, pescetarians, and omnivores.',
+            },
+            statusModule: { expandedAccessInfo: { hasExpandedAccess: false } },
+          },
+        },
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('Observational Model: COHORT');
+      expect(text).toContain('Time Perspective: PROSPECTIVE');
+      expect(text).toContain('**Patient Registry:** No');
+      expect(text).toContain('**Biospecimens:** SAMPLES_WITH_DNA — fasting blood samples');
+      expect(text).toContain('**Sampling Method:** NON_PROBABILITY_SAMPLE');
+      expect(text).toContain('**Study Population:**');
+      expect(text).toContain('Vegans, vegetarians, pescetarians, and omnivores.');
+      expect(text).toContain('**Expanded Access:** Available: No');
+    });
+  });
+
+  describe('rarely-populated record sections (#18)', () => {
+    it('renders annotations, submission tracking, removed countries, and retractions', () => {
+      const output = {
+        study: {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+            statusModule: {
+              dispFirstSubmitDate: '2021-03-01',
+              dispFirstPostDateStruct: { date: '2021-03-15', type: 'ACTUAL' },
+            },
+            referencesModule: {
+              references: [
+                {
+                  citation: 'Smith J. Withdrawn work. 2019.',
+                  pmid: '30000001',
+                  retractions: [{ pmid: '30000002', source: 'Journal of Retractions' }],
+                },
+              ],
+            },
+          },
+          annotationSection: {
+            annotationModule: {
+              unpostedAnnotation: {
+                unpostedResponsibleParty: 'Acme Sponsor',
+                unpostedEvents: [{ type: 'RESET', date: '2020-05-01' }],
+              },
+              violationAnnotation: {
+                violationEvents: [
+                  {
+                    type: 'VIOLATION_IDENTIFIED',
+                    description: 'Results not submitted within the statutory deadline.',
+                    creationDate: '2020-06-01',
+                    issuedDate: '2020-06-15',
+                  },
+                ],
+              },
+            },
+          },
+          derivedSection: {
+            miscInfoModule: {
+              versionHolder: '2026-07-24',
+              removedCountries: ['Denmark', 'Israel'],
+              submissionTracking: {
+                estimatedResultsFirstSubmitDate: '2021-01-01',
+                firstMcpInfo: { postDateStruct: { date: '2020-12-01', type: 'ACTUAL' } },
+                submissionInfos: [{ mcpReleaseN: 2, releaseDate: '2020-11-01' }],
+              },
+            },
+          },
+        },
+        filtersApplied: {},
+      };
+      const text = (getStudy.format!(output)[0] as { text: string }).text;
+      expect(missingLeaves(output, text)).toEqual([]);
+      expect(text).toContain('Disposition First Post: 2021-03-15 (ACTUAL)');
+      expect(text).toContain('Retracted — Journal of Retractions, PMID: 30000002');
+      expect(text).toContain('## Annotations');
+      expect(text).toContain('**Unposted Responsible Party:** Acme Sponsor');
+      expect(text).toContain('Results not submitted within the statutory deadline.');
+      expect(text).toContain('**Removed Countries:** Denmark, Israel');
+      expect(text).toContain('First MCP Post: 2020-12-01 (ACTUAL)');
+      expect(text).toContain('*Data version: 2026-07-24*');
+    });
+  });
+
+  describe('channel parity — every populated leaf reaches content[] (#18)', () => {
+    /**
+     * Reverse parity against verbatim API records: walk structuredContent for
+     * primitive leaves and require each one to appear in the rendered text. This
+     * catches upstream fields the formatter has never been taught, which a
+     * per-section assertion list cannot.
+     */
+    const renderFixture = async (fixture: string, nctId: string) => {
+      mockService.getStudy.mockResolvedValue(loadStudyFixture(fixture));
+      const ctx = createMockContext();
+      const result = await getStudy.handler(getStudy.input!.parse({ nctId }), ctx);
+      return { result, text: (getStudy.format!(result)[0] as { text: string }).text };
+    };
+
+    it('renders every leaf of an interventional record (NCT03722472)', async () => {
+      const { result, text } = await renderFixture('nct03722472', 'NCT03722472');
+      expect(missingLeaves(result, text)).toEqual([]);
+      // Leaves the formatter previously dropped, spot-checked by value.
+      expect(text).toContain(
+        'The number of subjects experiencing solicited local injection site reactions within 7 days',
+      );
+      expect(text).toContain(
+        'Masking: QUADRUPLE (PARTICIPANT, CARE_PROVIDER, INVESTIGATOR, OUTCOMES_ASSESSOR)',
+      );
+      expect(text).toContain('OTHER: DMID 17-0104 (NIH/NIAID/DMID)');
+      expect(text).toContain('Interventions: Biological: ID93 + GLA-SE');
+      expect(text).toContain('Start: 2018-10-02 (ACTUAL)');
+      expect(text).toContain('N=48 (ACTUAL)');
+      expect(text).toContain('**Expanded Access:** Available: No');
+    });
+
+    it('renders every leaf of an observational record (NCT06323538)', async () => {
+      const { result, text } = await renderFixture('nct06323538', 'NCT06323538');
+      expect(missingLeaves(result, text)).toEqual([]);
+      // Observational studies exercise a design/eligibility subtree that
+      // interventional records never populate.
+      expect(text).toContain('Observational Model: COHORT');
+      expect(text).toContain('Time Perspective: PROSPECTIVE');
+      expect(text).toContain('**Patient Registry:** No');
+      expect(text).toContain('SAMPLES_WITH_DNA');
+      expect(text).toContain('**Sampling Method:** NON_PROBABILITY_SAMPLE');
+      expect(text).toContain('Vegans - no consumption of animal products');
+    });
+
+    it('keeps parity when the caller applies handler-level limits (NCT06323538)', async () => {
+      mockService.getStudy.mockResolvedValue(loadStudyFixture('nct06323538'));
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({ nctId: 'NCT06323538', outcomeLimit: 2, locationLimit: 2 }),
+        ctx,
+      );
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      // Limits shape both channels at the handler, so parity still holds.
+      expect(missingLeaves(result, text)).toEqual([]);
+      expect(text).toContain('outcomeLimit=2');
     });
   });
 });

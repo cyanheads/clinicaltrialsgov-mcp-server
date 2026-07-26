@@ -43,7 +43,9 @@ function displayMeasurementValue(value: unknown, paramType: unknown): string {
 }
 
 /**
- * Extract top-line per-group stats from a raw outcome object (full mode).
+ * Extract top-line per-group stats from a raw outcome object for summary mode's
+ * `topStats`. Reads only the first class/category — deliberate condensation, and
+ * the reason full mode walks the whole tree in format() instead of calling this.
  * Returns undefined if no measurement values are present.
  */
 function extractTopStats(
@@ -239,16 +241,152 @@ function shortGroup(title: string, max = 40): string {
   return title.length <= max ? title : `${title.slice(0, max - 1)}…`;
 }
 
+/** Coerce a raw value to a trimmed display string, or undefined when absent/blank. */
+function text(value: unknown): string | undefined {
+  if (value == null) return;
+  const s = String(value).trim();
+  return s.length > 0 ? s : undefined;
+}
+
+/**
+ * Render the arm roster for a results section. `id` is the join key every
+ * measurement, count, and stat references, and `description` is the arm's
+ * definition — both belong on the text channel alongside the title.
+ */
+function renderGroupRoster(obj: RO, indent: string, lines: string[], label = 'Groups'): void {
+  const groups = (obj.groups ?? obj.eventGroups) as Array<RO> | undefined;
+  if (!groups?.length) return;
+  lines.push(`${indent}${label}:`);
+  for (const g of groups) {
+    const head = [text(g.id), text(g.title)].filter(Boolean).join(': ');
+    lines.push(`${indent}- ${head || 'Group'}`);
+    const desc = text(g.description);
+    if (desc) lines.push(`${indent}  ${desc}`);
+    const rollup = [
+      g.deathsNumAffected != null
+        ? `deaths ${g.deathsNumAffected}/${g.deathsNumAtRisk ?? '?'}`
+        : '',
+      g.seriousNumAffected != null
+        ? `serious ${g.seriousNumAffected}/${g.seriousNumAtRisk ?? '?'}`
+        : '',
+      g.otherNumAffected != null ? `other ${g.otherNumAffected}/${g.otherNumAtRisk ?? '?'}` : '',
+    ].filter(Boolean);
+    if (rollup.length) lines.push(`${indent}  ${rollup.join(' | ')}`);
+  }
+}
+
+/** Render denominator rows — the units and the per-group counts they apply to. */
+function renderDenoms(
+  denoms: unknown,
+  gm: Map<string, string>,
+  indent: string,
+  lines: string[],
+): void {
+  for (const d of (denoms as Array<RO> | undefined) ?? []) {
+    const counts = ((d.counts as Array<RO> | undefined) ?? [])
+      .map((c) => {
+        const g = shortGroup(gm.get(c.groupId as string) ?? String(c.groupId));
+        return c.value != null ? `${g}: ${c.value}` : g;
+      })
+      .join(', ');
+    const units = text(d.units);
+    const label = units ? `Denominator (${units})` : 'Denominator';
+    lines.push(`${indent}${[label, counts].filter(Boolean).join(': ')}`);
+  }
+}
+
+/**
+ * Render per-group participant counts as `Group: subjects / units (comment)`
+ * segments — the shape both participant-flow milestone achievements and
+ * drop/withdraw reasons publish.
+ */
+function countsByGroup(rows: unknown, gm: Map<string, string>): string {
+  return ((rows as Array<RO> | undefined) ?? [])
+    .map((r) => {
+      const gName = shortGroup(gm.get(r.groupId as string) ?? (r.groupId as string));
+      const comment = text(r.comment);
+      const count = [r.numSubjects, r.numUnits].filter((v) => v != null).join(' / ') || '?';
+      return `${gName}: ${count}${comment ? ` (${comment})` : ''}`;
+    })
+    .join(', ');
+}
+
+/** Render one measurement cell — value, spread, confidence limits, and comment. */
+function measurementCell(m: RO, gm: Map<string, string>, paramType: unknown): string | undefined {
+  const parts: string[] = [];
+  if (m.value != null) parts.push(displayMeasurementValue(m.value, paramType));
+  if (m.spread != null) parts.push(`±${m.spread}`);
+  if (m.lowerLimit != null || m.upperLimit != null)
+    parts.push(`[${m.lowerLimit ?? ''} to ${m.upperLimit ?? ''}]`);
+  const comment = text(m.comment);
+  if (comment) parts.push(`(${comment})`);
+  if (parts.length === 0) return;
+  const g = shortGroup(gm.get(m.groupId as string) ?? String(m.groupId));
+  return `${g}: ${parts.join(' ')}`;
+}
+
+/**
+ * Walk a measure's complete classes → categories → measurements tree. Every
+ * level carries data — class and category titles, per-class denominators, and
+ * the per-group cells — so reading only the first entry drops the rest of the
+ * measure from the text channel.
+ */
+function renderClasses(
+  classes: unknown,
+  gm: Map<string, string>,
+  paramType: unknown,
+  indent: string,
+  lines: string[],
+): void {
+  for (const cls of (classes as Array<RO> | undefined) ?? []) {
+    const clsTitle = text(cls.title);
+    if (clsTitle) lines.push(`${indent}_${clsTitle}_`);
+    renderDenoms(cls.denoms, gm, `${indent}  `, lines);
+    for (const cat of (cls.categories as Array<RO> | undefined) ?? []) {
+      const catTitle = text(cat.title);
+      const cells = ((cat.measurements as Array<RO> | undefined) ?? [])
+        .map((m) => measurementCell(m, gm, paramType))
+        .filter((v): v is string => Boolean(v));
+      // Label the row even when upstream titles neither the class nor the
+      // category, so a measurement row is never mistaken for a denominator row.
+      const prefix = catTitle ?? clsTitle ?? 'Values';
+      if (cells.length > 0) lines.push(`${indent}  ${prefix}: ${cells.join(', ')}`);
+      else if (catTitle) lines.push(`${indent}  ${catTitle}`);
+    }
+  }
+}
+
 /** Render one analysis (summary or full) as a single-line bullet. */
 function formatAnalysisLine(a: RO): string {
+  const ci = [
+    a.ciPctValue != null ? `${a.ciPctValue}%` : '',
+    text(a.ciNumSides),
+    a.ciLowerLimit != null || a.ciUpperLimit != null
+      ? `CI [${a.ciLowerLimit ?? ''}, ${a.ciUpperLimit ?? ''}]`
+      : '',
+    text(a.ciLowerLimitComment),
+    text(a.ciUpperLimitComment),
+  ]
+    .filter(Boolean)
+    .join(' ');
   const parts = [
     a.statisticalMethod ? `Method: ${a.statisticalMethod}` : '',
+    text(a.statisticalComment),
     a.pValue ? `p=${a.pValue}` : '',
-    a.paramValue ? `${a.paramType ?? 'estimate'}=${a.paramValue}` : '',
-    a.ciLowerLimit != null && a.ciUpperLimit != null
-      ? `${a.ciPctValue ?? 95}% CI [${a.ciLowerLimit}, ${a.ciUpperLimit}]`
+    text(a.pValueComment),
+    a.testedNonInferiority != null
+      ? `non-inferiority tested: ${a.testedNonInferiority ? 'yes' : 'no'}`
       : '',
     a.nonInferiorityType ? `(${a.nonInferiorityType})` : '',
+    text(a.nonInferiorityComment),
+    a.paramValue ? `${a.paramType ?? 'estimate'}=${a.paramValue}` : '',
+    a.dispersionType ? `dispersion: ${a.dispersionType}` : '',
+    a.dispersionValue != null ? `±${a.dispersionValue}` : '',
+    ci,
+    text(a.estimateComment),
+    text(a.otherAnalysisDescription),
+    Array.isArray(a.groupIds) ? `groups: ${(a.groupIds as string[]).join(', ')}` : '',
+    text(a.groupDescription),
   ].filter(Boolean);
   return parts.length ? `  Analysis: ${parts.join(', ')}` : '';
 }
@@ -256,28 +394,56 @@ function formatAnalysisLine(a: RO): string {
 function formatOutcomes(outcomes: RO[], lines: string[]) {
   lines.push(`\n### Outcomes (${outcomes.length} measures)`);
   for (const o of outcomes) {
-    const type = (o.type as string) ?? '';
-    const title = (o.title as string) ?? 'Untitled';
-    const timeFrame = (o.timeFrame as string) ?? '';
-    const paramType = (o.paramType as string) ?? '';
-    const unitOfMeasure = (o.unitOfMeasure as string) ?? '';
+    const gm = groupMap(o);
+    const title = text(o.title) ?? 'Untitled';
+    const timeFrame = text(o.timeFrame);
     const groupCount =
       (o.groupCount as number | undefined) ??
       (Array.isArray(o.groups) ? (o.groups as unknown[]).length : undefined);
-    const meta = [type, paramType, unitOfMeasure, groupCount != null ? `${groupCount} groups` : '']
+    const classCount =
+      (o.classCount as number | undefined) ??
+      (Array.isArray(o.classes) ? (o.classes as unknown[]).length : undefined);
+    const meta = [
+      text(o.type),
+      text(o.paramType),
+      text(o.dispersionType),
+      text(o.unitOfMeasure),
+      groupCount != null ? `${groupCount} groups` : '',
+      classCount != null ? `${classCount} classes` : '',
+      o.reportingStatus ? `reporting: ${o.reportingStatus as string}` : '',
+    ]
       .filter(Boolean)
       .join(', ');
-    const tf = timeFrame ? ` [${timeFrame}]` : '';
-    lines.push(`- **${title}**${meta ? ` (${meta})` : ''}${tf}`);
+    lines.push(`- **${title}**${meta ? ` (${meta})` : ''}${timeFrame ? ` [${timeFrame}]` : ''}`);
 
-    const topStats =
-      (o.topStats as Array<{ group: string; value: string; spread?: string }> | undefined) ??
-      extractTopStats(o as RO);
+    const description = text(o.description);
+    if (description) lines.push(`  ${description}`);
+    const population = text(o.populationDescription);
+    if (population) lines.push(`  Population: ${population}`);
+    const unitsAnalyzed = text(o.typeUnitsAnalyzed);
+    const denomUnits = text(o.denomUnitsSelected);
+    const anticipatedPosting = text(o.anticipatedPostingDate);
+    const outcomeUnits = [
+      unitsAnalyzed ? `Units analyzed: ${unitsAnalyzed}` : '',
+      denomUnits ? `Denominator units: ${denomUnits}` : '',
+      anticipatedPosting ? `Anticipated posting: ${anticipatedPosting}` : '',
+    ].filter(Boolean);
+    if (outcomeUnits.length) lines.push(`  ${outcomeUnits.join(' | ')}`);
+
+    // Summary mode: the per-group top-line stats the handler condensed.
+    const topStats = o.topStats as
+      | Array<{ group: string; spread?: string; value: string }>
+      | undefined;
     if (topStats?.length) {
       lines.push(
         `  ${topStats.map((s) => `${s.group}: ${s.value}${s.spread ? ` ±${s.spread}` : ''}`).join(' | ')}`,
       );
     }
+
+    // Full mode: the complete arm roster, denominators, and measurement tree.
+    renderGroupRoster(o, '  ', lines);
+    renderDenoms(o.denoms, gm, '  ', lines);
+    renderClasses(o.classes, gm, o.paramType, '  ', lines);
 
     // Summary mode: single condensed analysis lifted from analyses[0].
     const topAnalysis = o.topAnalysis as RO | undefined;
@@ -287,12 +453,9 @@ function formatOutcomes(outcomes: RO[], lines: string[]) {
     }
 
     // Full mode: render every analysis on the measure.
-    const analyses = o.analyses as Array<RO> | undefined;
-    if (analyses?.length) {
-      for (const a of analyses) {
-        const line = formatAnalysisLine(a);
-        if (line) lines.push(line);
-      }
+    for (const a of (o.analyses as Array<RO> | undefined) ?? []) {
+      const line = formatAnalysisLine(a);
+      if (line) lines.push(line);
     }
   }
 }
@@ -300,16 +463,21 @@ function formatOutcomes(outcomes: RO[], lines: string[]) {
 function formatAdverseEvents(ae: RO, lines: string[]) {
   lines.push('\n### Adverse Events');
   const gm = groupMap(ae);
-  const timeFrame = ae.timeFrame as string | undefined;
+  const timeFrame = text(ae.timeFrame);
   if (timeFrame) lines.push(`Assessment period: ${timeFrame}`);
+  const description = text(ae.description);
+  if (description) lines.push(description);
+  const threshold = text(ae.frequencyThreshold);
+  if (threshold) lines.push(`Frequency threshold: ${threshold}%`);
+  const mortality = text(ae.allCauseMortalityComment);
+  if (mortality) lines.push(`All-cause mortality: ${mortality}`);
 
-  const serious = ae.seriousEvents as Array<RO> | undefined;
-  const other = ae.otherEvents as Array<RO> | undefined;
-
-  // Summary shape — counts plus the ranked top-events view, no raw event arrays
-  if (!serious && !other) {
+  // Summary shape — counts plus the ranked top-events view, no raw event arrays.
+  // Detected on the summarizer's own keys, so a full module that happens to
+  // publish no events still takes the full path and renders its event groups.
+  if ('groupCount' in ae || 'seriousEventCount' in ae || 'otherEventCount' in ae) {
     const parts = [
-      gm.size ? `${gm.size} groups` : '',
+      ae.groupCount != null ? `${ae.groupCount} groups` : '',
       ae.seriousEventCount != null ? `${ae.seriousEventCount} serious events` : '',
       ae.otherEventCount != null ? `${ae.otherEventCount} other events` : '',
     ].filter(Boolean);
@@ -318,30 +486,43 @@ function formatAdverseEvents(ae: RO, lines: string[]) {
     if (topEvents?.length) {
       lines.push(`\n**Most frequent events** (top ${topEvents.length} by participants affected)`);
       for (const ev of topEvents) {
-        const sys = ev.organSystem ? ` _(${ev.organSystem})_` : '';
+        const sys = ev.organSystem ? ` _(${ev.organSystem as string})_` : '';
         lines.push(`- ${ev.term}${sys} — ${ev.numAffected}/${ev.numAtRisk} affected [${ev.kind}]`);
       }
     }
     return;
   }
 
-  // Full shape — render actual events with per-group stats
-  // Render every event the handler returned — payload control is summary mode
-  // (which condenses per item), never a format()-side row cap (channel parity).
+  // Full shape — every event group, event, and per-group stat the handler
+  // returned. Payload control is summary mode (which condenses per item), never
+  // a format()-side cap or a per-event field subset (channel parity).
+  renderGroupRoster(ae, '', lines, 'Event Groups');
+
   const renderEvents = (label: string, events: RO[]) => {
     lines.push(`\n**${label}** (${events.length})`);
     for (const ev of events) {
-      const stats = ev.stats as Array<RO> | undefined;
-      const statStr = (stats ?? [])
+      const meta = [
+        text(ev.organSystem),
+        text(ev.sourceVocabulary),
+        text(ev.assessmentType),
+      ].filter(Boolean);
+      const statStr = ((ev.stats as Array<RO> | undefined) ?? [])
         .map((s) => {
           const gName = shortGroup(gm.get(s.groupId as string) ?? (s.groupId as string));
-          return `${gName}: ${s.numAffected}/${s.numAtRisk}`;
+          const events_ = s.numEvents != null ? ` (${s.numEvents} events)` : '';
+          return `${gName}: ${s.numAffected}/${s.numAtRisk}${events_}`;
         })
         .join(', ');
-      lines.push(`- ${ev.term}${statStr ? ` — ${statStr}` : ''}`);
+      lines.push(
+        `- ${ev.term}${meta.length ? ` _(${meta.join(' | ')})_` : ''}${statStr ? ` — ${statStr}` : ''}`,
+      );
+      const notes = text(ev.notes);
+      if (notes) lines.push(`  ${notes}`);
     }
   };
 
+  const serious = ae.seriousEvents as Array<RO> | undefined;
+  const other = ae.otherEvents as Array<RO> | undefined;
   if (serious?.length) renderEvents('Serious Events', serious);
   if (other?.length) renderEvents('Other Events', other);
 }
@@ -349,10 +530,9 @@ function formatAdverseEvents(ae: RO, lines: string[]) {
 function formatParticipantFlow(pf: RO, lines: string[]) {
   lines.push('\n### Participant Flow');
   const gm = groupMap(pf);
-  const periods = pf.periods as Array<RO> | undefined;
 
-  // Summary shape — only counts
-  if (!periods) {
+  // Summary shape — only counts.
+  if ('groupCount' in pf || 'periodCount' in pf) {
     const parts = [
       pf.groupCount != null ? `${pf.groupCount} groups` : '',
       pf.periodCount != null ? `${pf.periodCount} periods` : '',
@@ -361,33 +541,32 @@ function formatParticipantFlow(pf: RO, lines: string[]) {
     return;
   }
 
-  // Full shape — render milestones with per-group counts
-  for (const period of periods) {
-    if (periods.length > 1) lines.push(`\n**${(period.title as string) ?? 'Period'}**`);
-    const milestones = period.milestones as Array<RO> | undefined;
-    for (const ms of milestones ?? []) {
-      const achievements = ms.achievements as Array<RO> | undefined;
-      const achStr = (achievements ?? [])
-        .map((a) => {
-          const gName = shortGroup(gm.get(a.groupId as string) ?? (a.groupId as string));
-          return `${gName}: ${a.numSubjects ?? a.numUnits ?? '?'}`;
-        })
-        .join(', ');
-      lines.push(`- **${(ms.type as string) ?? 'Milestone'}**: ${achStr}`);
+  // Full shape — recruitment context, the arm roster, then per-period milestones.
+  const recruitment = text(pf.recruitmentDetails);
+  if (recruitment) lines.push(`Recruitment: ${recruitment}`);
+  const preAssignment = text(pf.preAssignmentDetails);
+  if (preAssignment) lines.push(`Pre-assignment: ${preAssignment}`);
+  const unitsAnalyzed = text(pf.typeUnitsAnalyzed);
+  if (unitsAnalyzed) lines.push(`Units analyzed: ${unitsAnalyzed}`);
+  renderGroupRoster(pf, '', lines);
+
+  for (const period of (pf.periods as Array<RO> | undefined) ?? []) {
+    const periodTitle = text(period.title);
+    if (periodTitle) lines.push(`\n**${periodTitle}**`);
+    for (const ms of (period.milestones as Array<RO> | undefined) ?? []) {
+      const achStr = countsByGroup(ms.achievements, gm);
+      const msComment = text(ms.comment);
+      lines.push(
+        `- **${text(ms.type) ?? 'Milestone'}**: ${achStr}${msComment ? ` — ${msComment}` : ''}`,
+      );
     }
 
-    const drops = period.dropWithdraws as Array<RO> | undefined;
-    if (drops?.length) {
-      for (const d of drops) {
-        const reasons = d.reasons as Array<RO> | undefined;
-        const rStr = (reasons ?? [])
-          .map((r) => {
-            const gName = shortGroup(gm.get(r.groupId as string) ?? (r.groupId as string));
-            return `${gName}: ${r.numSubjects ?? '?'}`;
-          })
-          .join(', ');
-        lines.push(`- Drop/Withdraw — ${(d.type as string) ?? 'reason'}: ${rStr}`);
-      }
+    for (const d of (period.dropWithdraws as Array<RO> | undefined) ?? []) {
+      const rStr = countsByGroup(d.reasons, gm);
+      const dComment = text(d.comment);
+      lines.push(
+        `- Drop/Withdraw — ${text(d.type) ?? 'reason'}: ${rStr}${dComment ? ` — ${dComment}` : ''}`,
+      );
     }
   }
 }
@@ -397,51 +576,42 @@ function formatBaseline(bl: RO, lines: string[]) {
   const gm = groupMap(bl);
   const measures = bl.measures as Array<RO> | undefined;
 
-  // Summary shape — just titles (no classes array on first measure means summarized)
-  const firstMeasure = measures?.[0];
-  if (
-    measures?.length &&
-    firstMeasure &&
-    !(firstMeasure.classes as Array<RO> | undefined)?.length
-  ) {
-    if (gm.size) lines.push(`${gm.size} groups`);
-    for (const m of measures) {
-      const unit = (m.unitOfMeasure as string) ? ` (${m.unitOfMeasure as string})` : '';
-      lines.push(`- ${(m.title as string) ?? 'Measure'}${unit}`);
+  // Summary shape — counts plus each measure's identifying metadata.
+  if ('groupCount' in bl || 'measureCount' in bl) {
+    const parts = [
+      bl.groupCount != null ? `${bl.groupCount} groups` : '',
+      bl.measureCount != null ? `${bl.measureCount} measures` : '',
+    ].filter(Boolean);
+    if (parts.length) lines.push(parts.join(' | '));
+    for (const m of measures ?? []) {
+      const meta = [text(m.paramType), text(m.unitOfMeasure)].filter(Boolean);
+      lines.push(`- ${text(m.title) ?? 'Measure'}${meta.length ? ` (${meta.join(', ')})` : ''}`);
     }
     return;
   }
 
-  // Full shape — render per-group values
-  if (gm.size) lines.push(`Groups: ${[...gm.values()].map((g) => shortGroup(g)).join(', ')}`);
+  // Full shape — population context, the arm roster, then every measure's tree.
+  const population = text(bl.populationDescription);
+  if (population) lines.push(`Population: ${population}`);
+  const unitsAnalyzed = text(bl.typeUnitsAnalyzed);
+  if (unitsAnalyzed) lines.push(`Units analyzed: ${unitsAnalyzed}`);
+  renderGroupRoster(bl, '', lines);
+  renderDenoms(bl.denoms, gm, '', lines);
 
   for (const m of measures ?? []) {
-    const title = (m.title as string) ?? 'Measure';
-    const unit = (m.unitOfMeasure as string) ? ` (${m.unitOfMeasure as string})` : '';
-    const paramType = (m.paramType as string) ?? '';
-    const dispersion = (m.dispersionType as string) ?? '';
-    const desc = [paramType, dispersion].filter(Boolean).join(', ');
-    lines.push(`- **${title}**${unit}${desc ? ` [${desc}]` : ''}`);
-
-    const classes = m.classes as Array<RO> | undefined;
-    for (const cls of classes ?? []) {
-      const clsTitle = cls.title as string | undefined;
-      const categories = cls.categories as Array<RO> | undefined;
-      for (const cat of categories ?? []) {
-        const catTitle = cat.title as string | undefined;
-        const prefix = clsTitle ?? catTitle ?? '';
-        const measurements = cat.measurements as Array<RO> | undefined;
-        const vals = (measurements ?? [])
-          .filter((v) => v.value != null)
-          .map((v) => {
-            const gName = shortGroup(gm.get(v.groupId as string) ?? (v.groupId as string));
-            const spread = v.spread != null ? ` ±${v.spread}` : '';
-            return `${gName}: ${displayMeasurementValue(v.value, paramType)}${spread}`;
-          })
-          .join(', ');
-        if (vals) lines.push(`  ${prefix ? `${prefix}: ` : ''}${vals}`);
-      }
-    }
+    const title = text(m.title) ?? 'Measure';
+    const unit = text(m.unitOfMeasure);
+    const desc = [text(m.paramType), text(m.dispersionType)].filter(Boolean).join(', ');
+    lines.push(`- **${title}**${unit ? ` (${unit})` : ''}${desc ? ` [${desc}]` : ''}`);
+    const mDescription = text(m.description);
+    if (mDescription) lines.push(`  ${mDescription}`);
+    const mPopulation = text(m.populationDescription);
+    if (mPopulation) lines.push(`  Population: ${mPopulation}`);
+    if (m.calculatePct != null) lines.push(`  Percentages: ${m.calculatePct ? 'yes' : 'no'}`);
+    const denomUnits = text(m.denomUnitsSelected);
+    if (denomUnits) lines.push(`  Denominator units: ${denomUnits}`);
+    renderDenoms(m.denoms, gm, '  ', lines);
+    renderClasses(m.classes, gm, m.paramType, '  ', lines);
   }
 }
 
@@ -468,7 +638,8 @@ function formatMoreInfo(mi: RO, lines: string[]) {
     if (agr.otherDetails) lines.push(`  ${agr.otherDetails as string}`);
   }
   if (poc) {
-    const parts = [poc.title, poc.organization, poc.email, poc.phone].filter(Boolean);
+    const phone = poc.phoneExt ? `${poc.phone} ext. ${poc.phoneExt}` : poc.phone;
+    const parts = [poc.title, poc.organization, poc.email, phone].filter(Boolean);
     if (parts.length) lines.push(`**Point of Contact:** ${parts.join(' | ')}`);
   }
 }
@@ -519,7 +690,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       .boolean()
       .default(false)
       .describe(
-        'Return condensed summaries instead of full data. Reduces payload from ~200KB to ~5KB per study. Summaries include outcome titles, types, timeframes, group counts, and top-level stats — omitting individual measurements, analyses, and per-group data.',
+        'Return condensed summaries instead of full data. Full mode renders every row and field on both output channels, so a large results set can exceed 500KB per study; summary mode reduces that to ~5KB. Summaries include outcome titles, types, timeframes, group counts, and top-level stats — omitting individual measurements, analyses, and per-group data.',
       ),
   }),
 

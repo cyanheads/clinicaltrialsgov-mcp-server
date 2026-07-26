@@ -16,6 +16,9 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
 
 import { getStudyResults } from '@/mcp-server/tools/definitions/get-study-results.tool.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
+import { loadStudyFixture, missingLeaves } from '../../../helpers/format-parity.js';
+
+const SECTIONS = ['outcomes', 'adverseEvents', 'participantFlow', 'baseline', 'moreInfo'] as const;
 
 function makeStudy(
   nctId: string,
@@ -1075,6 +1078,236 @@ describe('getStudyResults', () => {
       const text = (blocks[0] as { text: string }).text;
       expect(text).toContain('## NCT12345678: Study A');
       expect(text).toContain('## NCT87654321: Study B');
+    });
+
+    it('renders every class, category, and measurement of a measure (#63)', () => {
+      const blocks = getStudyResults.format!({
+        results: [
+          {
+            nctId: 'NCT03722472',
+            title: 'Multi-class Study',
+            hasResults: true,
+            outcomes: [
+              {
+                type: 'PRIMARY',
+                title: 'Reactogenicity',
+                reportingStatus: 'POSTED',
+                description: 'Solicited reactions within 7 days.',
+                populationDescription: 'Safety population (n=48).',
+                groups: [
+                  { id: 'OG000', title: 'Single-vial', description: 'Two IM injections.' },
+                  { id: 'OG001', title: 'Two-vial', description: 'Reconstituted on site.' },
+                ],
+                denoms: [{ units: 'Participants', counts: [{ groupId: 'OG000', value: '23' }] }],
+                classes: [
+                  {
+                    title: 'Day 0',
+                    categories: [
+                      {
+                        title: 'Pain',
+                        measurements: [
+                          { groupId: 'OG000', value: '9', lowerLimit: '4', upperLimit: '14' },
+                        ],
+                      },
+                    ],
+                  },
+                  {
+                    title: 'Day 56',
+                    categories: [
+                      { title: 'Pain', measurements: [{ groupId: 'OG001', value: '7' }] },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('reporting: POSTED');
+      expect(text).toContain('Solicited reactions within 7 days.');
+      expect(text).toContain('Population: Safety population (n=48).');
+      expect(text).toContain('OG000: Single-vial');
+      expect(text).toContain('Two IM injections.');
+      expect(text).toContain('Denominator (Participants): Single-vial: 23');
+      // The second class was previously unreachable — extractTopStats only ever
+      // read classes[0].categories[0].
+      expect(text).toContain('Day 0');
+      expect(text).toContain('Day 56');
+      expect(text).toContain('Pain: Single-vial: 9 [4 to 14]');
+      expect(text).toContain('Pain: Two-vial: 7');
+    });
+
+    it('renders adverse-event coding metadata and notes in full mode (#63)', () => {
+      const blocks = getStudyResults.format!({
+        results: [
+          {
+            nctId: 'NCT03722472',
+            title: 'AE Study',
+            hasResults: true,
+            adverseEvents: {
+              frequencyThreshold: '0',
+              timeFrame: '421 days',
+              description: 'Solicited and unsolicited events.',
+              eventGroups: [{ id: 'EG000', title: 'Single-vial', description: 'Arm detail.' }],
+              otherEvents: [
+                {
+                  term: 'Arthralgia',
+                  organSystem: 'Musculoskeletal and connective tissue disorders',
+                  sourceVocabulary: 'MedDRA 21.1',
+                  assessmentType: 'SYSTEMATIC_ASSESSMENT',
+                  notes: 'Injection related reactions',
+                  stats: [{ groupId: 'EG000', numAffected: 4, numAtRisk: 23 }],
+                },
+              ],
+            },
+          },
+        ],
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('Solicited and unsolicited events.');
+      expect(text).toContain('Frequency threshold: 0%');
+      expect(text).toContain('EG000: Single-vial');
+      expect(text).toContain('Arm detail.');
+      expect(text).toContain('MedDRA 21.1');
+      expect(text).toContain('SYSTEMATIC_ASSESSMENT');
+      expect(text).toContain('Injection related reactions');
+    });
+
+    it('renders reportingStatus and class count in summary mode (#63)', () => {
+      const blocks = getStudyResults.format!({
+        results: [
+          {
+            nctId: 'NCT03722472',
+            title: 'Summary Study',
+            hasResults: true,
+            outcomes: [
+              {
+                type: 'PRIMARY',
+                title: 'Reactogenicity',
+                reportingStatus: 'POSTED',
+                groupCount: 2,
+                classCount: 3,
+              },
+            ],
+          },
+        ],
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('reporting: POSTED');
+      expect(text).toContain('2 groups');
+      expect(text).toContain('3 classes');
+    });
+
+    it('renders baseline group and measure counts in summary mode (#63)', () => {
+      const blocks = getStudyResults.format!({
+        results: [
+          {
+            nctId: 'NCT03722472',
+            title: 'Summary Study',
+            hasResults: true,
+            baseline: {
+              groupCount: 3,
+              measureCount: 4,
+              measures: [{ title: 'Age', paramType: 'MEAN', unitOfMeasure: 'years' }],
+            },
+          },
+        ],
+      });
+      const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('3 groups');
+      expect(text).toContain('4 measures');
+      expect(text).toContain('- Age (MEAN, years)');
+    });
+  });
+
+  describe('channel parity — every populated leaf reaches content[] (#63)', () => {
+    /**
+     * Reverse parity against a verbatim API results payload, one section per
+     * call so a section's leaves cannot be satisfied by another's text.
+     */
+    const render = async (section: (typeof SECTIONS)[number], summary: boolean) => {
+      mockService.getStudiesBatch.mockResolvedValue([
+        loadStudyFixture('nct03722472') as RawStudyShape,
+      ]);
+      const ctx = createMockContext();
+      const input = getStudyResults.input!.parse({
+        nctIds: 'NCT03722472',
+        sections: section,
+        summary,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      return { result, text: (getStudyResults.format!(result)[0] as { text: string }).text };
+    };
+
+    for (const section of SECTIONS) {
+      it(`renders every ${section} leaf in full mode`, async () => {
+        const { result, text } = await render(section, false);
+        expect(missingLeaves(result, text)).toEqual([]);
+      });
+
+      it(`renders every ${section} leaf in summary mode`, async () => {
+        const { result, text } = await render(section, true);
+        expect(missingLeaves(result, text)).toEqual([]);
+      });
+    }
+
+    it('renders every field of a fully-populated statistical analysis (#63)', () => {
+      const analysis = {
+        statisticalMethod: 'ANCOVA',
+        statisticalComment: 'Adjusted for baseline.',
+        pValue: '<0.0001',
+        pValueComment: 'Two-sided.',
+        testedNonInferiority: true,
+        nonInferiorityType: 'SUPERIORITY',
+        nonInferiorityComment: 'Margin 1.3.',
+        paramType: 'Treatment difference',
+        paramValue: '-9.38',
+        dispersionType: 'Standard Error',
+        dispersionValue: '1.31',
+        ciPctValue: '95',
+        ciNumSides: '2-Sided',
+        ciLowerLimit: '-11.97',
+        ciUpperLimit: '-6.80',
+        ciLowerLimitComment: 'Lower bound truncated.',
+        ciUpperLimitComment: 'Upper bound truncated.',
+        estimateComment: 'Least-squares mean.',
+        otherAnalysisDescription: 'Sensitivity analysis.',
+        groupIds: ['OG000', 'OG001'],
+        groupDescription: 'Active versus placebo.',
+      };
+      const output = {
+        results: [
+          {
+            nctId: 'NCT04074161',
+            title: 'Analysis Study',
+            hasResults: true,
+            outcomes: [{ title: 'Body Weight', analyses: [analysis] }],
+          },
+        ],
+      };
+      const text = (getStudyResults.format!(output)[0] as { text: string }).text;
+      expect(missingLeaves(output, text)).toEqual([]);
+      expect(text).toContain('95% 2-Sided CI [-11.97, -6.80]');
+    });
+
+    it('surfaces reportingStatus for summarized outcomes (#63)', async () => {
+      const { result, text } = await render('outcomes', true);
+      const outcomes = result.results[0]!.outcomes!;
+      expect(outcomes.length).toBeGreaterThan(1);
+      for (const outcome of outcomes) expect(outcome.reportingStatus).toBeDefined();
+      expect(text).toContain('reporting: POSTED');
+    });
+
+    it('walks the whole classes tree in full mode, not just the first entry (#63)', async () => {
+      const { result, text } = await render('outcomes', false);
+      const outcomes = result.results[0]!.outcomes!;
+      const deepest = outcomes.find(
+        (o) => ((o.classes as unknown[] | undefined)?.length ?? 0) > 1,
+      ) as Record<string, unknown> | undefined;
+      expect(deepest).toBeDefined();
+      const classes = deepest!.classes as Array<{ title?: string }>;
+      for (const cls of classes) if (cls.title) expect(text).toContain(cls.title);
     });
   });
 });

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.8.4](changelog/2.8.x/2.8.4.md) — 2026-07-26
+
+get_study_record renders the Locations header and reason on a nearLocation match of zero; find_eligible carries each site's LocationStatus into content[]; get_field_definitions surfaces the pre-cap totalMatches in search mode
+
 ## [2.8.3](changelog/2.8.x/2.8.3.md) — 2026-07-26
 
 throttle() serializes concurrent requests instead of firing them together; search_studies classifies malformed geoFilter/sort by reading the offending parameter from the upstream body; Essie query-parse errors name the actual offending token and correct the bracket-reservation rule; mcp-ts-core ^0.11.0 maintenance

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.8.5](changelog/2.8.x/2.8.5.md) — 2026-07-26
+
+get_study_record and get_study_results format() render leaves structuredContent already carried but text output silently dropped, including the full classes/categories/measurements results tree
+
 ## [2.8.4](changelog/2.8.x/2.8.4.md) — 2026-07-26
 
 get_study_record renders the Locations header and reason on a nearLocation match of zero; find_eligible carries each site's LocationStatus into content[]; get_field_definitions surfaces the pre-cap totalMatches in search mode

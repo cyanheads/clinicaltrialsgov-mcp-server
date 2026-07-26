@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-07-26 12:19:48
+Generated on: 2026-07-26 14:06:46
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -178,6 +178,11 @@ clinicaltrialsgov-mcp-server/
 ├── tests/
 │   ├── config/
 │   │   └── server-config.test.ts
+│   ├── fixtures/
+│   │   ├── nct03722472.json
+│   │   └── nct06323538.json
+│   ├── helpers/
+│   │   └── format-parity.ts
 │   ├── mcp-server/
 │   │   ├── prompts/
 │   │   │   └── definitions/

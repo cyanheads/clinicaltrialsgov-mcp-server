@@ -290,8 +290,64 @@ describe('getFieldDefinitions', () => {
       expect(mockService.getMetadata).not.toHaveBeenCalled();
       const enrichment = getEnrichment(ctx);
       expect(enrichment.searchQuery).toBe('enrollment');
+      expect(enrichment.totalMatches).toBe(1);
       expect(result.fields).toHaveLength(1);
       expect(result.fields[0]!.piece).toBe('EnrollmentCount');
+    });
+
+    it('surfaces the pre-cap totalMatches on an uncapped search (#95)', async () => {
+      mockService.searchFieldDefinitions.mockResolvedValue({
+        entries: [
+          { name: 'a', piece: 'A', path: 'x.a', type: 'STRING' },
+          { name: 'b', piece: 'B', path: 'x.b', type: 'STRING' },
+        ],
+        total: 2,
+      });
+      const ctx = createMockContext();
+      const input = getFieldDefinitions.input!.parse({ mode: 'search', query: 'ab', limit: 20 });
+      const result = await getFieldDefinitions.handler(input, ctx);
+
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.totalMatches).toBe(2);
+      expect(enrichment.truncated).toBeUndefined();
+      // totalFields is the returned count; totalMatches is the pre-cap match count.
+      expect(result.totalFields).toBe(2);
+    });
+
+    it('surfaces the pre-cap totalMatches on a capped search, distinguishing depth (#95)', async () => {
+      const entries = Array.from({ length: 3 }, (_, i) => ({
+        name: `f${i}`,
+        piece: `F${i}`,
+        path: `x.f${i}`,
+        type: 'STRING',
+      }));
+      mockService.searchFieldDefinitions.mockResolvedValue({ entries, total: 137 });
+      const ctx = createMockContext();
+      const input = getFieldDefinitions.input!.parse({ mode: 'search', query: 'date', limit: 3 });
+      const result = await getFieldDefinitions.handler(input, ctx);
+
+      const enrichment = getEnrichment(ctx);
+      // Without totalMatches, a 4-match and a 137-match capped search look identical.
+      expect(enrichment.totalMatches).toBe(137);
+      expect(enrichment.truncated).toBe(true);
+      expect(enrichment.shown).toBe(3);
+      expect(enrichment.cap).toBe(3);
+      expect(result.totalFields).toBe(3);
+    });
+
+    it('omits totalMatches outside search mode (#95)', async () => {
+      mockService.getMetadata.mockResolvedValue(sampleTree);
+      for (const input of [
+        getFieldDefinitions.input!.parse({ mode: 'overview' }),
+        getFieldDefinitions.input!.parse({
+          mode: 'drill',
+          path: 'protocolSection.identificationModule',
+        }),
+      ]) {
+        const ctx = createMockContext();
+        await getFieldDefinitions.handler(input, ctx);
+        expect(getEnrichment(ctx).totalMatches).toBeUndefined();
+      }
     });
 
     it('does not flag truncated when matches are at or below the cap (#77)', async () => {

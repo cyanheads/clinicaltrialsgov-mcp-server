@@ -136,6 +136,12 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
       .string()
       .optional()
       .describe('Echo of the keyword used in search mode. Absent for drill and overview.'),
+    totalMatches: z
+      .number()
+      .optional()
+      .describe(
+        'Total fields matching the query before the limit cap was applied (search mode only). Compare against `shown` to size a follow-up limit, or to see that a capped result set is barely over the cap rather than hundreds deep.',
+      ),
     truncated: z
       .boolean()
       .optional()
@@ -169,7 +175,10 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
           matchCount: fields.length,
           total,
         });
-        ctx.enrich({ searchQuery: input.query });
+        // Surface the pre-cap match total on every search, capped or not: `totalFields`
+        // is the returned count, so without this a limit=3 search matching 4 fields and
+        // one matching 400 are indistinguishable and a follow-up limit is a blind guess (#95).
+        ctx.enrich({ searchQuery: input.query, totalMatches: total });
         // Disclose truncation only when the match set actually exceeded the cap —
         // otherwise the "raise the cap" notice misleads when shown < cap.
         if (total > input.limit) {

@@ -410,6 +410,7 @@ describe('ClinicalTrialsService', () => {
     });
 
     it('throws notFound with ID list on incorrect format error for filter.ids', async () => {
+      // Body that names no parameter — exercises the presence-based fallback.
       mockFetch.mockResolvedValue(textResponse('filter.ids has incorrect format for value XYZ'));
 
       const ctx = createMockContext();
@@ -523,15 +524,21 @@ describe('ClinicalTrialsService', () => {
         expect(err).toBeInstanceOf(McpError);
         const msg = (err as McpError).message;
         expect(msg).toContain("near '['");
-        expect(msg).toContain('reserved for advancedFilter AREA[]');
+        // The bracket rule states where brackets ARE valid, and that the
+        // free-text params accept AREA[]/RANGE[] too (#94-C).
+        expect(msg).toContain('AREA[FieldName]value');
+        expect(msg).toContain('as well as advancedFilter');
+        expect(msg).not.toContain('reserved for advancedFilter AREA[]');
         expect(msg).not.toContain('expecting {');
         expect(msg).not.toContain('StringLiteral');
         expect((err as McpError).data).toMatchObject({ reason: 'query_parse_error' });
       }
     });
 
-    it('wraps the unmatched-paren `missing` shape (#83)', async () => {
-      // Live-API string for an unbalanced `(` in query.term.
+    it("reports the unclosed delimiter, not the expected token, for `missing 'X' at` (#94-A)", async () => {
+      // Live-API string for an unbalanced `(` in query.term. ANTLR quotes the
+      // token it WANTED, so `)` is absent from the input — naming it as the
+      // offender points at a character the caller never typed.
       mockFetch.mockResolvedValue(
         textResponse("Error parsing query in Other terms: missing ')' at '<EOF>'"),
       );
@@ -542,8 +549,134 @@ describe('ClinicalTrialsService', () => {
       } catch (err) {
         expect(err).toBeInstanceOf(McpError);
         const msg = (err as McpError).message;
-        expect(msg).toContain("near ')'");
+        expect(msg).toContain("missing a closing ')'");
+        expect(msg).not.toContain("near ')'");
         expect(msg).not.toContain('expecting');
+        expect((err as McpError).data).toMatchObject({ reason: 'query_parse_error' });
+      }
+    });
+
+    it("names the offending token for `extraneous input 'X'` (#94-B)", async () => {
+      // Live-API string for a trailing stray `)` in query.cond — a shape none of
+      // the #83 regexes matched, so it fell to the token-less generic message.
+      mockFetch.mockResolvedValue(
+        textResponse(
+          "Error parsing query in Conditions or disease: extraneous input ')' expecting <EOF>",
+        ),
+      );
+      const ctx = queryParseErrorCtx();
+      try {
+        await service.searchStudies({ queryCond: 'diabetes)' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        const msg = (err as McpError).message;
+        expect(msg).toContain("near ')'");
+        expect(msg).not.toContain('the upstream parser rejected the query');
+        // A paren offender gets the paren rule, not the bracket rule.
+        expect(msg).toContain('Parentheses only group sub-expressions');
+        expect(msg).not.toContain('AREA[FieldName]value');
+        expect((err as McpError).data).toMatchObject({ reason: 'query_parse_error' });
+      }
+    });
+
+    it("names the opening bracket for the two-line `extraneous input '['` shape (#94-B)", async () => {
+      // Live-API body for `[diabetes]` — upstream emits one line per stray
+      // bracket. The opening `[` is the informative one, so it must win.
+      mockFetch.mockResolvedValue(
+        textResponse(
+          "Error parsing query in Conditions or disease: extraneous input '[' expecting {<EOF>, '(', ',', 'NOT', 'SEARCH', 'AREA', 'RANGE', 'DISTANCE', Coverage, Expansion, 'TILT', 'ALL', 'MISSING', 'MIN', 'MAX', EscapedKeyword, BooleanLiteral, DecimalLiteral, DateLiteral, TimeLiteral, RadiusLiteral, StringLiteral, Term}\nextraneous input ']' expecting <EOF>",
+        ),
+      );
+      const ctx = queryParseErrorCtx();
+      try {
+        await service.searchStudies({ queryCond: '[diabetes]' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const msg = (err as McpError).message;
+        expect(msg).toContain("near '['");
+        expect(msg).not.toContain("near ']'");
+        expect(msg).not.toContain('expecting {');
+        expect((err as McpError).data).toMatchObject({ reason: 'query_parse_error' });
+      }
+    });
+
+    it("treats `mismatched input '<EOF>' expecting 'X'` as an unclosed delimiter (#94-A)", async () => {
+      // Live-API string for an unclosed AREA[ — `<EOF>` is a position, not a
+      // token, so it never makes a usable offender.
+      mockFetch.mockResolvedValue(
+        textResponse(
+          "Error parsing query in Conditions or disease: mismatched input '<EOF>' expecting ']'",
+        ),
+      );
+      const ctx = queryParseErrorCtx();
+      try {
+        await service.searchStudies({ queryCond: 'AREA[Phase' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const msg = (err as McpError).message;
+        expect(msg).toContain("ends before its closing ']'");
+        expect(msg).not.toContain("near '<EOF>'");
+        expect((err as McpError).data).toMatchObject({ reason: 'query_parse_error' });
+      }
+    });
+
+    it("treats a grammar-dump `mismatched input '<EOF>'` as an unclosed delimiter (#94-A)", async () => {
+      // Live-API string for `(a OR (b` — same unclosed condition, but upstream
+      // lists a token set instead of naming one expected delimiter.
+      mockFetch.mockResolvedValue(
+        textResponse(
+          "Error parsing query in Conditions or disease: mismatched input '<EOF>' expecting {'(', ')', ',', 'NOT', 'AND', 'OR', 'SEARCH', 'AREA', StringLiteral, Term}",
+        ),
+      );
+      const ctx = queryParseErrorCtx();
+      try {
+        await service.searchStudies({ queryCond: '(a OR (b' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const msg = (err as McpError).message;
+        expect(msg).toContain('ends mid-expression');
+        expect(msg).not.toContain("near '<EOF>'");
+        expect(msg).not.toContain('StringLiteral');
+        expect((err as McpError).data).toMatchObject({ reason: 'query_parse_error' });
+      }
+    });
+
+    it('names the unparseable literal for a token-recognition error', async () => {
+      // Live-API string for an unterminated quote in query.cond — a fourth shape
+      // that also fell to the generic message.
+      mockFetch.mockResolvedValue(
+        textResponse(
+          "Error parsing query in Conditions or disease: token recognition error at: '\"unterminated'",
+        ),
+      );
+      const ctx = queryParseErrorCtx();
+      try {
+        await service.searchStudies({ queryCond: '"unterminated' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect((err as McpError).message).toContain("near '\"unterminated'");
+        expect((err as McpError).data).toMatchObject({ reason: 'query_parse_error' });
+      }
+    });
+
+    it('preserves an unrecognized upstream explanation instead of replacing it', async () => {
+      // Live-API string for `RANGE[1, 2]` in query.cond. It matches no ANTLR
+      // shape but says something specific — discarding it for a generic sentence
+      // loses the only actionable detail in the response.
+      mockFetch.mockResolvedValue(
+        textResponse(
+          'Error parsing query in Conditions or disease: RANGE is not supported for multiple (7) fields',
+        ),
+      );
+      const ctx = queryParseErrorCtx();
+      try {
+        await service.searchStudies({ queryCond: 'RANGE[1, 2]' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const msg = (err as McpError).message;
+        expect(msg).toContain('RANGE is not supported for multiple (7) fields');
+        expect(msg).not.toContain('Error parsing query in');
         expect((err as McpError).data).toMatchObject({ reason: 'query_parse_error' });
       }
     });
@@ -777,6 +910,74 @@ describe('ClinicalTrialsService', () => {
     }, 10_000);
   });
 
+  describe('request throttling (#92)', () => {
+    // MIN_INTERVAL_MS in the service. Held as a local literal rather than
+    // exported — the spacing between outbound requests is what callers observe,
+    // and asserting it here keeps the constant private.
+    const MIN_INTERVAL_MS = 1000;
+    // setTimeout resolution can land a hair under the requested delay; the
+    // defect this guards produced ~0ms gaps, so a few ms of slack costs nothing.
+    const TOLERANCE_MS = 10;
+
+    function recordFireTimes(): number[] {
+      const fired: number[] = [];
+      mockFetch.mockImplementation(() => {
+        fired.push(Date.now());
+        return Promise.resolve(jsonResponse({ studies: [] }));
+      });
+      return fired;
+    }
+
+    it('spaces three concurrent callers at least MIN_INTERVAL_MS apart', async () => {
+      const fired = recordFireTimes();
+      const ctx = createMockContext();
+
+      await Promise.all([
+        service.searchStudies({ queryCond: 'a' }, ctx),
+        service.searchStudies({ queryCond: 'b' }, ctx),
+        service.searchStudies({ queryCond: 'c' }, ctx),
+      ]);
+
+      expect(fired).toHaveLength(3);
+      // Each caller used to read the same lastRequestAt, compute the same wait,
+      // sleep in parallel, and fire simultaneously — the gaps were ~0ms.
+      const gaps = fired.slice(1).map((t, i) => t - fired[i]!);
+      for (const gap of gaps) {
+        expect(gap).toBeGreaterThanOrEqual(MIN_INTERVAL_MS - TOLERANCE_MS);
+      }
+    }, 15_000);
+
+    it('queues a caller that arrives while another is already waiting', async () => {
+      const fired = recordFireTimes();
+      const ctx = createMockContext();
+
+      // First call fires immediately (no prior request), second waits out the
+      // interval. The third is issued mid-wait and must land behind it rather
+      // than sharing the second's slot.
+      const first = service.searchStudies({ queryCond: 'a' }, ctx);
+      const second = service.searchStudies({ queryCond: 'b' }, ctx);
+      await first;
+      const third = service.searchStudies({ queryCond: 'c' }, ctx);
+      await Promise.all([second, third]);
+
+      expect(fired).toHaveLength(3);
+      expect(fired[2]! - fired[1]!).toBeGreaterThanOrEqual(MIN_INTERVAL_MS - TOLERANCE_MS);
+    }, 15_000);
+
+    it('does not wedge the queue when a request fails', async () => {
+      mockFetch
+        .mockResolvedValueOnce(textResponse('Bad request body'))
+        .mockResolvedValue(jsonResponse({ studies: [] }));
+      const ctx = createMockContext();
+
+      await expect(service.getStudy('NCT12345678', ctx)).rejects.toThrow(McpError);
+      // A rejected request must still release its slot so later callers proceed.
+      await expect(service.searchStudies({ queryCond: 'a' }, ctx)).resolves.toMatchObject({
+        studies: [],
+      });
+    }, 15_000);
+  });
+
   describe('HTML response handling', () => {
     it('retries when API returns HTML instead of JSON', async () => {
       mockFetch
@@ -850,6 +1051,20 @@ describe('ClinicalTrialsService', () => {
           'Call clinicaltrials_get_field_values with fields=["OverallStatus"] to see valid values.',
       },
       {
+        reason: 'geo_invalid' as const,
+        code: JsonRpcErrorCode.ValidationError,
+        when: 'geoFilter is not a well-formed distance() expression.',
+        recovery:
+          'Build geoFilter as distance(lat,lon,radius) with a mi or km suffix on the radius.',
+      },
+      {
+        reason: 'sort_invalid' as const,
+        code: JsonRpcErrorCode.ValidationError,
+        when: 'sort is not FieldName:asc or FieldName:desc.',
+        recovery:
+          'Set sort to FieldName:asc or FieldName:desc, at most two fields comma-separated.',
+      },
+      {
         reason: 'rate_limited' as const,
         code: JsonRpcErrorCode.RateLimited,
         when: 'Rate limited after retries.',
@@ -889,7 +1104,10 @@ describe('ClinicalTrialsService', () => {
     });
 
     it('attaches reason=ids_not_found for filter.ids rejection', async () => {
-      mockFetch.mockResolvedValue(textResponse('filter.ids has incorrect format for value XYZ'));
+      // Verbatim live-API body, which names the parameter in backticks.
+      mockFetch.mockResolvedValue(
+        textResponse('Item 1 in parameter `filter.ids` has incorrect format'),
+      );
       const ctx = createMockContext({ errors: allReasons });
       try {
         await service.searchStudies({ filterIds: ['XYZ'] }, ctx);
@@ -979,7 +1197,7 @@ describe('ClinicalTrialsService', () => {
 
     it('translates sort "incorrect format" error to param-named message with format hint (#71)', async () => {
       mockFetch.mockResolvedValue(textResponse('Item 1 in parameter `sort` has incorrect format'));
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: allReasons });
       try {
         await service.searchStudies({ sort: 'EnrollmentCount:descending' }, ctx);
         expect.fail('should have thrown');
@@ -990,6 +1208,69 @@ describe('ClinicalTrialsService', () => {
         expect(msg).toContain('EnrollmentCount:descending');
         expect(msg).toContain('FieldName:asc');
         expect(msg).toContain('FieldName:desc');
+        // sort was the one validation error arriving with no Recovery: line (#93).
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('sort_invalid');
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain('FieldName:asc');
+      }
+    });
+
+    it('names geoFilter and its shape on a filter.geo "incorrect format" rejection (#93)', async () => {
+      // Live-API body for every malformed geoFilter value.
+      mockFetch.mockResolvedValue(textResponse('Parameter `filter.geo` has incorrect format'));
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies({ filterGeo: 'near Seattle' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        expect((err as McpError).code).toBe(JsonRpcErrorCode.ValidationError);
+        const msg = (err as McpError).message;
+        expect(msg).toContain('geoFilter');
+        expect(msg).toContain("'near Seattle'");
+        expect(msg).toContain('distance(lat,lon,radius)');
+        // A bare radius is accepted upstream but read as meters, so the suffix is
+        // stated as required rather than optional.
+        expect(msg).toContain('meters');
+        // The raw upstream body no longer passes through verbatim.
+        expect(msg).not.toContain('Invalid request format');
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('geo_invalid');
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain('distance(');
+      }
+    });
+
+    it('blames the parameter upstream names when a bad geoFilter rides with a valid sort (#93)', async () => {
+      // Upstream answers this pair by naming filter.geo only. Inferring the
+      // offender from which params were sent would report a sort error for a
+      // perfectly good sort value.
+      mockFetch.mockResolvedValue(textResponse('Parameter `filter.geo` has incorrect format'));
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies(
+          { filterGeo: 'near Seattle', sort: 'LastUpdatePostDate:desc' },
+          ctx,
+        );
+        expect.fail('should have thrown');
+      } catch (err) {
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('geo_invalid');
+        expect((err as McpError).message).not.toContain('LastUpdatePostDate');
+      }
+    });
+
+    it('blames sort when upstream names sort and a geoFilter is also present (#93)', async () => {
+      mockFetch.mockResolvedValue(textResponse('Item 1 in parameter `sort` has incorrect format'));
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies(
+          { filterGeo: 'distance(47.6062,-122.3321,50mi)', sort: 'EnrollmentCount:descending' },
+          ctx,
+        );
+        expect.fail('should have thrown');
+      } catch (err) {
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('sort_invalid');
       }
     });
 

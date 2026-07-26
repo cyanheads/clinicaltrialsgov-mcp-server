@@ -62,6 +62,84 @@ const KNOWN_FIELD_RENAMES: Record<string, string> = {
   recruitingstatus: 'OverallStatus',
 };
 
+/**
+ * The bracket rule, stated once. `AREA[…]`/`RANGE[…]` expressions are accepted
+ * by the free-text query params (`query.term`, `query.cond`, …) exactly as they
+ * are by `filter.advanced` — verified against the live API, which returns
+ * identical totals for the same expression in either. Only a bracket *outside*
+ * such an expression fails, so calling brackets advancedFilter-only would route
+ * a working query away from the param it would have worked in.
+ */
+const BRACKET_RULE =
+  '`[ ]` are valid only as part of an AREA[FieldName]value or RANGE[min, max] expression, which the free-text params accept as well as advancedFilter; a stray bracket fails.';
+
+/**
+ * Reduce an upstream Essie/ANTLR parse-error body to one actionable sentence.
+ *
+ * The quoted token means something different in each shape, so extracting "the
+ * quoted thing" and calling it the offender misreports several of them:
+ *
+ * | Upstream shape | Quoted token is |
+ * |:--|:--|
+ * | `extraneous input 'X' expecting …` | a stray X in the input |
+ * | `no viable alternative at input 'X'` | the span that failed to parse |
+ * | `token recognition error at: 'X'` | the unparseable literal (e.g. an unterminated quote) |
+ * | `mismatched input 'X' expecting 'Y'` | the token found — `<EOF>` means input ran out with Y still due |
+ * | `missing 'Y' at 'X'` | the token the parser **wanted**, so Y is the unclosed delimiter |
+ *
+ * `<EOF>` is a position rather than a token, so it never makes a usable
+ * offender. The `expecting {…}` grammar dump is dropped throughout — the token
+ * list is noise to a caller. An unrecognized shape keeps the upstream
+ * explanation (often specific, e.g. "RANGE is not supported for multiple (7)
+ * fields") rather than being replaced by a content-free sentence.
+ */
+function describeQueryParseError(text: string): string {
+  const tail = 'Free-text fields otherwise take plain words plus AND, OR, NOT.';
+  const unclosedNote =
+    "Every '(' needs a matching ')', and an AREA[…] or RANGE[…] expression needs its ']'.";
+
+  // `missing 'Y' at 'X'` quotes what the parser expected, never what the caller
+  // typed — reporting Y as the offender names a character absent from the input.
+  const missing = text.match(/missing '(.+?)' at /)?.[1];
+  if (missing) {
+    return `Query syntax error: the query is missing a closing '${missing}'. ${unclosedNote} ${tail}`;
+  }
+
+  // Same unclosed-delimiter condition reached by a different rule: input ended
+  // while a delimiter was still due.
+  if (text.includes("mismatched input '<EOF>'")) {
+    const expected = text.match(/mismatched input '<EOF>' expecting '(.+?)'/)?.[1];
+    return expected
+      ? `Query syntax error: the query ends before its closing '${expected}'. ${unclosedNote} ${tail}`
+      : `Query syntax error: the query ends mid-expression, leaving a '(' or '[' unclosed. ${unclosedNote} ${tail}`;
+  }
+
+  const offender =
+    text.match(/mismatched input '(.+?)'/)?.[1] ??
+    text.match(/extraneous input '(.+?)'/)?.[1] ??
+    text.match(/no viable alternative at input '(.+?)'/)?.[1] ??
+    text.match(/token recognition error at: '(.+?)'/)?.[1];
+  if (offender) {
+    // State only the rule the offending token actually violates — leading a
+    // stray ')' with the bracket rule reads as a non-sequitur.
+    const rule = /[[\]]/.test(offender)
+      ? BRACKET_RULE
+      : /[()]/.test(offender)
+        ? "Parentheses only group sub-expressions and must be matched; a stray '(' or ')' fails."
+        : 'Check for an unbalanced quote, bracket, or parenthesis.';
+    return `Query syntax error near '${offender}'. ${rule} ${tail}`;
+  }
+
+  // Unrecognized shape — preserve whatever upstream said, minus any grammar dump.
+  const detail = text
+    .replace(/^Error parsing query in [^:]*:\s*/, '')
+    .split(/\s*expecting [{(]/)[0]
+    ?.trim();
+  return detail
+    ? `Query syntax error: ${detail}. Free-text fields take plain words plus AND, OR, NOT.`
+    : 'Query syntax error: the upstream parser rejected the query. Free-text fields take plain words plus AND, OR, NOT.';
+}
+
 /** Constructor options for overriding retry/backoff/validation behavior (primarily for tests). */
 export interface ClinicalTrialsServiceOptions {
   baseBackoffMs?: number;
@@ -84,6 +162,12 @@ export class ClinicalTrialsService {
   private readonly maxBackoffMs: number;
   private readonly validateFieldsLocally: boolean;
   private lastRequestAt = 0;
+  /**
+   * Tail of the throttle queue. Each caller chains onto it, so concurrent
+   * callers reserve distinct slots instead of all sleeping against the same
+   * `lastRequestAt` and firing together. See `throttle()`.
+   */
+  private throttleQueue: Promise<void> = Promise.resolve();
   private fieldIndexPromise:
     | Promise<{
         caseFold: Map<string, string>;
@@ -384,10 +468,23 @@ export class ClinicalTrialsService {
     return q;
   }
 
-  private async throttle(): Promise<void> {
-    const wait = MIN_INTERVAL_MS - (Date.now() - this.lastRequestAt);
-    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-    this.lastRequestAt = Date.now();
+  /**
+   * Hold each caller until at least MIN_INTERVAL_MS has passed since the
+   * previous request left. Serialization is the point: reading `lastRequestAt`
+   * and sleeping against it is not enough, because concurrent callers all read
+   * the same value, compute the same wait, and collapse onto one instant. Each
+   * caller instead appends to `throttleQueue`, claiming its slot synchronously
+   * before it yields, so N callers spread over N intervals no matter how they
+   * were initiated (`Promise.all`, separate HTTP sessions, a retry).
+   */
+  private throttle(): Promise<void> {
+    const slot = this.throttleQueue.then(async () => {
+      const wait = MIN_INTERVAL_MS - (Date.now() - this.lastRequestAt);
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      this.lastRequestAt = Date.now();
+    });
+    this.throttleQueue = slot;
+    return slot;
   }
 
   private async fetchJson<T>(
@@ -505,19 +602,38 @@ export class ClinicalTrialsService {
                 { reason: 'study_not_found', ...ctx.recoveryFor('study_not_found') },
               );
             }
-            // sort param rejection — detected before filter.ids since a malformed
-            // sort on a non-/studies/ path hits this same branch.
-            if (params.sort) {
+            // Upstream names the offending parameter in backticks — `Parameter
+            // \`filter.geo\` has incorrect format`, `Item 1 in parameter \`sort\`
+            // has incorrect format`. Read the name from the body instead of
+            // inferring it from which params were sent: a request carrying both a
+            // sort and a geoFilter is answered naming only the malformed one, so
+            // presence alone blames whichever check runs first. Falls back to
+            // presence when the body names nothing.
+            const namedParam = text.match(/parameter\s+`([^`]+)`/i)?.[1];
+            const blamed = (param: 'filter.geo' | 'sort' | 'filter.ids') =>
+              namedParam === undefined ? params[param] !== undefined : namedParam === param;
+
+            // geoFilter is a hand-built string with a non-obvious shape, so it is
+            // the parameter a model most often gets wrong — name the shape rather
+            // than echoing the upstream body.
+            const geo = params['filter.geo'];
+            if (geo && blamed('filter.geo')) {
+              throw validationError(
+                `Invalid value for \`geoFilter\`: '${geo}'. Format must be distance(lat,lon,radius) with a \`mi\` or \`km\` suffix on the radius — e.g. "distance(47.6062,-122.3321,50mi)". A bare radius is accepted upstream but read as meters, so it silently matches almost nothing.`,
+                { reason: 'geo_invalid', ...ctx.recoveryFor('geo_invalid') },
+              );
+            }
+            if (params.sort && blamed('sort')) {
               throw validationError(
                 `Invalid value for \`sort\`: '${params.sort}'. Format must be FieldName:asc or FieldName:desc (e.g. "LastUpdatePostDate:desc", "EnrollmentCount:asc"). Max 2 fields comma-separated.`,
-                { reason: 'sort_invalid' },
+                { reason: 'sort_invalid', ...ctx.recoveryFor('sort_invalid') },
               );
             }
             // filter.ids rejection — the API may reject IDs that match the
             // regex but don't exist (e.g. NCT00000000). Surface the actual
             // IDs so the caller knows which ones failed.
             const ids = params['filter.ids'];
-            if (ids) {
+            if (ids && blamed('filter.ids')) {
               const idList = ids.split('|').join(', ');
               throw notFound(
                 `Study ID(s) not found or rejected by API: ${idList}. Verify the NCT IDs exist on ClinicalTrials.gov.`,
@@ -531,9 +647,9 @@ export class ClinicalTrialsService {
           //   1. `Unknown area name: \`X\`` — bad field in AREA[X]
           //   2. `Allowed values for enum field \`<path>\` are \`V1\`, \`V2\`, …` — invalid enum
           //      value in an AREA[Phase] expression (phaseFilter routes through filter.advanced)
-          //   3. ANTLR syntax errors from a reserved char or unbalanced parens in a free-text
-          //      field — `mismatched input 'X'`, `no viable alternative at input 'X'`, or
-          //      `missing 'X' at …` (the catch-all below; the raw grammar dump is dropped).
+          //   3. ANTLR syntax errors from a stray bracket, unbalanced parens, or an
+          //      unterminated quote in a free-text field — several distinct shapes,
+          //      each read by describeQueryParseError (the catch-all below).
           if (text.startsWith('Error parsing query in')) {
             const areaMatch = text.match(/Unknown area name:\s*`([^`]+)`/);
             if (areaMatch) {
@@ -562,17 +678,9 @@ export class ClinicalTrialsService {
                 validValues,
               });
             }
-            // ANTLR catch-all: extract the offending token from whichever shape
-            // matched and drop the `expecting {…}` grammar dump — the token list is
-            // noise to a caller, so keep only the offender plus the recovery hint.
-            const offender =
-              text.match(/mismatched input '(.+?)'/)?.[1] ??
-              text.match(/no viable alternative at input '(.+?)'/)?.[1] ??
-              text.match(/missing '(.+?)' at /)?.[1];
-            const conciseMsg = offender
-              ? `Query syntax error near '${offender}': '[' and ']' are reserved for advancedFilter AREA[] expressions; an unmatched '(' or ')' also fails. Free-text fields take plain words plus AND, OR, NOT.`
-              : 'Query syntax error: the upstream parser rejected the query. Free-text fields take plain words plus AND, OR, NOT.';
-            throw validationError(conciseMsg, {
+            // ANTLR catch-all — see describeQueryParseError for why each shape
+            // needs its own reading of the quoted token.
+            throw validationError(describeQueryParseError(text), {
               reason: 'query_parse_error',
               ...ctx.recoveryFor('query_parse_error'),
             });

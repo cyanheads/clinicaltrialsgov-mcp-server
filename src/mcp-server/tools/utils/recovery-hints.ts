@@ -17,7 +17,11 @@ export const RECOVERY_HINTS = {
   enum_invalid:
     'Call clinicaltrials_get_field_values with fields=["OverallStatus"] or fields=["Phase"] to see the valid enum values the filter accepts.',
   query_parse_error:
-    'Field-scoped search uses advancedFilter with AREA[FieldName]value (call clinicaltrials_get_field_definitions to look up the right FieldName); free-text fields (query, conditionQuery, etc.) take plain words plus AND, OR, NOT — `[ ]` are reserved (advancedFilter AREA[] only); `( )` group sub-expressions and are safe when matched; `,` acts as AND.',
+    'Field-scoped search uses AREA[FieldName]value, which works in the free-text fields (query, conditionQuery, etc.) as well as in advancedFilter — call clinicaltrials_get_field_definitions to look up the right FieldName. A `[` or `]` outside an AREA[…] / RANGE[…] expression fails; `( )` group sub-expressions and are safe when matched; `,` acts as AND. Free-text fields otherwise take plain words plus AND, OR, NOT.',
+  geo_invalid:
+    'Build geoFilter as distance(lat,lon,radius) with a `mi` or `km` suffix on the radius, e.g. distance(47.6062,-122.3321,50mi) — a bare radius is read as meters. Look up the city coordinates first.',
+  sort_invalid:
+    'Set sort to FieldName:asc or FieldName:desc, e.g. LastUpdatePostDate:desc — at most 2 fields, comma-separated. Call clinicaltrials_get_field_definitions to confirm the PascalCase field name.',
   path_not_found:
     'Call clinicaltrials_get_field_definitions with mode="search" and query="phase" (or "enrollment") to find a path by concept, or mode="overview" for the top-level sections.',
   rate_limited:

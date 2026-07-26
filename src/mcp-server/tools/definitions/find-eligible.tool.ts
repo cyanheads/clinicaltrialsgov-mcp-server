@@ -342,11 +342,14 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       sex: input.sex,
     });
 
-    // Run the main search and the two funnel-stage counts together. The
-    // service throttles outbound requests at ~1 req/sec, so the calls
-    // serialize at the network layer regardless — Promise.all keeps the code
-    // straight rather than chaining awaits. The extra ~2s is the price of
-    // diagnosing sparse results without a follow-up call.
+    // Run the main search and the two funnel-stage counts together. The service
+    // queues outbound requests one per ~1s, so these three leave ~1s apart
+    // whether written as Promise.all or chained awaits — Promise.all just keeps
+    // the code straight. That makes the funnel cost a real ~2s on every call,
+    // paid deliberately: the counts turn "2 matches" into "298 match the
+    // condition, 4 of those are in this location", which is what tells a caller
+    // which constraint to relax, and getting it any other way costs two more
+    // round-trips.
     const [result, conditionStage, locationStage] = await Promise.all([
       service.searchStudies(
         {

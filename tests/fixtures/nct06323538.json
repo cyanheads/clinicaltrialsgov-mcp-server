@@ -1,0 +1,796 @@
+{
+  "protocolSection": {
+    "identificationModule": {
+      "nctId": "NCT06323538",
+      "orgStudyIdInfo": {
+        "id": "01"
+      },
+      "organization": {
+        "fullName": "German Federal Institute for Risk Assessment",
+        "class": "OTHER"
+      },
+      "briefTitle": "Cohort Study on Plant-based Diets (COPLANT Study)",
+      "officialTitle": "Cohort Study on Plant-based Diets (COPLANT Study)",
+      "acronym": "COPLANT"
+    },
+    "statusModule": {
+      "statusVerifiedDate": "2025-02",
+      "overallStatus": "RECRUITING",
+      "expandedAccessInfo": {
+        "hasExpandedAccess": false
+      },
+      "startDateStruct": {
+        "date": "2024-04-09",
+        "type": "ACTUAL"
+      },
+      "primaryCompletionDateStruct": {
+        "date": "2027-03-31",
+        "type": "ESTIMATED"
+      },
+      "completionDateStruct": {
+        "date": "2047-03-31",
+        "type": "ESTIMATED"
+      },
+      "studyFirstSubmitDate": "2024-03-01",
+      "studyFirstSubmitQcDate": "2024-03-14",
+      "studyFirstPostDateStruct": {
+        "date": "2024-03-21",
+        "type": "ACTUAL"
+      },
+      "lastUpdateSubmitDate": "2025-02-13",
+      "lastUpdatePostDateStruct": {
+        "date": "2025-02-14",
+        "type": "ACTUAL"
+      }
+    },
+    "sponsorCollaboratorsModule": {
+      "responsibleParty": {
+        "type": "SPONSOR"
+      },
+      "leadSponsor": {
+        "name": "German Federal Institute for Risk Assessment",
+        "class": "OTHER"
+      },
+      "collaborators": [
+        {
+          "name": "Max Rubner-Institut",
+          "class": "UNKNOWN"
+        },
+        {
+          "name": "University of Bonn",
+          "class": "OTHER"
+        },
+        {
+          "name": "Research Institute for Plant-Based Nutrition",
+          "class": "UNKNOWN"
+        },
+        {
+          "name": "University of Jena",
+          "class": "OTHER"
+        },
+        {
+          "name": "University of Regensburg",
+          "class": "OTHER"
+        },
+        {
+          "name": "Heidelberg University",
+          "class": "OTHER"
+        },
+        {
+          "name": "University of Vienna",
+          "class": "OTHER"
+        }
+      ]
+    },
+    "oversightModule": {
+      "oversightHasDmc": false,
+      "isFdaRegulatedDrug": false,
+      "isFdaRegulatedDevice": false
+    },
+    "descriptionModule": {
+      "briefSummary": "The Cohort on Plant-based Diets (COPLANT) study is a multi-centre cohort study that starts baseline recruitment from 2024 to 2027 with approximately 6,000 participants in Germany and Austria. The COPLANT study focuses on vegan (no animal products), vegetarian (no meat and fish, but dairy products and eggs), pescetarian (no meat, but fish) and omnivorous (mixed diet including all possible animal products) diets. The aim of the COPLANT study is to gain new insights on health benefits and risks as well as social, ecological and economic effects of different plant-based diets in comparison to a mixed diet. In addition to a detailed dietary survey using an app adapted to the needs of this study, the baseline examination includes measurements of body composition, bone health, cardiovascular risk factors, diabetes risk, contaminants and lifestyle. For the basic laboratory program, fasting blood, 24-hour urine collection and a stool sample are taken from all study participants. Furthermore, specific aspects of dietary behavior, physical activity and other lifestyle factors are collected via questionnaires. Follow-up studies are planned at intervals of 5, 10 and 20 years after the baseline visit.",
+      "detailedDescription": "The multicenter Cohort on Plant-based diets (COPLANT) study, aims to investigate the health benefits as well as short-term and long-term risks of different plant-based diets (vegan: no animal products, vegetarian: no meat and fish, but dairy products and eggs, pescetarian: no meat, but fish) compared to a mixed diet among 6,000 participants aged 18 to 69 years across German speaking countries. Currently the impact of different diets not only on health effects, but also on social, ecological and economic factors is becoming increasingly evident in areas of social justice, climate change and animal welfare. For this reason, a sustainability analysis (social, ecological and economic effects) together with findings on health effects will be included in the COPLANT study. As plant-based diets, especially vegan diets, are associated with specific risks and benefits for certain population groups such as pregnant women, breastfeeding mothers and children, COPLANT will also establish appropriate research structures for these groups and include them in the study.\n\nThe detailed consumption survey of all study participants is one of the main pillars of the planned study. Of particular importance is the dietary assessment of novel vegan and vegetarian foods, thus an app adapted to the needs of this study was developed. The characterisation of external and internal intakes of nutrients and contaminants within a particular diet will be examined. Large epidemiological projects currently underway in Germany, such as the NAKO Health Study, are unable to answer these questions. In order to prospectively investigate links between diet and the later occurrence of common diseases such as type 2 diabetes, cardiovascular diseases and cancer, the study participants should be followed up for at least 20 years if third-party funding is successfully acquired.\n\nThe study is to be conducted in study centers at the Federal Institute for Risk Assessment (BfR), Berlin, the Max Rubner-Institut (MRI) in Karlsruhe, the Rheinische Friedrich-Wilhelms University in Bonn, the Friedrich Schiller University Jena, the Research Institute for Plant-Based Nutrition in Giessen, in cooperation with the Justus Liebig University Giessen and at the universities of Heidelberg, Regensburg and Vienna. Furthermore, the basic examination includes measurements of body composition, bone health, cardiovascular risk factors, diabetes risk, contaminants and lifestyle. Specific aspects of dietary behavior, physical activity and other lifestyle factors will be assessed using questionnaires. For the basic laboratory program, fasting blood, 24-hour urine collection and a stool sample are taken from all study participants.\n\nParticipants will be recruited for the baseline study from 2024 to 2027. Follow-up visits are planned at intervals of 5, 10 and 20 years."
+    },
+    "conditionsModule": {
+      "conditions": [
+        "Dietary Exposure",
+        "Diabetes Mellitus, Type 2",
+        "Cardiovascular Diseases",
+        "Bone Loss",
+        "Sustainability",
+        "Exposure",
+        "Obesity",
+        "Vitamin Deficiency",
+        "Mineral Deficiency"
+      ],
+      "keywords": [
+        "vegan",
+        "vegetarian",
+        "pescetarian",
+        "omnivor",
+        "multicenter cohort",
+        "biomarker",
+        "vitamins",
+        "minerals",
+        "bone health",
+        "cardiovascular risk",
+        "body composition",
+        "inflammation",
+        "contaminants",
+        "diabetes type 2",
+        "thyroid gland health",
+        "microbiota",
+        "metabolomics",
+        "adults",
+        "children",
+        "pregnancy",
+        "breast feeding time",
+        "mental health",
+        "sustainability"
+      ]
+    },
+    "designModule": {
+      "studyType": "OBSERVATIONAL",
+      "patientRegistry": false,
+      "designInfo": {
+        "observationalModel": "COHORT",
+        "timePerspective": "PROSPECTIVE"
+      },
+      "bioSpec": {
+        "retention": "SAMPLES_WITH_DNA",
+        "description": "fasting blood samples, 24h urine, stool samples, saliva, breast milk"
+      },
+      "enrollmentInfo": {
+        "count": 6000,
+        "type": "ESTIMATED"
+      }
+    },
+    "armsInterventionsModule": {
+      "armGroups": [
+        {
+          "label": "vegans",
+          "description": "vegan diet: no products of animal origin"
+        },
+        {
+          "label": "vegetarians",
+          "description": "vegetarian diet: no meat and fish, but dairy products and eggs"
+        },
+        {
+          "label": "pescetarians",
+          "description": "pescetarian diet: no meat, but fish"
+        },
+        {
+          "label": "mixed diet",
+          "description": "mixed diet: plant-based foods and animal-based foods"
+        }
+      ]
+    },
+    "outcomesModule": {
+      "primaryOutcomes": [
+        {
+          "measure": "Incidence of diabetes type 2",
+          "description": "Incidence of diabetes type 2",
+          "timeFrame": "5, 10, 20 years"
+        }
+      ],
+      "secondaryOutcomes": [
+        {
+          "measure": "Incidence of cardiovascular diseases",
+          "description": "Incidence of cardiovascular diseases",
+          "timeFrame": "10, 20 years"
+        },
+        {
+          "measure": "Incidence of cancer",
+          "description": "Incidence of cancer",
+          "timeFrame": "10, 20 years"
+        },
+        {
+          "measure": "Vitamin B12",
+          "description": "Vitamin B12 (pmol/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Holo-transcobalamine",
+          "description": "Holo-transcobalamine (pmol/l),",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Homocysteine",
+          "description": "Homocysteine (µmol/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Methylmalonic acid",
+          "description": "Methylmalonic acid (µg/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Vitamin B1 status",
+          "description": "Vitamin B1 (nmol/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Vitamin B2 status",
+          "description": "Vitamin B2 (µg/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Vitamin B6 status",
+          "description": "Vitamin B6 (nmol/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Vitamin C status",
+          "description": "Vitamin C (mg/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Vitamin D status",
+          "description": "Vitamin D (nmol/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Vitamin E status",
+          "description": "Vitamin E (µmol/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Iron",
+          "description": "Iron (µmol/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Ferritin",
+          "description": "Ferritin (µg/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Transferrin",
+          "description": "Transferrin (mg/dl)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Zinc status",
+          "description": "Zinc (µg/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Selenium status",
+          "description": "Selenium (µg/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Iodine status",
+          "description": "Iodine (µg/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Blood pressure",
+          "description": "Systolic blood pressure (mm Hg), diastolic blood pressure (mm Hg)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Blood lipids",
+          "description": "Total cholesterol, LDL, HDL, triacylglycerides (mmol/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Fasting insulin",
+          "description": "Fasting insulin (mU/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Fasting glucose",
+          "description": "Fasting glucose (mmol/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Glycated hemoglobin (HbA1c)",
+          "description": "HbA1c (%)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "C-peptide",
+          "description": "C-peptide (ng/ml)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Osteocalcin",
+          "description": "Osteocalcin (ng/ml)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Ostase",
+          "description": "Ostase (µg/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Parathormone",
+          "description": "Parathormone (ng/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "N-terminal propeptide of type I procollagen (PINP)",
+          "description": "PINP (ng/ml)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "C-terminal telopeptide of type I collagen (CTX)",
+          "description": "CTX (ng/ml)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Creatinine",
+          "description": "Creatinine (mmol/24h)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Uric acid",
+          "description": "Uric acid (mg/24h)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Cytstatin C",
+          "description": "Cytstatin C (mg/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Thyroid stimulating hormone (TSH)",
+          "description": "TSH (mU/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Free triiodothyronine (fT3)",
+          "description": "fT3 (pmol/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Free thyroxine (fT4)",
+          "description": "fT4 (pmol/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Body fat",
+          "description": "Body fat (kg)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Skeletal muscle mass",
+          "description": "Skeletal muscle mass (kg)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Total Body Water",
+          "description": "Total Body Water (l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Energy intake",
+          "description": "Calories per day",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Nutrient intake",
+          "description": "Milligramm per day",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Intake of dietary supplements",
+          "description": "Frequencies per day",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Intake of medication",
+          "description": "Frequencies per day",
+          "timeFrame": "Baseline"
+        }
+      ],
+      "otherOutcomes": [
+        {
+          "measure": "Heavy metals",
+          "description": "Arsenic, lead, cadmium (µg/l)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Halogenated, polycyclic aromatic hydrocarbons (dioxins)",
+          "description": "Dioxins (ng/g lipid)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Mycotoxins",
+          "description": "Mycotoxins (ng/ml)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Per- and polyfluoroalkyl substances (PFAS)",
+          "description": "PFAS (ng/ml)",
+          "timeFrame": "Baseline"
+        },
+        {
+          "measure": "Microbiome",
+          "description": "16S rRNA sequencing",
+          "timeFrame": "Baseline"
+        }
+      ]
+    },
+    "eligibilityModule": {
+      "eligibilityCriteria": "Inclusion Criteria:\n\n* age between 18 and 69 years at recruitment (age-stratified recruitment in four age groups (18 to 29, 30 to 39, 40 to 49 and 50 to 69 years) which should be equally distributed across the four diets)\n* following their current diet for at least one year\n* health insured\n* are willing to have blood taken (adults)\n* are willing and able to complete questionnaires\n* only at Berlin, Jena, Giessen and Karlsruhe sites: pregnant and breastfeeding women were recruited (shortened examination programm)\n* only at the Regensburg, Heidelberg, Bonn and Vienna sites: are neither pregnant nor breastfeeding at the time of recruitment\n* only at Berlin and Karlsruhe sites: children of adult participants (shortened examination programm without collection of blood, urine, and stool)\n* are able to give informed consent to participate in the study\n* have given their consent to participate in the COPLANT study\n\nExclusion Criteria:\n\n* who can no longer be contacted\n* who withdraw their consent to participate in the study",
+      "sex": "ALL",
+      "genderBased": true,
+      "genderDescription": "We plan to include proportions of women and men (ratio 1:1), whereby a proportion of women of up to 60 % is accepted.",
+      "minimumAge": "18 Years",
+      "maximumAge": "69 Years",
+      "stdAges": ["ADULT", "OLDER_ADULT"],
+      "studyPopulation": "Vegans - no consumption of animal products (less than one exception per month)\n\nVegetarians\n\n* no consumption of meat and fish (less than one exception per month)\n* consumption of eggs and/or dairy products (at least once a month)\n\nPescetarians\n\n* no consumption of meat (less than one exception per month)\n* consumption of fish (at least once a month)\n* consumption of eggs or dairy products possible\n\nOmnivores/ mixed diet - group of non-exposed persons or control group\n\n\\- consumption of meat or sausage (at least once a month).",
+      "samplingMethod": "NON_PROBABILITY_SAMPLE"
+    },
+    "contactsLocationsModule": {
+      "centralContacts": [
+        {
+          "name": "Cornelia Weikert, Prof",
+          "role": "CONTACT",
+          "phone": "+49 30 184155000",
+          "email": "Cornelia.Weikert@bfr.bund.de"
+        },
+        {
+          "name": "Christine Dawczynski, PhD",
+          "role": "CONTACT",
+          "phone": "+49 3641 949656",
+          "email": "christine.dawczynski@uni-jena.de"
+        }
+      ],
+      "overallOfficials": [
+        {
+          "name": "Ute Nöthlings, Prof",
+          "affiliation": "University of Bonn",
+          "role": "PRINCIPAL_INVESTIGATOR"
+        },
+        {
+          "name": "Christine Dawczynski, PhD",
+          "affiliation": "University Jena",
+          "role": "PRINCIPAL_INVESTIGATOR"
+        },
+        {
+          "name": "Markus Keller, PhD",
+          "affiliation": "Research Institute for Plant-based Nutrition (IFPE)",
+          "role": "PRINCIPAL_INVESTIGATOR"
+        },
+        {
+          "name": "Michael Leitzmann, Prof",
+          "affiliation": "University Regensburg",
+          "role": "PRINCIPAL_INVESTIGATOR"
+        },
+        {
+          "name": "Ina Danquah, Prof",
+          "affiliation": "University Heidelberg",
+          "role": "PRINCIPAL_INVESTIGATOR"
+        },
+        {
+          "name": "Maria Wakolbinger, Prof",
+          "affiliation": "University Vienna",
+          "role": "PRINCIPAL_INVESTIGATOR"
+        },
+        {
+          "name": "Tilman Kühn, Prof",
+          "affiliation": "University Vienna",
+          "role": "PRINCIPAL_INVESTIGATOR"
+        },
+        {
+          "name": "Beate Fischer, PhD",
+          "affiliation": "University Regensburg",
+          "role": "PRINCIPAL_INVESTIGATOR"
+        },
+        {
+          "name": "Benedikt Merz, PhD",
+          "affiliation": "Max Rubner-Institut",
+          "role": "PRINCIPAL_INVESTIGATOR"
+        },
+        {
+          "name": "Cornelia Weikert, Prof",
+          "affiliation": "Federal Institut for Risk Assessment",
+          "role": "PRINCIPAL_INVESTIGATOR"
+        }
+      ],
+      "locations": [
+        {
+          "facility": "University Vienna",
+          "status": "RECRUITING",
+          "city": "Vienna",
+          "zip": "1090",
+          "country": "Austria",
+          "contacts": [
+            {
+              "name": "Maria Wakolbinger, Prof",
+              "role": "CONTACT",
+              "email": "maria.wakolbinger@meduniwien.ac.at"
+            },
+            {
+              "name": "Tilman Kühn, Prof",
+              "role": "CONTACT",
+              "email": "tilman.kuehn@univie.ac.at"
+            }
+          ],
+          "geoPoint": {
+            "lat": 48.20849,
+            "lon": 16.37208
+          }
+        },
+        {
+          "facility": "Max Rubner-Institut",
+          "status": "RECRUITING",
+          "city": "Karlsruhe",
+          "state": "Baden-Wurttemberg",
+          "zip": "76131",
+          "country": "Germany",
+          "contacts": [
+            {
+              "name": "Benedikt Merz, PhD",
+              "role": "CONTACT",
+              "email": "benedikt.merz@mri.bund.de"
+            }
+          ],
+          "geoPoint": {
+            "lat": 49.00937,
+            "lon": 8.40444
+          }
+        },
+        {
+          "facility": "Friedrich-Schiller University",
+          "status": "RECRUITING",
+          "city": "Jena",
+          "state": "Thuringia",
+          "zip": "07743",
+          "country": "Germany",
+          "contacts": [
+            {
+              "name": "Christine Dawczynski, PhD",
+              "role": "CONTACT",
+              "phone": "+49 3641 949656",
+              "email": "christine.dawczynski@uni-jena.de"
+            }
+          ],
+          "geoPoint": {
+            "lat": 50.92878,
+            "lon": 11.5899
+          }
+        },
+        {
+          "facility": "The German Federal Institut for Risk Assessment",
+          "status": "RECRUITING",
+          "city": "Berlin",
+          "zip": "10589",
+          "country": "Germany",
+          "contacts": [
+            {
+              "name": "Cornelia Weikert, Prof",
+              "role": "CONTACT",
+              "phone": "+49 30 1841255000",
+              "email": "Cornelia.Weikert@bfr.bund.de"
+            }
+          ],
+          "geoPoint": {
+            "lat": 52.52437,
+            "lon": 13.41053
+          }
+        },
+        {
+          "facility": "University Bonn",
+          "status": "RECRUITING",
+          "city": "Bonn",
+          "country": "Germany",
+          "contacts": [
+            {
+              "name": "Ute Nöthlings, Prof",
+              "role": "CONTACT",
+              "email": "noethlings@uni-bonn.de"
+            }
+          ],
+          "geoPoint": {
+            "lat": 50.73438,
+            "lon": 7.09549
+          }
+        },
+        {
+          "facility": "Research Institute for Plant-Based Nutrition, Gießen",
+          "status": "NOT_YET_RECRUITING",
+          "city": "Giessen",
+          "zip": "35444",
+          "country": "Germany",
+          "contacts": [
+            {
+              "name": "Markus Keller, PhD",
+              "role": "CONTACT",
+              "email": "keller@ifpe-giessen.de"
+            }
+          ],
+          "geoPoint": {
+            "lat": 50.58727,
+            "lon": 8.67554
+          }
+        },
+        {
+          "facility": "University Heidelberg",
+          "status": "NOT_YET_RECRUITING",
+          "city": "Heidelberg",
+          "zip": "69120",
+          "country": "Germany",
+          "contacts": [
+            {
+              "name": "Ina Danquah",
+              "role": "CONTACT",
+              "email": "ina.danquah@uni-heidelberg.de"
+            }
+          ],
+          "geoPoint": {
+            "lat": 49.40768,
+            "lon": 8.69079
+          }
+        },
+        {
+          "facility": "University Regensburg",
+          "status": "RECRUITING",
+          "city": "Regensburg",
+          "zip": "93053",
+          "country": "Germany",
+          "contacts": [
+            {
+              "name": "Michael Leitzmann, Prof",
+              "role": "CONTACT",
+              "email": "Michael.Leitzmann@klinik.uni-regensburg.de"
+            },
+            {
+              "name": "Beate Fischer",
+              "role": "CONTACT",
+              "email": "Beate.Fischer@klinik.uni-regensburg.de"
+            }
+          ],
+          "geoPoint": {
+            "lat": 49.01513,
+            "lon": 12.10161
+          }
+        }
+      ]
+    },
+    "referencesModule": {
+      "seeAlsoLinks": [
+        {
+          "label": "summary",
+          "url": "http://www.bfr.bund.de/de/coplant-studie.html"
+        }
+      ]
+    },
+    "ipdSharingStatementModule": {
+      "ipdSharing": "UNDECIDED",
+      "description": "In accordance with the informed consent of the COPLANT participants, pseudonymised study data could be provided to external researchers upon request for cooperation or data-use purposes. In this case, a cooperation or data use agreement must be concluded in advance. The use of COPLANT study data is therefore only possible with a detailed prior justification of its scientific purpose and after agreement of the steering commitee of the COPLANT study."
+    }
+  },
+  "documentSection": {
+    "largeDocumentModule": {
+      "largeDocs": [
+        {
+          "typeAbbrev": "Prot",
+          "hasProtocol": true,
+          "hasSap": false,
+          "hasIcf": false,
+          "label": "Study Protocol",
+          "date": "2023-11-20",
+          "uploadDate": "2024-02-23T09:43",
+          "filename": "Prot_000.pdf",
+          "size": 1528917
+        }
+      ]
+    }
+  },
+  "derivedSection": {
+    "miscInfoModule": {
+      "versionHolder": "2026-07-24"
+    },
+    "conditionBrowseModule": {
+      "meshes": [
+        {
+          "id": "D003924",
+          "term": "Diabetes Mellitus, Type 2"
+        },
+        {
+          "id": "D002318",
+          "term": "Cardiovascular Diseases"
+        },
+        {
+          "id": "D001851",
+          "term": "Bone Diseases, Metabolic"
+        },
+        {
+          "id": "D009765",
+          "term": "Obesity"
+        },
+        {
+          "id": "D001361",
+          "term": "Avitaminosis"
+        },
+        {
+          "id": "D007249",
+          "term": "Inflammation"
+        },
+        {
+          "id": "D000092862",
+          "term": "Psychological Well-Being"
+        }
+      ],
+      "ancestors": [
+        {
+          "id": "D003920",
+          "term": "Diabetes Mellitus"
+        },
+        {
+          "id": "D044882",
+          "term": "Glucose Metabolism Disorders"
+        },
+        {
+          "id": "D008659",
+          "term": "Metabolic Diseases"
+        },
+        {
+          "id": "D009750",
+          "term": "Nutritional and Metabolic Diseases"
+        },
+        {
+          "id": "D004700",
+          "term": "Endocrine System Diseases"
+        },
+        {
+          "id": "D001847",
+          "term": "Bone Diseases"
+        },
+        {
+          "id": "D009140",
+          "term": "Musculoskeletal Diseases"
+        },
+        {
+          "id": "D050177",
+          "term": "Overweight"
+        },
+        {
+          "id": "D044343",
+          "term": "Overnutrition"
+        },
+        {
+          "id": "D009748",
+          "term": "Nutrition Disorders"
+        },
+        {
+          "id": "D001835",
+          "term": "Body Weight"
+        },
+        {
+          "id": "D012816",
+          "term": "Signs and Symptoms"
+        },
+        {
+          "id": "D013568",
+          "term": "Pathological Conditions, Signs and Symptoms"
+        },
+        {
+          "id": "D003677",
+          "term": "Deficiency Diseases"
+        },
+        {
+          "id": "D044342",
+          "term": "Malnutrition"
+        },
+        {
+          "id": "D010335",
+          "term": "Pathologic Processes"
+        },
+        {
+          "id": "D010549",
+          "term": "Personal Satisfaction"
+        },
+        {
+          "id": "D001519",
+          "term": "Behavior"
+        }
+      ]
+    }
+  },
+  "hasResults": false
+}

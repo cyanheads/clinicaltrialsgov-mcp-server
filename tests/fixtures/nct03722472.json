@@ -1,0 +1,2755 @@
+{
+  "protocolSection": {
+    "identificationModule": {
+      "nctId": "NCT03722472",
+      "orgStudyIdInfo": {
+        "id": "IDRI-TBVPX-120"
+      },
+      "secondaryIdInfos": [
+        {
+          "id": "DMID 17-0104",
+          "type": "OTHER",
+          "domain": "NIH/NIAID/DMID"
+        },
+        {
+          "id": "272201400041C-0-0-1",
+          "type": "NIH",
+          "link": "https://reporter.nih.gov/quickSearch/272201400041C-0-0-1"
+        }
+      ],
+      "organization": {
+        "fullName": "Access to Advanced Health Institute (AAHI)",
+        "class": "OTHER"
+      },
+      "briefTitle": "Phase 1 Clinical Trial of Single-Vial ID93 + GLA-SE in Healthy Adults",
+      "officialTitle": "A Phase 1, Double-Blind, Randomized Clinical Trial to Evaluate the Safety, Tolerability, and Immunogenicity of the Single-Vial Lyophilized ID93 + GLA-SE Vaccine Administered Intramuscularly in Healthy Adult Subjects"
+    },
+    "statusModule": {
+      "statusVerifiedDate": "2023-05",
+      "overallStatus": "COMPLETED",
+      "expandedAccessInfo": {
+        "hasExpandedAccess": false
+      },
+      "startDateStruct": {
+        "date": "2018-10-02",
+        "type": "ACTUAL"
+      },
+      "primaryCompletionDateStruct": {
+        "date": "2020-06-15",
+        "type": "ACTUAL"
+      },
+      "completionDateStruct": {
+        "date": "2020-06-15",
+        "type": "ACTUAL"
+      },
+      "studyFirstSubmitDate": "2018-10-25",
+      "studyFirstSubmitQcDate": "2018-10-25",
+      "studyFirstPostDateStruct": {
+        "date": "2018-10-29",
+        "type": "ACTUAL"
+      },
+      "resultsFirstSubmitDate": "2023-05-05",
+      "resultsFirstSubmitQcDate": "2023-05-05",
+      "resultsFirstPostDateStruct": {
+        "date": "2023-06-01",
+        "type": "ACTUAL"
+      },
+      "lastUpdateSubmitDate": "2023-05-05",
+      "lastUpdatePostDateStruct": {
+        "date": "2023-06-01",
+        "type": "ACTUAL"
+      }
+    },
+    "sponsorCollaboratorsModule": {
+      "responsibleParty": {
+        "type": "SPONSOR"
+      },
+      "leadSponsor": {
+        "name": "Access to Advanced Health Institute (AAHI)",
+        "class": "OTHER"
+      },
+      "collaborators": [
+        {
+          "name": "National Institutes of Health (NIH)",
+          "class": "NIH"
+        },
+        {
+          "name": "National Institute of Allergy and Infectious Diseases (NIAID)",
+          "class": "NIH"
+        }
+      ]
+    },
+    "oversightModule": {
+      "oversightHasDmc": true,
+      "isFdaRegulatedDrug": true,
+      "isFdaRegulatedDevice": false
+    },
+    "descriptionModule": {
+      "briefSummary": "This is a phase 1, double-blind, randomized clinical trial to evaluate the safety, tolerability, and immunogenicity of single-vial lyophilized ID93 + GLA-SE compared to the two-vial presentation consisting of lyophilized ID93 and liquid GLA-SE administered as two IM injections in healthy adult subjects (aged 18 - 55).",
+      "detailedDescription": "Subjects will receive a total of two doses administered IM on Days 0 and 56. Subjects will be monitored for approximately 421 days (one year following the last study injection), including safety laboratory analyses done just prior to and 7 days following each study injection. Tears and nasal swabs will be obtained for exploratory antibody analysis at Days 0, 70, and 224. Blood samples will be obtained for immunological assays (secondary and exploratory) at Days 0, 7, 14, 56, 63, 70, 84, and 224)."
+    },
+    "conditionsModule": {
+      "conditions": ["Pulmonary TB"],
+      "keywords": ["Vaccine, recombinant, adjuvant, GLA-SE, ID93"]
+    },
+    "designModule": {
+      "studyType": "INTERVENTIONAL",
+      "phases": ["PHASE1"],
+      "designInfo": {
+        "allocation": "RANDOMIZED",
+        "interventionModel": "PARALLEL",
+        "primaryPurpose": "PREVENTION",
+        "maskingInfo": {
+          "masking": "QUADRUPLE",
+          "maskingDescription": "All clinical staff and the participants are blinded to treatment, with the exception of the clinical pharmacist who prepares the vaccines and syringes.",
+          "whoMasked": ["PARTICIPANT", "CARE_PROVIDER", "INVESTIGATOR", "OUTCOMES_ASSESSOR"]
+        }
+      },
+      "enrollmentInfo": {
+        "count": 48,
+        "type": "ACTUAL"
+      }
+    },
+    "armsInterventionsModule": {
+      "armGroups": [
+        {
+          "label": "Single-vial ID93 + GLA-SE",
+          "type": "EXPERIMENTAL",
+          "description": "Single-vial presentation of ID93 + GLA-SE. Participants will receive two intramuscular (IM) injections of the vaccine on Days 0 and 56. 2 mcg ID93 and 5 mcg GLA-SE in 0.5 mL volume will be given per injection.",
+          "interventionNames": ["Biological: ID93 + GLA-SE"]
+        },
+        {
+          "label": "Two-vial ID93 + GLA-SE",
+          "type": "ACTIVE_COMPARATOR",
+          "description": "Two-vial presentation of ID93 + GLA-SE. Participants will receive two intramuscular (IM) injections of the vaccine on Days 0 and 56. 2 mcg ID93 and 5 mcg GLA-SE in 0.5 mL volume will be given per injection.",
+          "interventionNames": ["Biological: ID93 + GLA-SE"]
+        }
+      ],
+      "interventions": [
+        {
+          "type": "BIOLOGICAL",
+          "name": "ID93 + GLA-SE",
+          "description": "The single-vial lyophilized vaccine will be reconstituted with WFI. For the two-vial presentation, the lyophilized ID93 will be reconstituted with WFI and mixed with liquid GLA-SE.",
+          "armGroupLabels": ["Single-vial ID93 + GLA-SE", "Two-vial ID93 + GLA-SE"]
+        }
+      ]
+    },
+    "outcomesModule": {
+      "primaryOutcomes": [
+        {
+          "measure": "Local Injection Site Reactogenicity",
+          "description": "The number of subjects experiencing solicited local injection site reactions within 7 days following each study injection.",
+          "timeFrame": "7 days following each injection"
+        },
+        {
+          "measure": "Systemic Reactogenicity",
+          "description": "The number of subjects experiencing solicited systemic reactions within 7 days following each study injection.",
+          "timeFrame": "7 days following each injection"
+        },
+        {
+          "measure": "All Adverse Events",
+          "description": "The number of subjects spontaneously reporting adverse events from Day 0 through Day 84.",
+          "timeFrame": "Day 0 - 84"
+        },
+        {
+          "measure": "Serious Adverse Events",
+          "description": "The number of serious adverse events considered related to any of the study injections reported at any point during the study period.",
+          "timeFrame": "Day 0 - 421"
+        }
+      ],
+      "secondaryOutcomes": [
+        {
+          "measure": "IgG Antibody Response Rate",
+          "description": "Total IgG antibody ELISA: Responder rate is defined as the proportion of subjects with at least a 4-fold increase from baseline in IgG antibody titer for ID93 antigen.",
+          "timeFrame": "Days 0, 14, 56, 70, 84, and 224"
+        },
+        {
+          "measure": "IgG Antibody Response Magnitude",
+          "description": "Total IgG mean endpoint titer for ID93",
+          "timeFrame": "Days 0, 14, 56, 70, 84, and 224"
+        },
+        {
+          "measure": "Cytokine Response",
+          "description": "PBMC ELISpot: IFN-γ response to the ID93 antigen. Responder status is determined by the SCHARP method.",
+          "timeFrame": "Days 0, 14, 56, 70, 84, and 224"
+        },
+        {
+          "measure": "Cytokine Response",
+          "description": "PBMC ELISpot: IL-10 response to the ID93 antigen. Responder status is determined by the SCHARP method.",
+          "timeFrame": "Days 0, 14, 56, 70, 84 and 224"
+        },
+        {
+          "measure": "T Cell Response",
+          "description": "PBMC ICS: Responder Rate of the \"Any Two\" CD4 T cell responses to the ID93 antigen; CD4 T cells producing 1 or more cytokines (IFN-γ, TNF, IL-2, IL-4, IL-21 and CD154) simultaneously in response to stimulation with the ID93 antigen as measured by intracellular cytokine staining of PBMCs.",
+          "timeFrame": "Days 0, 7, 14, 56, 63, 70, 84 and 224"
+        },
+        {
+          "measure": "T Cell Response",
+          "description": "PBMC ICS: Responder Rate of the \"Any Two\" CD8 T cell responses to the ID93 antigen; CD8 T cells producing 1 or more cytokines (IFN-γ, TNF, IL-2, IL-4, IL-21 and CD154) simultaneously in response to stimulation with the ID93 antigen as measured by intracellular cytokine staining of PBMCs.",
+          "timeFrame": "Days 0, 7, 14, 56, 63, 70, 84 and 224."
+        }
+      ]
+    },
+    "eligibilityModule": {
+      "eligibilityCriteria": "Inclusion Criteria:\n\n1. Males and females 18 to 55 years of age.\n2. In good general health as confirmed by a medical history and physical exam, vital signs\\*, and screening laboratories conducted no more than 30 days prior to study injection administration.\n\n   \\*Temperature \\<38°C, respiratory rate \\< 17 breaths pm, heart rate ≤100 bpm and \\>54 bpm, systolic blood pressure ≤140 mmHg and \\>89 mmHg, diastolic blood pressure ≤90 mmHg and ≥60 mmHg.\n\n   NOTE: Athletically trained subjects with a pulse ≥40 may be enrolled at the discretion of the principal investigator or designated licensed clinical investigator.\n3. Screening laboratory values within normal limits: sodium, potassium, ALT, AST, total bilirubin, alkaline phosphatase, creatinine, random glucose, total WBC count, hemoglobin, and platelet count.\n4. Negative HIV 1/2 antibody, hepatitis B surface antigen (HBsAg), and hepatitis C virus (HCV) antibody.\n5. Urine dipstick for protein and glucose (negative to trace protein are acceptable).\n6. Women of childbearing potential\\* in sexual relationships with men must agree to practice acceptable contraception\\*\\* for the 30-day period before Day 0 through 90 days after the last study injection.\n\n   \\*Not sterilized via tubal ligation, bilateral oophorectomy, hysterectomy or successful Essure® placement (permanent, non-surgical, non-hormonal sterilization) with documented radiological confirmation test at least 90 days after the procedure, and still menstruating or \\< 1 year of the last menses if menopausal). Post-menopausal defined as at least 12 months spontaneous amenorrhea and confirmed with FSH \\> 40 mIU/ml.\n\n   \\*\\*Includes, but is not limited to, sexual abstinence, monogamous relationship with vasectomized partner who has been vasectomized for 6 months or more prior to the subject receiving study product, barrier methods such as condoms or diaphragms with spermicide or foam, effective intrauterine devices, NuvaRing ®, and licensed hormonal methods such as implants, injectables or oral contraceptives (\"the pill\").\n7. Able to understand and comply with planned study procedures and willing to be available for all study-required procedures, visits and calls for the duration of the study.\n8. Provide written informed consent before initiation of any study procedures.\n9. Willing to abstain from donating whole blood or blood derivatives until 90 days after the final study injection.\n\nExclusion Criteria:\n\n1. Previous exposure to ID93 vaccines or experimental products containing GLA-SE.\n2. History of treatment for active or latent tuberculosis infection.\n3. History or evidence of active or documented latent tuberculosis, or positive QuantiFERON®-TB Gold test.\n4. Shared a residence within the last year prior to randomization with an individual on anti-tuberculosis treatment or with culture or smear positive tuberculosis.\n5. Received a tuberculin skin test within 3 months (90 days) prior to randomization.\n6. History of autoimmune disease or immunosuppression.\n7. Used immunosuppressive medication (e.g., oral or injected steroids) within 3 months prior to randomization (inhaled and topical corticosteroids are permitted).\n8. Received any investigational drug therapy or investigational vaccine within past 6 months prior to randomization, or planned participation in any other investigational study during the study period.\n9. Received investigational TB vaccine at any time prior to randomization.\n10. Received any vaccine within 30 days prior to the first study vaccination and no planned immunizations between Day 0-84 or Day 210-224 due to the washout period prior to immunology blood draws.\n11. History or laboratory evidence of immunodeficiency state including but not limited to laboratory indication of HIV-1 infection at screening.\n12. History of allergic disease or reactions, likely to be exacerbated by any component of the study vaccine.\n13. History of allergic reaction to kanamycin-related antibiotics.\n14. Subjects with a history of previous anaphylaxis or severe allergic reaction to vaccines or unknown allergens.\n15. Previous medical history that may compromise the safety of the subject in the study, including but not limited to: severe impairment of pulmonary function from tuberculosis infection or other pulmonary disease; chronic illness with signs of cardiac or renal failure; suspected progressive neurological disease; or uncontrolled epilepsy or infantile spasms.\n16. Known or suspected alcohol or drug abuse within the past 5 years.\n17. Smokes 1 pack or more of cigarettes per day.\n18. History of keloid formation or excessive scarring.\n19. History or evidence on physical examination of any systemic disease or any acute or chronic illness that, in the opinion of the investigator, may interfere with the evaluation of the safety or immunogenicity of the vaccine, including axillary lymphadenopathy.\n20. Received a blood transfusion or immunoglobulin within the past 3 months prior to randomization.\n21. Donated blood products (platelets, whole blood, plasma, etc.) within past 1 month prior to randomization.\n22. Presence of any febrile illness, oral temperature of \\>100.4 °F/38.0 °C within 24 hours of study injection administration. Such subjects may be re-evaluated for enrolment after resolution of illness.\n23. Positive serum (at screening visit only) or urine pregnancy test at screening or within 24 hours prior to study injection for women of childbearing potential.\n24. Breastfeeding at any time throughout the study.\n25. Rash, tattoos, or any other dermatological condition on the upper anterolateral arm that could adversely affect the vaccine injection site or interfere with its evaluation.\n26. BMI \\<18 or \\>35 kg/m2.\n27. Any medical or neuropsychiatric condition which, in the Investigator's opinion, would render the subject incompetent to provide informed consent or unable to provide valid safety observations and reporting.\n28. Cancer or treatment for cancer within 3 years of study injection administration. Persons with a history of cancer who are disease-free without treatment for 3 years or more are eligible. Persons with treated and uncomplicated basal cell carcinoma of the skin are eligible.\n29. Subjects unlikely to cooperate with the requirements of the study protocol.",
+      "healthyVolunteers": true,
+      "sex": "ALL",
+      "minimumAge": "18 Years",
+      "maximumAge": "55 Years",
+      "stdAges": ["ADULT"]
+    },
+    "contactsLocationsModule": {
+      "overallOfficials": [
+        {
+          "name": "Christopher Fox, PhD",
+          "affiliation": "Access to Advanced Health Institute (AAHI)",
+          "role": "PRINCIPAL_INVESTIGATOR"
+        }
+      ],
+      "locations": [
+        {
+          "facility": "Saint Louis University - Center for Vaccine Development",
+          "city": "St Louis",
+          "state": "Missouri",
+          "zip": "63104",
+          "country": "United States",
+          "geoPoint": {
+            "lat": 38.62727,
+            "lon": -90.19789
+          }
+        }
+      ]
+    },
+    "referencesModule": {
+      "references": [
+        {
+          "pmid": "36878897",
+          "type": "RESULT",
+          "citation": "Sagawa ZK, Goman C, Frevol A, Blazevic A, Tennant J, Fisher B, Day T, Jackson S, Lemiale F, Toussaint L, Kalisz I, Jiang J, Ondrejcek L, Mohamath R, Vergara J, Lew A, Beckmann AM, Casper C, Hoft DF, Fox CB. Safety and immunogenicity of a thermostable ID93 + GLA-SE tuberculosis vaccine candidate in healthy adults. Nat Commun. 2023 Mar 6;14(1):1138. doi: 10.1038/s41467-023-36789-2."
+        }
+      ],
+      "seeAlsoLinks": [
+        {
+          "label": "Safety and immunogenicity of a thermostable ID93 + GLA-SE tuberculosis vaccine candidate in healthy adults",
+          "url": "http://www.nature.com/articles/s41467-023-36789-2"
+        }
+      ]
+    },
+    "ipdSharingStatementModule": {
+      "ipdSharing": "NO"
+    }
+  },
+  "resultsSection": {
+    "participantFlowModule": {
+      "groups": [
+        {
+          "id": "FG000",
+          "title": "Single-vial Presentation ID93 + GLA-SE",
+          "description": "Thermostable lyophilized single-vial presentation of ID93 + GLA-SE (2 µg ID93, 5 µg GLA) given as two intramuscular (IM) injections on Days 0 and 56."
+        },
+        {
+          "id": "FG001",
+          "title": "Two-vial Presentation ID93 + GLA-SE",
+          "description": "Non-thermostable two-vial presentation of ID93 (2 µg, lyophilized) + GLA-SE (5 µg, liquid) given as two intramuscular (IM) injections on Days 0 and 56."
+        }
+      ],
+      "periods": [
+        {
+          "title": "Overall Study",
+          "milestones": [
+            {
+              "type": "STARTED",
+              "achievements": [
+                {
+                  "groupId": "FG000",
+                  "numSubjects": "23"
+                },
+                {
+                  "groupId": "FG001",
+                  "numSubjects": "25"
+                }
+              ]
+            },
+            {
+              "type": "COMPLETED",
+              "achievements": [
+                {
+                  "groupId": "FG000",
+                  "numSubjects": "23"
+                },
+                {
+                  "groupId": "FG001",
+                  "numSubjects": "22"
+                }
+              ]
+            },
+            {
+              "type": "NOT COMPLETED",
+              "achievements": [
+                {
+                  "groupId": "FG000",
+                  "numSubjects": "0"
+                },
+                {
+                  "groupId": "FG001",
+                  "numSubjects": "3"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "baselineCharacteristicsModule": {
+      "populationDescription": "males and females, ages 18-55 inclusive",
+      "groups": [
+        {
+          "id": "BG000",
+          "title": "Single-vial Presentation ID93 + GLA-SE",
+          "description": "ID93 + GLA-SE (2 µg ID93, 5 µg GLA) \\[lyophilized, single-vial\\] given as two intramuscular (IM) injections on Days 0 and 56."
+        },
+        {
+          "id": "BG001",
+          "title": "Two-vial Presentation ID93 + GLA-SE",
+          "description": "ID93 (2 µg, lyophilized) + GLA-SE (5 µg, liquid) \\[two-vial presentation\\] given as two intramuscular (IM) injections on Days 0 and 56."
+        },
+        {
+          "id": "BG002",
+          "title": "Total",
+          "description": "Total of all reporting groups"
+        }
+      ],
+      "denoms": [
+        {
+          "units": "Participants",
+          "counts": [
+            {
+              "groupId": "BG000",
+              "value": "23"
+            },
+            {
+              "groupId": "BG001",
+              "value": "25"
+            },
+            {
+              "groupId": "BG002",
+              "value": "48"
+            }
+          ]
+        }
+      ],
+      "measures": [
+        {
+          "title": "Age, Categorical",
+          "paramType": "COUNT_OF_PARTICIPANTS",
+          "unitOfMeasure": "Participants",
+          "classes": [
+            {
+              "categories": [
+                {
+                  "title": "<=18 years",
+                  "measurements": [
+                    {
+                      "groupId": "BG000",
+                      "value": "0"
+                    },
+                    {
+                      "groupId": "BG001",
+                      "value": "2"
+                    },
+                    {
+                      "groupId": "BG002",
+                      "value": "2"
+                    }
+                  ]
+                },
+                {
+                  "title": "Between 18 and 65 years",
+                  "measurements": [
+                    {
+                      "groupId": "BG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "BG001",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "BG002",
+                      "value": "46"
+                    }
+                  ]
+                },
+                {
+                  "title": ">=65 years",
+                  "measurements": [
+                    {
+                      "groupId": "BG000",
+                      "value": "0"
+                    },
+                    {
+                      "groupId": "BG001",
+                      "value": "0"
+                    },
+                    {
+                      "groupId": "BG002",
+                      "value": "0"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Sex: Female, Male",
+          "paramType": "COUNT_OF_PARTICIPANTS",
+          "unitOfMeasure": "Participants",
+          "classes": [
+            {
+              "categories": [
+                {
+                  "title": "Female",
+                  "measurements": [
+                    {
+                      "groupId": "BG000",
+                      "value": "18"
+                    },
+                    {
+                      "groupId": "BG001",
+                      "value": "18"
+                    },
+                    {
+                      "groupId": "BG002",
+                      "value": "36"
+                    }
+                  ]
+                },
+                {
+                  "title": "Male",
+                  "measurements": [
+                    {
+                      "groupId": "BG000",
+                      "value": "5"
+                    },
+                    {
+                      "groupId": "BG001",
+                      "value": "7"
+                    },
+                    {
+                      "groupId": "BG002",
+                      "value": "12"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Race (NIH/OMB)",
+          "paramType": "COUNT_OF_PARTICIPANTS",
+          "unitOfMeasure": "Participants",
+          "classes": [
+            {
+              "categories": [
+                {
+                  "title": "American Indian or Alaska Native",
+                  "measurements": [
+                    {
+                      "groupId": "BG000",
+                      "value": "0"
+                    },
+                    {
+                      "groupId": "BG001",
+                      "value": "0"
+                    },
+                    {
+                      "groupId": "BG002",
+                      "value": "0"
+                    }
+                  ]
+                },
+                {
+                  "title": "Asian",
+                  "measurements": [
+                    {
+                      "groupId": "BG000",
+                      "value": "2"
+                    },
+                    {
+                      "groupId": "BG001",
+                      "value": "0"
+                    },
+                    {
+                      "groupId": "BG002",
+                      "value": "2"
+                    }
+                  ]
+                },
+                {
+                  "title": "Native Hawaiian or Other Pacific Islander",
+                  "measurements": [
+                    {
+                      "groupId": "BG000",
+                      "value": "0"
+                    },
+                    {
+                      "groupId": "BG001",
+                      "value": "0"
+                    },
+                    {
+                      "groupId": "BG002",
+                      "value": "0"
+                    }
+                  ]
+                },
+                {
+                  "title": "Black or African American",
+                  "measurements": [
+                    {
+                      "groupId": "BG000",
+                      "value": "0"
+                    },
+                    {
+                      "groupId": "BG001",
+                      "value": "1"
+                    },
+                    {
+                      "groupId": "BG002",
+                      "value": "1"
+                    }
+                  ]
+                },
+                {
+                  "title": "White",
+                  "measurements": [
+                    {
+                      "groupId": "BG000",
+                      "value": "20"
+                    },
+                    {
+                      "groupId": "BG001",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "BG002",
+                      "value": "43"
+                    }
+                  ]
+                },
+                {
+                  "title": "More than one race",
+                  "measurements": [
+                    {
+                      "groupId": "BG000",
+                      "value": "1"
+                    },
+                    {
+                      "groupId": "BG001",
+                      "value": "1"
+                    },
+                    {
+                      "groupId": "BG002",
+                      "value": "2"
+                    }
+                  ]
+                },
+                {
+                  "title": "Unknown or Not Reported",
+                  "measurements": [
+                    {
+                      "groupId": "BG000",
+                      "value": "0"
+                    },
+                    {
+                      "groupId": "BG001",
+                      "value": "0"
+                    },
+                    {
+                      "groupId": "BG002",
+                      "value": "0"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "title": "Region of Enrollment",
+          "paramType": "COUNT_OF_PARTICIPANTS",
+          "unitOfMeasure": "Participants",
+          "classes": [
+            {
+              "title": "United States",
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "BG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "BG001",
+                      "value": "25"
+                    },
+                    {
+                      "groupId": "BG002",
+                      "value": "48"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "outcomeMeasuresModule": {
+      "outcomeMeasures": [
+        {
+          "type": "PRIMARY",
+          "title": "Local Injection Site Reactogenicity",
+          "description": "The number of subjects experiencing solicited local injection site reactions within 7 days following each study injection.",
+          "populationDescription": "Safety population (n=48). All subjects receiving at least one study injection.",
+          "reportingStatus": "POSTED",
+          "paramType": "NUMBER",
+          "unitOfMeasure": "participants",
+          "timeFrame": "7 days following each injection",
+          "groups": [
+            {
+              "id": "OG000",
+              "title": "Single-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 + GLA-SE (2 µg ID93, 5 µg GLA) \\[lyophilized, single-vial\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            },
+            {
+              "id": "OG001",
+              "title": "Two-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 (2 µg, lyophilized) + GLA-SE (5 µg, liquid) \\[two-vial presentation\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            }
+          ],
+          "denoms": [
+            {
+              "units": "Participants",
+              "counts": [
+                {
+                  "groupId": "OG000",
+                  "value": "23"
+                },
+                {
+                  "groupId": "OG001",
+                  "value": "25"
+                }
+              ]
+            }
+          ],
+          "classes": [
+            {
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "22"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "21"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "PRIMARY",
+          "title": "Systemic Reactogenicity",
+          "description": "The number of subjects experiencing solicited systemic reactions within 7 days following each study injection.",
+          "populationDescription": "Safety population (n=48). All subjects receiving at least one study injection.",
+          "reportingStatus": "POSTED",
+          "paramType": "NUMBER",
+          "unitOfMeasure": "participants",
+          "timeFrame": "7 days following each injection",
+          "groups": [
+            {
+              "id": "OG000",
+              "title": "Single-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 + GLA-SE (2 µg ID93, 5 µg GLA) \\[lyophilized, single-vial\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            },
+            {
+              "id": "OG001",
+              "title": "Two-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 (2 µg, lyophilized) + GLA-SE (5 µg, liquid) \\[two-vial presentation\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            }
+          ],
+          "denoms": [
+            {
+              "units": "Participants",
+              "counts": [
+                {
+                  "groupId": "OG000",
+                  "value": "23"
+                },
+                {
+                  "groupId": "OG001",
+                  "value": "25"
+                }
+              ]
+            }
+          ],
+          "classes": [
+            {
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "9"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "12"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "PRIMARY",
+          "title": "All Adverse Events",
+          "description": "The number of subjects spontaneously reporting adverse events from Day 0 through Day 84.",
+          "populationDescription": "Safety population (n=48). All subjects received at least one study injection.",
+          "reportingStatus": "POSTED",
+          "paramType": "NUMBER",
+          "unitOfMeasure": "participants",
+          "timeFrame": "Day 0 - 84",
+          "groups": [
+            {
+              "id": "OG000",
+              "title": "Single-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 + GLA-SE (2 µg ID93, 5 µg GLA) \\[lyophilized, single-vial\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            },
+            {
+              "id": "OG001",
+              "title": "Two-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 (2 µg, lyophilized) + GLA-SE (5 µg, liquid) \\[two-vial presentation\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            }
+          ],
+          "denoms": [
+            {
+              "units": "Participants",
+              "counts": [
+                {
+                  "groupId": "OG000",
+                  "value": "23"
+                },
+                {
+                  "groupId": "OG001",
+                  "value": "25"
+                }
+              ]
+            }
+          ],
+          "classes": [
+            {
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "24"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "PRIMARY",
+          "title": "Serious Adverse Events",
+          "description": "The number of serious adverse events considered related to any of the study injections reported at any point during the study period.",
+          "populationDescription": "Safety population (n=48). All subjects received at least one study injection.",
+          "reportingStatus": "POSTED",
+          "paramType": "NUMBER",
+          "unitOfMeasure": "participants",
+          "timeFrame": "Day 0 - 421",
+          "groups": [
+            {
+              "id": "OG000",
+              "title": "Single-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 + GLA-SE (2 µg ID93, 5 µg GLA) \\[lyophilized, single-vial\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            },
+            {
+              "id": "OG001",
+              "title": "Two-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 (2 µg, lyophilized) + GLA-SE (5 µg, liquid) \\[two-vial presentation\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            }
+          ],
+          "denoms": [
+            {
+              "units": "Participants",
+              "counts": [
+                {
+                  "groupId": "OG000",
+                  "value": "23"
+                },
+                {
+                  "groupId": "OG001",
+                  "value": "25"
+                }
+              ]
+            }
+          ],
+          "classes": [
+            {
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "0"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "0"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SECONDARY",
+          "title": "IgG Antibody Response Rate",
+          "description": "Total IgG antibody ELISA: Responder rate is defined as the proportion of subjects with at least a 4-fold increase from baseline in IgG antibody titer for ID93 antigen.",
+          "populationDescription": "Immunogenicity population: all eligible subjects who have received at least one study injection, for whom data concerning post-baseline immunogenicity endpoint measures are available, and major protocol deviations are absent.",
+          "reportingStatus": "POSTED",
+          "paramType": "NUMBER",
+          "dispersionType": "95% Confidence Interval",
+          "unitOfMeasure": "percentage of participants",
+          "timeFrame": "Days 0, 14, 56, 70, 84, and 224",
+          "groups": [
+            {
+              "id": "OG000",
+              "title": "Single-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 + GLA-SE (2 µg ID93, 5 µg GLA) \\[lyophilized, single-vial\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            },
+            {
+              "id": "OG001",
+              "title": "Two-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 (2 µg, lyophilized) + GLA-SE (5 µg, liquid) \\[two-vial presentation\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            }
+          ],
+          "denoms": [
+            {
+              "units": "Participants",
+              "counts": [
+                {
+                  "groupId": "OG000",
+                  "value": "23"
+                },
+                {
+                  "groupId": "OG001",
+                  "value": "25"
+                }
+              ]
+            }
+          ],
+          "classes": [
+            {
+              "title": "Day 14 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "24"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "30.4",
+                      "lowerLimit": "13.21",
+                      "upperLimit": "52.92"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "25.0",
+                      "lowerLimit": "9.77",
+                      "upperLimit": "46.71"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 56 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "22"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "60.9",
+                      "lowerLimit": "38.54",
+                      "upperLimit": "80.29"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "40.9",
+                      "lowerLimit": "20.71",
+                      "upperLimit": "63.65"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 70 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "22"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "100",
+                      "lowerLimit": "85.18",
+                      "upperLimit": "100.0"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "90.9",
+                      "lowerLimit": "70.84",
+                      "upperLimit": "98.88"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 84 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "22"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "22"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "90.9",
+                      "lowerLimit": "70.84",
+                      "upperLimit": "98.88"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "95.5",
+                      "lowerLimit": "77.16",
+                      "upperLimit": "99.88"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 224 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "20"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "22"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "85.0",
+                      "lowerLimit": "62.11",
+                      "upperLimit": "96.79"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "63.6",
+                      "lowerLimit": "40.66",
+                      "upperLimit": "82.80"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SECONDARY",
+          "title": "IgG Antibody Response Magnitude",
+          "description": "Total IgG mean endpoint titer for ID93",
+          "populationDescription": "All subjects who have received at least one study injection, for whom data concerning post-baseline immunogenicity endpoint measures are available, and major protocol deviations are absent.",
+          "reportingStatus": "POSTED",
+          "paramType": "GEOMETRIC_MEAN",
+          "dispersionType": "95% Confidence Interval",
+          "unitOfMeasure": "titer",
+          "timeFrame": "Days 0, 14, 56, 70, 84, and 224",
+          "groups": [
+            {
+              "id": "OG000",
+              "title": "Single-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 + GLA-SE (2 µg ID93, 5 µg GLA) \\[lyophilized, single-vial\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            },
+            {
+              "id": "OG001",
+              "title": "Two-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 (2 µg, lyophilized) + GLA-SE (5 µg, liquid) \\[two-vial presentation\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            }
+          ],
+          "denoms": [
+            {
+              "units": "Participants",
+              "counts": [
+                {
+                  "groupId": "OG000",
+                  "value": "23"
+                },
+                {
+                  "groupId": "OG001",
+                  "value": "25"
+                }
+              ]
+            }
+          ],
+          "classes": [
+            {
+              "title": "Day 0 Geometric Mean MEPT",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "25"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "57",
+                      "lowerLimit": "49",
+                      "upperLimit": "66"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "74",
+                      "lowerLimit": "45",
+                      "upperLimit": "123"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 14 Geometric Mean MEPT",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "24"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "147",
+                      "lowerLimit": "83",
+                      "upperLimit": "260"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "140",
+                      "lowerLimit": "94",
+                      "upperLimit": "209"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 56 Geometric Mean MEPT",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "22"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "250",
+                      "lowerLimit": "154",
+                      "upperLimit": "405"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "259",
+                      "lowerLimit": "126",
+                      "upperLimit": "530"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 70 Geometric Mean MEPT",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "22"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "10868",
+                      "lowerLimit": "5971",
+                      "upperLimit": "19780"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "2583",
+                      "lowerLimit": "1608",
+                      "upperLimit": "4147"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 84 Geometric Mean MEPT",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "22"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "22"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "5592",
+                      "lowerLimit": "2753",
+                      "upperLimit": "11362"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "2522",
+                      "lowerLimit": "1711",
+                      "upperLimit": "3716"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 224 Geometric Mean MEPT",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "20"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "22"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "913",
+                      "lowerLimit": "510",
+                      "upperLimit": "1634"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "445",
+                      "lowerLimit": "273",
+                      "upperLimit": "726"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SECONDARY",
+          "title": "Cytokine Response",
+          "description": "PBMC ELISpot: IFN-γ response to the ID93 antigen. Responder status is determined by the SCHARP method.",
+          "populationDescription": "All subjects who have received at least one study injection, for whom data concerning post-baseline immunogenicity endpoint measures are available, and major protocol deviations are absent.",
+          "reportingStatus": "POSTED",
+          "paramType": "NUMBER",
+          "dispersionType": "95% Confidence Interval",
+          "unitOfMeasure": "percentage of participants",
+          "timeFrame": "Days 0, 14, 56, 70, 84, and 224",
+          "groups": [
+            {
+              "id": "OG000",
+              "title": "Single-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 + GLA-SE (2 µg ID93, 5 µg GLA) \\[lyophilized, single-vial\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            },
+            {
+              "id": "OG001",
+              "title": "Two-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 (2 µg, lyophilized) + GLA-SE (5 µg, liquid) \\[two-vial presentation\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            }
+          ],
+          "denoms": [
+            {
+              "units": "Participants",
+              "counts": [
+                {
+                  "groupId": "OG000",
+                  "value": "23"
+                },
+                {
+                  "groupId": "OG001",
+                  "value": "25"
+                }
+              ]
+            }
+          ],
+          "classes": [
+            {
+              "title": "Day 0 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "25"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "13.0",
+                      "lowerLimit": "2.78",
+                      "upperLimit": "33.59"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "20.0",
+                      "lowerLimit": "6.83",
+                      "upperLimit": "40.70"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 14 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "22"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "25"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "45.5",
+                      "lowerLimit": "24.39",
+                      "upperLimit": "67.79"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "32.0",
+                      "lowerLimit": "14.95",
+                      "upperLimit": "53.5"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 56 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "22"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "34.8",
+                      "lowerLimit": "16.38",
+                      "upperLimit": "57.27"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "31.8",
+                      "lowerLimit": "13.86",
+                      "upperLimit": "54.87"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 70 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "21"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "69.6",
+                      "lowerLimit": "47.08",
+                      "upperLimit": "86.79"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "76.2",
+                      "lowerLimit": "52.83",
+                      "upperLimit": "91.79"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "DAY 84 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "22"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "21"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "68.2",
+                      "lowerLimit": "45.13",
+                      "upperLimit": "86.14"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "66.7",
+                      "lowerLimit": "43.03",
+                      "upperLimit": "85.41"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 224 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "20"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "19"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "65",
+                      "lowerLimit": "40.78",
+                      "upperLimit": "84.61"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "52.6",
+                      "lowerLimit": "28.86",
+                      "upperLimit": "75.55"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SECONDARY",
+          "title": "Cytokine Response",
+          "description": "PBMC ELISpot: IL-10 response to the ID93 antigen. Responder status is determined by the SCHARP method.",
+          "populationDescription": "All subjects who have received at least one study injection, for whom data concerning post-baseline immunogenicity endpoint measures are available, and major protocol deviations are absent.",
+          "reportingStatus": "POSTED",
+          "paramType": "NUMBER",
+          "dispersionType": "95% Confidence Interval",
+          "unitOfMeasure": "percentage of participants",
+          "timeFrame": "Days 0, 14, 56, 70, 84 and 224",
+          "groups": [
+            {
+              "id": "OG000",
+              "title": "Single-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 + GLA-SE (2 µg ID93, 5 µg GLA) \\[lyophilized, single-vial\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            },
+            {
+              "id": "OG001",
+              "title": "Two-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 (2 µg, lyophilized) + GLA-SE (5 µg, liquid) \\[two-vial presentation\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            }
+          ],
+          "denoms": [
+            {
+              "units": "Participants",
+              "counts": [
+                {
+                  "groupId": "OG000",
+                  "value": "23"
+                },
+                {
+                  "groupId": "OG001",
+                  "value": "25"
+                }
+              ]
+            }
+          ],
+          "classes": [
+            {
+              "title": "Day 0 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "25"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "4.3",
+                      "lowerLimit": "0.11",
+                      "upperLimit": "21.95"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "8.0",
+                      "lowerLimit": "0.98",
+                      "upperLimit": "26.03"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 14 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "22"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "23"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "0",
+                      "lowerLimit": "0.00",
+                      "upperLimit": "15.44"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "4.3",
+                      "lowerLimit": "0.11",
+                      "upperLimit": "21.95"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 56 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "22"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "4.3",
+                      "lowerLimit": "0.11",
+                      "upperLimit": "21.95"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "4.5",
+                      "lowerLimit": "0.12",
+                      "upperLimit": "22.84"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 70 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "20"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "30.4",
+                      "lowerLimit": "13.21",
+                      "upperLimit": "52.92"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "0",
+                      "lowerLimit": "0.00",
+                      "upperLimit": "16.84"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 84 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "22"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "19"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "18.2",
+                      "lowerLimit": "5.19",
+                      "upperLimit": "40.28"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "10.5",
+                      "lowerLimit": "1.30",
+                      "upperLimit": "33.14"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 224 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "20"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "18"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "10.0",
+                      "lowerLimit": "1.23",
+                      "upperLimit": "31.70"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "0",
+                      "lowerLimit": "0.00",
+                      "upperLimit": "18.53"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SECONDARY",
+          "title": "T Cell Response",
+          "description": "PBMC ICS: Responder Rate of the \"Any Two\" CD4 T cell responses to the ID93 antigen; CD4 T cells producing 1 or more cytokines (IFN-γ, TNF, IL-2, IL-4, IL-21 and CD154) simultaneously in response to stimulation with the ID93 antigen as measured by intracellular cytokine staining of PBMCs.",
+          "populationDescription": "All subjects who have received at least one study injection, for whom data concerning post-baseline immunogenicity endpoint measures are available, and major protocol deviations are absent.",
+          "reportingStatus": "POSTED",
+          "paramType": "NUMBER",
+          "dispersionType": "95% Confidence Interval",
+          "unitOfMeasure": "percentage of participants",
+          "timeFrame": "Days 0, 7, 14, 56, 63, 70, 84 and 224",
+          "groups": [
+            {
+              "id": "OG000",
+              "title": "Single-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 + GLA-SE (2 µg ID93, 5 µg GLA) \\[lyophilized, single-vial\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            },
+            {
+              "id": "OG001",
+              "title": "Two-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 (2 µg, lyophilized) + GLA-SE (5 µg, liquid) \\[two-vial presentation\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            }
+          ],
+          "denoms": [
+            {
+              "units": "Participants",
+              "counts": [
+                {
+                  "groupId": "OG000",
+                  "value": "23"
+                },
+                {
+                  "groupId": "OG001",
+                  "value": "25"
+                }
+              ]
+            }
+          ],
+          "classes": [
+            {
+              "title": "Day 0 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "25"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "4.3",
+                      "lowerLimit": "0.11",
+                      "upperLimit": "21.95"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "4.0",
+                      "lowerLimit": "0.10",
+                      "upperLimit": "20.35"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 7 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "21"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "25"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "4.8",
+                      "lowerLimit": "0.12",
+                      "upperLimit": "23.82"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "4.0",
+                      "lowerLimit": "0.10",
+                      "upperLimit": "20.35"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 14 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "20"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "24"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "15.0",
+                      "lowerLimit": "3.21",
+                      "upperLimit": "37.89"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "4.2",
+                      "lowerLimit": "0.11",
+                      "upperLimit": "21.12"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 56 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "22"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "20"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "13.6",
+                      "lowerLimit": "2.91",
+                      "upperLimit": "34.91"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "0",
+                      "lowerLimit": "0.00",
+                      "upperLimit": "16.84"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 63 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "22"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "22"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "36.4",
+                      "lowerLimit": "17.20",
+                      "upperLimit": "59.34"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "13.6",
+                      "lowerLimit": "2.91",
+                      "upperLimit": "34.91"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 70 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "22"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "21"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "59.1",
+                      "lowerLimit": "36.35",
+                      "upperLimit": "79.29"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "38.1",
+                      "lowerLimit": "18.11",
+                      "upperLimit": "61.56"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 84 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "20"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "20"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "50.0",
+                      "lowerLimit": "27.20",
+                      "upperLimit": "72.80"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "30.0",
+                      "lowerLimit": "11.89",
+                      "upperLimit": "54.28"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 224 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "16"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "19"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "31.3",
+                      "lowerLimit": "11.02",
+                      "upperLimit": "58.66"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "26.3",
+                      "lowerLimit": "9.15",
+                      "upperLimit": "51.20"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "SECONDARY",
+          "title": "T Cell Response",
+          "description": "PBMC ICS: Responder Rate of the \"Any Two\" CD8 T cell responses to the ID93 antigen; CD8 T cells producing 1 or more cytokines (IFN-γ, TNF, IL-2, IL-4, IL-21 and CD154) simultaneously in response to stimulation with the ID93 antigen as measured by intracellular cytokine staining of PBMCs.",
+          "populationDescription": "All subjects who have received at least one study injection, for whom data concerning post-baseline immunogenicity endpoint measures are available, and major protocol deviations are absent.",
+          "reportingStatus": "POSTED",
+          "paramType": "NUMBER",
+          "dispersionType": "95% Confidence Interval",
+          "unitOfMeasure": "percentage of participants",
+          "timeFrame": "Days 0, 7, 14, 56, 63, 70, 84 and 224.",
+          "groups": [
+            {
+              "id": "OG000",
+              "title": "Single-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 + GLA-SE (2 µg ID93, 5 µg GLA) \\[lyophilized, single-vial\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            },
+            {
+              "id": "OG001",
+              "title": "Two-vial Presentation ID93 + GLA-SE",
+              "description": "ID93 (2 µg, lyophilized) + GLA-SE (5 µg, liquid) \\[two-vial presentation\\] given as two intramuscular (IM) injections on Days 0 and 56."
+            }
+          ],
+          "denoms": [
+            {
+              "units": "Participants",
+              "counts": [
+                {
+                  "groupId": "OG000",
+                  "value": "23"
+                },
+                {
+                  "groupId": "OG001",
+                  "value": "25"
+                }
+              ]
+            }
+          ],
+          "classes": [
+            {
+              "title": "Day 0 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "25"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "0",
+                      "lowerLimit": "0.00",
+                      "upperLimit": "14.82"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "0",
+                      "lowerLimit": "0.00",
+                      "upperLimit": "13.72"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 7 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "21"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "25"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "4.8",
+                      "lowerLimit": "0.12",
+                      "upperLimit": "23.82"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "0",
+                      "lowerLimit": "0.00",
+                      "upperLimit": "13.72"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 14 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "20"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "24"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "15.0",
+                      "lowerLimit": "3.21",
+                      "upperLimit": "37.89"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "0",
+                      "lowerLimit": "0.00",
+                      "upperLimit": "14.25"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 56 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "22"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "20"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "4.5",
+                      "lowerLimit": "0.12",
+                      "upperLimit": "22.84"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "0",
+                      "lowerLimit": "0.00",
+                      "upperLimit": "16.84"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 63 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "22"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "22"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "4.5",
+                      "lowerLimit": "0.12",
+                      "upperLimit": "22.84"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "9.1",
+                      "lowerLimit": "1.12",
+                      "upperLimit": "29.16"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 70 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "22"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "21"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "0",
+                      "lowerLimit": "0.00",
+                      "upperLimit": "15.44"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "4.8",
+                      "lowerLimit": "0.12",
+                      "upperLimit": "23.82"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 84 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "20"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "20"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "0",
+                      "lowerLimit": "0.00",
+                      "upperLimit": "16.84"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "5.0",
+                      "lowerLimit": "0.13",
+                      "upperLimit": "24.87"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "title": "Day 224 Responder rate",
+              "denoms": [
+                {
+                  "units": "Participants",
+                  "counts": [
+                    {
+                      "groupId": "OG000",
+                      "value": "16"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "19"
+                    }
+                  ]
+                }
+              ],
+              "categories": [
+                {
+                  "measurements": [
+                    {
+                      "groupId": "OG000",
+                      "value": "6.3",
+                      "lowerLimit": "0.16",
+                      "upperLimit": "30.23"
+                    },
+                    {
+                      "groupId": "OG001",
+                      "value": "15.8",
+                      "lowerLimit": "3.38",
+                      "upperLimit": "39.58"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "adverseEventsModule": {
+      "frequencyThreshold": "5",
+      "timeFrame": "421 days",
+      "description": "Solicited adverse events within 7 days and unsolicited adverse events within 28 days after each study injection; serious adverse events (SAEs) and potential immune-mediated medical conditions (PIMMCs) after the first study injection until end of study follow-up.",
+      "eventGroups": [
+        {
+          "id": "EG000",
+          "title": "Single-vial Presentation ID93 + GLA-SE",
+          "description": "ID93 + GLA-SE (2 µg ID93, 5 µg GLA) \\[lyophilized, single-vial\\] given as two intramuscular (IM) injections on Days 0 and 56.",
+          "deathsNumAffected": 0,
+          "deathsNumAtRisk": 23,
+          "seriousNumAffected": 0,
+          "seriousNumAtRisk": 23,
+          "otherNumAffected": 23,
+          "otherNumAtRisk": 23
+        },
+        {
+          "id": "EG001",
+          "title": "Two-vial Presentation ID93 + GLA-SE",
+          "description": "ID93 (2 µg, lyophilized) + GLA-SE (5 µg, liquid) \\[two-vial presentation\\] given as two intramuscular (IM) injections on Days 0 and 56.",
+          "deathsNumAffected": 0,
+          "deathsNumAtRisk": 25,
+          "seriousNumAffected": 0,
+          "seriousNumAtRisk": 25,
+          "otherNumAffected": 24,
+          "otherNumAtRisk": 25
+        }
+      ],
+      "otherEvents": [
+        {
+          "term": "Arthralgia",
+          "organSystem": "Musculoskeletal and connective tissue disorders",
+          "sourceVocabulary": "MedDRA 21.1",
+          "assessmentType": "SYSTEMATIC_ASSESSMENT",
+          "notes": "Injection related reactions",
+          "stats": [
+            {
+              "groupId": "EG000",
+              "numAffected": 4,
+              "numAtRisk": 23
+            },
+            {
+              "groupId": "EG001",
+              "numAffected": 1,
+              "numAtRisk": 25
+            }
+          ]
+        },
+        {
+          "term": "Fatigue",
+          "organSystem": "General disorders",
+          "sourceVocabulary": "MedDRA 21.1",
+          "assessmentType": "SYSTEMATIC_ASSESSMENT",
+          "notes": "Injection related reactions",
+          "stats": [
+            {
+              "groupId": "EG000",
+              "numAffected": 6,
+              "numAtRisk": 23
+            },
+            {
+              "groupId": "EG001",
+              "numAffected": 10,
+              "numAtRisk": 25
+            }
+          ]
+        },
+        {
+          "term": "Headache",
+          "organSystem": "Nervous system disorders",
+          "sourceVocabulary": "MedDRA 21.1",
+          "assessmentType": "SYSTEMATIC_ASSESSMENT",
+          "notes": "Injection related reactions",
+          "stats": [
+            {
+              "groupId": "EG000",
+              "numAffected": 4,
+              "numAtRisk": 23
+            },
+            {
+              "groupId": "EG001",
+              "numAffected": 7,
+              "numAtRisk": 25
+            }
+          ]
+        },
+        {
+          "term": "Injection site pain",
+          "organSystem": "General disorders",
+          "sourceVocabulary": "MedDRA 21.1",
+          "assessmentType": "SYSTEMATIC_ASSESSMENT",
+          "notes": "Injection related reactions",
+          "stats": [
+            {
+              "groupId": "EG000",
+              "numAffected": 22,
+              "numAtRisk": 23
+            },
+            {
+              "groupId": "EG001",
+              "numAffected": 21,
+              "numAtRisk": 25
+            }
+          ]
+        },
+        {
+          "term": "Injection site induration",
+          "organSystem": "General disorders",
+          "sourceVocabulary": "MedDRA 21.1",
+          "assessmentType": "SYSTEMATIC_ASSESSMENT",
+          "notes": "Injection related reactions",
+          "stats": [
+            {
+              "groupId": "EG000",
+              "numAffected": 3,
+              "numAtRisk": 23
+            },
+            {
+              "groupId": "EG001",
+              "numAffected": 0,
+              "numAtRisk": 25
+            }
+          ]
+        },
+        {
+          "term": "Myalgia",
+          "organSystem": "Musculoskeletal and connective tissue disorders",
+          "sourceVocabulary": "MedDRA 21.1",
+          "assessmentType": "SYSTEMATIC_ASSESSMENT",
+          "notes": "Injection related reactions",
+          "stats": [
+            {
+              "groupId": "EG000",
+              "numAffected": 3,
+              "numAtRisk": 23
+            },
+            {
+              "groupId": "EG001",
+              "numAffected": 5,
+              "numAtRisk": 25
+            }
+          ]
+        },
+        {
+          "term": "Haemoglobin decreased",
+          "organSystem": "Investigations",
+          "sourceVocabulary": "MedDRA 21.1",
+          "assessmentType": "SYSTEMATIC_ASSESSMENT",
+          "stats": [
+            {
+              "groupId": "EG000",
+              "numAffected": 1,
+              "numAtRisk": 23
+            },
+            {
+              "groupId": "EG001",
+              "numAffected": 5,
+              "numAtRisk": 25
+            }
+          ]
+        },
+        {
+          "term": "Upper respiratory tract infection",
+          "organSystem": "Infections and infestations",
+          "sourceVocabulary": "MedDRA 21.1",
+          "assessmentType": "NON_SYSTEMATIC_ASSESSMENT",
+          "stats": [
+            {
+              "groupId": "EG000",
+              "numAffected": 4,
+              "numAtRisk": 23
+            },
+            {
+              "groupId": "EG001",
+              "numAffected": 2,
+              "numAtRisk": 25
+            }
+          ]
+        }
+      ]
+    },
+    "moreInfoModule": {
+      "certainAgreement": {
+        "piSponsorEmployee": false,
+        "restrictiveAgreement": false
+      },
+      "pointOfContact": {
+        "title": "Christopher Fox PhD",
+        "organization": "Access to Advanced Health Institute (AAHI)",
+        "email": "Christopher.Fox@aahi.org",
+        "phone": "(206) 381-0883"
+      }
+    }
+  },
+  "documentSection": {
+    "largeDocumentModule": {
+      "largeDocs": [
+        {
+          "typeAbbrev": "Prot",
+          "hasProtocol": true,
+          "hasSap": false,
+          "hasIcf": false,
+          "label": "Study Protocol",
+          "date": "2018-10-05",
+          "uploadDate": "2023-05-05T14:37",
+          "filename": "Prot_000.pdf",
+          "size": 812496
+        },
+        {
+          "typeAbbrev": "SAP",
+          "hasProtocol": false,
+          "hasSap": true,
+          "hasIcf": false,
+          "label": "Statistical Analysis Plan",
+          "date": "2022-05-02",
+          "uploadDate": "2023-05-05T14:37",
+          "filename": "SAP_001.pdf",
+          "size": 504746
+        }
+      ]
+    }
+  },
+  "derivedSection": {
+    "miscInfoModule": {
+      "versionHolder": "2026-07-24"
+    },
+    "conditionBrowseModule": {
+      "meshes": [
+        {
+          "id": "D014397",
+          "term": "Tuberculosis, Pulmonary"
+        }
+      ],
+      "ancestors": [
+        {
+          "id": "D014376",
+          "term": "Tuberculosis"
+        },
+        {
+          "id": "D009164",
+          "term": "Mycobacterium Infections"
+        },
+        {
+          "id": "D000193",
+          "term": "Actinomycetales Infections"
+        },
+        {
+          "id": "D016908",
+          "term": "Gram-Positive Bacterial Infections"
+        },
+        {
+          "id": "D001424",
+          "term": "Bacterial Infections"
+        },
+        {
+          "id": "D001423",
+          "term": "Bacterial Infections and Mycoses"
+        },
+        {
+          "id": "D007239",
+          "term": "Infections"
+        },
+        {
+          "id": "D012141",
+          "term": "Respiratory Tract Infections"
+        },
+        {
+          "id": "D008171",
+          "term": "Lung Diseases"
+        },
+        {
+          "id": "D012140",
+          "term": "Respiratory Tract Diseases"
+        }
+      ]
+    }
+  },
+  "hasResults": true
+}

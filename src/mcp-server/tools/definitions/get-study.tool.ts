@@ -576,8 +576,13 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     }
 
     // Locations — render every site present in the (already filtered) study.
-    if (contacts.locations?.length) {
-      const locs = contacts.locations as LocationWithDistance[];
+    // A nearLocation filter that matched nothing still renders the header and the
+    // reason: omitting the section makes "sites exist, none within the radius"
+    // indistinguishable from "this study publishes no sites at all", which is the
+    // opposite conclusion (#96). A study with no upstream sites leaves meta.nearLocation
+    // unset (applyFilters never runs the filter), so it still renders nothing.
+    const locs = (contacts.locations ?? []) as LocationWithDistance[];
+    if (locs.length || meta.nearLocation) {
       const total = meta.totalLocations ?? locs.length;
       lines.push('');
       let header = `## Locations (${locs.length}`;
@@ -593,6 +598,16 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
         header += ` total)`;
       }
       lines.push(header);
+      if (locs.length === 0) {
+        // All-sites-dropped-for-missing-coordinates and all-sites-too-far are
+        // different situations and get different recovery guidance.
+        const noun = total === 1 ? 'site' : 'sites';
+        lines.push(
+          meta.locationsWithoutGeo === total
+            ? `No sites could be matched by distance — all ${total} published ${noun} lack coordinates. Omit nearLocation to see the full list.`
+            : `No sites within the requested radius. Widen radiusMi, or omit nearLocation to see all ${total} ${noun}.`,
+        );
+      }
       for (const loc of locs) {
         const parts = [loc.facility, loc.city, loc.state, loc.country].filter(Boolean);
         const statusNote = loc.status ? ` [${loc.status}]` : '';

@@ -289,6 +289,112 @@ describe('getStudy', () => {
       expect(text).not.toContain('No Coords,');
     });
 
+    it('nearLocation matching zero sites renders the header with the zero count and reason (#96)', async () => {
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({
+          contactsLocationsModule: {
+            locations: [{ facility: 'Saint Louis Site', geoPoint: { lat: 38.627, lon: -90.1994 } }],
+          },
+        }),
+      );
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({
+          nctId: 'NCT12345678',
+          nearLocation: { lat: -33.8688, lon: 151.2093, radiusMi: 10 },
+        }),
+        ctx,
+      );
+
+      expect(getStructuredLocations(result)).toHaveLength(0);
+      expect(result.filtersApplied.totalLocations).toBe(1);
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      expect(text).toContain('## Locations (0 within 10 mi of -33.869,151.209 of 1 total)');
+      expect(text).toContain('No sites within the requested radius.');
+      expect(text).toContain('omit nearLocation to see all 1 site');
+    });
+
+    it('nearLocation with every site lacking coordinates names the coordinate gap as the reason (#96)', async () => {
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({
+          contactsLocationsModule: {
+            locations: [{ facility: 'No Coords A' }, { facility: 'No Coords B' }],
+          },
+        }),
+      );
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({
+          nctId: 'NCT12345678',
+          nearLocation: { lat: 47.6062, lon: -122.3321, radiusMi: 50 },
+        }),
+        ctx,
+      );
+
+      expect(getStructuredLocations(result)).toHaveLength(0);
+      expect(result.filtersApplied.locationsWithoutGeo).toBe(2);
+      expect(result.filtersApplied.totalLocations).toBe(2);
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      expect(text).toContain('## Locations (0 within 50 mi of 47.606,-122.332 of 2 total');
+      expect(text).toContain('2 without coordinates skipped)');
+      expect(text).toContain('all 2 published sites lack coordinates');
+      // The far-away wording would be the wrong diagnosis here.
+      expect(text).not.toContain('No sites within the requested radius.');
+    });
+
+    it('nearLocation combined with locationLimit matching zero sites still renders the header (#96)', async () => {
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({
+          contactsLocationsModule: {
+            locations: [
+              { facility: 'Far A', geoPoint: { lat: 42.3601, lon: -71.0589 } },
+              { facility: 'Far B', geoPoint: { lat: 45.5152, lon: -122.6784 } },
+            ],
+          },
+        }),
+      );
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({
+          nctId: 'NCT12345678',
+          nearLocation: { lat: -33.8688, lon: 151.2093, radiusMi: 25 },
+          locationLimit: 3,
+        }),
+        ctx,
+      );
+
+      expect(getStructuredLocations(result)).toHaveLength(0);
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      expect(text).toContain('## Locations (0 within 25 mi of -33.869,151.209 of 2 total)');
+      expect(text).toContain('omit nearLocation to see all 2 sites');
+    });
+
+    it('a study that publishes no sites renders no Locations section even with nearLocation (#96)', async () => {
+      mockService.getStudy.mockResolvedValue(buildStudy({ contactsLocationsModule: {} }));
+
+      const ctx = createMockContext();
+      const result = await getStudy.handler(
+        getStudy.input!.parse({
+          nctId: 'NCT12345678',
+          nearLocation: { lat: 47.6062, lon: -122.3321, radiusMi: 50 },
+        }),
+        ctx,
+      );
+
+      // No upstream sites means no filter ran, so nothing is echoed and the
+      // section stays silent — "no sites published" is not "none nearby" (#96).
+      expect(result.filtersApplied).toEqual({});
+
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+      expect(text).not.toContain('## Locations');
+    });
+
     it('referenceLimit caps references in both surfaces and records the upstream total (#73)', async () => {
       const references = Array.from({ length: 19 }, (_, i) => ({
         pmid: `${20000 + i}`,

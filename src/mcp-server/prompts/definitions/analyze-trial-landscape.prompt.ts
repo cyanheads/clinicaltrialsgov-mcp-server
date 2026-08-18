@@ -10,7 +10,11 @@ export const analyzeTrialLandscape = prompt('analyze_trial_landscape', {
     'Guides analysis of a clinical trial landscape using the ClinicalTrials.gov MCP tools. Adaptable workflow for breakdowns by status, phase, sponsor, geography, etc.',
 
   args: z.object({
-    topic: z.string().describe('Disease, condition, or research area to analyze.'),
+    // `.min(1)` serializes to an advertised minLength: 1 in prompts/list. No
+    // `.default()` here: the SDK's optionality check reads `type: 'optional'`
+    // and not `default`, so a defaulted arg is advertised required for the
+    // wrong reason — topic is required on its own merits.
+    topic: z.string().min(1).describe('Disease, condition, or research area to analyze.'),
     focusAreas: z
       .string()
       .optional()
@@ -20,6 +24,16 @@ export const analyzeTrialLandscape = prompt('analyze_trial_landscape', {
   }),
 
   generate: (args) => {
+    // `.min(1)` passes for a whitespace-only topic, which renders as an empty
+    // heading and asks the model to analyze nothing. Prompts have no error
+    // contract — the framework's registration catch converts this throw into
+    // an McpError carrying the message.
+    if (args.topic.trim().length === 0) {
+      throw new Error(
+        "Prompt argument 'topic' was supplied with a blank value. Provide a disease, condition, or research area containing non-whitespace.",
+      );
+    }
+
     const areas =
       args.focusAreas
         ?.split(',')

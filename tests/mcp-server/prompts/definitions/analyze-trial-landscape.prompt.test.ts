@@ -24,6 +24,17 @@ describe('analyzeTrialLandscape', () => {
       expect(() => argsSchema.parse({})).toThrow();
     });
 
+    it('rejects an empty topic — the schema advertises minLength 1 (#99)', () => {
+      expect(() => argsSchema.parse({ topic: '' })).toThrow();
+    });
+
+    it('leaves topic optionality untouched — no default is introduced (#99)', () => {
+      // A Zod `.default()` would advertise topic as required: true in
+      // prompts/list for the wrong reason; it is required on its own merits.
+      expect(argsSchema.parse({ topic: 'Lung Cancer' }).topic).toBe('Lung Cancer');
+      expect(() => argsSchema.parse({})).toThrow();
+    });
+
     it('accepts topic only', () => {
       const args = argsSchema.parse({ topic: 'Lung Cancer' });
       expect(args.topic).toBe('Lung Cancer');
@@ -101,6 +112,15 @@ describe('analyzeTrialLandscape', () => {
 
     it('returns content with type text', () => {
       expect(firstMessage({ topic: 'Test' }).content.type).toBe('text');
+    });
+
+    it('throws for a whitespace-only topic the schema cannot catch (#99)', () => {
+      // `.min(1)` passes for '   '; the trim check inside generate() closes it.
+      expect(() => generate({ topic: '   ' })).toThrow(/topic/);
+    });
+
+    it('renders a non-blank topic unchanged', () => {
+      expect(firstMessage({ topic: ' Lung Cancer ' }).content.text).toContain('Lung Cancer');
     });
   });
 

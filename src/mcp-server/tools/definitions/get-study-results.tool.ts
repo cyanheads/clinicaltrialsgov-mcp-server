@@ -224,6 +224,63 @@ function summarizeMoreInfo(mi: Record<string, unknown>) {
   };
 }
 
+/** What a caller-requested cap actually trimmed on one study's results. */
+interface ResultsFilterMeta {
+  adverseEventLimit?: number;
+  outcomeLimit?: number;
+  totalOtherEvents?: number;
+  totalOutcomes?: number;
+  totalSeriousEvents?: number;
+}
+
+/**
+ * Cap a study's outcome measure list. The cap drops whole measures — every
+ * surviving one keeps its complete groups/classes/measurements/analyses tree.
+ * Recorded in `meta` only when the slice actually removed something; echoing a
+ * cap that trimmed nothing would report a filter that was never applied (#80).
+ */
+function capOutcomes(
+  measures: Record<string, unknown>[],
+  limit: number | undefined,
+  meta: ResultsFilterMeta,
+): Record<string, unknown>[] {
+  if (limit == null || measures.length <= limit) return measures;
+  meta.totalOutcomes = measures.length;
+  meta.outcomeLimit = limit;
+  return measures.slice(0, limit);
+}
+
+/**
+ * Cap the serious and other event lists of a full-mode adverse-events module.
+ * The two lists are capped independently — one list exceeding the limit says
+ * nothing about the other — and the event group roster is never capped, since
+ * every per-event stat joins back to it by id.
+ */
+function capAdverseEvents(
+  ae: Record<string, unknown>,
+  limit: number | undefined,
+  meta: ResultsFilterMeta,
+): Record<string, unknown> {
+  if (limit == null) return ae;
+  const next = { ...ae };
+  let trimmed = false;
+  const serious = ae.seriousEvents as unknown[] | undefined;
+  if (serious && serious.length > limit) {
+    meta.totalSeriousEvents = serious.length;
+    next.seriousEvents = serious.slice(0, limit);
+    trimmed = true;
+  }
+  const other = ae.otherEvents as unknown[] | undefined;
+  if (other && other.length > limit) {
+    meta.totalOtherEvents = other.length;
+    next.otherEvents = other.slice(0, limit);
+    trimmed = true;
+  }
+  if (!trimmed) return ae;
+  meta.adverseEventLimit = limit;
+  return next;
+}
+
 /* ------------------------------------------------------------------ */
 /*  Format helpers                                                     */
 /* ------------------------------------------------------------------ */
@@ -389,6 +446,29 @@ function formatAnalysisLine(a: RO): string {
     text(a.groupDescription),
   ].filter(Boolean);
   return parts.length ? `  Analysis: ${parts.join(', ')}` : '';
+}
+
+/**
+ * Disclose a trim on the text channel. Both channels carry the same capped
+ * data, so the counts and the route back to the omitted rows have to reach the
+ * caller who only reads `content[]`.
+ */
+function formatCaps(meta: RO, lines: string[]) {
+  const parts = [
+    meta.totalOutcomes != null
+      ? `${meta.outcomeLimit} of ${meta.totalOutcomes} outcome measures`
+      : '',
+    meta.totalSeriousEvents != null
+      ? `${meta.adverseEventLimit} of ${meta.totalSeriousEvents} serious adverse events`
+      : '',
+    meta.totalOtherEvents != null
+      ? `${meta.adverseEventLimit} of ${meta.totalOtherEvents} other adverse events`
+      : '',
+  ].filter(Boolean);
+  if (!parts.length) return;
+  lines.push(
+    `_Capped: returning ${parts.join('; ')}. Raise outcomeLimit / adverseEventLimit on clinicaltrials_get_study_results, or narrow sections and re-run, to reach the omitted rows._`,
+  );
 }
 
 function formatOutcomes(outcomes: RO[], lines: string[]) {
@@ -645,7 +725,7 @@ function formatMoreInfo(mi: RO, lines: string[]) {
 }
 
 export const getStudyResults = tool('clinicaltrials_get_study_results', {
-  description: `Fetch clinical trial results data from ClinicalTrials.gov for completed studies — outcome measures with statistics, adverse events, participant flow, baseline characteristics, and results metadata (limitations & caveats, certain-agreement disclosure restrictions, results point of contact). Only available for studies where hasResults is true. Use clinicaltrials_search_studies first to find studies with results.`,
+  description: `Fetch clinical trial results data from ClinicalTrials.gov for completed studies — outcome measures with statistics, adverse events, participant flow, baseline characteristics, and results metadata (limitations & caveats, certain-agreement disclosure restrictions, results point of contact). Only available for studies where hasResults is true. Use clinicaltrials_search_studies first to find studies with results. A results-rich record can exceed 500KB per study in full mode — bound it with summary=true, narrower sections, or the outcomeLimit / adverseEventLimit caps, whose trims are reported per study in filtersApplied.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -690,7 +770,25 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       .boolean()
       .default(false)
       .describe(
-        'Return condensed summaries instead of full data. Full mode renders every row and field on both output channels, so a large results set can exceed 500KB per study; summary mode reduces that to ~5KB. Summaries include outcome titles, types, timeframes, group counts, and top-level stats — omitting individual measurements, analyses, and per-group data.',
+        'Return condensed summaries instead of full data. Full mode renders every row and field on both output channels, so a large results set can exceed 500KB per study; summary mode reduces that to ~5KB. Summaries include outcome titles, types, timeframes, group counts, and top-level stats — omitting individual measurements, analyses, and per-group data. For a middle ground, keep full mode and cap the two lists that carry the bulk with outcomeLimit / adverseEventLimit.',
+      ),
+    outcomeLimit: z
+      .number()
+      .int()
+      .min(1)
+      .max(100)
+      .optional()
+      .describe(
+        'Optional cap on the number of outcome measures returned per study, taken in the order ClinicalTrials.gov publishes them. Omit for no cap (every measure). Applies to full mode only — summary mode is already condensed. Each surviving measure keeps its complete groups/classes/measurements/analyses tree. Upstream total preserved in filtersApplied.totalOutcomes only when the cap trims the list.',
+      ),
+    adverseEventLimit: z
+      .number()
+      .int()
+      .min(1)
+      .max(500)
+      .optional()
+      .describe(
+        'Optional cap on the number of serious and other adverse events returned per study, applied to each list separately in upstream order. Omit for no cap (every event). Applies to full mode only — summary mode already ranks the top 20 by participants affected. Event groups are never capped. Upstream totals preserved in filtersApplied.totalSeriousEvents / totalOtherEvents only when the cap trims a list.',
       ),
   }),
 
@@ -732,6 +830,46 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
               .describe(
                 'Results metadata from moreInfoModule. Summary mode: limitationsAndCaveats, certainAgreement flags (piSponsorEmployee, restrictiveAgreement, restrictionType), and pointOfContact. Full mode: adds certainAgreement.otherDetails.',
               ),
+            filtersApplied: z
+              .object({
+                totalOutcomes: z
+                  .number()
+                  .int()
+                  .optional()
+                  .describe('Upstream outcome measure count before outcomeLimit trimmed the list.'),
+                outcomeLimit: z
+                  .number()
+                  .int()
+                  .optional()
+                  .describe(
+                    'Echo of the outcomeLimit input — present only when the cap trimmed the list.',
+                  ),
+                totalSeriousEvents: z
+                  .number()
+                  .int()
+                  .optional()
+                  .describe(
+                    'Upstream serious adverse event count before adverseEventLimit trimmed the list.',
+                  ),
+                totalOtherEvents: z
+                  .number()
+                  .int()
+                  .optional()
+                  .describe(
+                    'Upstream other adverse event count before adverseEventLimit trimmed the list.',
+                  ),
+                adverseEventLimit: z
+                  .number()
+                  .int()
+                  .optional()
+                  .describe(
+                    'Echo of the adverseEventLimit input — present only when the cap trimmed a list.',
+                  ),
+              })
+              .optional()
+              .describe(
+                'What a cap trimmed on this study — present only when a cap actually reduced a list. Absent means the payload is the complete upstream set for the requested sections.',
+              ),
           })
           .describe('Extracted results for one study.'),
       )
@@ -751,6 +889,12 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       )
       .optional()
       .describe('Studies that could not be fetched.'),
+    truncated: z
+      .boolean()
+      .optional()
+      .describe(
+        'True when a cap trimmed a list on at least one study; absent when nothing was trimmed, matching filtersApplied one level down. Which study and which list is named in that study’s filtersApplied.',
+      ),
   }),
 
   async handler(input, ctx) {
@@ -780,6 +924,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     interface StudyResult {
       adverseEvents?: Record<string, unknown>;
       baseline?: Record<string, unknown>;
+      filtersApplied?: ResultsFilterMeta;
       hasResults: boolean;
       moreInfo?: Record<string, unknown>;
       nctId: string;
@@ -855,37 +1000,53 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
 
       const rs = study.resultsSection ?? {};
       const entry: StudyResult = { nctId, title, hasResults: true };
+      // Caps are applied here, once, ahead of both the returned value and
+      // format() — a format()-side cap would leave structuredContent carrying
+      // rows the text channel never shows (#46).
+      const meta: ResultsFilterMeta = {};
       for (const section of sections) {
         const moduleKey = SECTION_MAP[section];
         const data = rs[moduleKey];
         if (data) {
           if (section === 'outcomes') {
             const measures = (data.outcomeMeasures as Record<string, unknown>[] | undefined) ?? [];
-            entry.outcomes = input.summary ? measures.map(summarizeOutcome) : measures;
+            entry.outcomes = input.summary
+              ? measures.map(summarizeOutcome)
+              : capOutcomes(measures, input.outcomeLimit, meta);
           } else if (input.summary) {
             if (section === 'adverseEvents') entry.adverseEvents = summarizeAdverseEvents(data);
             else if (section === 'participantFlow')
               entry.participantFlow = summarizeParticipantFlow(data);
             else if (section === 'baseline') entry.baseline = summarizeBaseline(data);
             else if (section === 'moreInfo') entry.moreInfo = summarizeMoreInfo(data);
+          } else if (section === 'adverseEvents') {
+            entry.adverseEvents = capAdverseEvents(data, input.adverseEventLimit, meta);
           } else {
             entry[section] = data;
           }
         }
       }
+      if (Object.keys(meta).length > 0) entry.filtersApplied = meta;
       results.push(entry);
     }
+
+    // Batch-level roll-up of the per-study filtersApplied, which is only ever
+    // set when a cap actually trimmed. A caller reading one boolean learns
+    // whether any list is short before walking every study to find out.
+    const truncated = results.some((r) => r.filtersApplied !== undefined);
 
     ctx.log.info('Results extracted', {
       resultCount: results.length,
       withoutResults: studiesWithoutResults.length,
       errors: fetchErrors.length,
+      truncated,
     });
 
     return {
       results,
       ...(studiesWithoutResults.length > 0 ? { studiesWithoutResults } : {}),
       ...(fetchErrors.length > 0 ? { fetchErrors } : {}),
+      ...(truncated ? { truncated } : {}),
     };
   },
 
@@ -899,6 +1060,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
         continue;
       }
 
+      if (r.filtersApplied) formatCaps(r.filtersApplied, lines);
       if (r.outcomes?.length) formatOutcomes(r.outcomes, lines);
       if (r.adverseEvents) formatAdverseEvents(r.adverseEvents, lines);
       if (r.participantFlow) formatParticipantFlow(r.participantFlow, lines);
@@ -913,6 +1075,10 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       lines.push(
         `Fetch errors: ${result.fetchErrors.map((e) => `${e.nctId}: ${e.error}`).join(', ')}`,
       );
+    // The per-study cap lines above say which list was trimmed; this says a trim
+    // happened at all, so a reader who skimmed the studies still sees it.
+    if (result.truncated)
+      lines.push('Truncated: a cap trimmed at least one list. See filtersApplied per study.');
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });

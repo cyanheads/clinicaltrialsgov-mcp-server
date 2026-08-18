@@ -810,6 +810,230 @@ describe('getStudyResults', () => {
     });
   });
 
+  describe('payload caps (#97)', () => {
+    /**
+     * An outcome measure with a populated classes tree — a cap must trim whole
+     * measures, never flatten the ones that survive.
+     */
+    const outcomeMeasure = (n: number) => ({
+      type: n === 1 ? 'PRIMARY' : 'SECONDARY',
+      title: `Outcome ${n}`,
+      paramType: 'MEAN',
+      unitOfMeasure: 'units',
+      groups: [{ id: 'OG000', title: `Arm ${n}` }],
+      classes: [
+        {
+          title: `Class ${n}A`,
+          categories: [
+            { title: `Category ${n}A1`, measurements: [{ groupId: 'OG000', value: `${n}.1` }] },
+          ],
+        },
+        {
+          title: `Class ${n}B`,
+          categories: [
+            { title: `Category ${n}B1`, measurements: [{ groupId: 'OG000', value: `${n}.2` }] },
+          ],
+        },
+      ],
+      analyses: [{ statisticalMethod: `Method ${n}`, pValue: `0.0${n}` }],
+    });
+
+    const adverseEvent = (kind: string, n: number) => ({
+      term: `${kind} term ${n}`,
+      organSystem: `${kind} system ${n}`,
+      stats: [{ groupId: 'EG000', numAffected: n, numAtRisk: 100 }],
+    });
+
+    const resultsStudy = (outcomes: number, serious: number, other: number) =>
+      makeStudy('NCT12345678', true, {
+        outcomeMeasuresModule: {
+          outcomeMeasures: Array.from({ length: outcomes }, (_, i) => outcomeMeasure(i + 1)),
+        },
+        adverseEventsModule: {
+          timeFrame: '12 months',
+          eventGroups: [{ id: 'EG000', title: 'All participants' }],
+          seriousEvents: Array.from({ length: serious }, (_, i) => adverseEvent('Serious', i + 1)),
+          otherEvents: Array.from({ length: other }, (_, i) => adverseEvent('Other', i + 1)),
+        },
+      });
+
+    const run = async (
+      extra: Record<string, unknown>,
+      study: RawStudyShape = resultsStudy(4, 3, 5),
+    ) => {
+      mockService.getStudiesBatch.mockResolvedValue([study]);
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+      const input = getStudyResults.input!.parse({ nctIds: 'NCT12345678', ...extra });
+      const result = await getStudyResults.handler(input, ctx);
+      return {
+        result,
+        entry: result.results[0]!,
+        text: (getStudyResults.format!(result)[0] as { text: string }).text,
+      };
+    };
+
+    it('returns every outcome measure and adverse event in full mode when no cap is passed', async () => {
+      const { entry } = await run({});
+      expect(entry.outcomes).toHaveLength(4);
+      expect(entry.adverseEvents!.seriousEvents as unknown[]).toHaveLength(3);
+      expect(entry.adverseEvents!.otherEvents as unknown[]).toHaveLength(5);
+      expect(entry.filtersApplied).toBeUndefined();
+    });
+
+    it('caps outcome measures in full mode and preserves the upstream total', async () => {
+      const { entry } = await run({ outcomeLimit: 2 });
+      expect(entry.outcomes).toHaveLength(2);
+      expect(entry.outcomes!.map((o) => o.title)).toEqual(['Outcome 1', 'Outcome 2']);
+      expect(entry.filtersApplied).toEqual({ totalOutcomes: 4, outcomeLimit: 2 });
+    });
+
+    it('keeps the full nested tree of every surviving outcome measure', async () => {
+      const { entry } = await run({ outcomeLimit: 1 });
+      const survivor = entry.outcomes![0] as Record<string, unknown>;
+      const classes = survivor.classes as Array<{ categories: Array<{ measurements: unknown[] }> }>;
+      expect(classes).toHaveLength(2);
+      expect(classes[1]!.categories[0]!.measurements).toHaveLength(1);
+      expect(survivor.analyses).toHaveLength(1);
+    });
+
+    it('caps serious and other adverse events separately and preserves both totals', async () => {
+      const { entry } = await run({ adverseEventLimit: 2 });
+      const ae = entry.adverseEvents!;
+      expect(ae.seriousEvents as unknown[]).toHaveLength(2);
+      expect(ae.otherEvents as unknown[]).toHaveLength(2);
+      expect(ae.eventGroups as unknown[]).toHaveLength(1);
+      expect(entry.filtersApplied).toEqual({
+        totalSeriousEvents: 3,
+        totalOtherEvents: 5,
+        adverseEventLimit: 2,
+      });
+    });
+
+    it('records only the adverse-event list the cap actually trimmed', async () => {
+      const { entry } = await run({ adverseEventLimit: 3 });
+      expect(entry.adverseEvents!.seriousEvents as unknown[]).toHaveLength(3);
+      expect(entry.adverseEvents!.otherEvents as unknown[]).toHaveLength(3);
+      expect(entry.filtersApplied).toEqual({ totalOtherEvents: 5, adverseEventLimit: 3 });
+    });
+
+    it('reports nothing when a cap is at or above the upstream count (#80)', async () => {
+      const { entry } = await run({ outcomeLimit: 4, adverseEventLimit: 5 });
+      expect(entry.outcomes).toHaveLength(4);
+      expect(entry.filtersApplied).toBeUndefined();
+    });
+
+    it('applies both caps together', async () => {
+      const { entry } = await run({ outcomeLimit: 1, adverseEventLimit: 1 });
+      expect(entry.outcomes).toHaveLength(1);
+      expect(entry.adverseEvents!.seriousEvents as unknown[]).toHaveLength(1);
+      expect(entry.filtersApplied).toEqual({
+        totalOutcomes: 4,
+        outcomeLimit: 1,
+        totalSeriousEvents: 3,
+        totalOtherEvents: 5,
+        adverseEventLimit: 1,
+      });
+    });
+
+    it('leaves summary mode uncapped — it is already condensed', async () => {
+      const { entry } = await run({ outcomeLimit: 1, adverseEventLimit: 1, summary: true });
+      expect(entry.outcomes).toHaveLength(4);
+      expect(entry.adverseEvents!.seriousEventCount).toBe(3);
+      expect(entry.adverseEvents!.otherEventCount).toBe(5);
+      expect(entry.filtersApplied).toBeUndefined();
+    });
+
+    it('reports nothing for a study whose results sections are empty', async () => {
+      const study = makeStudy('NCT12345678', true, {
+        outcomeMeasuresModule: { outcomeMeasures: [] },
+        adverseEventsModule: { timeFrame: '12 months' },
+      });
+      const { entry } = await run({ outcomeLimit: 1, adverseEventLimit: 1 }, study);
+      expect(entry.outcomes).toEqual([]);
+      expect(entry.filtersApplied).toBeUndefined();
+    });
+
+    it('caps each study in a batch independently', async () => {
+      mockService.getStudiesBatch.mockResolvedValue([
+        resultsStudy(4, 3, 5),
+        makeStudy('NCT87654321', true, {
+          outcomeMeasuresModule: { outcomeMeasures: [outcomeMeasure(9)] },
+        }),
+      ]);
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+      const input = getStudyResults.input!.parse({
+        nctIds: ['NCT12345678', 'NCT87654321'],
+        outcomeLimit: 2,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      expect(result.results[0]!.filtersApplied).toEqual({ totalOutcomes: 4, outcomeLimit: 2 });
+      expect(result.results[1]!.filtersApplied).toBeUndefined();
+      expect(result.results[1]!.outcomes).toHaveLength(1);
+    });
+
+    it('rolls the per-study trims up into a batch-level truncated flag on both channels', async () => {
+      const { result, text } = await run({ outcomeLimit: 2 });
+      expect(result.truncated).toBe(true);
+      expect(text).toContain('Truncated: a cap trimmed at least one list.');
+    });
+
+    it('omits truncated entirely when no cap trimmed anything', async () => {
+      const { result, text } = await run({});
+      expect(result.truncated).toBeUndefined();
+      expect(text).not.toContain('Truncated:');
+    });
+
+    it('sets truncated when only one study in a batch was trimmed', async () => {
+      mockService.getStudiesBatch.mockResolvedValue([
+        resultsStudy(4, 3, 5),
+        makeStudy('NCT87654321', true, {
+          outcomeMeasuresModule: { outcomeMeasures: [outcomeMeasure(9)] },
+        }),
+      ]);
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+      const input = getStudyResults.input!.parse({
+        nctIds: ['NCT12345678', 'NCT87654321'],
+        outcomeLimit: 2,
+      });
+      const result = await getStudyResults.handler(input, ctx);
+      expect(result.results[1]!.filtersApplied).toBeUndefined();
+      expect(result.truncated).toBe(true);
+    });
+
+    it('rejects a cap below 1', () => {
+      expect(() =>
+        getStudyResults.input!.parse({ nctIds: 'NCT12345678', outcomeLimit: 0 }),
+      ).toThrow();
+      expect(() =>
+        getStudyResults.input!.parse({ nctIds: 'NCT12345678', adverseEventLimit: 0 }),
+      ).toThrow();
+    });
+
+    it('discloses the trim on content[] with a route back to the omitted data', async () => {
+      const { text } = await run({ outcomeLimit: 2, adverseEventLimit: 2 });
+      expect(text).toContain('2 of 4 outcome measures');
+      expect(text).toContain('2 of 3 serious');
+      expect(text).toContain('2 of 5 other adverse events');
+      expect(text).toContain('clinicaltrials_get_study_results');
+    });
+
+    it('renders the surviving measures, not the upstream count, in the outcomes header', async () => {
+      const { text } = await run({ outcomeLimit: 2 });
+      expect(text).toContain('### Outcomes (2 measures)');
+      expect(text).not.toContain('Outcome 3');
+    });
+
+    it('says nothing about caps when nothing was trimmed', async () => {
+      const { text } = await run({});
+      expect(text).not.toContain('outcome measures');
+    });
+
+    it('keeps channel parity for a capped payload', async () => {
+      const { result, text } = await run({ outcomeLimit: 2, adverseEventLimit: 2 });
+      expect(missingLeaves(result, text)).toEqual([]);
+    });
+  });
+
   describe('error contract', () => {
     it('declares only reasons a handler path can throw (#101)', () => {
       // study_not_found is unreachable here: every missing study lands in

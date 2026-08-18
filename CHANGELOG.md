@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.8.7](changelog/2.8.x/2.8.7.md) — 2026-08-18
+
+find_eligible age bounds and the enrollment sentinel filter no longer exclude studies with a missing field; sort rejections reclassified and normalized; query.* parameter descriptions completed; empty-list rejection extended to nctIds and get_field_values
+
 ## [2.8.6](changelog/2.8.x/2.8.6.md) — 2026-08-18
 
 search_studies and get_study_results fixes: array cross-contamination, stale pagination tokens, rate-limit retry storm, and an unreachable error contract; blank-value rejection added across five tools and the analyze_trial_landscape prompt; mcp-ts-core 0.11.5 maintenance

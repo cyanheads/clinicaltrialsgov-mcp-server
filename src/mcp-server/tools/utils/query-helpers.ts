@@ -63,9 +63,13 @@ export function firstBlankListParam(
   return undefined;
 }
 
-/** Actionable message for a parameter supplied with a blank value. */
+/**
+ * Actionable message for a parameter supplied with a blank value. Leads with
+ * the fix that works on a required parameter too — omitting one of those fails
+ * the schema and returns a bare -32602 with no reason and no recovery hint.
+ */
 export function blankValueMessage(param: string): string {
-  return `Parameter '${param}' was supplied with a blank value — an empty or whitespace-only string, an empty list, or a list carrying a blank entry. Omit it to leave it unset, or supply a value containing non-whitespace.`;
+  return `Parameter '${param}' was supplied with a blank value — an empty or whitespace-only string, an empty list, or a list carrying a blank entry. Supply a value containing non-whitespace, or for a list at least one non-blank entry; omit the parameter entirely only if it is optional and you meant to leave it unset.`;
 }
 
 /** Build AREA[] phase filter and combine with user's advancedFilter. */

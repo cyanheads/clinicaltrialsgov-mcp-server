@@ -97,10 +97,14 @@ describe('nctIdSchema', () => {
 
 describe('RECOVERY_HINTS', () => {
   const expectedKeys = [
+    'blank_value',
     'study_not_found',
     'ids_not_found',
     'field_invalid',
+    'enum_invalid',
     'query_parse_error',
+    'geo_invalid',
+    'sort_invalid',
     'path_not_found',
     'rate_limited',
   ] as const;
@@ -117,6 +121,25 @@ describe('RECOVERY_HINTS', () => {
       expect(typeof hint).toBe('string');
       expect(hint.length).toBeGreaterThan(0);
     }
+  });
+
+  it('blank_value hint leads with the fix that also works on a required parameter (#113)', () => {
+    // `get_field_values.fields`, `get_study_results.nctIds`, `find_eligible.conditions`,
+    // and `find_eligible.location.country` are all required and all raise
+    // blank_value. Omitting one fails the schema and returns the bare -32602 the
+    // typed contract exists to replace, so "omit it" cannot lead.
+    const hint = RECOVERY_HINTS.blank_value;
+    expect(hint).toMatch(/^Supply a value containing non-whitespace/);
+    expect(hint).toContain('non-blank entry');
+    expect(hint.indexOf('non-whitespace')).toBeLessThan(hint.indexOf('omit'));
+  });
+
+  it('blank_value hint keeps the omission contrast, qualified to optional parameters (#113)', () => {
+    // Omission and a blank value still mean different things — an optional
+    // parameter left unset is not the same request as one sent blank.
+    const hint = RECOVERY_HINTS.blank_value;
+    expect(hint).toContain('optional');
+    expect(hint).toMatch(/omission and a blank value mean different things/i);
   });
 
   it('study_not_found hint references NCT ID or clinicaltrials', () => {

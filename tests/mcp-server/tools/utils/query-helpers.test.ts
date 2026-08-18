@@ -4,7 +4,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { buildAdvancedFilter, toArray } from '@/mcp-server/tools/utils/query-helpers.js';
+import {
+  blankValueMessage,
+  buildAdvancedFilter,
+  toArray,
+} from '@/mcp-server/tools/utils/query-helpers.js';
 
 describe('toArray', () => {
   it('returns undefined for undefined input', () => {
@@ -86,5 +90,28 @@ describe('buildAdvancedFilter', () => {
     expect(buildAdvancedFilter(['PHASE1', 'PHASE2'], 'AREA[StudyType]INTERVENTIONAL')).toBe(
       '(AREA[Phase]PHASE1 OR AREA[Phase]PHASE2) AND AREA[StudyType]INTERVENTIONAL',
     );
+  });
+});
+
+describe('blankValueMessage', () => {
+  it('names the parameter and every blank shape it covers', () => {
+    const msg = blankValueMessage('nctIds');
+    expect(msg).toContain("Parameter 'nctIds'");
+    expect(msg).toContain('empty or whitespace-only string');
+    expect(msg).toContain('empty list');
+    expect(msg).toContain('list carrying a blank entry');
+  });
+
+  it('leads the recovery clause with supplying a value, not omitting it (#113)', () => {
+    // nctIds is required — a caller who omits it gets a bare -32602.
+    const msg = blankValueMessage('nctIds');
+    expect(msg.indexOf('Supply a value containing non-whitespace')).toBeGreaterThan(-1);
+    expect(msg.indexOf('Supply a value containing non-whitespace')).toBeLessThan(
+      msg.indexOf('omit'),
+    );
+  });
+
+  it('spells out the list-entry recovery, not just the scalar one (#113)', () => {
+    expect(blankValueMessage('fields')).toContain('non-blank entry');
   });
 });

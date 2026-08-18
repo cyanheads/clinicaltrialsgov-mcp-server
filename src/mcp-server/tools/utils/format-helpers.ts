@@ -46,27 +46,37 @@ function withEntry(path: PathPart[], index: number, total: number): PathPart[] {
   ];
 }
 
+/** The default label window: the last two meaningful segments. */
+const LABEL_WINDOW = 2;
+
 /**
- * Build a leaf's rendered label and its dedup key.
- *
- * The label is the last two meaningful segments, humanized, carrying the entry
+ * Render the last `width` meaningful segments as a label, carrying the entry
  * index of any repeated array among them (`Secondary Id Infos[1] > Id`) so a
  * `content[]`-only reader can attribute each line to its originating entry.
  * Single-entry arrays keep the plain label — the common case stays quiet.
+ */
+function labelAt(meaningful: PathPart[], width: number): string {
+  return meaningful
+    .slice(-width)
+    .map((part) => `${humanizeSegment(part.key)}${part.repeated ? part.entry : ''}`)
+    .join(' > ');
+}
+
+/**
+ * Build a leaf's default-width label and its dedup key.
  *
  * The key adds the fully-qualified path of the entry the leaf sits in, so
  * entries of one array never collapse into each other and two arrays that
  * humanize alike (`conditionBrowseModule.meshes` / `interventionBrowseModule.meshes`)
  * never cross-merge on a shared index. Leaves outside any array key on the label
  * alone, consolidating same-labelled paths exactly as before.
+ *
+ * The key is always built from the default-width label, never from a widened
+ * one, so display widening (see `disambiguateLabels`) can never change which
+ * leaves consolidate — and therefore never disturbs the truncation footer.
  */
-function describeLeaf(path: PathPart[]): { label: string; key: string } {
-  const meaningful = path.filter((part) => !STRUCTURAL.has(part.key));
-  const label = meaningful
-    .slice(-2)
-    .map((part) => `${humanizeSegment(part.key)}${part.repeated ? part.entry : ''}`)
-    .join(' > ');
-
+function describeLeaf(meaningful: PathPart[]): { label: string; key: string } {
+  const label = labelAt(meaningful, LABEL_WINDOW);
   const innermostEntry = meaningful.findLastIndex((part) => part.entry !== '');
   if (innermostEntry < 0) return { label, key: label };
   const entryPath = meaningful
@@ -74,6 +84,73 @@ function describeLeaf(path: PathPart[]): { label: string; key: string } {
     .map((part) => `${part.key}${part.entry}`)
     .join('.');
   return { label, key: `${entryPath}|${label}` };
+}
+
+/** A leaf paired with its meaningful path, dedup key, shape, and the label to render. */
+interface DescribedLeaf {
+  key: string;
+  label: string;
+  meaningful: PathPart[];
+  /** The leaf's path with array indices stripped — every entry of one array shares it. */
+  shape: string;
+  value: string;
+}
+
+/**
+ * Widen the label window of any leaves whose labels collide, until each rendered
+ * label identifies the record its value came from.
+ *
+ * Two distinct leaves can share a default-width label whenever the distinguishing
+ * segment sits outside the window — `conditionBrowseModule.meshes[i].term` and
+ * `interventionBrowseModule.meshes[i].term` both render `Meshes[i] > Term`. Same
+ * label under two different dedup keys is exactly that ambiguity. Leaves that
+ * share a key are consolidated by the dedup rather than rendered side by side,
+ * so they are never ambiguous and never widen — which keeps same-labelled
+ * non-array paths collapsing as before.
+ *
+ * Width is tracked per shape, not per leaf, so every entry of one array widens
+ * together: an array whose last entry has no counterpart in the colliding array
+ * would otherwise keep a narrow label while its siblings widened.
+ */
+function disambiguateLabels(items: DescribedLeaf[]): void {
+  const widths = new Map<string, number>();
+  const depths = new Map<string, number>();
+  let maxDepth = 0;
+  for (const item of items) {
+    widths.set(item.shape, LABEL_WINDOW);
+    depths.set(item.shape, item.meaningful.length);
+    maxDepth = Math.max(maxDepth, item.meaningful.length);
+  }
+
+  // Each pass widens every shape involved in a collision by one segment. Bounded
+  // by the deepest path: past that, widening cannot change any label.
+  for (let pass = LABEL_WINDOW; pass < maxDepth; pass++) {
+    const byLabel = new Map<string, DescribedLeaf[]>();
+    for (const item of items) {
+      const group = byLabel.get(item.label);
+      if (group) group.push(item);
+      else byLabel.set(item.label, [item]);
+    }
+
+    const ambiguous = new Set<string>();
+    for (const group of byLabel.values()) {
+      if (new Set(group.map((item) => item.key)).size < 2) continue;
+      for (const item of group) ambiguous.add(item.shape);
+    }
+
+    let widened = false;
+    for (const shape of ambiguous) {
+      const width = widths.get(shape) ?? LABEL_WINDOW;
+      if (width >= (depths.get(shape) ?? 0)) continue;
+      widths.set(shape, width + 1);
+      widened = true;
+    }
+    if (!widened) return;
+
+    for (const item of items) {
+      item.label = labelAt(item.meaningful, widths.get(item.shape) ?? LABEL_WINDOW);
+    }
+  }
 }
 
 /** Recursively collect primitive leaf values from a nested object. */
@@ -130,6 +207,17 @@ export function formatRemainingStudyFields(
   const remaining = leaves.filter((leaf) => !isRendered(leaf.path, renderedPrefixes));
   if (remaining.length === 0) return [];
 
+  const described = remaining.map((leaf) => {
+    const meaningful = leaf.path.filter((part) => !STRUCTURAL.has(part.key));
+    return {
+      ...describeLeaf(meaningful),
+      meaningful,
+      shape: meaningful.map((part) => part.key).join('.'),
+      value: leaf.value,
+    };
+  });
+  disambiguateLabels(described);
+
   // Count only cap-dropped fields as "uncovered" — dedup-dropped leaves aren't
   // truncation, just consolidation. Pre-fix logic counted both, lying about
   // truncation whenever multiple array entries shared a label. A cap-dropped key
@@ -138,15 +226,14 @@ export function formatRemainingStudyFields(
   const seen = new Set<string>();
   const lines: string[] = [];
   let dropped = 0;
-  for (const leaf of remaining) {
-    const { label, key } = describeLeaf(leaf.path);
+  for (const { label, key, value } of described) {
     if (!label || seen.has(key)) continue;
     seen.add(key);
     if (lines.length >= maxLines) {
       dropped++;
       continue;
     }
-    lines.push(`  ${label}: ${truncate(leaf.value, maxValueLen)}`);
+    lines.push(`  ${label}: ${truncate(value, maxValueLen)}`);
   }
 
   if (dropped > 0) {

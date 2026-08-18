@@ -1399,6 +1399,47 @@ describe('searchStudies', () => {
       expect(text).not.toMatch(/Secondary Id Infos > /);
     });
 
+    it('explicit fields: the two browse modules render under distinct labels in content[] (#104)', async () => {
+      // NCT02271776 carries meshes in both browse modules. Both arrays are named
+      // `meshes` and both leaves are `term`, so the two-segment label window
+      // rendered every line as `Meshes[i] > Term` — values stayed distinct and
+      // separated, but a content[]-only reader could not tell which module a
+      // given line came from.
+      const trimmed = {
+        protocolSection: { identificationModule: { nctId: 'NCT02271776' } },
+        derivedSection: {
+          conditionBrowseModule: {
+            meshes: [
+              { term: 'Obesity' },
+              { term: 'Diabetes Mellitus, Type 2' },
+              { term: 'Insulin Resistance' },
+            ],
+          },
+          interventionBrowseModule: {
+            meshes: [{ term: "4'-galactooligosaccharide" }, { term: 'maltodextrin' }],
+          },
+        },
+      };
+      mockService.searchStudies.mockResolvedValue({ studies: [trimmed], totalCount: 1 });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({
+          nctIds: ['NCT02271776'],
+          fields: ['NCTId', 'ConditionMeshTerm', 'InterventionMeshTerm'],
+          pageSize: 1,
+        }),
+        ctx,
+      );
+
+      const text = renderText(result);
+      expect(text).toContain('Condition Browse > Meshes[0] > Term: Obesity');
+      expect(text).toContain('Condition Browse > Meshes[2] > Term: Insulin Resistance');
+      expect(text).toContain("Intervention Browse > Meshes[0] > Term: 4'-galactooligosaccharide");
+      expect(text).toContain('Intervention Browse > Meshes[1] > Term: maltodextrin');
+      // No line renders under the ambiguous label the two modules used to share.
+      expect(text).not.toMatch(/^\s*Meshes\[\d+] > Term:/m);
+    });
+
     it('explicit fields: a long string leaf (BriefSummary) renders unclipped in content[], matching structuredContent (#89)', async () => {
       // A 543-char summary — the reported NCT00225888 length. structuredContent
       // carries it whole; content[] must too, not a 200-char slice with an ellipsis.

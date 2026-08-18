@@ -182,6 +182,93 @@ describe('formatRemainingStudyFields', () => {
     }
   });
 
+  it('widens the label window when two sibling arrays humanize alike (regression for #104)', () => {
+    // NCT02271776's two browse modules. Both arrays are named `meshes` and both
+    // leaves are `term`, so a fixed two-segment window renders `Meshes[0] > Term`
+    // for each — the distinguishing segment (`conditionBrowseModule` /
+    // `interventionBrowseModule`) sits one step further back than the window
+    // reaches. Values stay distinct and separated; only the labels collide.
+    const study = {
+      derivedSection: {
+        conditionBrowseModule: {
+          meshes: [
+            { term: 'Obesity' },
+            { term: 'Diabetes Mellitus, Type 2' },
+            { term: 'Insulin Resistance' },
+          ],
+        },
+        interventionBrowseModule: {
+          meshes: [{ term: "4'-galactooligosaccharide" }, { term: 'maltodextrin' }],
+        },
+      },
+    };
+    const lines = formatRemainingStudyFields(study, new Set(), {
+      maxLines: Number.POSITIVE_INFINITY,
+    });
+    expect(lines).toEqual([
+      '  Condition Browse > Meshes[0] > Term: Obesity',
+      '  Condition Browse > Meshes[1] > Term: Diabetes Mellitus, Type 2',
+      '  Condition Browse > Meshes[2] > Term: Insulin Resistance',
+      "  Intervention Browse > Meshes[0] > Term: 4'-galactooligosaccharide",
+      '  Intervention Browse > Meshes[1] > Term: maltodextrin',
+    ]);
+  });
+
+  it('widens only the colliding labels, leaving unambiguous ones at the two-segment window (#104)', () => {
+    // The identification leaves are unambiguous and must keep their established
+    // labels; only the two mesh arrays widen.
+    const study = {
+      protocolSection: {
+        identificationModule: { nctId: 'NCT02271776', briefTitle: 'A trial' },
+      },
+      derivedSection: {
+        conditionBrowseModule: { meshes: [{ term: 'Obesity' }] },
+        interventionBrowseModule: { meshes: [{ term: 'maltodextrin' }] },
+      },
+    };
+    const lines = formatRemainingStudyFields(study, new Set(), {
+      maxLines: Number.POSITIVE_INFINITY,
+    });
+    expect(lines).toEqual([
+      '  Identification > Nct Id: NCT02271776',
+      '  Identification > Brief Title: A trial',
+      '  Condition Browse > Meshes > Term: Obesity',
+      '  Intervention Browse > Meshes > Term: maltodextrin',
+    ]);
+  });
+
+  it('keeps widening until the colliding labels are distinct (#104)', () => {
+    // The distinguishing segment sits three levels back, so one widening step
+    // still collides and a second is required.
+    const study = {
+      protocolSection: {
+        alphaModule: { browse: { meshes: [{ term: 'Alpha' }] } },
+        betaModule: { browse: { meshes: [{ term: 'Beta' }] } },
+      },
+    };
+    const lines = formatRemainingStudyFields(study, new Set(), {
+      maxLines: Number.POSITIVE_INFINITY,
+    });
+    expect(lines).toEqual([
+      '  Alpha > Browse > Meshes > Term: Alpha',
+      '  Beta > Browse > Meshes > Term: Beta',
+    ]);
+  });
+
+  it('counts only cap-dropped leaves in the footer when labels widen (regression for #38, #104)', () => {
+    // Five leaves across two colliding arrays, capped at 2. Widening changes how
+    // lines read, never what the footer counts: 3 cap-dropped, 0 consolidated.
+    const study = {
+      derivedSection: {
+        conditionBrowseModule: { meshes: [{ term: 'A' }, { term: 'B' }, { term: 'C' }] },
+        interventionBrowseModule: { meshes: [{ term: 'D' }, { term: 'E' }] },
+      },
+    };
+    const lines = formatRemainingStudyFields(study, new Set(), { maxLines: 2 });
+    expect(lines).toHaveLength(3);
+    expect(lines.at(-1)).toBe('  … and 3 more fields');
+  });
+
   it('distinguishes entries of an array nested inside another array entry (#86)', () => {
     const study = {
       resultsSection: {

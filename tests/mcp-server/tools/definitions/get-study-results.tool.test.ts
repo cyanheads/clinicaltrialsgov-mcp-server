@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/get-study-results.tool
  */
 
+import { JsonRpcErrorCode, notFound, rateLimited } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -119,7 +120,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({ nctIds: 'NCT12345678' });
       const result = await getStudyResults.handler(input, ctx);
 
@@ -134,7 +135,7 @@ describe('getStudyResults', () => {
     it('tracks studies without results', async () => {
       mockService.getStudiesBatch.mockResolvedValue([makeStudy('NCT12345678', false)]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({ nctIds: 'NCT12345678' });
       const result = await getStudyResults.handler(input, ctx);
 
@@ -151,7 +152,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT12345678',
         sections: 'outcomes',
@@ -173,7 +174,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT12345678',
         sections: ['outcomes', 'baseline'],
@@ -205,7 +206,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT12345678',
         sections: 'outcomes',
@@ -234,7 +235,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT12345678',
         sections: 'adverseEvents',
@@ -283,7 +284,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT02130466',
         sections: 'adverseEvents',
@@ -322,7 +323,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT02130466',
         sections: 'adverseEvents',
@@ -343,7 +344,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT12345678',
         sections: 'participantFlow',
@@ -368,7 +369,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT12345678',
         sections: 'baseline',
@@ -401,7 +402,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT02130466',
         sections: 'moreInfo',
@@ -429,7 +430,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT02130466',
         sections: 'moreInfo',
@@ -447,7 +448,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({ nctIds: 'NCT02130466' });
       const result = await getStudyResults.handler(input, ctx);
       expect(result.results[0]!.moreInfo).toBeDefined();
@@ -482,7 +483,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT04074161',
         sections: 'outcomes',
@@ -521,7 +522,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT05891496',
         sections: 'outcomes',
@@ -563,7 +564,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT02819518',
         sections: 'outcomes',
@@ -613,7 +614,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT02819518',
         sections: 'outcomes',
@@ -658,7 +659,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT04074161',
         sections: 'outcomes',
@@ -683,7 +684,7 @@ describe('getStudyResults', () => {
       });
       mockService.getStudiesBatch.mockResolvedValue([study]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT12345678',
         sections: 'adverseEvents',
@@ -705,7 +706,7 @@ describe('getStudyResults', () => {
         makeStudy('NCT87654321', false),
       ]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: ['NCT12345678', 'NCT87654321'],
       });
@@ -720,7 +721,7 @@ describe('getStudyResults', () => {
     it('records fetch errors for missing studies in batch', async () => {
       mockService.getStudiesBatch.mockResolvedValue([makeStudy('NCT12345678', false)]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: ['NCT12345678', 'NCT87654321'],
       });
@@ -733,7 +734,7 @@ describe('getStudyResults', () => {
     it('returns fetchErrors gracefully when all studies are missing from the batch response', async () => {
       mockService.getStudiesBatch.mockResolvedValue([]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({ nctIds: 'NCT12345678' });
       const result = await getStudyResults.handler(input, ctx);
 
@@ -754,7 +755,7 @@ describe('getStudyResults', () => {
         });
       });
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: ['NCT03722472', 'NCT05956821', 'NCT00000000'],
       });
@@ -772,7 +773,7 @@ describe('getStudyResults', () => {
       mockService.getStudiesBatch.mockRejectedValue(new Error('Batch rejected'));
       mockService.getStudy.mockRejectedValue(new Error('Study not found'));
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: ['NCT99999999', 'NCT88888888'],
       });
@@ -788,7 +789,7 @@ describe('getStudyResults', () => {
     it('handles study with empty resultsSection', async () => {
       mockService.getStudiesBatch.mockResolvedValue([makeStudy('NCT12345678', true, {})]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({ nctIds: 'NCT12345678' });
       const result = await getStudyResults.handler(input, ctx);
 
@@ -800,12 +801,173 @@ describe('getStudyResults', () => {
     it('handles study with missing resultsSection', async () => {
       mockService.getStudiesBatch.mockResolvedValue([makeStudy('NCT12345678', true)]);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({ nctIds: 'NCT12345678' });
       const result = await getStudyResults.handler(input, ctx);
 
       expect(result.results[0]!.hasResults).toBe(true);
       expect(result.results[0]!.outcomes).toBeUndefined();
+    });
+  });
+
+  describe('error contract', () => {
+    it('declares only reasons a handler path can throw (#101)', () => {
+      // study_not_found is unreachable here: every missing study lands in
+      // fetchErrors on a successful response (per #55). Pinned so a future
+      // mechanical contract rollout cannot silently re-add a dead reason.
+      expect(getStudyResults.errors?.map((e) => e.reason).sort()).toEqual([
+        'blank_value',
+        'rate_limited',
+      ]);
+    });
+
+    it('keeps returning a missing study as a fetchErrors entry, not a thrown contract (#101)', async () => {
+      mockService.getStudiesBatch.mockResolvedValue([]);
+
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+      const result = await getStudyResults.handler(
+        getStudyResults.input!.parse({ nctIds: 'NCT00000000' }),
+        ctx,
+      );
+
+      expect(result.results).toEqual([]);
+      expect(result.fetchErrors).toEqual([{ nctId: 'NCT00000000', error: 'Study not found' }]);
+    });
+  });
+
+  describe('rate-limit handling (#103)', () => {
+    const batchRateLimit = () =>
+      rateLimited('Rate limited by ClinicalTrials.gov after 3 retries', {
+        path: '/studies',
+        reason: 'rate_limited',
+      });
+
+    it('throws the declared rate_limited contract instead of falling back per ID', async () => {
+      mockService.getStudiesBatch.mockRejectedValue(batchRateLimit());
+
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+      const input = getStudyResults.input!.parse({
+        nctIds: ['NCT03722472', 'NCT05956821', 'NCT02130466'],
+      });
+
+      await expect(getStudyResults.handler(input, ctx)).rejects.toMatchObject({
+        code: JsonRpcErrorCode.RateLimited,
+        data: { reason: 'rate_limited', retryable: true },
+      });
+    });
+
+    it('issues no further upstream requests once the batch is rate-limited', async () => {
+      mockService.getStudiesBatch.mockRejectedValue(batchRateLimit());
+      mockService.getStudy.mockResolvedValue(makeStudy('NCT03722472', false));
+
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+      const input = getStudyResults.input!.parse({
+        nctIds: ['NCT03722472', 'NCT05956821', 'NCT02130466'],
+      });
+
+      await expect(getStudyResults.handler(input, ctx)).rejects.toThrow();
+      expect(mockService.getStudy).not.toHaveBeenCalled();
+    });
+
+    it('carries the recovery hint from the declared contract', async () => {
+      mockService.getStudiesBatch.mockRejectedValue(batchRateLimit());
+
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+      const input = getStudyResults.input!.parse({ nctIds: 'NCT03722472' });
+      const err = await Promise.resolve(getStudyResults.handler(input, ctx)).catch(
+        (e: unknown) => e,
+      );
+
+      expect((err as { data?: { recovery?: { hint?: string } } }).data?.recovery?.hint).toContain(
+        'rate-limited',
+      );
+    });
+
+    it('still falls back per ID for a typed non-rate-limit batch rejection', async () => {
+      // Discrimination is on data.reason, not on the error being an McpError.
+      mockService.getStudiesBatch.mockRejectedValue(
+        notFound('Study ID(s) not found or rejected by API: NCT00000000', {
+          reason: 'ids_not_found',
+        }),
+      );
+      mockService.getStudy.mockImplementation(async (nctId: string) => {
+        if (nctId === 'NCT00000000') throw new Error('Study NCT00000000 not found');
+        return makeStudy(nctId, false);
+      });
+
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+      const input = getStudyResults.input!.parse({ nctIds: ['NCT03722472', 'NCT00000000'] });
+      const result = await getStudyResults.handler(input, ctx);
+
+      expect(mockService.getStudy).toHaveBeenCalledTimes(2);
+      expect(result.results.map((r) => r.nctId)).toEqual(['NCT03722472']);
+      expect(result.fetchErrors).toEqual([
+        { nctId: 'NCT00000000', error: expect.stringContaining('not found') },
+      ]);
+    });
+  });
+
+  describe('blank supplied values (#99)', () => {
+    it('rejects an empty sections array at the schema (defense in depth)', () => {
+      expect(() => getStudyResults.input!.parse({ nctIds: 'NCT12345678', sections: [] })).toThrow();
+    });
+
+    it('rejects an empty sections list in the handler with the blank_value contract', async () => {
+      mockService.getStudiesBatch.mockResolvedValue([makeStudy('NCT12345678', true, {})]);
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+      // Hand-built input: the schema now rejects `[]`, so this pins the handler
+      // layer that carries the reason and recovery hint a client can act on.
+      const input = {
+        nctIds: 'NCT12345678',
+        sections: [],
+        summary: false,
+      } as unknown as Parameters<typeof getStudyResults.handler>[0];
+
+      await expect(getStudyResults.handler(input, ctx)).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'blank_value', param: 'sections' },
+      });
+    });
+
+    it('leaves an omitted sections list meaning "all sections"', async () => {
+      mockService.getStudiesBatch.mockResolvedValue([
+        makeStudy('NCT12345678', true, {
+          outcomeMeasuresModule: { outcomeMeasures: [{ title: 'X' }] },
+          adverseEventsModule: { timeFrame: '6 months' },
+          participantFlowModule: { groups: [] },
+          baselineCharacteristicsModule: { groups: [] },
+          moreInfoModule: { pointOfContact: { email: 'x@example.com' } },
+        }),
+      ]);
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+      const result = await getStudyResults.handler(
+        getStudyResults.input!.parse({ nctIds: 'NCT12345678' }),
+        ctx,
+      );
+
+      const entry = result.results[0]!;
+      expect(entry.outcomes).toBeDefined();
+      expect(entry.adverseEvents).toBeDefined();
+      expect(entry.participantFlow).toBeDefined();
+      expect(entry.baseline).toBeDefined();
+      expect(entry.moreInfo).toBeDefined();
+    });
+
+    it('leaves a valid non-empty sections list unaffected', async () => {
+      mockService.getStudiesBatch.mockResolvedValue([
+        makeStudy('NCT12345678', true, {
+          outcomeMeasuresModule: { outcomeMeasures: [{ title: 'X' }] },
+          adverseEventsModule: { timeFrame: '6 months' },
+        }),
+      ]);
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+      const result = await getStudyResults.handler(
+        getStudyResults.input!.parse({ nctIds: 'NCT12345678', sections: ['outcomes'] }),
+        ctx,
+      );
+
+      expect(result.results[0]!.outcomes).toBeDefined();
+      expect(result.results[0]!.adverseEvents).toBeUndefined();
     });
   });
 
@@ -1230,7 +1392,7 @@ describe('getStudyResults', () => {
       mockService.getStudiesBatch.mockResolvedValue([
         loadStudyFixture('nct03722472') as RawStudyShape,
       ]);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
         nctIds: 'NCT03722472',
         sections: section,

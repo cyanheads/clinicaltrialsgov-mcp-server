@@ -135,7 +135,7 @@ hasResults is true. Use search_studies first to find studies with results.
 | `studiesWithoutResults` | `string[]?`         | NCT IDs of studies that don't have results available.                                                  |
 | `fetchErrors`           | `{nctId, error}[]?` | NCT IDs that failed to fetch with error details.                                                       |
 
-**Partial success semantics:** Studies are fetched concurrently. Individual failures are reported in `fetchErrors` without failing the entire request. Only throws if ALL studies fail.
+**Partial success semantics:** Studies are fetched in one batch request, falling back to sequential per-ID fetches when the batch is rejected. Individual failures are reported in `fetchErrors` without failing the request — including when every requested ID fails. A rate limit is the exception: it affects the whole request, so it is thrown as a retryable `rate_limited` error rather than entering the per-ID fallback.
 
 **Error messages:**
 

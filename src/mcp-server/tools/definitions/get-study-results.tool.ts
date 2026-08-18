@@ -4,11 +4,11 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
-import { toArray } from '../utils/query-helpers.js';
+import { blankValueMessage, toArray } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 const VALID_SECTIONS = [
@@ -654,10 +654,10 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
 
   errors: [
     {
-      reason: 'study_not_found',
-      code: JsonRpcErrorCode.NotFound,
-      when: 'A provided NCT ID does not match any study at ClinicalTrials.gov.',
-      recovery: RECOVERY_HINTS.study_not_found,
+      reason: 'blank_value',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A parameter was supplied with a blank, whitespace-only, or empty-list value.',
+      recovery: RECOVERY_HINTS.blank_value,
     },
     {
       reason: 'rate_limited',
@@ -680,11 +680,11 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     sections: z
       .union([
         z.enum(VALID_SECTIONS).describe('A single section name.'),
-        z.array(z.enum(VALID_SECTIONS)).describe('Multiple section names.'),
+        z.array(z.enum(VALID_SECTIONS)).min(1).describe('Multiple section names.'),
       ])
       .optional()
       .describe(
-        `Filter which sections to return. Values: outcomes, adverseEvents, participantFlow, baseline, moreInfo. Omit for all sections.`,
+        `Filter which sections to return. Values: outcomes, adverseEvents, participantFlow, baseline, moreInfo. Omit for all sections — an empty list is rejected, not treated as omission.`,
       ),
     summary: z
       .boolean()
@@ -755,11 +755,23 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
 
   async handler(input, ctx) {
     const nctIds = toArray(input.nctIds);
-    const sections: Section[] = input.sections
+    // `[]` is truthy, so a length-blind ternary took the explicit-sections
+    // branch with nothing in it and returned a study stripped of every results
+    // module, with no signal anything was omitted. An empty list is a supplied
+    // blank, not omission — reject it rather than answering with a hollow
+    // record.
+    const requestedSections = input.sections
       ? Array.isArray(input.sections)
         ? input.sections
         : [input.sections]
-      : [...VALID_SECTIONS];
+      : undefined;
+    if (requestedSections?.length === 0) {
+      throw ctx.fail('blank_value', blankValueMessage('sections'), {
+        param: 'sections',
+        ...ctx.recoveryFor('blank_value'),
+      });
+    }
+    const sections: Section[] = requestedSections ?? [...VALID_SECTIONS];
 
     interface StudyResult {
       adverseEvents?: Record<string, unknown>;
@@ -782,6 +794,17 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     try {
       fetched = (await service.getStudiesBatch(nctIds, ctx)) as RawStudyShape[];
     } catch (err) {
+      // A rate limit is a whole-request failure, not a per-ID one: every
+      // fallback request would hit the same limit, so answering a 429 with up
+      // to 20 more sequential requests is the worst possible response. Surface
+      // the declared retryable contract instead and issue nothing further.
+      // Keyed on the service's typed `data.reason` — the tag it sets once its
+      // retry budget is spent against a 429 — never on upstream message text.
+      if (err instanceof McpError && err.data?.reason === 'rate_limited') {
+        throw ctx.fail('rate_limited', err.message, ctx.recoveryFor('rate_limited'), {
+          cause: err,
+        });
+      }
       // The batch endpoint rejects the whole request if any single ID is
       // malformed or nonexistent. Fall back to per-ID fetches so valid IDs
       // still succeed and only failing IDs land in fetchErrors. Sequential

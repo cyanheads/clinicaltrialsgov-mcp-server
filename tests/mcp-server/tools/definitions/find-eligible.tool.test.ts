@@ -73,6 +73,14 @@ describe('findEligible', () => {
       expect(() => findEligible.input!.parse({ ...baseInput, maxResults: 51 })).toThrow();
     });
 
+    it('defaults locationLimit and rejects values outside 1-500 (#100)', () => {
+      expect(findEligible.input!.parse(baseInput).locationLimit).toBe(10);
+      expect(() => findEligible.input!.parse({ ...baseInput, locationLimit: 0 })).toThrow();
+      expect(() => findEligible.input!.parse({ ...baseInput, locationLimit: 501 })).toThrow();
+      expect(() => findEligible.input!.parse({ ...baseInput, locationLimit: 1 })).not.toThrow();
+      expect(() => findEligible.input!.parse({ ...baseInput, locationLimit: 500 })).not.toThrow();
+    });
+
     it('requires location.country', () => {
       expect(() =>
         findEligible.input!.parse({ ...baseInput, location: { state: 'WA' } }),
@@ -996,6 +1004,488 @@ describe('findEligible', () => {
       const locs = sortedStudy.protocolSection.contactsLocationsModule.locations;
       // Seattle (city match) wins over WA-state-only and US-country-only sites.
       expect(locs[0]!.facility).toBe('Seattle Site');
+    });
+  });
+
+  describe('handler — bounded candidate locations (#100)', () => {
+    type CandidateStudy = {
+      locationSummary?: {
+        locationsTruncated: boolean;
+        matchedLocations: number;
+        nearestRecruitingSiteAdded?: true;
+        retrieveFullStudyWith: string;
+        totalLocations: number;
+      };
+      protocolSection: {
+        contactsLocationsModule?: { locations?: Array<Record<string, unknown>> };
+        identificationModule: { briefTitle?: string; nctId: string };
+      };
+    };
+
+    /** A study carrying `sites` locations under one identification module. */
+    const studyWith = (nctId: string, sites: Array<Record<string, unknown>>) => ({
+      protocolSection: {
+        identificationModule: { nctId, briefTitle: `${nctId} trial` },
+        contactsLocationsModule: { locations: sites },
+      },
+    });
+
+    const site = (
+      facility: string,
+      city: string,
+      state: string,
+      country = 'United States',
+      status = 'RECRUITING',
+    ) => ({
+      facility,
+      city,
+      state,
+      country,
+      status,
+    });
+
+    /** Run the handler and return the single bounded candidate it produced. */
+    const runOne = async (
+      study: unknown,
+      overrides: Record<string, unknown> = {},
+    ): Promise<CandidateStudy> => {
+      mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
+      const ctx = createMockContext({ errors: findEligible.errors });
+      const result = await findEligible.handler(
+        findEligible.input!.parse({ ...baseInput, ...overrides }),
+        ctx,
+      );
+      return result.studies[0] as CandidateStudy;
+    };
+
+    const facilities = (candidate: CandidateStudy) =>
+      (candidate.protocolSection.contactsLocationsModule?.locations ?? []).map((l) => l.facility);
+
+    it('keeps only the sites matching the requested city, dropping the rest', async () => {
+      // The reported shape: a study qualifies on a Seattle site but carries every
+      // site it ever registered, so distant sites dominate a local eligibility
+      // answer and the payload.
+      const candidate = await runOne(
+        studyWith('NCT05929768', [
+          site('Seattle A', 'Seattle', 'Washington'),
+          site('Spokane', 'Spokane', 'Washington'),
+          site('Seattle B', 'Seattle', 'Washington'),
+          site('Boston', 'Boston', 'Massachusetts'),
+          site('Miami', 'Miami', 'Florida'),
+        ]),
+      );
+      expect(facilities(candidate)).toEqual(['Seattle A', 'Seattle B']);
+      expect(candidate.locationSummary).toEqual({
+        totalLocations: 5,
+        matchedLocations: 2,
+        locationsTruncated: false,
+        retrieveFullStudyWith: 'clinicaltrials_get_study_record',
+      });
+    });
+
+    it('falls back to the state tier when no site is in the requested city', async () => {
+      const candidate = await runOne(
+        studyWith('NCT1', [
+          site('Spokane', 'Spokane', 'Washington'),
+          site('Boston', 'Boston', 'Massachusetts'),
+          site('Tacoma', 'Tacoma', 'Washington'),
+        ]),
+      );
+      expect(facilities(candidate)).toEqual(['Spokane', 'Tacoma']);
+      expect(candidate.locationSummary?.matchedLocations).toBe(2);
+    });
+
+    it('falls back to the country tier when no site is in the requested state', async () => {
+      const candidate = await runOne(
+        studyWith('NCT1', [
+          site('Boston', 'Boston', 'Massachusetts'),
+          site('Toronto', 'Toronto', 'Ontario', 'Canada'),
+        ]),
+      );
+      expect(facilities(candidate)).toEqual(['Boston']);
+      expect(candidate.locationSummary?.totalLocations).toBe(2);
+    });
+
+    it('keeps every site bounded when none matches the requested location at all', async () => {
+      // A study can qualify upstream through a facility or ZIP match with no
+      // city/state/country hit. The payload must still be bounded, never dumped.
+      const candidate = await runOne(
+        studyWith(
+          'NCT1',
+          Array.from({ length: 30 }, (_, i) =>
+            site(`Toronto ${i}`, 'Toronto', 'Ontario', 'Canada'),
+          ),
+        ),
+        { locationLimit: 3 },
+      );
+      expect(facilities(candidate)).toHaveLength(3);
+      expect(candidate.locationSummary).toEqual({
+        totalLocations: 30,
+        matchedLocations: 30,
+        locationsTruncated: true,
+        retrieveFullStudyWith: 'clinicaltrials_get_study_record',
+      });
+    });
+
+    it('caps the matched sites at locationLimit and flags the truncation', async () => {
+      const candidate = await runOne(
+        studyWith(
+          'NCT1',
+          Array.from({ length: 40 }, (_, i) => site(`Seattle ${i}`, 'Seattle', 'Washington')),
+        ),
+        { locationLimit: 4 },
+      );
+      expect(facilities(candidate)).toHaveLength(4);
+      expect(candidate.locationSummary).toEqual({
+        totalLocations: 40,
+        matchedLocations: 40,
+        locationsTruncated: true,
+        retrieveFullStudyWith: 'clinicaltrials_get_study_record',
+      });
+    });
+
+    it('defaults to a bounded candidate without the caller passing locationLimit', async () => {
+      const candidate = await runOne(
+        studyWith(
+          'NCT1',
+          Array.from({ length: 200 }, (_, i) => site(`Seattle ${i}`, 'Seattle', 'Washington')),
+        ),
+      );
+      expect(facilities(candidate).length).toBeLessThan(200);
+      expect(candidate.locationSummary?.locationsTruncated).toBe(true);
+    });
+
+    it('omits the summary entirely when nothing was dropped (#80 echo semantics)', async () => {
+      const candidate = await runOne(
+        studyWith('NCT1', [
+          site('Seattle A', 'Seattle', 'Washington'),
+          site('Seattle B', 'Seattle', 'Washington'),
+        ]),
+      );
+      expect(facilities(candidate)).toEqual(['Seattle A', 'Seattle B']);
+      expect(candidate.locationSummary).toBeUndefined();
+    });
+
+    it('leaves a study with no locations untouched', async () => {
+      const candidate = await runOne({
+        protocolSection: {
+          identificationModule: { nctId: 'NCT1', briefTitle: 'No sites' },
+          contactsLocationsModule: { locations: [] },
+        },
+      });
+      expect(facilities(candidate)).toEqual([]);
+      expect(candidate.locationSummary).toBeUndefined();
+    });
+
+    it('leaves a study with no contactsLocationsModule untouched', async () => {
+      const candidate = await runOne({
+        protocolSection: { identificationModule: { nctId: 'NCT1', briefTitle: 'No module' } },
+      });
+      expect(candidate.protocolSection.contactsLocationsModule).toBeUndefined();
+      expect(candidate.locationSummary).toBeUndefined();
+    });
+
+    it('preserves every non-location field of the candidate', async () => {
+      const candidate = (await runOne({
+        protocolSection: {
+          identificationModule: { nctId: 'NCT1', briefTitle: 'Keeps its data' },
+          descriptionModule: { briefSummary: 'A summary' },
+          armsInterventionsModule: { interventions: [{ name: 'Drug A' }] },
+          eligibilityModule: { minimumAge: '18 Years', sex: 'ALL' },
+          contactsLocationsModule: {
+            centralContacts: [{ name: 'Dr. Smith' }],
+            locations: [
+              site('Seattle', 'Seattle', 'Washington'),
+              site('Boston', 'Boston', 'Massachusetts'),
+            ],
+          },
+        },
+      })) as CandidateStudy & {
+        protocolSection: {
+          armsInterventionsModule: { interventions: Array<{ name: string }> };
+          contactsLocationsModule: { centralContacts: Array<{ name: string }> };
+          descriptionModule: { briefSummary: string };
+          eligibilityModule: { minimumAge: string };
+        };
+      };
+      expect(candidate.protocolSection.descriptionModule.briefSummary).toBe('A summary');
+      expect(candidate.protocolSection.armsInterventionsModule.interventions[0]!.name).toBe(
+        'Drug A',
+      );
+      expect(candidate.protocolSection.eligibilityModule.minimumAge).toBe('18 Years');
+      expect(candidate.protocolSection.contactsLocationsModule.centralContacts[0]!.name).toBe(
+        'Dr. Smith',
+      );
+    });
+
+    it('renders exactly the bounded sites in content[], and no dropped one (channel parity, #46/#91)', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [
+          studyWith('NCT1', [
+            site('Seattle A', 'Seattle', 'Washington'),
+            site('Boston', 'Boston', 'Massachusetts'),
+            site('Miami', 'Miami', 'Florida'),
+          ]),
+        ],
+        totalCount: 1,
+      });
+      const ctx = createMockContext({ errors: findEligible.errors });
+      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+      const text = (findEligible.format!(result)[0] as { text: string }).text;
+
+      expect(text).toContain('Seattle A');
+      // A site absent from structuredContent must be absent from content[] too —
+      // trimming one channel while the other keeps the full record is the defect
+      // #46 fixed, and the cap here applies once at the handler boundary.
+      expect(text).not.toContain('Boston');
+      expect(text).not.toContain('Miami');
+    });
+
+    it('renders every locationSummary value in content[] (channel parity)', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [
+          studyWith('NCT05929768', [
+            ...Array.from({ length: 6 }, (_, i) => site(`Seattle ${i}`, 'Seattle', 'Washington')),
+            ...Array.from({ length: 957 }, (_, i) =>
+              site(`Elsewhere ${i}`, 'Boston', 'Massachusetts'),
+            ),
+          ]),
+        ],
+        totalCount: 1,
+      });
+      const ctx = createMockContext({ errors: findEligible.errors });
+      const result = await findEligible.handler(
+        findEligible.input!.parse({ ...baseInput, locationLimit: 4 }),
+        ctx,
+      );
+      const text = (findEligible.format!(result)[0] as { text: string }).text;
+
+      // showing / totalLocations / matchedLocations / truncation / retrieval pointer.
+      expect(text).toContain('4 of 963');
+      expect(text).toContain('6 match the requested location');
+      expect(text).toContain('truncated');
+      expect(text).toContain('clinicaltrials_get_study_record');
+      expect(text).toContain('NCT05929768');
+    });
+
+    it('does not render a sites line when nothing was dropped', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [studyWith('NCT1', [site('Seattle A', 'Seattle', 'Washington')])],
+        totalCount: 1,
+      });
+      const ctx = createMockContext({ errors: findEligible.errors });
+      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+      const text = (findEligible.format!(result)[0] as { text: string }).text;
+      expect(text).not.toContain('registered');
+      expect(text).toContain('Seattle A');
+    });
+
+    it('does not leak locationSummary into the field-dump fallback', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [
+          studyWith('NCT1', [
+            site('Seattle A', 'Seattle', 'Washington'),
+            site('Boston', 'Boston', 'Massachusetts'),
+          ]),
+        ],
+        totalCount: 1,
+      });
+      const ctx = createMockContext({ errors: findEligible.errors });
+      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+      const text = (findEligible.format!(result)[0] as { text: string }).text;
+      expect(text).not.toMatch(/Location Summary > /);
+    });
+
+    describe('nearest recruiting site (#114)', () => {
+      /**
+       * The reported shape — a RECRUITING study whose nearest site is closed and
+       * whose only open site sits one tier out. Selecting on geography alone
+       * returns the closed Seattle site and hides the open Renton one.
+       */
+      const closedCityOpenState = () =>
+        studyWith('NCT07174336', [
+          site(
+            'Swedish Medical Center',
+            'Seattle',
+            'Washington',
+            'United States',
+            'NOT_YET_RECRUITING',
+          ),
+          site(
+            'UW Medicine Valley Medical Center',
+            'Renton',
+            'Washington',
+            'United States',
+            'RECRUITING',
+          ),
+          site(
+            'Deaconess Hospital',
+            'Spokane',
+            'Washington',
+            'United States',
+            'NOT_YET_RECRUITING',
+          ),
+          site('North Star Lodge', 'Yakima', 'Washington', 'United States', 'NOT_YET_RECRUITING'),
+          site('MD Anderson', 'Houston', 'Texas', 'United States', 'NOT_YET_RECRUITING'),
+        ]);
+
+      it('admits the nearest recruiting site when every matched site is closed', async () => {
+        const candidate = await runOne(closedCityOpenState());
+        expect(facilities(candidate)).toEqual([
+          'Swedish Medical Center',
+          'UW Medicine Valley Medical Center',
+        ]);
+        expect(candidate.locationSummary).toEqual({
+          totalLocations: 5,
+          matchedLocations: 1,
+          locationsTruncated: false,
+          nearestRecruitingSiteAdded: true,
+          retrieveFullStudyWith: 'clinicaltrials_get_study_record',
+        });
+      });
+
+      it('admits the nearest recruiting site, not the first one it finds', async () => {
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            site('Seattle closed', 'Seattle', 'Washington', 'United States', 'NOT_YET_RECRUITING'),
+            site('Boston open', 'Boston', 'Massachusetts', 'United States', 'RECRUITING'),
+            site('Tacoma closed', 'Tacoma', 'Washington', 'United States', 'SUSPENDED'),
+            site('Renton open', 'Renton', 'Washington', 'United States', 'RECRUITING'),
+          ]),
+        );
+        // Renton matches at the state tier, Boston only at the country tier.
+        expect(facilities(candidate)).toEqual(['Seattle closed', 'Renton open']);
+        expect(candidate.locationSummary?.nearestRecruitingSiteAdded).toBe(true);
+      });
+
+      it('leaves the tier answer alone when a matched site is already recruiting', async () => {
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            site('Seattle open', 'Seattle', 'Washington'),
+            site('Seattle closed', 'Seattle', 'Washington', 'United States', 'NOT_YET_RECRUITING'),
+            site('Renton open', 'Renton', 'Washington'),
+          ]),
+        );
+        expect(facilities(candidate)).toEqual(['Seattle open', 'Seattle closed']);
+        expect(candidate.locationSummary?.nearestRecruitingSiteAdded).toBeUndefined();
+      });
+
+      it('admits nothing when the study registers no recruiting site anywhere', async () => {
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            site('Seattle closed', 'Seattle', 'Washington', 'United States', 'NOT_YET_RECRUITING'),
+            site('Renton closed', 'Renton', 'Washington', 'United States', 'TERMINATED'),
+            site('Boston closed', 'Boston', 'Massachusetts', 'United States', 'COMPLETED'),
+          ]),
+        );
+        expect(facilities(candidate)).toEqual(['Seattle closed']);
+        expect(candidate.locationSummary).toEqual({
+          totalLocations: 3,
+          matchedLocations: 1,
+          locationsTruncated: false,
+          retrieveFullStudyWith: 'clinicaltrials_get_study_record',
+        });
+      });
+
+      it('treats enrolling-by-invitation as closed — a self-referring patient cannot enroll there', async () => {
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            site('Seattle closed', 'Seattle', 'Washington', 'United States', 'NOT_YET_RECRUITING'),
+            site(
+              'Renton invite-only',
+              'Renton',
+              'Washington',
+              'United States',
+              'ENROLLING_BY_INVITATION',
+            ),
+          ]),
+        );
+        expect(facilities(candidate)).toEqual(['Seattle closed']);
+        expect(candidate.locationSummary?.nearestRecruitingSiteAdded).toBeUndefined();
+      });
+
+      it('adds one site alongside the cap, which still bounds the matched sites', async () => {
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            ...Array.from({ length: 12 }, (_, i) =>
+              site(`Seattle ${i}`, 'Seattle', 'Washington', 'United States', 'NOT_YET_RECRUITING'),
+            ),
+            site('Renton open', 'Renton', 'Washington'),
+          ]),
+          { locationLimit: 3 },
+        );
+        expect(facilities(candidate)).toEqual([
+          'Seattle 0',
+          'Seattle 1',
+          'Seattle 2',
+          'Renton open',
+        ]);
+        expect(candidate.locationSummary).toEqual({
+          totalLocations: 13,
+          matchedLocations: 12,
+          locationsTruncated: true,
+          nearestRecruitingSiteAdded: true,
+          retrieveFullStudyWith: 'clinicaltrials_get_study_record',
+        });
+      });
+
+      it('keeps the summary absent when the admitted site completes the site list (#80)', async () => {
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            site('Seattle closed', 'Seattle', 'Washington', 'United States', 'NOT_YET_RECRUITING'),
+            site('Renton open', 'Renton', 'Washington'),
+          ]),
+        );
+        expect(facilities(candidate)).toEqual(['Seattle closed', 'Renton open']);
+        expect(candidate.locationSummary).toBeUndefined();
+      });
+
+      it('leaves a lone closed site alone when the study registers no other', async () => {
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            site('Seattle closed', 'Seattle', 'Washington', 'United States', 'NOT_YET_RECRUITING'),
+          ]),
+        );
+        expect(facilities(candidate)).toEqual(['Seattle closed']);
+        expect(candidate.locationSummary).toBeUndefined();
+      });
+
+      it('admits nothing on the no-geographic-match path — every site already sits at the tier', async () => {
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            ...Array.from({ length: 5 }, (_, i) =>
+              site(`Toronto ${i}`, 'Toronto', 'Ontario', 'Canada', 'NOT_YET_RECRUITING'),
+            ),
+            site('Montreal open', 'Montreal', 'Quebec', 'Canada'),
+          ]),
+          { locationLimit: 2 },
+        );
+        // Recruiting sites sort ahead of closed ones inside a tier, so the cap
+        // cannot bury the open site behind closed peers at the same tier.
+        expect(facilities(candidate)).toEqual(['Montreal open', 'Toronto 0']);
+        expect(candidate.locationSummary?.nearestRecruitingSiteAdded).toBeUndefined();
+      });
+
+      it('renders the admitted site and the reason it was added in content[] (#46/#91)', async () => {
+        mockService.searchStudies.mockResolvedValue({
+          studies: [closedCityOpenState()],
+          totalCount: 1,
+        });
+        const ctx = createMockContext({ errors: findEligible.errors });
+        const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+        const text = (findEligible.format!(result)[0] as { text: string }).text;
+
+        expect(text).toContain(
+          'Swedish Medical Center, Seattle, Washington, United States [NOT_YET_RECRUITING]',
+        );
+        expect(text).toContain(
+          'UW Medicine Valley Medical Center, Renton, Washington, United States [RECRUITING]',
+        );
+        expect(text).toContain('showing 2 of 5');
+        expect(text).toContain('1 match the requested location');
+        expect(text).toContain('nearest recruiting site');
+        expect(text).not.toContain('Deaconess');
+      });
     });
   });
 });

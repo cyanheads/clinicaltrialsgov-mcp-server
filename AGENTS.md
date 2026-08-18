@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** clinicaltrialsgov-mcp-server
-**Version:** 2.8.7
+**Version:** 2.9.0
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.11.5`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 
@@ -36,7 +36,7 @@ MCP server wrapping the [ClinicalTrials.gov REST API v2](https://clinicaltrials.
 
 | URI Template               | Description                              |
 | :------------------------- | :--------------------------------------- |
-| `clinicaltrials://{nctId}` | Single study by NCT ID. Full study data. |
+| `clinicaltrials://{nctId}` | Single study by NCT ID. Bounded protocol record; results replaced by counts. |
 
 ### Prompts (1)
 

@@ -11,13 +11,13 @@
 | `clinicaltrials_get_field_values`  | Discover valid values for any ClinicalTrials.gov field with study counts per value. Use before constructing searches to find valid filter options.                | `fields`                                                                                                                                                                                 | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_get_study_count`   | Get total study count matching a query without fetching study data. Use for quick stats and building breakdowns by calling multiple times with different filters. | `query`, `conditionQuery`, `interventionQuery`, `statusFilter`, `phaseFilter`, `advancedFilter`                                                                                          | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_get_field_definitions` | Get field definitions from the study data model — piece names, types, nesting. For discovering available fields and AREA[] filter targets.                   | `mode`, `query`, `path`, `limit`, `includeIndexedOnly`                                                                                                                                                             | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
-| `clinicaltrials_find_eligible`     | Match patient demographics to recruiting clinical trials. Builds optimized API queries from a patient profile and returns studies with eligibility/location fields. | `age`, `sex`, `conditions`, `location`, `healthyVolunteer`, `recruitingOnly`, `maxResults`                                                                                               | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
+| `clinicaltrials_find_eligible`     | Match patient demographics to recruiting clinical trials. Builds optimized API queries from a patient profile and returns studies with eligibility/location fields. | `age`, `sex`, `conditions`, `location`, `healthyVolunteer`, `recruitingOnly`, `maxResults`, `locationLimit`                                                                                             | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 
 ### Resources
 
 | URI Template               | Description                                                       | Pagination |
 | :------------------------- | :---------------------------------------------------------------- | :--------- |
-| `clinicaltrials://{nctId}` | Fetch a single clinical study by NCT ID. Returns full study data. | No         |
+| `clinicaltrials://{nctId}` | Fetch a single clinical study by NCT ID. Returns a bounded study record. | No         |
 
 ### Prompts
 
@@ -276,12 +276,13 @@ for, with match explanations. Internally builds optimized queries with demograph
 | `healthyVolunteer` | `boolean?` | Query only studies accepting healthy volunteers. Default: `false`. |
 | `recruitingOnly` | `boolean?` | Only include actively recruiting studies. Default: `true`.                    |
 | `maxResults`     | `number?`  | Maximum results to return, 1–50. Default: `10`.                               |
+| `locationLimit`  | `number?`  | Cap on the matched sites returned per candidate, 1–500. Default: `10`. A candidate whose matched sites are all closed carries one more — its nearest recruiting site. |
 
 **Output schema:**
 
 | Field        | Type      | Description                                                                                                                                                                                                                                                                              |
 | :----------- | :-------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `studies`    | `Study[]` | Matching studies, re-ranked and capped at `maxResults`. Each carries the requested eligibility fields: `nctId`, `briefTitle`, `briefSummary`, `overallStatus`, phase/enrollment/sponsor, `conditions`, interventions, `eligibilityModule` (age range, sex, healthy volunteers), full `locations[]` (sorted by match to the patient location), and central contacts. |
+| `studies`    | `Study[]` | Matching studies, re-ranked and capped at `maxResults`. Each carries the requested eligibility fields: `nctId`, `briefTitle`, `briefSummary`, `overallStatus`, phase/enrollment/sponsor, `conditions`, interventions, `eligibilityModule` (age range, sex, healthy volunteers), a bounded `locations[]` — the sites matching the requested location at the narrowest level that matched (city, else state, else country), sorted by match score and capped at `locationLimit`, plus the candidate's nearest recruiting site when none of the matched ones is recruiting — and central contacts. A candidate whose sites were bounded also carries a top-level `locationSummary` (`totalLocations`, `matchedLocations`, `locationsTruncated`, `nearestRecruitingSiteAdded?`, `retrieveFullStudyWith`); it is absent when nothing was dropped, and `nearestRecruitingSiteAdded` is present only when that extra site was added. |
 | `totalCount` | `number?` | Total eligible studies matching the full filter set upstream, before the `maxResults` cap.                                                                                                                                                                                               |
 
 **Enrichment (agent-facing context, rendered as a `content[]` trailer):**
@@ -297,7 +298,7 @@ for, with match explanations. Internally builds optimized queries with demograph
 3. Build status filter: `['RECRUITING']` when `recruitingOnly`, otherwise unfiltered
 4. Build advanced filter: age range `AREA[MinimumAge]RANGE[MIN, {age} years] AND AREA[MaximumAge]RANGE[{age} years, MAX]`, plus `(AREA[Sex]ALL OR AREA[Sex]{sex})` when sex ≠ `ALL`, plus `AREA[HealthyVolunteers]true` when `healthyVolunteer`
 5. Run the main search (`pageSize={maxResults}`, `fields=ELIGIBLE_FIELDS`, `countTotal`) alongside two funnel-stage counts (condition-only, condition+location) in parallel
-6. Re-rank studies so those whose own condition list names a requested condition surface above tangential MeSH-umbrella matches (#72/#79), then sort each study's locations by match to the patient location (city > state > country)
+6. Re-rank studies so those whose own condition list names a requested condition surface above tangential MeSH-umbrella matches (#72/#79), then sort each study's locations by match to the patient location (city > state > country) and bound each list to the best-matching tier, capped at `locationLimit`. The tier is geographic, so a tier holding only closed sites would answer with a candidate nobody can enroll in — when that happens the candidate's nearest recruiting site is admitted alongside it (#114). The bound is applied here, once, so `structuredContent` and `format()` render the same sites (#46, #91)
 7. Enrich with `searchCriteria` (including the reproducible `conditionQuery`/`statusFilter`/`advancedFilter` strings) and `funnel` diagnostics
 8. Return the re-ranked studies (capped at `maxResults`) with `totalCount`
 
@@ -309,14 +310,14 @@ for, with match explanations. Internally builds optimized queries with demograph
 
 ### `clinicaltrials://{nctId}`
 
-Single study by NCT ID. Wraps `GET /studies/{nctId}`. Returns full study data as JSON.
+Single study by NCT ID. Wraps `GET /studies/{nctId}`. Returns a bounded study record as JSON.
 
 **URI examples:**
 
 - `clinicaltrials://NCT03722472`
 - `clinicaltrials://NCT04852770`
 
-**Handler:** Fetch study, return full JSON. Throws `notFound` for 404, `serviceUnavailable` for API errors.
+**Handler:** Fetch study, cap its three unbounded protocol lists (locations, secondary/other outcomes, references — 50 each), drop `resultsSection` in favor of `resultsSummary` counts, and report every omission via `truncated`, `filtersApplied`, and a `retrieval` block naming `clinicaltrials_get_study_record` / `clinicaltrials_get_study_results`. A resource read carries no arguments, so the caps are fixed server-side. Throws `notFound` for 404, `serviceUnavailable` for API errors.
 
 **list():** Not provided — studies are not discoverable by browsing; use `search_studies` to find NCT IDs.
 
@@ -582,7 +583,7 @@ See [docs/api-reference.md](api-reference.md) for the complete ClinicalTrials.go
 
 - [ ] `src/mcp-server/resources/definitions/study.resource.ts`
 - [ ] Params: `nctId` with NCT ID regex validation
-- [ ] Handler: fetch via service, return full study JSON
+- [ ] Handler: fetch via service, apply the fixed list caps, drop `resultsSection` for counts, disclose omissions
 - [ ] Error: `notFound` for 404, `serviceUnavailable` for API errors
 - [ ] Register in `definitions/index.ts`
 

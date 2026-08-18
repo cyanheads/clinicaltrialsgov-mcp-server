@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![Version](https://img.shields.io/badge/Version-2.8.7-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![Version](https://img.shields.io/badge/Version-2.9.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^1.29.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.3.14-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -38,12 +38,12 @@ Seven tools for searching, discovering, analyzing, and matching clinical trials:
 | `clinicaltrials_get_study_count`       | Get total study count for a query without fetching data. Fast statistics and breakdowns.         |
 | `clinicaltrials_get_field_values`      | Discover valid values for API fields (status, phase, study type, etc.) with per-value counts.    |
 | `clinicaltrials_get_field_definitions` | Browse the study data model field tree — piece names, types, nesting. Supports subtree navigation and keyword search. |
-| `clinicaltrials_get_study_results`     | Extract outcomes, adverse events, participant flow, and baseline from completed studies. Optional summary mode reduces ~200KB payloads to ~5KB. |
+| `clinicaltrials_get_study_results`     | Extract outcomes, adverse events, participant flow, and baseline from completed studies. Optional summary mode reduces ~200KB payloads to ~5KB; `outcomeLimit` / `adverseEventLimit` cap full mode without leaving it. |
 | `clinicaltrials_find_eligible`         | Match patient demographics and conditions to eligible recruiting trials. Provide age, sex, conditions, and location to find studies with matching eligibility criteria, contacts, and recruiting locations. |
 
 | Resource                   | Description                                         |
 | :------------------------- | :-------------------------------------------------- |
-| `clinicaltrials://{nctId}` | Fetch a single clinical trial study by NCT ID. Full JSON. |
+| `clinicaltrials://{nctId}` | Fetch a single clinical trial study by NCT ID. Protocol JSON with capped locations/outcomes/references and results replaced by counts; omissions reported with the tool that retrieves them. |
 
 | Prompt                    | Description                                                                        |
 | :------------------------ | :--------------------------------------------------------------------------------- |
@@ -84,6 +84,7 @@ Match a patient profile to eligible recruiting trials.
 - Builds optimized API queries with demographic filters (age range, sex, healthy volunteers)
 - Re-ranks results so studies whose own condition matches a requested condition surface above tangential matches from the upstream fuzzy condition search
 - Returns studies with eligibility and location fields for the caller to evaluate
+- Bounds each candidate to the sites matching the requested location (capped by `locationLimit`) rather than every site the study registers worldwide, adds the nearest recruiting site when none of the matched ones is open, and discloses what was omitted
 - Provides actionable hints when no studies match (broaden conditions, adjust filters)
 
 ## Features

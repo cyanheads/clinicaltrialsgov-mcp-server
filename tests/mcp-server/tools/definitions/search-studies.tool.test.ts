@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/search-studies.tool
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -105,7 +106,7 @@ describe('searchStudies', () => {
       };
       mockService.searchStudies.mockResolvedValue(serviceResult);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(
         searchStudies.input!.parse({ conditionQuery: 'diabetes' }),
         ctx,
@@ -120,7 +121,7 @@ describe('searchStudies', () => {
 
     it('maps all input fields to service params', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(
         searchStudies.input!.parse({
           query: 'general',
@@ -160,7 +161,7 @@ describe('searchStudies', () => {
 
     it('converts phaseFilter to advanced filter', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(
         searchStudies.input!.parse({ phaseFilter: ['PHASE1', 'PHASE2'] }),
         ctx,
@@ -176,7 +177,7 @@ describe('searchStudies', () => {
 
     it('combines phaseFilter with advancedFilter', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(
         searchStudies.input!.parse({
           phaseFilter: 'PHASE3',
@@ -195,7 +196,7 @@ describe('searchStudies', () => {
 
     it('converts nctIds string to filterIds array', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(searchStudies.input!.parse({ nctIds: 'NCT12345678' }), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
@@ -206,7 +207,7 @@ describe('searchStudies', () => {
 
     it('parses a JSON-stringified statusFilter array into filterOverallStatus (regression for #75)', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(
         searchStudies.input!.parse({ statusFilter: '["RECRUITING","COMPLETED"]' }),
         ctx,
@@ -220,7 +221,7 @@ describe('searchStudies', () => {
 
     it('parses a JSON-stringified phaseFilter array into the advanced filter (regression for #75)', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(
         searchStudies.input!.parse({ phaseFilter: '["PHASE1","PHASE2"]' }),
         ctx,
@@ -234,7 +235,7 @@ describe('searchStudies', () => {
 
     it('echoes search criteria in enrichment when results are empty', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(
         searchStudies.input!.parse({ conditionQuery: 'rare disease', statusFilter: 'RECRUITING' }),
         ctx,
@@ -251,7 +252,7 @@ describe('searchStudies', () => {
 
     it('provides notice in enrichment for query + filter combo', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(
         searchStudies.input!.parse({
           conditionQuery: 'rare disease',
@@ -270,7 +271,7 @@ describe('searchStudies', () => {
 
     it('provides notice in enrichment for query-only empty results', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(searchStudies.input!.parse({ conditionQuery: 'xyz' }), ctx);
 
       const enrichment = getEnrichment(ctx);
@@ -280,7 +281,7 @@ describe('searchStudies', () => {
 
     it('provides notice in enrichment for filter-only empty results', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(
         searchStudies.input!.parse({ statusFilter: 'SUSPENDED', geoFilter: 'distance(0,0,1mi)' }),
         ctx,
@@ -296,7 +297,7 @@ describe('searchStudies', () => {
         studies: [{ nctId: 'NCT12345678' }],
         totalCount: 1,
       });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(searchStudies.input!.parse({ conditionQuery: 'diabetes' }), ctx);
 
       const enrichment = getEnrichment(ctx);
@@ -312,7 +313,7 @@ describe('searchStudies', () => {
         studies: [{ nctId: 'NCT12345678' }],
         totalCount: 1,
       });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(
         searchStudies.input!.parse({ conditionQuery: 'diabetes', includeUnknownEnrollment: true }),
         ctx,
@@ -328,7 +329,7 @@ describe('searchStudies', () => {
         totalCount: 100,
         nextPageToken: 'abc123',
       });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(searchStudies.input!.parse({}), ctx);
 
       expect(result.nextPageToken).toBe('abc123');
@@ -336,7 +337,7 @@ describe('searchStudies', () => {
 
     it('passes pageToken to service', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 50 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(searchStudies.input!.parse({ pageToken: 'tok_page2' }), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
@@ -347,7 +348,7 @@ describe('searchStudies', () => {
 
     it('defaults includeUnknownEnrollment to false (regression for #41)', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(searchStudies.input!.parse({}), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
@@ -358,7 +359,7 @@ describe('searchStudies', () => {
 
     it('forwards includeUnknownEnrollment=true to service', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await searchStudies.handler(
         searchStudies.input!.parse({ includeUnknownEnrollment: true }),
         ctx,
@@ -375,7 +376,7 @@ describe('searchStudies', () => {
         studies: [{ nctId: 'NCT12345678' }],
         totalCount: 1,
       });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(
         searchStudies.input!.parse({ fields: ['NCTId', 'BriefTitle'] }),
         ctx,
@@ -388,9 +389,322 @@ describe('searchStudies', () => {
         studies: [{ nctId: 'NCT12345678' }],
         totalCount: 1,
       });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(searchStudies.input!.parse({}), ctx);
       expect(result.requestedFields).toBeUndefined();
+    });
+  });
+
+  describe('next-page cursor suppression (#98)', () => {
+    const renderText = (result: Parameters<NonNullable<typeof searchStudies.format>>[0]) =>
+      (searchStudies.format!(result)[0] as { text: string }).text;
+
+    const study = (nctId: string) => ({
+      protocolSection: { identificationModule: { nctId } },
+    });
+
+    it('suppresses the cursor on both channels when the page already carries every match', async () => {
+      // Upstream emits a token whenever the page fills to pageSize, without
+      // looking ahead — following it here returns an empty page.
+      mockService.searchStudies.mockResolvedValue({
+        studies: [study('NCT03722472')],
+        totalCount: 1,
+        nextPageToken: 'ZVt07cGHkvI2wRk2CJf6',
+      });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({ nctIds: ['NCT03722472'], pageSize: 1 }),
+        ctx,
+      );
+
+      expect(result.nextPageToken).toBeUndefined();
+      const text = renderText(result);
+      expect(text).not.toContain('nextPageToken');
+      expect(text).not.toContain('More results available');
+    });
+
+    it('suppresses the cursor for a plain query search at the same exhaustion point', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [study('NCT03722472')],
+        totalCount: 1,
+        nextPageToken: 'tok_false_cursor',
+      });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({ query: 'rare disease', pageSize: 1 }),
+        ctx,
+      );
+      expect(result.nextPageToken).toBeUndefined();
+      expect(renderText(result)).not.toContain('tok_false_cursor');
+    });
+
+    it('keeps the cursor when the caller supplied a pageToken', async () => {
+      // Page 2+ carries no totalCount to compare against, and the upstream
+      // cursor is opaque — suppressing there would strand real results.
+      mockService.searchStudies.mockResolvedValue({
+        studies: [study('NCT03722472')],
+        totalCount: 1,
+        nextPageToken: 'tok_page3',
+      });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({
+          nctIds: ['NCT03722472'],
+          pageSize: 1,
+          pageToken: 'tok_page2',
+        }),
+        ctx,
+      );
+
+      expect(result.nextPageToken).toBe('tok_page3');
+      expect(renderText(result)).toContain('nextPageToken: tok_page3');
+    });
+
+    it('keeps the cursor when totalCount was not computed (countTotal=false)', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [study('NCT03722472')],
+        nextPageToken: 'tok_no_total',
+      });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({ query: 'cancer', pageSize: 1, countTotal: false }),
+        ctx,
+      );
+
+      expect(result.nextPageToken).toBe('tok_no_total');
+      expect(renderText(result)).toContain('nextPageToken: tok_no_total');
+    });
+
+    it('keeps the cursor when the page is a partial slice of the match set', async () => {
+      // A 3-ID walk at pageSize 1: pages 2 and 3 hold real data.
+      mockService.searchStudies.mockResolvedValue({
+        studies: [study('NCT03722472')],
+        totalCount: 3,
+        nextPageToken: 'tok_page2',
+      });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({
+          nctIds: ['NCT03722472', 'NCT05956821', 'NCT02130466'],
+          pageSize: 1,
+        }),
+        ctx,
+      );
+
+      expect(result.nextPageToken).toBe('tok_page2');
+      expect(renderText(result)).toContain('nextPageToken: tok_page2');
+    });
+
+    it('leaves an already-absent cursor absent (no phantom key)', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [study('NCT03722472')],
+        totalCount: 1,
+      });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      const result = await searchStudies.handler(searchStudies.input!.parse({}), ctx);
+      expect(result.nextPageToken).toBeUndefined();
+      expect(Object.hasOwn(result, 'nextPageToken')).toBe(false);
+    });
+  });
+
+  describe('blank supplied values (#99)', () => {
+    const QUERY_PARAMS = [
+      'query',
+      'conditionQuery',
+      'interventionQuery',
+      'locationQuery',
+      'sponsorQuery',
+      'titleQuery',
+      'outcomeQuery',
+    ] as const;
+
+    /** Assert a handler call fails with the shared blank_value contract for `param`. */
+    const expectBlankValue = (call: unknown, param: string) =>
+      expect(call).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'blank_value', param },
+      });
+
+    beforeEach(() => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+    });
+
+    it.each(QUERY_PARAMS)(
+      'rejects an empty %s instead of searching the whole registry',
+      (param) => {
+        const ctx = createMockContext({ errors: searchStudies.errors });
+        return expectBlankValue(
+          searchStudies.handler(searchStudies.input!.parse({ [param]: '' }), ctx),
+          param,
+        );
+      },
+    );
+
+    it.each(QUERY_PARAMS)('rejects a whitespace-only %s', (param) => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      return expectBlankValue(
+        searchStudies.handler(searchStudies.input!.parse({ [param]: '   ' }), ctx),
+        param,
+      );
+    });
+
+    // Three constraint strings whose consumers guard on plain truthiness:
+    // '' is falsy and silently dropped — the widening #99 exists to stop —
+    // while ' ' is truthy and forwarded upstream, splicing a blank term into a
+    // joined boolean expression for advancedFilter and sending a malformed
+    // value for geoFilter and sort.
+    const CONSTRAINT_PARAMS = ['advancedFilter', 'geoFilter', 'sort'] as const;
+
+    it.each(CONSTRAINT_PARAMS)(
+      'rejects an empty %s instead of silently dropping the constraint',
+      async (param) => {
+        const ctx = createMockContext({ errors: searchStudies.errors });
+        await expectBlankValue(
+          searchStudies.handler(searchStudies.input!.parse({ [param]: '' }), ctx),
+          param,
+        );
+        expect(mockService.searchStudies).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(CONSTRAINT_PARAMS)(
+      'rejects a whitespace-only %s instead of forwarding whitespace upstream',
+      async (param) => {
+        const ctx = createMockContext({ errors: searchStudies.errors });
+        await expectBlankValue(
+          searchStudies.handler(searchStudies.input!.parse({ [param]: '   ' }), ctx),
+          param,
+        );
+        expect(mockService.searchStudies).not.toHaveBeenCalled();
+      },
+    );
+
+    it('leaves non-blank constraint values untouched', async () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expect(
+        searchStudies.handler(
+          searchStudies.input!.parse({
+            advancedFilter: 'AREA[StudyType]INTERVENTIONAL',
+            geoFilter: 'distance(47.6062,-122.3321,50mi)',
+            sort: 'LastUpdatePostDate:desc',
+          }),
+          ctx,
+        ),
+      ).resolves.toBeDefined();
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filterAdvanced: 'AREA[StudyType]INTERVENTIONAL',
+          filterGeo: 'distance(47.6062,-122.3321,50mi)',
+          sort: 'LastUpdatePostDate:desc',
+        }),
+        ctx,
+      );
+    });
+
+    it('never reaches the service when a query value is blank', async () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expectBlankValue(
+        searchStudies.handler(searchStudies.input!.parse({ query: '' }), ctx),
+        'query',
+      );
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it('rejects an empty fields array at the schema (defense in depth)', () => {
+      expect(() => searchStudies.input!.parse({ fields: [] })).toThrow();
+    });
+
+    it('rejects a fields array carrying a blank entry', () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      return expectBlankValue(
+        searchStudies.handler(searchStudies.input!.parse({ fields: ['OverallStatus', ''] }), ctx),
+        'fields',
+      );
+    });
+
+    it.each(['statusFilter', 'phaseFilter'] as const)(
+      'rejects a stringified empty %s array',
+      (param) => {
+        const ctx = createMockContext({ errors: searchStudies.errors });
+        return expectBlankValue(
+          searchStudies.handler(searchStudies.input!.parse({ [param]: '[]' }), ctx),
+          param,
+        );
+      },
+    );
+
+    it.each(['statusFilter', 'phaseFilter'] as const)(
+      'rejects an empty real %s array at the schema (defense in depth)',
+      (param) => {
+        expect(() => searchStudies.input!.parse({ [param]: [] })).toThrow();
+      },
+    );
+
+    it('rejects a statusFilter carrying a blank entry', () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      return expectBlankValue(
+        searchStudies.handler(
+          searchStudies.input!.parse({ statusFilter: ['RECRUITING', ' '] }),
+          ctx,
+        ),
+        'statusFilter',
+      );
+    });
+
+    it('rejects a phaseFilter carrying a blank entry', () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      return expectBlankValue(
+        searchStudies.handler(searchStudies.input!.parse({ phaseFilter: ['PHASE3', ''] }), ctx),
+        'phaseFilter',
+      );
+    });
+
+    it('leaves omission untouched — every narrowed parameter stays optional', async () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expect(
+        searchStudies.handler(searchStudies.input!.parse({}), ctx),
+      ).resolves.toBeDefined();
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          queryTerm: undefined,
+          fields: undefined,
+          filterOverallStatus: undefined,
+          filterAdvanced: undefined,
+          filterGeo: undefined,
+          sort: undefined,
+        }),
+        ctx,
+      );
+    });
+
+    it('leaves non-blank values untouched', async () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expect(
+        searchStudies.handler(
+          searchStudies.input!.parse({
+            query: 'diabetes',
+            conditionQuery: 'Type 2 Diabetes',
+            fields: ['NCTId'],
+            statusFilter: ['RECRUITING'],
+            phaseFilter: 'PHASE3',
+          }),
+          ctx,
+        ),
+      ).resolves.toBeDefined();
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          queryTerm: 'diabetes',
+          queryCond: 'Type 2 Diabetes',
+          fields: ['NCTId'],
+          filterOverallStatus: ['RECRUITING'],
+          filterAdvanced: 'AREA[Phase]PHASE3',
+        }),
+        ctx,
+      );
+    });
+
+    it('declares the blank_value reason on the tool contract', () => {
+      expect(searchStudies.errors?.map((e) => e.reason)).toContain('blank_value');
     });
   });
 
@@ -437,7 +751,7 @@ describe('searchStudies', () => {
         studies: [studyWithLocations()],
         totalCount: 1,
       });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(
         searchStudies.input!.parse({ geoFilter: 'distance(47.6062,-122.3321,50mi)' }),
         ctx,
@@ -456,7 +770,7 @@ describe('searchStudies', () => {
         studies: [studyWithLocations()],
         totalCount: 1,
       });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(
         searchStudies.input!.parse({ geoFilter: 'distance(47.6062,-122.3321,50mi)' }),
         ctx,
@@ -472,7 +786,7 @@ describe('searchStudies', () => {
         studies: [studyWithLocations()],
         totalCount: 1,
       });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(searchStudies.input!.parse({}), ctx);
       const loc = indexLocations(result);
       // Upstream order preserved — Phoenix leads, no distance annotation.
@@ -486,7 +800,7 @@ describe('searchStudies', () => {
         studies: [studyWithLocations()],
         totalCount: 1,
       });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(
         searchStudies.input!.parse({
           geoFilter: 'distance(47.6062,-122.3321,50mi)',
@@ -515,7 +829,7 @@ describe('searchStudies', () => {
         studies: [{ protocolSection: { identificationModule: { nctId: 'NCT00000001' } } }],
         totalCount: 1,
       });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       await expect(
         searchStudies.handler(
           searchStudies.input!.parse({ geoFilter: 'distance(47.6062,-122.3321,50mi)' }),
@@ -709,7 +1023,7 @@ describe('searchStudies', () => {
 
     it('default (no fields): structuredContent is a compact index, not the full record, and content[] mirrors it', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [fullStudy()], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(
         searchStudies.input!.parse({ conditionQuery: 'diabetes' }),
         ctx,
@@ -750,7 +1064,7 @@ describe('searchStudies', () => {
 
     it('default non-geoFilter: a multi-site study still renders its site in content[] (#84 non-geo common case)', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [fullStudy()], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(
         searchStudies.input!.parse({ conditionQuery: 'diabetes' }),
         ctx,
@@ -777,7 +1091,7 @@ describe('searchStudies', () => {
         },
       };
       mockService.searchStudies.mockResolvedValue({ studies: [trimmed], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(
         searchStudies.input!.parse({
           conditionQuery: 'diabetes',
@@ -802,7 +1116,7 @@ describe('searchStudies', () => {
 
     it('geoFilter (default): the nearest site + distance reach both channels', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [fullStudy()], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(
         searchStudies.input!.parse({ conditionQuery: 'diabetes', geoFilter: seattleGeo }),
         ctx,
@@ -833,7 +1147,7 @@ describe('searchStudies', () => {
         },
       };
       mockService.searchStudies.mockResolvedValue({ studies: [trimmed], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(
         searchStudies.input!.parse({
           conditionQuery: 'diabetes',
@@ -863,6 +1177,69 @@ describe('searchStudies', () => {
       expect(text).toContain('0.0 mi');
     });
 
+    it('explicit fields: repeated secondaryIdInfos entries stay attributed to their own entry in content[] (#86)', async () => {
+      // NCT03722472 registers two secondary IDs with overlapping-but-not-identical
+      // leaf sets — entry [0] has a `domain` and no `link`, entry [1] the reverse.
+      // content[] rendered one four-line record splicing both entries together.
+      const trimmed = {
+        protocolSection: {
+          identificationModule: {
+            nctId: 'NCT03722472',
+            secondaryIdInfos: [
+              { id: 'DMID 17-0104', type: 'OTHER', domain: 'NIH/NIAID/DMID' },
+              {
+                id: '272201400041C-0-0-1',
+                type: 'NIH',
+                link: 'https://reporter.nih.gov/quickSearch/272201400041C-0-0-1',
+              },
+            ],
+          },
+        },
+      };
+      mockService.searchStudies.mockResolvedValue({ studies: [trimmed], totalCount: 1 });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({
+          nctIds: ['NCT03722472'],
+          fields: [
+            'NCTId',
+            'SecondaryId',
+            'SecondaryIdType',
+            'SecondaryIdDomain',
+            'SecondaryIdLink',
+          ],
+          pageSize: 1,
+          includeUnknownEnrollment: true,
+        }),
+        ctx,
+      );
+
+      // structuredContent carries both entries untouched.
+      const infos = (
+        result.studies[0] as {
+          protocolSection: {
+            identificationModule: {
+              secondaryIdInfos: Array<{ id?: string; domain?: string; link?: string }>;
+            };
+          };
+        }
+      ).protocolSection.identificationModule.secondaryIdInfos;
+      expect(infos.map((i) => i.id)).toEqual(['DMID 17-0104', '272201400041C-0-0-1']);
+
+      // content[] carries every leaf, each attributed to its originating entry.
+      const text = renderText(result);
+      expect(text).toContain('Secondary Id Infos[0] > Id: DMID 17-0104');
+      expect(text).toContain('Secondary Id Infos[0] > Type: OTHER');
+      expect(text).toContain('Secondary Id Infos[0] > Domain: NIH/NIAID/DMID');
+      expect(text).toContain('Secondary Id Infos[1] > Id: 272201400041C-0-0-1');
+      expect(text).toContain('Secondary Id Infos[1] > Type: NIH');
+      expect(text).toContain(
+        'Secondary Id Infos[1] > Link: https://reporter.nih.gov/quickSearch/272201400041C-0-0-1',
+      );
+      // No unattributed line — entry [1]'s link never rides under entry [0].
+      expect(text).not.toMatch(/Secondary Id Infos > /);
+    });
+
     it('explicit fields: a long string leaf (BriefSummary) renders unclipped in content[], matching structuredContent (#89)', async () => {
       // A 543-char summary — the reported NCT00225888 length. structuredContent
       // carries it whole; content[] must too, not a 200-char slice with an ellipsis.
@@ -875,7 +1252,7 @@ describe('searchStudies', () => {
         },
       };
       mockService.searchStudies.mockResolvedValue({ studies: [trimmed], totalCount: 1 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const result = await searchStudies.handler(
         searchStudies.input!.parse({
           conditionQuery: 'Type 2 Diabetes',

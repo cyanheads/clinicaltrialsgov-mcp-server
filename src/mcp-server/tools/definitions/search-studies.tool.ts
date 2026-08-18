@@ -15,7 +15,13 @@ import {
   type LocationWithDistance,
   parseGeoFilterCenter,
 } from '../utils/geo-helpers.js';
-import { buildAdvancedFilter, toArray } from '../utils/query-helpers.js';
+import {
+  blankValueMessage,
+  buildAdvancedFilter,
+  firstBlankListParam,
+  firstBlankParam,
+  toArray,
+} from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 const { maxPageSize } = getServerConfig();
@@ -256,6 +262,12 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
 
   errors: [
     {
+      reason: 'blank_value',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A parameter was supplied with a blank, whitespace-only, or empty-list value.',
+      recovery: RECOVERY_HINTS.blank_value,
+    },
+    {
       reason: 'ids_not_found',
       code: JsonRpcErrorCode.NotFound,
       when: 'One or more NCT IDs in the nctIds filter are not present at ClinicalTrials.gov.',
@@ -346,19 +358,21 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     statusFilter: z
       .union([
         z.string().describe('A single status value.'),
-        z.array(z.string()).describe('Multiple status values (OR).'),
+        z.array(z.string()).min(1).describe('Multiple status values (OR).'),
       ])
       .optional()
       .describe(
-        `Filter by study status. Values: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, NOT_YET_RECRUITING, ENROLLING_BY_INVITATION, SUSPENDED, TERMINATED, WITHDRAWN, UNKNOWN, WITHHELD, NO_LONGER_AVAILABLE, AVAILABLE, APPROVED_FOR_MARKETING, TEMPORARILY_NOT_AVAILABLE.`,
+        `Filter by study status. Omit to search all statuses — an empty list is rejected, not treated as "no filter". Values: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, NOT_YET_RECRUITING, ENROLLING_BY_INVITATION, SUSPENDED, TERMINATED, WITHDRAWN, UNKNOWN, WITHHELD, NO_LONGER_AVAILABLE, AVAILABLE, APPROVED_FOR_MARKETING, TEMPORARILY_NOT_AVAILABLE.`,
       ),
     phaseFilter: z
       .union([
         z.string().describe('A single phase value.'),
-        z.array(z.string()).describe('Multiple phase values (OR).'),
+        z.array(z.string()).min(1).describe('Multiple phase values (OR).'),
       ])
       .optional()
-      .describe('Filter by trial phase. Values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA.'),
+      .describe(
+        'Filter by trial phase. Omit to search all phases — an empty list is rejected, not treated as "no filter". Values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA.',
+      ),
     advancedFilter: z
       .string()
       .optional()
@@ -380,9 +394,10 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .describe('Filter to specific NCT IDs for batch lookups.'),
     fields: z
       .array(z.string())
+      .min(1)
       .optional()
       .describe(
-        `PascalCase leaf names to return; strongly recommended since full records are ~70KB. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept.`,
+        `PascalCase leaf names to return; strongly recommended since full records are ~70KB. Omit for the compact index projection — an empty list is rejected, not treated as omission. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept.`,
       ),
     sort: z
       .string()
@@ -420,7 +435,12 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .number()
       .optional()
       .describe('Total matching studies (first page only when countTotal=true).'),
-    nextPageToken: z.string().optional().describe('Token for the next page. Absent on last page.'),
+    nextPageToken: z
+      .string()
+      .optional()
+      .describe(
+        'Token for the next page. Absent when this response already carries every matching study; otherwise it mirrors the upstream cursor, which ClinicalTrials.gov emits whenever a page fills to pageSize — so on a continuation page a token can still lead to an empty page.',
+      ),
     requestedFields: z
       .array(z.string())
       .optional()
@@ -458,6 +478,37 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
   },
 
   async handler(input, ctx) {
+    // A supplied-but-blank value is not an omitted one: buildSearchQuery drops
+    // falsy values, so a blank query would widen the search to the entire
+    // registry, and an empty `fields` list would silently fall back to the
+    // default projection. The constraint strings fail both ways — '' is falsy
+    // and dropped, while ' ' is truthy and forwarded, splicing a blank term
+    // into a joined boolean expression (advancedFilter) or sending upstream a
+    // whitespace value it can only reject (geoFilter, sort). Reject in the
+    // handler — a schema-only rejection surfaces as a bare -32602 with no
+    // reason and no recovery hint.
+    const statusFilter = toArray(input.statusFilter);
+    const phaseFilter = toArray(input.phaseFilter);
+    const blankParam =
+      firstBlankParam({
+        query: input.query,
+        conditionQuery: input.conditionQuery,
+        interventionQuery: input.interventionQuery,
+        locationQuery: input.locationQuery,
+        sponsorQuery: input.sponsorQuery,
+        titleQuery: input.titleQuery,
+        outcomeQuery: input.outcomeQuery,
+        advancedFilter: input.advancedFilter,
+        geoFilter: input.geoFilter,
+        sort: input.sort,
+      }) ?? firstBlankListParam({ fields: input.fields, statusFilter, phaseFilter });
+    if (blankParam) {
+      throw ctx.fail('blank_value', blankValueMessage(blankParam), {
+        param: blankParam,
+        ...ctx.recoveryFor('blank_value'),
+      });
+    }
+
     const service = getClinicalTrialsService();
     const result = await service.searchStudies(
       {
@@ -468,10 +519,10 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         querySpons: input.sponsorQuery,
         queryTitles: input.titleQuery,
         queryOutc: input.outcomeQuery,
-        filterOverallStatus: toArray(input.statusFilter),
+        filterOverallStatus: statusFilter,
         filterGeo: input.geoFilter,
         filterIds: toArray(input.nctIds),
-        filterAdvanced: buildAdvancedFilter(toArray(input.phaseFilter), input.advancedFilter),
+        filterAdvanced: buildAdvancedFilter(phaseFilter, input.advancedFilter),
         fields: input.fields,
         sort: input.sort,
         countTotal: input.countTotal,
@@ -556,9 +607,24 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       ? result.studies
       : (result.studies as RawStudyShape[]).map(projectStudyIndex);
 
+    // Upstream emits nextPageToken whenever a page fills to pageSize, without
+    // looking ahead — so a first page that already holds every match still gets
+    // a cursor whose next page is empty, and both channels then promise more
+    // results (#98). Drop it only where exhaustion is provable: a fresh search
+    // (no incoming pageToken) whose computed totalCount this page already
+    // covers. A continuation page is out of reach — totalCount is first-page
+    // only and the upstream cursor is opaque, so there is no consumed count to
+    // compare against, and firing there would strand real results.
+    const { nextPageToken, ...page } = result;
+    const exhausted =
+      input.pageToken === undefined &&
+      result.totalCount !== undefined &&
+      result.studies.length >= result.totalCount;
+
     return {
-      ...result,
+      ...page,
       studies,
+      ...(nextPageToken !== undefined && !exhausted ? { nextPageToken } : {}),
       ...(input.fields?.length ? { requestedFields: input.fields } : {}),
     };
   },

@@ -8,6 +8,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
 import { formatRemainingStudyFields } from '../utils/format-helpers.js';
+import { blankValueMessage, firstBlankListParam, firstBlankParam } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 interface UserLocation {
@@ -166,6 +167,12 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
 
   errors: [
     {
+      reason: 'blank_value',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A parameter was supplied with a blank, whitespace-only, or empty-list value.',
+      recovery: RECOVERY_HINTS.blank_value,
+    },
+    {
       reason: 'rate_limited',
       code: JsonRpcErrorCode.RateLimited,
       when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
@@ -306,6 +313,20 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
   },
 
   async handler(input, ctx) {
+    // A blank condition or country is dropped before the upstream query is
+    // built, so the call would answer with trials unrelated to anything the
+    // caller asked for. Reject in the handler — a schema-only rejection
+    // surfaces as a bare -32602 with no reason and no recovery hint.
+    const blankParam =
+      firstBlankListParam({ conditions: input.conditions }) ??
+      firstBlankParam({ 'location.country': input.location.country });
+    if (blankParam) {
+      throw ctx.fail('blank_value', blankValueMessage(blankParam), {
+        param: blankParam,
+        ...ctx.recoveryFor('blank_value'),
+      });
+    }
+
     const service = getClinicalTrialsService();
 
     const conditionQuery = input.conditions

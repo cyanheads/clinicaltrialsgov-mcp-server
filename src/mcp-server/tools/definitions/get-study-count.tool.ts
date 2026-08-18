@@ -6,7 +6,13 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
-import { buildAdvancedFilter, toArray } from '../utils/query-helpers.js';
+import {
+  blankValueMessage,
+  buildAdvancedFilter,
+  firstBlankListParam,
+  firstBlankParam,
+  toArray,
+} from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 export const getStudyCount = tool('clinicaltrials_get_study_count', {
@@ -18,6 +24,12 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
   },
 
   errors: [
+    {
+      reason: 'blank_value',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A parameter was supplied with a blank, whitespace-only, or empty-list value.',
+      recovery: RECOVERY_HINTS.blank_value,
+    },
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
@@ -91,19 +103,21 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     statusFilter: z
       .union([
         z.string().describe('A single status value.'),
-        z.array(z.string()).describe('Multiple status values (OR).'),
+        z.array(z.string()).min(1).describe('Multiple status values (OR).'),
       ])
       .optional()
       .describe(
-        `Filter by study status. Values: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, NOT_YET_RECRUITING, ENROLLING_BY_INVITATION, SUSPENDED, TERMINATED, WITHDRAWN, UNKNOWN, WITHHELD, NO_LONGER_AVAILABLE, AVAILABLE, APPROVED_FOR_MARKETING, TEMPORARILY_NOT_AVAILABLE.`,
+        `Filter by study status. Omit to count all statuses — an empty list is rejected, not treated as "no filter". Values: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, NOT_YET_RECRUITING, ENROLLING_BY_INVITATION, SUSPENDED, TERMINATED, WITHDRAWN, UNKNOWN, WITHHELD, NO_LONGER_AVAILABLE, AVAILABLE, APPROVED_FOR_MARKETING, TEMPORARILY_NOT_AVAILABLE.`,
       ),
     phaseFilter: z
       .union([
         z.string().describe('A single phase value.'),
-        z.array(z.string()).describe('Multiple phase values (OR).'),
+        z.array(z.string()).min(1).describe('Multiple phase values (OR).'),
       ])
       .optional()
-      .describe('Filter by trial phase. Values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA.'),
+      .describe(
+        'Filter by trial phase. Omit to count all phases — an empty list is rejected, not treated as "no filter". Values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA.',
+      ),
     advancedFilter: z
       .string()
       .optional()
@@ -151,6 +165,33 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
   },
 
   async handler(input, ctx) {
+    // A supplied-but-blank value is not an omitted one: buildSearchQuery drops
+    // falsy values, so a blank query would return the size of the whole
+    // registry as if it were the answer to the caller's question. advancedFilter
+    // fails both ways — '' is falsy and dropped, while ' ' is truthy and splices
+    // a blank term into a joined boolean expression. Reject in the handler — a
+    // schema-only rejection surfaces as a bare -32602 with no reason and no
+    // recovery hint.
+    const statusFilter = toArray(input.statusFilter);
+    const phaseFilter = toArray(input.phaseFilter);
+    const blankParam =
+      firstBlankParam({
+        query: input.query,
+        conditionQuery: input.conditionQuery,
+        interventionQuery: input.interventionQuery,
+        locationQuery: input.locationQuery,
+        sponsorQuery: input.sponsorQuery,
+        titleQuery: input.titleQuery,
+        outcomeQuery: input.outcomeQuery,
+        advancedFilter: input.advancedFilter,
+      }) ?? firstBlankListParam({ statusFilter, phaseFilter });
+    if (blankParam) {
+      throw ctx.fail('blank_value', blankValueMessage(blankParam), {
+        param: blankParam,
+        ...ctx.recoveryFor('blank_value'),
+      });
+    }
+
     const service = getClinicalTrialsService();
     const result = await service.searchStudies(
       {
@@ -161,8 +202,8 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
         querySpons: input.sponsorQuery,
         queryTitles: input.titleQuery,
         queryOutc: input.outcomeQuery,
-        filterOverallStatus: toArray(input.statusFilter),
-        filterAdvanced: buildAdvancedFilter(toArray(input.phaseFilter), input.advancedFilter),
+        filterOverallStatus: statusFilter,
+        filterAdvanced: buildAdvancedFilter(phaseFilter, input.advancedFilter),
         countTotal: true,
         pageSize: 0,
         includeUnknownEnrollment: input.includeUnknownEnrollment,

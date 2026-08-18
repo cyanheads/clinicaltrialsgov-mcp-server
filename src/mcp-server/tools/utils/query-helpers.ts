@@ -33,6 +33,41 @@ export function toArray(v: string | string[] | undefined): string[] | undefined 
   return [v];
 }
 
+/**
+ * Name the first supplied-but-blank string parameter, or `undefined` when every
+ * supplied value carries non-whitespace. Omitted parameters are skipped —
+ * omission keeps its documented meaning; only a value the caller actually
+ * supplied is judged. Trimming, not a length check: `' '` is as empty as `''`,
+ * and the upstream query builder drops both, silently widening the request to
+ * the whole registry instead of constraining it.
+ */
+export function firstBlankParam(params: Record<string, string | undefined>): string | undefined {
+  for (const [name, value] of Object.entries(params)) {
+    if (value !== undefined && value.trim().length === 0) return name;
+  }
+  return undefined;
+}
+
+/**
+ * Name the first supplied list parameter that is empty or carries a blank
+ * entry. Pass lists already normalized through `toArray`, so the stringified
+ * `'[]'` form LLM callers sometimes send is judged on what it resolves to.
+ */
+export function firstBlankListParam(
+  params: Record<string, string[] | undefined>,
+): string | undefined {
+  for (const [name, values] of Object.entries(params)) {
+    if (!values) continue;
+    if (values.length === 0 || values.some((v) => v.trim().length === 0)) return name;
+  }
+  return undefined;
+}
+
+/** Actionable message for a parameter supplied with a blank value. */
+export function blankValueMessage(param: string): string {
+  return `Parameter '${param}' was supplied with a blank value — an empty or whitespace-only string, an empty list, or a list carrying a blank entry. Omit it to leave it unset, or supply a value containing non-whitespace.`;
+}
+
 /** Build AREA[] phase filter and combine with user's advancedFilter. */
 export function buildAdvancedFilter(
   phaseFilter?: string[],

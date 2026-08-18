@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/find-eligible.tool
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -83,7 +84,7 @@ describe('findEligible', () => {
       const study = { protocolSection: { identificationModule: { nctId: 'NCT12345678' } } };
       mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       expect(result.studies).toHaveLength(1);
@@ -92,7 +93,7 @@ describe('findEligible', () => {
 
     it('builds condition query with quoting and OR', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(
         findEligible.input!.parse({
           ...baseInput,
@@ -109,7 +110,7 @@ describe('findEligible', () => {
 
     it('does not quote single-word conditions', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(
         findEligible.input!.parse({ ...baseInput, conditions: ['Asthma'] }),
         ctx,
@@ -123,7 +124,7 @@ describe('findEligible', () => {
 
     it('builds location query from city, state, country', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
@@ -134,7 +135,7 @@ describe('findEligible', () => {
 
     it('builds location from country only', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(
         findEligible.input!.parse({
           ...baseInput,
@@ -151,7 +152,7 @@ describe('findEligible', () => {
 
     it('builds status filter when recruitingOnly is true', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
@@ -164,7 +165,7 @@ describe('findEligible', () => {
 
     it('omits status filter when recruitingOnly is false', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(
         findEligible.input!.parse({ ...baseInput, recruitingOnly: false }),
         ctx,
@@ -178,7 +179,7 @@ describe('findEligible', () => {
 
     it('includes sex filter in advancedFilter when sex is not All', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse({ ...baseInput, sex: 'FEMALE' }), ctx);
 
       const call = mockService.searchStudies.mock.calls[0]![0];
@@ -187,7 +188,7 @@ describe('findEligible', () => {
 
     it('omits sex filter when sex is All', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       const call = mockService.searchStudies.mock.calls[0]![0];
@@ -196,7 +197,7 @@ describe('findEligible', () => {
 
     it('includes healthy volunteer filter when set', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(
         findEligible.input!.parse({ ...baseInput, healthyVolunteer: true }),
         ctx,
@@ -208,7 +209,7 @@ describe('findEligible', () => {
 
     it('includes age range filters in advancedFilter', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       const call = mockService.searchStudies.mock.calls[0]![0];
@@ -218,7 +219,7 @@ describe('findEligible', () => {
 
     it('uses maxResults as pageSize', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse({ ...baseInput, maxResults: 25 }), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
@@ -232,7 +233,7 @@ describe('findEligible', () => {
       // sponsor published an enrollment count. The sentinel filter would
       // drop otherwise-valid matches.
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
@@ -243,7 +244,7 @@ describe('findEligible', () => {
 
     it('requests the eligibility field set', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       const call = mockService.searchStudies.mock.calls[0]![0];
@@ -256,7 +257,7 @@ describe('findEligible', () => {
 
     it('echoes search criteria including the reproducible query strings in enrichment (#91)', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       const enrichment = getEnrichment(ctx);
@@ -276,7 +277,7 @@ describe('findEligible', () => {
 
     it('omits statusFilter and folds sex + healthy-volunteer into the echoed advancedFilter (#91)', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(
         findEligible.input!.parse({
           ...baseInput,
@@ -297,17 +298,17 @@ describe('findEligible', () => {
 
     it('provides notice in enrichment when no studies found', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       const enrichment = getEnrichment(ctx);
-      expect(enrichment.notice).toBeDefined();
-      expect(enrichment.notice!.length).toBeGreaterThan(0);
+      expect(enrichment.notice).toEqual(expect.any(String));
+      expect(enrichment.notice).not.toBe('');
     });
 
     it('hints about extreme age in enrichment notice', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse({ ...baseInput, age: 120 }), ctx);
 
       const enrichment = getEnrichment(ctx);
@@ -316,7 +317,7 @@ describe('findEligible', () => {
 
     it('hints about sex restriction in enrichment notice', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse({ ...baseInput, sex: 'MALE' }), ctx);
 
       const enrichment = getEnrichment(ctx);
@@ -325,7 +326,7 @@ describe('findEligible', () => {
 
     it('hints about healthy volunteer restriction in enrichment notice', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(
         findEligible.input!.parse({ ...baseInput, healthyVolunteer: true }),
         ctx,
@@ -337,7 +338,7 @@ describe('findEligible', () => {
 
     it('hints about recruiting-only restriction in enrichment notice', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       const enrichment = getEnrichment(ctx);
@@ -346,7 +347,7 @@ describe('findEligible', () => {
 
     it('hints about narrowing location in enrichment notice', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       const enrichment = getEnrichment(ctx);
@@ -357,11 +358,92 @@ describe('findEligible', () => {
       const study = { protocolSection: { identificationModule: { nctId: 'NCT12345678' } } };
       mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       const enrichment = getEnrichment(ctx);
       expect(enrichment.notice).toBeUndefined();
+    });
+  });
+
+  describe('blank supplied values (#99)', () => {
+    /** Assert a handler call fails with the shared blank_value contract for `param`. */
+    const expectBlankValue = (call: unknown, param: string) =>
+      expect(call).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'blank_value', param },
+      });
+
+    beforeEach(() => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+    });
+
+    it('rejects a conditions array whose only entry is blank', () => {
+      const ctx = createMockContext({ errors: findEligible.errors });
+      return expectBlankValue(
+        findEligible.handler(findEligible.input!.parse({ ...baseInput, conditions: [''] }), ctx),
+        'conditions',
+      );
+    });
+
+    it('rejects a conditions array carrying a blank entry alongside a valid one', () => {
+      const ctx = createMockContext({ errors: findEligible.errors });
+      return expectBlankValue(
+        findEligible.handler(
+          findEligible.input!.parse({ ...baseInput, conditions: ['Diabetes', '  '] }),
+          ctx,
+        ),
+        'conditions',
+      );
+    });
+
+    it.each(['', '   '])('rejects a blank location.country (%j)', (country) => {
+      const ctx = createMockContext({ errors: findEligible.errors });
+      return expectBlankValue(
+        findEligible.handler(
+          findEligible.input!.parse({ ...baseInput, location: { country } }),
+          ctx,
+        ),
+        'location.country',
+      );
+    });
+
+    it('never reaches the service when a supplied value is blank', async () => {
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await expectBlankValue(
+        findEligible.handler(findEligible.input!.parse({ ...baseInput, conditions: [''] }), ctx),
+        'conditions',
+      );
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it('leaves non-blank values untouched', async () => {
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await expect(
+        findEligible.handler(findEligible.input!.parse(baseInput), ctx),
+      ).resolves.toBeDefined();
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ queryCond: '"Type 2 Diabetes"' }),
+        ctx,
+      );
+    });
+
+    it('leaves the optional location parts untouched when omitted', async () => {
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await expect(
+        findEligible.handler(
+          findEligible.input!.parse({ ...baseInput, location: { country: 'United States' } }),
+          ctx,
+        ),
+      ).resolves.toBeDefined();
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ queryLocn: 'United States' }),
+        ctx,
+      );
+    });
+
+    it('declares the blank_value reason on the tool contract', () => {
+      expect(findEligible.errors?.map((e) => e.reason)).toContain('blank_value');
     });
   });
 
@@ -630,7 +712,7 @@ describe('findEligible', () => {
         return { studies: [], totalCount: 298 }; // condition only
       });
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       const enrichment = getEnrichment(ctx);
@@ -661,7 +743,7 @@ describe('findEligible', () => {
       }));
       mockService.searchStudies.mockResolvedValue({ studies, totalCount: 5 });
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       const result = await findEligible.handler(
         findEligible.input!.parse({
           age: 56,
@@ -703,7 +785,7 @@ describe('findEligible', () => {
       ];
       mockService.searchStudies.mockResolvedValue({ studies, totalCount: 2 });
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       const result = await findEligible.handler(
         findEligible.input!.parse({
           age: 50,
@@ -740,7 +822,7 @@ describe('findEligible', () => {
       }));
       mockService.searchStudies.mockResolvedValue({ studies, totalCount: 2 });
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       const result = await findEligible.handler(
         findEligible.input!.parse({
           age: 58,
@@ -779,7 +861,7 @@ describe('findEligible', () => {
       }));
       mockService.searchStudies.mockResolvedValue({ studies, totalCount: 2 });
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       const result = await findEligible.handler(
         findEligible.input!.parse({
           age: 58,
@@ -828,7 +910,7 @@ describe('findEligible', () => {
       };
       mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: findEligible.errors });
       const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       const sortedStudy = result.studies[0] as typeof study;

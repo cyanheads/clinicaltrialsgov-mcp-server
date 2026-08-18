@@ -8,6 +8,8 @@
  */
 
 export const RECOVERY_HINTS = {
+  blank_value:
+    'Omit the parameter entirely to leave it unset — omission and a blank value mean different things here. To constrain the request, supply a value containing non-whitespace; for list parameters, supply at least one non-blank entry.',
   study_not_found:
     'Verify the NCT ID at clinicaltrials.gov or call clinicaltrials_search_studies to discover a valid identifier.',
   ids_not_found:

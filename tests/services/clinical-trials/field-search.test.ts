@@ -360,6 +360,40 @@ describe('nearestPieces', () => {
     expect(results).toContain('AbcDef');
   });
 
+  it('suggests the Enrollment family for a one-letter misspelling (#112)', () => {
+    const e = flattenMetadata(sampleTree);
+    const results = nearestPieces('Enrolment', e, 3);
+    expect(results).toContain('EnrollmentCount');
+  });
+
+  it('suggests the canonical casing for a case-only mistake (#112)', () => {
+    const e = flattenMetadata(sampleTree);
+    const results = nearestPieces('enrollmentcount', e, 3);
+    expect(results[0]).toBe('EnrollmentCount');
+  });
+
+  it('offers nothing when no piece is close to the input (#112)', () => {
+    // Every candidate is an edit-distance away equal to the longer string's
+    // length — no shared structure at all. Three confident-looking names sent a
+    // caller after a field the scorer had no reason to propose.
+    const e = flattenMetadata(sampleTree);
+    expect(nearestPieces('Bogus', e, 3)).toEqual([]);
+  });
+
+  it('offers nothing when the only overlap is a description word (#112)', () => {
+    // 'field' appears in the description and nowhere in the piece name or path.
+    // A lone description coincidence is not a did-you-mean.
+    const e = [
+      {
+        piece: 'ConditionMesh',
+        path: 'x.conditionMesh',
+        name: 'conditionMesh',
+        description: 'Field-level MeSH term for the condition.',
+      },
+    ];
+    expect(nearestPieces('MyField', e, 3)).toEqual([]);
+  });
+
   it('ranks the short canonical field above longer fields sharing one token (#60)', () => {
     // All three share only "status"; "recruitment" matches none. Field-token
     // coverage must lift the 2-token OverallStatus above the 3- and 6-token

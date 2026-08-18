@@ -152,21 +152,46 @@ export function searchFields(
 }
 
 /**
+ * Floor a keyword-scored suggestion must clear. Sits above the most a candidate
+ * can earn with no piece-name evidence at all — a lone path token (60), a lone
+ * description token (30), or both (90) — so a coincidence in the metadata
+ * surrounding a field never reads as a did-you-mean.
+ */
+const MIN_SUGGESTION_SCORE = 100;
+
+/**
+ * Ceiling on edit distance as a fraction of the longer string, for the fallback
+ * path. A near miss stays well under it (`Enrolment` → `EnrollmentCount` is
+ * 0.40); a name sharing no structure with any piece sits at or near 1.0.
+ */
+const MAX_SUGGESTION_DISTANCE_RATIO = 0.5;
+
+/**
  * Suggest the closest valid `piece` names to an invalid input. Uses the same
  * keyword scoring first, falls back to Levenshtein distance for typos that
  * don't share token-level signal (e.g., `ConditionList` → `Condition`).
+ *
+ * Both paths drop candidates clearing no minimum similarity, so an input
+ * related to no piece name yields nothing rather than the nearest of the
+ * unrelated. Callers already render the no-suggestion case: the message still
+ * names the invalid input and points at `clinicaltrials_get_field_definitions`.
  */
 export function nearestPieces(invalid: string, entries: FieldIndexEntry[], n = 3): string[] {
   const scored = entries
     .map((e) => ({ piece: e.piece, score: scoreEntry(invalid, e) }))
-    .filter((x) => x.score > 0);
+    .filter((x) => x.score >= MIN_SUGGESTION_SCORE);
   if (scored.length > 0) {
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, n).map((x) => x.piece);
   }
   const target = invalid.toLowerCase();
   return entries
-    .map((e) => ({ piece: e.piece, dist: levenshtein(target, e.piece.toLowerCase()) }))
+    .map((e) => {
+      const piece = e.piece.toLowerCase();
+      const dist = levenshtein(target, piece);
+      return { piece: e.piece, dist, ratio: dist / Math.max(target.length, piece.length) };
+    })
+    .filter((x) => x.ratio <= MAX_SUGGESTION_DISTANCE_RATIO)
     .sort((a, b) => a.dist - b.dist)
     .slice(0, n)
     .map((x) => x.piece);

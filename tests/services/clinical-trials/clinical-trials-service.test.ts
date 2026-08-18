@@ -1585,6 +1585,45 @@ describe('ClinicalTrialsService', () => {
       }
     });
 
+    it('omits the did-you-mean clause when nothing is close to the bad field (#112)', async () => {
+      // 'Bogus' shares no token and no meaningful edit distance with any piece.
+      // Naming three unrelated fields sent the caller after a name the scorer
+      // had no reason to propose; the bare header plus the recovery hint is the
+      // honest answer.
+      mockByRoute();
+      const ctx = createMockContext();
+      try {
+        await validatingService.searchStudies({ fields: ['Bogus'] }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const error = err as McpError;
+        expect(error.message).toBe("Invalid field name: 'Bogus'.");
+        expect(error.message).not.toContain('did you mean');
+        const data = error.data as Record<string, unknown>;
+        expect(data.reason).toBe('field_invalid');
+        expect(data.invalid).toEqual(['Bogus']);
+        expect(data.suggestions).toBeUndefined();
+      }
+    });
+
+    it('omits the blame clause on an unknown sort field with no close piece (#112)', async () => {
+      // #107 gave nearestPieces a second consumer. Not every piece is sortable,
+      // so an unrelated suggestion here costs a caller two failures: the field
+      // name, then `Unsupported sort field type`.
+      mockByRoute({ primary: textResponse('Unknown sort field') });
+      const ctx = createMockContext();
+      try {
+        await validatingService.searchStudies({ sort: 'Bogus:desc' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const msg = (err as McpError).message;
+        expect(msg).not.toContain('did you mean');
+        expect(msg).toContain('does not recognize the sort field name.');
+        expect(msg).toContain('clinicaltrials_get_field_definitions');
+        expect((err as McpError).data).toMatchObject({ reason: 'sort_invalid' });
+      }
+    });
+
     it('suggests nearest matches for a typo', async () => {
       mockByRoute();
       const ctx = createMockContext();

@@ -1,6 +1,6 @@
 {
   "name": "clinicaltrialsgov-mcp-server",
-  "version": "2.9.0",
+  "version": "2.9.1",
   "mcpName": "io.github.cyanheads/clinicaltrialsgov-mcp-server",
   "description": "Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to eligible trials via MCP. STDIO or Streamable HTTP.",
   "main": "dist/index.js",
@@ -28,9 +28,6 @@
   "homepage": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server#readme",
   "scripts": {
     "build": "bun run scripts/build.ts",
-    "build:worker": "bun build ./src/worker.ts --outdir ./dist --target bun --no-external",
-    "deploy:dev": "MCP_TRANSPORT_TYPE=http bunx wrangler dev",
-    "deploy:prod": "MCP_TRANSPORT_TYPE=http bunx wrangler deploy",
     "start": "bun ./dist/index.js",
     "start:stdio": "MCP_TRANSPORT_TYPE=stdio bun ./dist/index.js",
     "start:http": "MCP_TRANSPORT_TYPE=http bun ./dist/index.js",
@@ -49,7 +46,6 @@
     "prepare": "git config core.hooksPath .husky || exit 0",
     "inspector": "bunx mcp-inspector --config mcp.json --server clinicaltrialsgov-mcp-server",
     "test": "bunx vitest run",
-    "test:conformance": "bunx vitest run --config vitest.conformance.ts",
     "test:fuzz": "bunx vitest run fuzz",
     "test:coverage": "bunx vitest run --coverage",
     "coverage:update": "bun run scripts/update-coverage.ts",
@@ -108,7 +104,6 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.8",
-    "@cloudflare/workers-types": "5.20260815.1",
     "@socketsecurity/bun-security-scanner": "^1.1.2",
     "@types/bun": "^1.3.14",
     "@types/node": "26.2.0",

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.9.1](changelog/2.9.x/2.9.1.md) — 2026-08-18
+
+nearestPieces field/sort suggestions require a similarity floor instead of always returning three; the blank_value recovery hint leads with the fix that works on required parameters; dead Cloudflare Worker scripts and devDependency removed
+
 ## [2.9.0](changelog/2.9.x/2.9.0.md) — 2026-08-18 · ⚠️ Breaking
 
 clinicaltrials://{nctId} now returns a bounded wrapper instead of the raw study (breaking); get_study_results and find_eligible gain new caps; find_eligible no longer hides an enrollable site behind a closed one; remaining-field labels disambiguate on collision

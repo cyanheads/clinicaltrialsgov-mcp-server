@@ -61,8 +61,6 @@ logs/
 .env
 .env.local
 .env.*.local
-.wrangler
-worker-configuration.d.ts
 
 # =============================================================================
 # APPLICATION SPECIFIC

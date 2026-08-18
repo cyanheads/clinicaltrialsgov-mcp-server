@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-08-18 15:31:49
+Generated on: 2026-08-18 16:03:28
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -209,7 +209,8 @@ clinicaltrialsgov-mcp-server/
 │   │       │   ├── geo-helpers.test.ts
 │   │       │   ├── query-helpers.test.ts
 │   │       │   └── utils-shared.test.ts
-│   │       └── security.test.ts
+│   │       ├── security.test.ts
+│   │       └── tool-contract.test.ts
 │   └── services/
 │       └── clinical-trials/
 │           ├── clinical-trials-service.test.ts

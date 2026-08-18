@@ -6,7 +6,6 @@
 Dockerfile
 bun.lock
 bunfig.toml
-wrangler.toml
 biome.json
 tsconfig*.json
 vitest.config.ts

@@ -125,7 +125,7 @@ describe('ClinicalTrialsService', () => {
       expect(calledUrl.searchParams.get('filter.ids')).toBe('NCT12345678');
       // Sentinel filter is appended unless the caller opts in.
       expect(calledUrl.searchParams.get('filter.advanced')).toBe(
-        '(AREA[StudyType]INTERVENTIONAL) AND (AREA[EnrollmentCount]RANGE[0, 99999998])',
+        '(AREA[StudyType]INTERVENTIONAL) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])',
       );
       expect(calledUrl.searchParams.get('fields')).toBe('NCTId|BriefTitle');
       expect(calledUrl.searchParams.get('sort')).toBe('LastUpdatePostDate:desc');
@@ -142,8 +142,41 @@ describe('ClinicalTrialsService', () => {
 
       const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.searchParams.get('filter.advanced')).toBe(
-        'AREA[EnrollmentCount]RANGE[0, 99999998]',
+        'NOT AREA[EnrollmentCount]RANGE[99999999, MAX]',
       );
+    });
+
+    it('negates the sentinel range instead of bounding it, so a study with no EnrollmentCount survives (#106)', async () => {
+      // A closed AREA[EnrollmentCount]RANGE[…] predicate matches only studies
+      // that publish the field, so it excluded two disjoint sets: the handful of
+      // rows at or above the unknown-enrollment boundary it was written for, and
+      // every study carrying no EnrollmentCount at all — the whole of expanded
+      // access among them. The negated single-sided range expresses the
+      // documented intent directly and needs no MISSING arm.
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [] }));
+      const ctx = createMockContext();
+
+      await service.searchStudies({ queryCond: 'diabetes' }, ctx);
+
+      const advanced = new URL(mockFetch.mock.calls[0]![0] as string).searchParams.get(
+        'filter.advanced',
+      );
+      expect(advanced).toBe('NOT AREA[EnrollmentCount]RANGE[99999999, MAX]');
+      // The old bounded form is what dropped the missing-enrollment studies.
+      expect(advanced).not.toContain('RANGE[0, 99999998]');
+    });
+
+    it('parenthesizes the negated sentinel clause alongside a caller-supplied filter (#106)', async () => {
+      // NOT must stay bound to its own clause under the service's join pattern —
+      // a leak across the AND boundary would negate the caller's filter too.
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [] }));
+      const ctx = createMockContext();
+
+      await service.searchStudies({ filterAdvanced: 'AREA[OverallStatus]AVAILABLE' }, ctx);
+
+      expect(
+        new URL(mockFetch.mock.calls[0]![0] as string).searchParams.get('filter.advanced'),
+      ).toBe('(AREA[OverallStatus]AVAILABLE) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])');
     });
 
     it('skips the sentinel filter when includeUnknownEnrollment=true', async () => {
@@ -1215,6 +1248,98 @@ describe('ClinicalTrialsService', () => {
       }
     });
 
+    it('translates the "Unknown sort field" rejection to the sort_invalid contract (#107)', async () => {
+      // Upstream answers a bad sort field name with a bare body that names no
+      // parameter, so it matched none of the 400 branches and reached the caller
+      // as untyped text — no reason, no recovery, no statement of the shape.
+      mockFetch.mockResolvedValue(textResponse('Unknown sort field'));
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies({ sort: 'Bogus:desc' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        expect((err as McpError).code).toBe(JsonRpcErrorCode.ValidationError);
+        const msg = (err as McpError).message;
+        expect(msg).toContain('sort');
+        expect(msg).toContain("'Bogus:desc'");
+        expect(msg).toContain('FieldName:asc');
+        expect(msg).toContain('FieldName:desc');
+        expect(msg).toContain('clinicaltrials_get_field_definitions');
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('sort_invalid');
+        expect(data?.value).toBe('Bogus:desc');
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain('FieldName:asc');
+      }
+    });
+
+    it('translates a directionless "Unknown sort field" rejection the same way (#107)', async () => {
+      // `EnrollmentCount descending` (no colon) reaches upstream as one opaque
+      // field name and draws the same body.
+      mockFetch.mockResolvedValue(textResponse('Unknown sort field'));
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies({ sort: 'EnrollmentCount descending' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('sort_invalid');
+        expect((err as McpError).message).toContain("'EnrollmentCount descending'");
+      }
+    });
+
+    it('translates the 2-item cap rejection and states the cap (#107)', async () => {
+      // Upstream names `sort` in backticks here, but through a phrase the
+      // `incorrect format` branch never sees.
+      mockFetch.mockResolvedValue(
+        textResponse('Parameter `sort` must contain no more than 2 items'),
+      );
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies({ sort: 'A:desc,B:desc,C:desc' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const msg = (err as McpError).message;
+        expect(msg).toContain("'A:desc,B:desc,C:desc'");
+        expect(msg).toContain('3');
+        expect(msg).toContain('2');
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('sort_invalid');
+      }
+    });
+
+    it('translates the "Unsupported sort field type" rejection for a real but unsortable field (#107)', async () => {
+      // BriefTitle is a valid piece name that upstream refuses to sort on, so
+      // no field-name index can catch it ahead of the call.
+      mockFetch.mockResolvedValue(textResponse('Unsupported sort field type: text'));
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies({ sort: 'BriefTitle:desc' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const msg = (err as McpError).message;
+        expect(msg).toContain("'BriefTitle:desc'");
+        expect(msg).toContain('text');
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBe('sort_invalid');
+      }
+    });
+
+    it('leaves an unrelated 400 body on the generic tail rather than blaming sort (#107)', async () => {
+      // The sort branch keys on sort-specific bodies, not merely on a sort being
+      // present — an unrelated rejection must not be relabelled sort_invalid.
+      mockFetch.mockResolvedValue(textResponse('Something else went wrong'));
+      const ctx = createMockContext({ errors: allReasons });
+      try {
+        await service.searchStudies({ sort: 'LastUpdatePostDate:desc' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const data = (err as McpError).data as Record<string, unknown> | undefined;
+        expect(data?.reason).toBeUndefined();
+        expect((err as McpError).message).toContain('Something else went wrong');
+      }
+    });
+
     it('names geoFilter and its shape on a filter.geo "incorrect format" rejection (#93)', async () => {
       // Live-API body for every malformed geoFilter value.
       mockFetch.mockResolvedValue(textResponse('Parameter `filter.geo` has incorrect format'));
@@ -1384,6 +1509,80 @@ describe('ClinicalTrialsService', () => {
         return !u.includes('/studies/metadata');
       });
       expect(studiesCalls).toHaveLength(0);
+    });
+
+    it('case-folds a sort field name before the request, the way fields are (#107)', async () => {
+      // `fields` has had this since #44; `sort` reached upstream raw and drew an
+      // `Unknown sort field` rejection for a pure casing mistake.
+      mockByRoute();
+      const ctx = createMockContext();
+      await validatingService.searchStudies({ sort: 'enrollmentCount:desc' }, ctx);
+
+      const studiesCall = mockFetch.mock.calls
+        .map((c) => (typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString()))
+        .find((u) => !u.includes('/studies/metadata'));
+      expect(new URL(studiesCall!).searchParams.get('sort')).toBe('EnrollmentCount:desc');
+    });
+
+    it('trims the whitespace upstream rejects around a sort item (#107)', async () => {
+      // ClinicalTrials.gov answers `A:desc, B:asc` with "Item 2 in parameter
+      // `sort` has incorrect format" — the space is the whole defect.
+      mockByRoute();
+      const ctx = createMockContext();
+      await validatingService.searchStudies({ sort: ' NCTId:asc, briefTitle:desc' }, ctx);
+
+      const studiesCall = mockFetch.mock.calls
+        .map((c) => (typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString()))
+        .find((u) => !u.includes('/studies/metadata'));
+      expect(new URL(studiesCall!).searchParams.get('sort')).toBe('NCTId:asc,BriefTitle:desc');
+    });
+
+    it('lowercases an ASC/DESC direction suffix (#107)', async () => {
+      // Upstream accepts only lowercase; `EnrollmentCount:DESC` is rejected.
+      mockByRoute();
+      const ctx = createMockContext();
+      await validatingService.searchStudies({ sort: 'EnrollmentCount:DESC' }, ctx);
+
+      const studiesCall = mockFetch.mock.calls
+        .map((c) => (typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString()))
+        .find((u) => !u.includes('/studies/metadata'));
+      expect(new URL(studiesCall!).searchParams.get('sort')).toBe('EnrollmentCount:desc');
+    });
+
+    it('leaves @relevance and an unrecognized sort field untouched (#107)', async () => {
+      // The index knows which pieces exist, not which upstream will sort on, so
+      // normalization never rejects — it only applies exact, ambiguity-free
+      // fixes and lets upstream judge the rest. `@relevance` names no field.
+      mockByRoute();
+      const ctx = createMockContext();
+      await validatingService.searchStudies({ sort: '@relevance' }, ctx);
+      const first = mockFetch.mock.calls
+        .map((c) => (typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString()))
+        .find((u) => !u.includes('/studies/metadata'));
+      expect(new URL(first!).searchParams.get('sort')).toBe('@relevance');
+
+      mockFetch.mockClear();
+      mockByRoute();
+      await validatingService.searchStudies({ sort: 'Bogus:desc' }, ctx);
+      const second = mockFetch.mock.calls
+        .map((c) => (typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString()))
+        .find((u) => !u.includes('/studies/metadata'));
+      expect(new URL(second!).searchParams.get('sort')).toBe('Bogus:desc');
+    });
+
+    it('offers did-you-mean suggestions on an unknown sort field name (#107)', async () => {
+      // The same nearestPieces machinery an invalid `fields` entry gets.
+      mockByRoute({ primary: textResponse('Unknown sort field') });
+      const ctx = createMockContext();
+      try {
+        await validatingService.searchStudies({ sort: 'Enrolment:desc' }, ctx);
+        expect.fail('should have thrown');
+      } catch (err) {
+        const msg = (err as McpError).message;
+        expect(msg).toContain('did you mean');
+        expect(msg).toContain("'EnrollmentCount'");
+        expect((err as McpError).data).toMatchObject({ reason: 'sort_invalid' });
+      }
     });
 
     it('suggests nearest matches for a typo', async () => {

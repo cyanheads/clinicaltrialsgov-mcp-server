@@ -46,8 +46,16 @@ const ESSIE_ENUM_PARAM_MAP: Record<string, string> = {
  * count". The filter below excludes studies carrying the sentinel by
  * default — `RANGE[5000, MAX]` and `EnrollmentCount:desc` otherwise surface
  * sentinel-polluted results that look like the largest trials but aren't.
+ *
+ * Stated as a negated single-sided range rather than a bounded one. An
+ * `AREA[Field]RANGE[…]` predicate matches only studies that publish the field,
+ * so the bounded form `RANGE[0, 99999998]` excluded a second, unintended set:
+ * every study carrying no `EnrollmentCount` at all. Expanded-access records
+ * never publish one, so every compassionate-use query answered zero. The
+ * negation excludes only what sits at or above the sentinel boundary and needs
+ * no `MISSING` arm.
  */
-const ENROLLMENT_SENTINEL_FILTER = 'AREA[EnrollmentCount]RANGE[0, 99999998]';
+const ENROLLMENT_SENTINEL_FILTER = 'NOT AREA[EnrollmentCount]RANGE[99999999, MAX]';
 
 /**
  * Colloquial / legacy field labels that map unambiguously to a canonical v2
@@ -140,6 +148,26 @@ function describeQueryParseError(text: string): string {
     : 'Query syntax error: the upstream parser rejected the query. Free-text fields take plain words plus AND, OR, NOT.';
 }
 
+/** The shape and cap ClinicalTrials.gov enforces on `sort`, stated once. */
+const SORT_SHAPE =
+  'Format must be FieldName:asc or FieldName:desc (e.g. "LastUpdatePostDate:desc", "EnrollmentCount:asc"). Max 2 fields comma-separated.';
+
+/**
+ * Split a `sort` value into its comma-separated items, each as the field name
+ * and its direction suffix (`:asc` / `:desc`, empty when the caller gave none).
+ * `@relevance` names no field, so it lands in `name` and normalization leaves
+ * it alone — no lookup matches it.
+ */
+function parseSortItems(sort: string): Array<{ name: string; suffix: string }> {
+  return sort.split(',').map((item) => {
+    const trimmed = item.trim();
+    const colon = trimmed.indexOf(':');
+    return colon === -1
+      ? { name: trimmed, suffix: '' }
+      : { name: trimmed.slice(0, colon), suffix: trimmed.slice(colon) };
+  });
+}
+
 /** Constructor options for overriding retry/backoff/validation behavior (primarily for tests). */
 export interface ClinicalTrialsServiceOptions {
   baseBackoffMs?: number;
@@ -192,6 +220,9 @@ export class ClinicalTrialsService {
       const normalized = await this.normalizeFields(params.fields, ctx);
       await this.validateFields(normalized, ctx);
       params = { ...params, fields: normalized };
+    }
+    if (this.validateFieldsLocally && params.sort) {
+      params = { ...params, sort: await this.normalizeSort(params.sort, ctx) };
     }
     const q = this.buildSearchQuery(params);
     ctx.log.debug('searchStudies', { paramKeys: Object.keys(q) });
@@ -394,6 +425,99 @@ export class ClinicalTrialsService {
       ctx.log.notice('Field names auto-corrected', { corrections });
     }
     return normalized;
+  }
+
+  /**
+   * Apply the same unambiguous fixes normalizeFields makes for `fields` to the
+   * field name inside `sort`, reusing the one case-fold index: trim the
+   * surrounding whitespace, case-fold the name, lowercase an `asc`/`desc`
+   * suffix. Each is a shape ClinicalTrials.gov rejects outright — a space after
+   * a comma, `enrollmentCount:desc`, `EnrollmentCount:DESC` — so correcting
+   * them here spends no round-trip on a pure casing or spacing mistake.
+   *
+   * Normalization never rejects. The metadata index knows which pieces exist,
+   * not which upstream will sort on (`BriefTitle` is a valid piece that upstream
+   * refuses to sort), so an unrecognized name is left for upstream to judge and
+   * its rejection is translated in the 400 handler. `@relevance` matches no
+   * entry and passes through untouched.
+   */
+  private async normalizeSort(sort: string, ctx: Context): Promise<string> {
+    let pieceSet: Set<string>;
+    let caseFold: Map<string, string>;
+    try {
+      ({ pieceSet, caseFold } = await this.getFieldIndex(ctx));
+    } catch {
+      // Same fail-open as normalizeFields — the request still reaches upstream.
+      return sort;
+    }
+    const corrections: Array<{ from: string; to: string }> = [];
+    const normalized = parseSortItems(sort)
+      .map(({ name, suffix }) => {
+        const folded = pieceSet.has(name) ? name : (caseFold.get(name.toLowerCase()) ?? name);
+        const lowered = suffix.toLowerCase();
+        const direction = lowered === ':asc' || lowered === ':desc' ? lowered : suffix;
+        const original = `${name}${suffix}`;
+        const item = `${folded}${direction}`;
+        if (item !== original) corrections.push({ from: original, to: item });
+        return item;
+      })
+      .join(',');
+    if (corrections.length > 0) {
+      ctx.log.notice('Sort field auto-corrected', { corrections });
+    }
+    return normalized;
+  }
+
+  /**
+   * Name the sort items whose field name is absent from the metadata index,
+   * each with its nearest valid pieces — the did-you-mean treatment an invalid
+   * `fields` entry already gets. Fails open to none: this runs on an error path
+   * where the index may be unavailable or disabled, and no suggestion is better
+   * than a metadata fetch that throws over the real error.
+   */
+  private async suggestSortFields(
+    sort: string,
+    ctx: Context,
+  ): Promise<Array<{ name: string; near: string[] }>> {
+    if (!this.validateFieldsLocally) return [];
+    try {
+      const { entries, pieceSet } = await this.getFieldIndex(ctx);
+      return parseSortItems(sort)
+        .filter(({ name }) => name.length > 0 && !name.startsWith('@') && !pieceSet.has(name))
+        .map(({ name }) => ({ name, near: nearestPieces(name, entries, 3) }))
+        .filter(({ near }) => near.length > 0);
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Reduce an upstream `sort` rejection to one actionable sentence. The 2-item
+   * cap, an unsortable field type, and an unrecognized field name are three
+   * different things for a caller to fix, so each is told apart by its own
+   * upstream phrase rather than collapsed into one message.
+   */
+  private async describeSortRejection(sort: string, text: string, ctx: Context): Promise<string> {
+    const lead = `Invalid value for \`sort\`: '${sort}'.`;
+
+    const cap = text.match(/must contain no more than (\d+) items/i)?.[1];
+    if (cap) {
+      return `${lead} It names ${sort.split(',').length} fields; ClinicalTrials.gov accepts at most ${cap}. ${SORT_SHAPE}`;
+    }
+
+    // The field exists but its data type is not sortable — no field-name index
+    // can catch this ahead of the call, so say what to sort on instead.
+    const unsortableType = text.match(/Unsupported sort field type:\s*(\S+)/i)?.[1];
+    if (unsortableType) {
+      return `${lead} ClinicalTrials.gov does not sort on ${unsortableType} fields. Sort on a date or numeric field (e.g. LastUpdatePostDate, EnrollmentCount), or use "@relevance". ${SORT_SHAPE}`;
+    }
+
+    const suggestions = await this.suggestSortFields(sort, ctx);
+    const blame = suggestions
+      .map(({ name, near }) => `'${name}' — did you mean ${near.map((p) => `'${p}'`).join(', ')}?`)
+      .join(' ');
+    const named = blame ? ` ${blame}` : '';
+    return `${lead} ClinicalTrials.gov does not recognize the sort field name.${named} ${SORT_SHAPE} Call clinicaltrials_get_field_definitions to look up sortable PascalCase field names.`;
   }
 
   /** Reject invalid field names locally with did-you-mean suggestions. */
@@ -624,10 +748,11 @@ export class ClinicalTrialsService {
               );
             }
             if (params.sort && blamed('sort')) {
-              throw validationError(
-                `Invalid value for \`sort\`: '${params.sort}'. Format must be FieldName:asc or FieldName:desc (e.g. "LastUpdatePostDate:desc", "EnrollmentCount:asc"). Max 2 fields comma-separated.`,
-                { reason: 'sort_invalid', ...ctx.recoveryFor('sort_invalid') },
-              );
+              throw validationError(`Invalid value for \`sort\`: '${params.sort}'. ${SORT_SHAPE}`, {
+                reason: 'sort_invalid',
+                value: params.sort,
+                ...ctx.recoveryFor('sort_invalid'),
+              });
             }
             // filter.ids rejection — the API may reject IDs that match the
             // regex but don't exist (e.g. NCT00000000). Surface the actual
@@ -641,6 +766,24 @@ export class ClinicalTrialsService {
               );
             }
             throw validationError(`Invalid request format. API response: ${text}`);
+          }
+          // The other three sort rejections. The backtick extraction above runs
+          // only inside the `incorrect format` branch, so a body that never
+          // reaches it is recognized by its own phrase instead — including the
+          // 2-item cap, which does name `sort` in backticks but through a phrase
+          // that branch never sees. Gated on a sort having been sent:
+          // ClinicalTrials.gov emits these strings for no other parameter.
+          if (
+            params.sort &&
+            (text.includes('Unknown sort field') ||
+              text.includes('Unsupported sort field type') ||
+              /parameter\s+`sort`\s+must contain no more than/i.test(text))
+          ) {
+            throw validationError(await this.describeSortRejection(params.sort, text, ctx), {
+              reason: 'sort_invalid',
+              value: params.sort,
+              ...ctx.recoveryFor('sort_invalid'),
+            });
           }
           // Essie parser errors share the `Error parsing query in <where>: …` prefix.
           // Several shapes show up:

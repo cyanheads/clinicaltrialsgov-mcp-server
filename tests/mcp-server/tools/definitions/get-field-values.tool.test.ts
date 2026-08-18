@@ -57,7 +57,7 @@ describe('getFieldValues', () => {
       ];
       mockService.getFieldValues.mockResolvedValue(stats);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldValues.errors });
       const input = getFieldValues.input!.parse({ fields: 'OverallStatus' });
       const result = await getFieldValues.handler(input, ctx);
 
@@ -67,7 +67,7 @@ describe('getFieldValues', () => {
 
     it('normalizes single string to array', async () => {
       mockService.getFieldValues.mockResolvedValue([]);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldValues.errors });
       await getFieldValues.handler(getFieldValues.input!.parse({ fields: 'Phase' }), ctx);
 
       expect(mockService.getFieldValues).toHaveBeenCalledWith(['Phase'], ctx);
@@ -75,7 +75,7 @@ describe('getFieldValues', () => {
 
     it('passes array of fields through', async () => {
       mockService.getFieldValues.mockResolvedValue([]);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldValues.errors });
       const fields = ['OverallStatus', 'Phase'];
       await getFieldValues.handler(getFieldValues.input!.parse({ fields }), ctx);
 
@@ -84,7 +84,7 @@ describe('getFieldValues', () => {
 
     it('normalizes a JSON-stringified fields array (regression for #75)', async () => {
       mockService.getFieldValues.mockResolvedValue([]);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldValues.errors });
       await getFieldValues.handler(
         getFieldValues.input!.parse({ fields: '["OverallStatus","Phase"]' }),
         ctx,
@@ -95,7 +95,7 @@ describe('getFieldValues', () => {
 
     it('propagates service errors', async () => {
       mockService.getFieldValues.mockRejectedValue(new Error('Invalid field'));
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldValues.errors });
       await expect(
         getFieldValues.handler(getFieldValues.input!.parse({ fields: 'BadField' }), ctx),
       ).rejects.toThrow('Invalid field');

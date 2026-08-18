@@ -3,7 +3,6 @@
  * @module tests/mcp-server/tools/definitions/find-eligible.fuzz
  */
 
-import { McpError } from '@cyanheads/mcp-ts-core/errors';
 import { fuzzTool } from '@cyanheads/mcp-ts-core/testing/fuzz';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -34,8 +33,7 @@ describe('findEligible fuzz', () => {
       seed: 7,
       ctx: { errors: findEligible.errors },
     });
-    const programmerCrashes = report.crashes.filter((c) => !(c.error instanceof McpError));
-    expect(programmerCrashes).toEqual([]);
+    expect(report.crashes).toEqual([]);
     expect(report.leaks).toEqual([]);
     expect(report.prototypePollution).toBe(false);
     expect(report.totalRuns).toBeGreaterThan(0);

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.8.6](changelog/2.8.x/2.8.6.md) — 2026-08-18
+
+search_studies and get_study_results fixes: array cross-contamination, stale pagination tokens, rate-limit retry storm, and an unreachable error contract; blank-value rejection added across five tools and the analyze_trial_landscape prompt; mcp-ts-core 0.11.5 maintenance
+
 ## [2.8.5](changelog/2.8.x/2.8.5.md) — 2026-07-26
 
 get_study_record and get_study_results format() render leaves structuredContent already carried but text output silently dropped, including the full classes/categories/measurements results tree

@@ -3,7 +3,6 @@
  * @module tests/mcp-server/tools/definitions/search-studies.fuzz
  */
 
-import { McpError } from '@cyanheads/mcp-ts-core/errors';
 import { fuzzTool } from '@cyanheads/mcp-ts-core/testing/fuzz';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -31,10 +30,7 @@ describe('searchStudies fuzz', () => {
       seed: 42,
       ctx: { errors: searchStudies.errors },
     });
-    // McpError instances are intentional contract throws (validationError,
-    // notFound, etc.). Only programmer errors qualify as real crashes.
-    const programmerCrashes = report.crashes.filter((c) => !(c.error instanceof McpError));
-    expect(programmerCrashes).toEqual([]);
+    expect(report.crashes).toEqual([]);
     expect(report.leaks).toEqual([]);
     expect(report.prototypePollution).toBe(false);
     expect(report.totalRuns).toBeGreaterThan(0);

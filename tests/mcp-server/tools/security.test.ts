@@ -95,7 +95,7 @@ describe('searchStudies — injection and oversized inputs', () => {
     async (payload) => {
       // Zod does not strip or reject arbitrary strings in free-text fields.
       // The important invariant is no crash and no prototype pollution.
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: searchStudies.errors });
       const input = searchStudies.input!.parse({ query: payload });
       await expect(searchStudies.handler(input, ctx)).resolves.toBeDefined();
     },
@@ -111,7 +111,7 @@ describe('searchStudies — injection and oversized inputs', () => {
 
   it('oversized query string — handler does not crash', async () => {
     mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchStudies.errors });
     const input = searchStudies.input!.parse({ query: OVERSIZED_INPUTS.string1k });
     await expect(searchStudies.handler(input, ctx)).resolves.toBeDefined();
   });
@@ -121,10 +121,21 @@ describe('searchStudies — injection and oversized inputs', () => {
       studies: [{ nctId: 'NCT12345678' }],
       totalCount: 1,
     });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: searchStudies.errors });
     const result = await searchStudies.handler(searchStudies.input!.parse({}), ctx);
     assertNoSecretLeak(result);
   });
+
+  it.each(['', '   '])(
+    'rejects a blank query (%j) rather than searching the whole registry',
+    async (query) => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expect(
+        searchStudies.handler(searchStudies.input!.parse({ query }), ctx),
+      ).rejects.toMatchObject({ data: { reason: 'blank_value' } });
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -152,7 +163,7 @@ describe('getStudy — injection and output safety', () => {
     mockService.getStudy.mockResolvedValue({
       protocolSection: { identificationModule: { nctId: 'NCT12345678', briefTitle: 'Test' } },
     });
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getStudy.errors });
     const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx);
     assertNoSecretLeak(result);
     const formatted = getStudy.format!(result);
@@ -176,23 +187,34 @@ describe('getStudyCount — injection and output safety', () => {
   it.each(INJECTION_PAYLOADS)(
     'accepts free-text payload %s without crashing (no validation on plain strings)',
     async (payload) => {
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudyCount.errors });
       const input = getStudyCount.input!.parse({ conditionQuery: payload });
       await expect(getStudyCount.handler(input, ctx)).resolves.toBeDefined();
     },
   );
 
   it('oversized conditionQuery does not crash', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getStudyCount.errors });
     const input = getStudyCount.input!.parse({ conditionQuery: OVERSIZED_INPUTS.string1k });
     await expect(getStudyCount.handler(input, ctx)).resolves.toBeDefined();
   });
 
   it('output does not contain env var names', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getStudyCount.errors });
     const result = await getStudyCount.handler(getStudyCount.input!.parse({}), ctx);
     assertNoSecretLeak(result);
   });
+
+  it.each(['', '   '])(
+    'rejects a blank conditionQuery (%j) rather than counting the whole registry',
+    async (conditionQuery) => {
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      await expect(
+        getStudyCount.handler(getStudyCount.input!.parse({ conditionQuery }), ctx),
+      ).rejects.toMatchObject({ data: { reason: 'blank_value' } });
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -244,7 +266,7 @@ describe('getFieldValues — injection and output safety', () => {
   it.each(INJECTION_PAYLOADS)(
     'passes injection payload %s as field name string to service (no crash)',
     async (payload) => {
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldValues.errors });
       // Zod accepts any string for field names — the API rejects invalid ones
       const input = getFieldValues.input!.parse({ fields: payload });
       await expect(getFieldValues.handler(input, ctx)).resolves.toBeDefined();
@@ -255,7 +277,7 @@ describe('getFieldValues — injection and output safety', () => {
     mockService.getFieldValues.mockResolvedValue([
       { field: 'OverallStatus', piece: 'OverallStatus', type: 'ENUM', topValues: [] },
     ]);
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFieldValues.errors });
     const result = await getFieldValues.handler(
       getFieldValues.input!.parse({ fields: 'OverallStatus' }),
       ctx,
@@ -298,7 +320,7 @@ describe('getFieldDefinitions — path traversal and injection', () => {
   );
 
   it('format output does not leak env var names', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: getFieldDefinitions.errors });
     const result = await getFieldDefinitions.handler(
       getFieldDefinitions.input!.parse({ mode: 'overview' }),
       ctx,
@@ -330,7 +352,7 @@ describe('findEligible — injection and output safety', () => {
   };
 
   it.each(INJECTION_PAYLOADS)('condition payload %s passes without crash', async (payload) => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: findEligible.errors });
     const input = findEligible.input!.parse({
       ...baseInput,
       conditions: [payload],
@@ -359,7 +381,7 @@ describe('findEligible — injection and output safety', () => {
   });
 
   it('location city injection payload does not crash handler', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: findEligible.errors });
     const input = findEligible.input!.parse({
       ...baseInput,
       location: { country: 'United States', city: "'; DROP TABLE --" },
@@ -368,7 +390,7 @@ describe('findEligible — injection and output safety', () => {
   });
 
   it('output does not contain env var names', async () => {
-    const ctx = createMockContext();
+    const ctx = createMockContext({ errors: findEligible.errors });
     const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
     assertNoSecretLeak(result);
   });
@@ -376,6 +398,28 @@ describe('findEligible — injection and output safety', () => {
   it('format output does not contain env var names', () => {
     const formatted = findEligible.format!({ studies: [], totalCount: 0 });
     assertNoSecretLeak(formatted);
+  });
+
+  it.each(['', '   '])(
+    'rejects a blank condition entry (%j) rather than matching every trial',
+    async (condition) => {
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await expect(
+        findEligible.handler(
+          findEligible.input!.parse({ ...baseInput, conditions: [condition] }),
+          ctx,
+        ),
+      ).rejects.toMatchObject({ data: { reason: 'blank_value' } });
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(['', '   '])('rejects a blank location.country (%j)', async (country) => {
+    const ctx = createMockContext({ errors: findEligible.errors });
+    await expect(
+      findEligible.handler(findEligible.input!.parse({ ...baseInput, location: { country } }), ctx),
+    ).rejects.toMatchObject({ data: { reason: 'blank_value' } });
+    expect(mockService.searchStudies).not.toHaveBeenCalled();
   });
 });
 

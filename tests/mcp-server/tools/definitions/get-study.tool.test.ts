@@ -48,7 +48,7 @@ describe('getStudy', () => {
       };
       mockService.getStudy.mockResolvedValue(study);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx);
 
       expect(result.study).toStrictEqual(study);
@@ -57,7 +57,7 @@ describe('getStudy', () => {
 
     it('propagates service errors', async () => {
       mockService.getStudy.mockRejectedValue(new Error('Not found'));
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       await expect(
         getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx),
       ).rejects.toThrow('Not found');
@@ -81,7 +81,7 @@ describe('getStudy', () => {
       };
       mockService.getStudy.mockResolvedValue(study);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'NCT02130466' }), ctx);
 
       // The full resultsSection must not ride along in structuredContent.
@@ -103,7 +103,7 @@ describe('getStudy', () => {
         },
       });
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx);
       expect(result.resultsSummary).toBeUndefined();
     });
@@ -142,7 +142,7 @@ describe('getStudy', () => {
         buildStudy({ contactsLocationsModule: { locations } }),
       );
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({ nctId: 'NCT12345678', locationLimit: 5 }),
         ctx,
@@ -168,7 +168,7 @@ describe('getStudy', () => {
         buildStudy({ contactsLocationsModule: { locations } }),
       );
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx);
 
       expect(getStructuredLocations(result)).toHaveLength(30);
@@ -189,7 +189,7 @@ describe('getStudy', () => {
         buildStudy({ outcomesModule: { secondaryOutcomes, otherOutcomes } }),
       );
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({ nctId: 'NCT12345678', outcomeLimit: 3 }),
         ctx,
@@ -231,7 +231,7 @@ describe('getStudy', () => {
         }),
       );
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({
           nctId: 'NCT12345678',
@@ -272,7 +272,7 @@ describe('getStudy', () => {
         }),
       );
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({
           nctId: 'NCT12345678',
@@ -299,7 +299,7 @@ describe('getStudy', () => {
         }),
       );
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({
           nctId: 'NCT12345678',
@@ -326,7 +326,7 @@ describe('getStudy', () => {
         }),
       );
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({
           nctId: 'NCT12345678',
@@ -359,7 +359,7 @@ describe('getStudy', () => {
         }),
       );
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({
           nctId: 'NCT12345678',
@@ -379,7 +379,7 @@ describe('getStudy', () => {
     it('a study that publishes no sites renders no Locations section even with nearLocation (#96)', async () => {
       mockService.getStudy.mockResolvedValue(buildStudy({ contactsLocationsModule: {} }));
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({
           nctId: 'NCT12345678',
@@ -403,7 +403,7 @@ describe('getStudy', () => {
       }));
       mockService.getStudy.mockResolvedValue(buildStudy({ referencesModule: { references } }));
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({ nctId: 'NCT12345678', referenceLimit: 5 }),
         ctx,
@@ -434,7 +434,7 @@ describe('getStudy', () => {
       }));
       mockService.getStudy.mockResolvedValue(buildStudy({ referencesModule: { references } }));
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx);
 
       const ps = (
@@ -464,7 +464,7 @@ describe('getStudy', () => {
         }),
       );
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({ nctId: 'NCT12345678', referenceLimit: 2 }),
         ctx,
@@ -494,7 +494,7 @@ describe('getStudy', () => {
         }),
       );
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({
           nctId: 'NCT12345678',
@@ -525,7 +525,7 @@ describe('getStudy', () => {
         }),
       );
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({ nctId: 'NCT12345678', outcomeLimit: 3 }),
         ctx,
@@ -550,7 +550,7 @@ describe('getStudy', () => {
         }),
       );
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({
           nctId: 'NCT12345678',
@@ -574,6 +574,7 @@ describe('getStudy', () => {
   describe('format', () => {
     it('renders study header with NCT ID and title', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'My Study' },
@@ -585,6 +586,7 @@ describe('getStudy', () => {
 
     it('falls back to officialTitle when briefTitle missing', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', officialTitle: 'Official Title' },
@@ -596,6 +598,7 @@ describe('getStudy', () => {
 
     it('shows Untitled when no title', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: { identificationModule: { nctId: 'NCT12345678' } },
         },
@@ -604,12 +607,13 @@ describe('getStudy', () => {
     });
 
     it('shows Unknown when no nctId', () => {
-      const blocks = getStudy.format!({ study: {} });
+      const blocks = getStudy.format!({ study: {}, filtersApplied: {} });
       expect((blocks[0] as { text: string }).text).toContain('# Study Unknown: Untitled');
     });
 
     it('renders acronym', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X', acronym: 'ACME' },
@@ -621,6 +625,7 @@ describe('getStudy', () => {
 
     it('renders status with design info', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -642,6 +647,7 @@ describe('getStudy', () => {
 
     it('renders dates', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -661,6 +667,7 @@ describe('getStudy', () => {
 
     it('renders sponsor with class', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -675,6 +682,7 @@ describe('getStudy', () => {
 
     it('renders conditions', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -689,6 +697,7 @@ describe('getStudy', () => {
 
     it('renders summary', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -702,6 +711,7 @@ describe('getStudy', () => {
 
     it('renders eligibility section', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -726,6 +736,7 @@ describe('getStudy', () => {
 
     it('renders eligibility with only minAge', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -738,6 +749,7 @@ describe('getStudy', () => {
 
     it('renders eligibility with only maxAge', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -750,6 +762,7 @@ describe('getStudy', () => {
 
     it('renders interventions', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -771,6 +784,7 @@ describe('getStudy', () => {
 
     it('renders arm groups', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -791,6 +805,7 @@ describe('getStudy', () => {
 
     it('renders primary and secondary outcomes', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -814,6 +829,7 @@ describe('getStudy', () => {
         measure: `Outcome ${i}`,
       }));
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -828,6 +844,7 @@ describe('getStudy', () => {
 
     it('renders central contacts', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -847,6 +864,7 @@ describe('getStudy', () => {
 
     it('renders locations with recruiting priority', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -879,6 +897,7 @@ describe('getStudy', () => {
 
     it('renders detailedDescription section (regression for #18)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -896,6 +915,7 @@ describe('getStudy', () => {
 
     it('renders submission and update dates (regression for #18)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -917,6 +937,7 @@ describe('getStudy', () => {
 
     it('renders otherOutcomes (regression for #18)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -932,6 +953,7 @@ describe('getStudy', () => {
 
     it('renders oversight module (regression for #18)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -952,6 +974,7 @@ describe('getStudy', () => {
 
     it('renders ipdSharingStatementModule (regression for #18)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -971,6 +994,7 @@ describe('getStudy', () => {
 
     it('renders referencesModule (regression for #18)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -995,6 +1019,7 @@ describe('getStudy', () => {
 
     it('renders collaborators (regression for #18)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -1014,6 +1039,7 @@ describe('getStudy', () => {
 
     it('renders keywords (regression for #18)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -1031,6 +1057,7 @@ describe('getStudy', () => {
 
     it('renders design details (regression for #18)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -1059,6 +1086,7 @@ describe('getStudy', () => {
         country: 'US',
       }));
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -1078,6 +1106,7 @@ describe('getStudy', () => {
         citation: `Citation ${i}.`,
       }));
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -1092,6 +1121,7 @@ describe('getStudy', () => {
 
     it('renders resultsSummary counts and points to get_study_results (#63)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: { identificationModule: { nctId: 'NCT02130466', briefTitle: 'X' } },
           hasResults: true,
@@ -1116,6 +1146,7 @@ describe('getStudy', () => {
 
     it('renders a date struct type alongside its date (#18)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -1133,6 +1164,7 @@ describe('getStudy', () => {
 
     it('renders outcome descriptions, not just measure and timeFrame (#18)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -1155,6 +1187,7 @@ describe('getStudy', () => {
 
     it('renders masking detail, secondary ID provenance, and arm interventions (#18)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: {
@@ -1192,6 +1225,7 @@ describe('getStudy', () => {
 
     it('renders observational design and cohort fields (#18)', () => {
       const blocks = getStudy.format!({
+        filtersApplied: {},
         study: {
           protocolSection: {
             identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
@@ -1295,7 +1329,7 @@ describe('getStudy', () => {
      */
     const renderFixture = async (fixture: string, nctId: string) => {
       mockService.getStudy.mockResolvedValue(loadStudyFixture(fixture));
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(getStudy.input!.parse({ nctId }), ctx);
       return { result, text: (getStudy.format!(result)[0] as { text: string }).text };
     };
@@ -1332,7 +1366,7 @@ describe('getStudy', () => {
 
     it('keeps parity when the caller applies handler-level limits (NCT06323538)', async () => {
       mockService.getStudy.mockResolvedValue(loadStudyFixture('nct06323538'));
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getStudy.errors });
       const result = await getStudy.handler(
         getStudy.input!.parse({ nctId: 'NCT06323538', outcomeLimit: 2, locationLimit: 2 }),
         ctx,

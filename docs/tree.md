@@ -1,11 +1,9 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-07-26 14:06:46
+Generated on: 2026-08-18 07:23:29
 
 ```text
 clinicaltrialsgov-mcp-server/
-├── .agents/
-├── .claude/
 ├── .claude-plugin/
 │   └── plugin.json
 ├── .codex-plugin/
@@ -18,6 +16,8 @@ clinicaltrialsgov-mcp-server/
 │   │   └── feature_request.yml
 │   ├── workflows/
 │   │   └── codeql.yml
+│   ├── CODE_OF_CONDUCT.md
+│   ├── CONTRIBUTING.md
 │   ├── FUNDING.yml
 │   └── SECURITY.md
 ├── .husky/
@@ -233,7 +233,6 @@ clinicaltrialsgov-mcp-server/
 ├── server.json
 ├── tsconfig.build.json
 ├── tsconfig.json
-├── tsconfig.test.json
 └── vitest.config.ts
 ```
 

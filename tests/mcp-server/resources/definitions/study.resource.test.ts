@@ -50,7 +50,7 @@ describe('studyResource', () => {
       const study = { protocolSection: { identificationModule: { nctId: 'NCT03722472' } } };
       mockService.getStudy.mockResolvedValue(study);
 
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: studyResource.errors });
       const parsed = params.parse({ nctId: 'NCT03722472' });
       const result = await studyResource.handler(parsed, ctx);
 
@@ -60,7 +60,7 @@ describe('studyResource', () => {
 
     it('propagates service errors', async () => {
       mockService.getStudy.mockRejectedValue(new Error('Not found'));
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: studyResource.errors });
       const parsed = params.parse({ nctId: 'NCT03722472' });
 
       await expect(studyResource.handler(parsed, ctx)).rejects.toThrow('Not found');

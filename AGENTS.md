@@ -1,8 +1,8 @@
 # Agent Protocol
 
 **Server:** clinicaltrialsgov-mcp-server
-**Version:** 2.8.5
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.11.0`
+**Version:** 2.8.6
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.11.5`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -364,6 +364,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 | `bun run build`           | Compile TypeScript                                            |
 | `bun run rebuild`         | Clean + build                                                 |
 | `bun run devcheck`        | Lint + format + typecheck + security + changelog sync         |
+| `bun run lint:mcp`        | Lint tool/resource/prompt definitions (also a devcheck step)  |
 | `bun run tree`            | Generate directory structure doc                              |
 | `bun run format`          | Auto-fix formatting                                           |
 | `bun run test`            | Run tests (Vitest)                                            |

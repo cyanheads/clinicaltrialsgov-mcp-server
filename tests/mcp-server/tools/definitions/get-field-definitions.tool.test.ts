@@ -121,7 +121,7 @@ describe('getFieldDefinitions', () => {
   describe('handler', () => {
     it('returns top-level overview in overview mode', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const input = getFieldDefinitions.input!.parse({ mode: 'overview' });
       const result = await getFieldDefinitions.handler(input, ctx);
 
@@ -134,7 +134,7 @@ describe('getFieldDefinitions', () => {
 
     it('includes child summaries in overview', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const result = await getFieldDefinitions.handler(
         getFieldDefinitions.input!.parse({ mode: 'overview' }),
         ctx,
@@ -150,7 +150,7 @@ describe('getFieldDefinitions', () => {
 
     it('returns totalFields count for overview', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const result = await getFieldDefinitions.handler(
         getFieldDefinitions.input!.parse({ mode: 'overview' }),
         ctx,
@@ -162,7 +162,7 @@ describe('getFieldDefinitions', () => {
 
     it('navigates to a path in drill mode', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const input = getFieldDefinitions.input!.parse({
         mode: 'drill',
         path: 'protocolSection.identificationModule',
@@ -222,7 +222,7 @@ describe('getFieldDefinitions', () => {
 
     it('navigates single-level path', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const input = getFieldDefinitions.input!.parse({ mode: 'drill', path: 'protocolSection' });
       const result = await getFieldDefinitions.handler(input, ctx);
 
@@ -232,7 +232,7 @@ describe('getFieldDefinitions', () => {
 
     it('recursively flattens nested children', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const input = getFieldDefinitions.input!.parse({ mode: 'drill', path: 'protocolSection' });
       const result = await getFieldDefinitions.handler(input, ctx);
 
@@ -242,7 +242,7 @@ describe('getFieldDefinitions', () => {
 
     it('passes includeIndexedOnly to service in drill mode', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       await getFieldDefinitions.handler(
         getFieldDefinitions.input!.parse({
           mode: 'drill',
@@ -257,7 +257,7 @@ describe('getFieldDefinitions', () => {
 
     it('defaults includeIndexedOnly to false in drill mode', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       await getFieldDefinitions.handler(
         getFieldDefinitions.input!.parse({ mode: 'drill', path: 'protocolSection' }),
         ctx,
@@ -278,7 +278,7 @@ describe('getFieldDefinitions', () => {
         ],
         total: 1,
       });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const input = getFieldDefinitions.input!.parse({
         mode: 'search',
         query: 'enrollment',
@@ -303,7 +303,7 @@ describe('getFieldDefinitions', () => {
         ],
         total: 2,
       });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const input = getFieldDefinitions.input!.parse({ mode: 'search', query: 'ab', limit: 20 });
       const result = await getFieldDefinitions.handler(input, ctx);
 
@@ -322,7 +322,7 @@ describe('getFieldDefinitions', () => {
         type: 'STRING',
       }));
       mockService.searchFieldDefinitions.mockResolvedValue({ entries, total: 137 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const input = getFieldDefinitions.input!.parse({ mode: 'search', query: 'date', limit: 3 });
       const result = await getFieldDefinitions.handler(input, ctx);
 
@@ -344,7 +344,7 @@ describe('getFieldDefinitions', () => {
           path: 'protocolSection.identificationModule',
         }),
       ]) {
-        const ctx = createMockContext();
+        const ctx = createMockContext({ errors: getFieldDefinitions.errors });
         await getFieldDefinitions.handler(input, ctx);
         expect(getEnrichment(ctx).totalMatches).toBeUndefined();
       }
@@ -359,7 +359,7 @@ describe('getFieldDefinitions', () => {
         ],
         total: 3,
       });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const input = getFieldDefinitions.input!.parse({ mode: 'search', query: 'abc', limit: 20 });
       await getFieldDefinitions.handler(input, ctx);
 
@@ -376,7 +376,7 @@ describe('getFieldDefinitions', () => {
         type: 'STRING',
       }));
       mockService.searchFieldDefinitions.mockResolvedValue({ entries, total: 42 });
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const input = getFieldDefinitions.input!.parse({ mode: 'search', query: 'f', limit: 5 });
       await getFieldDefinitions.handler(input, ctx);
 
@@ -387,14 +387,14 @@ describe('getFieldDefinitions', () => {
     });
 
     it('rejects search mode without query', async () => {
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const input = getFieldDefinitions.input!.parse({ mode: 'search' });
 
       await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow(/requires `query`/);
     });
 
     it('rejects drill mode without path', async () => {
-      const ctx = createMockContext();
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
       const input = getFieldDefinitions.input!.parse({ mode: 'drill' });
 
       await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow(/requires `path`/);

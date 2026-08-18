@@ -3,7 +3,6 @@
  * @module tests/mcp-server/tools/definitions/get-field-definitions.fuzz
  */
 
-import { McpError } from '@cyanheads/mcp-ts-core/errors';
 import { fuzzTool } from '@cyanheads/mcp-ts-core/testing/fuzz';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -38,11 +37,7 @@ describe('getFieldDefinitions fuzz', () => {
       seed: 13,
       ctx: { errors: getFieldDefinitions.errors },
     });
-    // McpError throws are intentional contract failures (e.g. path_not_found
-    // when path doesn't match the tree, validationError when both query and
-    // path are passed). Only non-McpError throws indicate real bugs.
-    const programmerCrashes = report.crashes.filter((c) => !(c.error instanceof McpError));
-    expect(programmerCrashes).toEqual([]);
+    expect(report.crashes).toEqual([]);
     expect(report.leaks).toEqual([]);
     expect(report.prototypePollution).toBe(false);
     expect(report.totalRuns).toBeGreaterThan(0);

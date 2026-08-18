@@ -6,7 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
-import { toArray } from '../utils/query-helpers.js';
+import { blankValueMessage, firstBlankListParam, toArray } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 export const getFieldValues = tool('clinicaltrials_get_field_values', {
@@ -18,6 +18,12 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
   },
 
   errors: [
+    {
+      reason: 'blank_value',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A parameter was supplied with a blank, whitespace-only, or empty-list value.',
+      recovery: RECOVERY_HINTS.blank_value,
+    },
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
@@ -37,13 +43,10 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
     fields: z
       .union([
         z.string().describe('A single PascalCase field name.'),
-        z
-          .array(z.string())
-          .min(1)
-          .describe('Multiple PascalCase field names (at least one required).'),
+        z.array(z.string()).describe('Multiple PascalCase field names (at least one required).'),
       ])
       .describe(
-        `PascalCase field name(s) to get value statistics for. Examples: OverallStatus, Phase, StudyType, Sex, LeadSponsorClass. Use clinicaltrials_get_field_definitions with a query to find more field names.`,
+        `PascalCase field name(s) to get value statistics for — an empty list is rejected, not treated as "every field". Examples: OverallStatus, Phase, StudyType, Sex, LeadSponsorClass. Use clinicaltrials_get_field_definitions with a query to find more field names.`,
       ),
   }),
 
@@ -98,13 +101,21 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
   }),
 
   async handler(input, ctx) {
+    // An empty list drops the upstream `fields` param and answers with the
+    // whole ~418-field catalog. Both empty forms land here — the real array and
+    // the stringified '[]', which validates as a string and only resolves to []
+    // after toArray. Judged in the handler, not at the schema: the schema runs
+    // first and surfaces a bare -32602 with no reason and no recovery hint. The
+    // reason is blank_value rather than field_invalid, whose hint sends the
+    // caller off to browse the field tree — not the question a caller who
+    // supplied a blank is asking.
     const fields = toArray(input.fields);
-    if (fields.length === 0) {
-      throw ctx.fail(
-        'field_invalid',
-        'Provide at least one PascalCase field name (e.g. "OverallStatus").',
-        { ...ctx.recoveryFor('field_invalid') },
-      );
+    const blankParam = firstBlankListParam({ fields });
+    if (blankParam) {
+      throw ctx.fail('blank_value', blankValueMessage(blankParam), {
+        param: blankParam,
+        ...ctx.recoveryFor('blank_value'),
+      });
     }
     const service = getClinicalTrialsService();
     const stats = await service.getFieldValues(fields, ctx);

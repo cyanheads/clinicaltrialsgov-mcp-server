@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/get-field-values.tool
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -39,8 +40,10 @@ describe('getFieldValues', () => {
       expect(() => getFieldValues.input!.parse({})).toThrow();
     });
 
-    it('rejects an empty fields array (#82)', () => {
-      expect(() => getFieldValues.input!.parse({ fields: [] })).toThrow();
+    it('accepts an empty fields array at the schema so the handler can judge it (#109)', () => {
+      // The rejection moves to the handler, which is the only layer that can
+      // carry a reason and a recovery hint — see the blank_value case below.
+      expect(() => getFieldValues.input!.parse({ fields: [] })).not.toThrow();
     });
   });
 
@@ -101,13 +104,37 @@ describe('getFieldValues', () => {
       ).rejects.toThrow('Invalid field');
     });
 
-    it('rejects an empty stringified array instead of dumping the full catalog (#82)', async () => {
+    // Both empty forms — the real array and the stringified '[]' LLM callers
+    // sometimes send — resolve to [] after toArray and must fail fast rather
+    // than dropping the upstream fields param and dumping the full catalog
+    // (#82). The reason is blank_value, not field_invalid: field_invalid's
+    // recovery hint sends the caller to browse the field tree, which answers a
+    // question a caller who supplied [] did not ask (#109).
+    it.each([[[]], ['[]']])(
+      'answers an empty fields list (%j) with the typed blank_value contract',
+      async (fields) => {
+        const ctx = createMockContext({ errors: getFieldValues.errors });
+        const input = getFieldValues.input!.parse({ fields });
+        await expect(getFieldValues.handler(input, ctx)).rejects.toMatchObject({
+          code: JsonRpcErrorCode.ValidationError,
+          data: { reason: 'blank_value', param: 'fields' },
+        });
+        expect(mockService.getFieldValues).not.toHaveBeenCalled();
+      },
+    );
+
+    it('answers a fields list carrying a blank entry with the blank_value contract', async () => {
       const ctx = createMockContext({ errors: getFieldValues.errors });
-      // A genuine JSON string "[]" validates as a string, normalizes to [] in the
-      // handler, and must fail fast rather than omitting the upstream fields param.
-      const input = getFieldValues.input!.parse({ fields: '[]' });
-      await expect(getFieldValues.handler(input, ctx)).rejects.toThrow(/at least one/i);
+      const input = getFieldValues.input!.parse({ fields: ['OverallStatus', '  '] });
+      await expect(getFieldValues.handler(input, ctx)).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'blank_value', param: 'fields' },
+      });
       expect(mockService.getFieldValues).not.toHaveBeenCalled();
+    });
+
+    it('declares the blank_value reason on the tool contract', () => {
+      expect(getFieldValues.errors?.map((e) => e.reason)).toContain('blank_value');
     });
   });
 

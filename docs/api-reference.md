@@ -774,7 +774,7 @@ Each `query.*` parameter searches a weighted set of fields. The weight (0.0--1.0
 
 Highest-weighted fields: NCTId (1.0), Acronym (1.0), BriefTitle (0.89), OfficialTitle (0.85), Condition (0.81), InterventionName (0.80), InterventionOtherName (0.75), Phase (0.65), StdAge (0.65), BriefSummary (0.60), PrimaryOutcomeMeasure (0.60), Keyword (0.60).
 
-Covers 50+ fields total with decreasing weights down to 0.10.
+Covers 57 fields total with decreasing weights down to 0.10.
 
 ### ConditionSearch (`query.cond`)
 

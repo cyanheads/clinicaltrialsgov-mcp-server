@@ -317,48 +317,48 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        'General free-text search across all fields. Plain words plus AND, OR, NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression — those work here as well as in advancedFilter, so AREA[Phase]PHASE2 is accepted in this parameter; a stray bracket fails. `( )` group sub-expressions and work when matched; `,` acts as AND. The dedicated *Query parameters (conditionQuery, interventionQuery, etc.) scope a search to one field.',
+        'General free-text search across all fields. Runs the 57-field relevance search ClinicalTrials.gov publishes for this parameter — NCTId, NCTIdAlias, OrgStudyId, SecondaryId, Acronym, BriefTitle, OfficialTitle, Condition, InterventionName, InterventionOtherName, Phase, StdAge, StudyType, BriefSummary, outcome measures and their descriptions, LeadSponsorName, CollaboratorName, the Location* fields, the Design* fields, and the ConditionAncestorTerm/InterventionAncestorTerm MeSH umbrellas — so a hit need not carry your term in the field you had in mind. Plain words plus AND, OR, NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression — those work here as well as in advancedFilter, so AREA[Phase]PHASE2 is accepted in this parameter; a stray bracket fails. `( )` group sub-expressions and work when matched; `,` acts as AND. The dedicated *Query parameters (conditionQuery, interventionQuery, etc.) scope a search to one field.',
       ),
     conditionQuery: z
       .string()
       .optional()
       .describe(
-        'Condition/disease-specific search. E.g., "Type 2 Diabetes", "non-small cell lung cancer". Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
+        'Condition/disease-specific search. E.g., "Type 2 Diabetes", "non-small cell lung cancer". Matches Condition, BriefTitle, OfficialTitle, ConditionMeshTerm, ConditionAncestorTerm, Keyword, and NCTId. ConditionAncestorTerm is the MeSH umbrella above the conditions a study itself lists, so results run broader than those lists — a study can match a parent term it never names. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
       ),
     interventionQuery: z
       .string()
       .optional()
       .describe(
-        'Intervention/treatment search. E.g., "pembrolizumab", "cognitive behavioral therapy". Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
+        'Intervention/treatment search. E.g., "pembrolizumab", "cognitive behavioral therapy". Matches InterventionName, InterventionType, ArmGroupType, InterventionOtherName, BriefTitle, OfficialTitle, ArmGroupLabel, InterventionMeshTerm, Keyword, InterventionAncestorTerm, InterventionDescription, and ArmGroupDescription. InterventionAncestorTerm is the MeSH umbrella above the interventions a study itself lists, so results run broader than those lists. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
       ),
     locationQuery: z
       .string()
       .optional()
       .describe(
-        'Location search — city, state, country, or facility name. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
+        'Location search — city, state, country, or facility name. Matches LocationCity, LocationState, LocationCountry, LocationFacility, and LocationZip; a study matches when any of its sites does. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
       ),
     sponsorQuery: z
       .string()
       .optional()
       .describe(
-        'Sponsor/collaborator name search. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
+        'Sponsor/collaborator name search. Matches LeadSponsorName, CollaboratorName, and OrgFullName. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
       ),
     titleQuery: z
       .string()
       .optional()
       .describe(
-        'Search within study titles and acronyms only. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
+        'Search within study titles and acronyms only. Matches Acronym, BriefTitle, and OfficialTitle. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
       ),
     outcomeQuery: z
       .string()
       .optional()
       .describe(
-        'Search within outcome measure fields. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
+        'Search within outcome measure fields. Matches PrimaryOutcomeMeasure, SecondaryOutcomeMeasure, OtherOutcomeMeasure, and OutcomeMeasureTitle, plus their description counterparts PrimaryOutcomeDescription, SecondaryOutcomeDescription, OtherOutcomeDescription, OutcomeMeasureDescription, and OutcomeMeasurePopulationDescription — so a term appearing only in outcome prose still matches. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
       ),
     statusFilter: z
       .union([
         z.string().describe('A single status value.'),
-        z.array(z.string()).min(1).describe('Multiple status values (OR).'),
+        z.array(z.string()).describe('Multiple status values (OR).'),
       ])
       .optional()
       .describe(
@@ -367,7 +367,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     phaseFilter: z
       .union([
         z.string().describe('A single phase value.'),
-        z.array(z.string()).min(1).describe('Multiple phase values (OR).'),
+        z.array(z.string()).describe('Multiple phase values (OR).'),
       ])
       .optional()
       .describe(
@@ -391,10 +391,11 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         z.array(nctIdSchema).describe('Multiple NCT IDs (OR).'),
       ])
       .optional()
-      .describe('Filter to specific NCT IDs for batch lookups.'),
+      .describe(
+        'Filter to specific NCT IDs for batch lookups. Omit to search every study — an empty list is rejected, not treated as "no filter". Supplying this lifts the default unknown-enrollment exclusion, so an ID you name is never filtered out of its own lookup.',
+      ),
     fields: z
       .array(z.string())
-      .min(1)
       .optional()
       .describe(
         `PascalCase leaf names to return; strongly recommended since full records are ~70KB. Omit for the compact index projection — an empty list is rejected, not treated as omission. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept.`,
@@ -480,15 +481,20 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
   async handler(input, ctx) {
     // A supplied-but-blank value is not an omitted one: buildSearchQuery drops
     // falsy values, so a blank query would widen the search to the entire
-    // registry, and an empty `fields` list would silently fall back to the
-    // default projection. The constraint strings fail both ways — '' is falsy
-    // and dropped, while ' ' is truthy and forwarded, splicing a blank term
-    // into a joined boolean expression (advancedFilter) or sending upstream a
-    // whitespace value it can only reject (geoFilter, sort). Reject in the
-    // handler — a schema-only rejection surfaces as a bare -32602 with no
-    // reason and no recovery hint.
+    // registry, an empty `nctIds` list would drop `filter.ids` and answer an
+    // ID-scoped question with that same whole registry, and an empty `fields`
+    // list would silently fall back to the default projection. The constraint
+    // strings fail both ways — '' is falsy and dropped, while ' ' is truthy and
+    // forwarded, splicing a blank term into a joined boolean expression
+    // (advancedFilter) or sending upstream a whitespace value it can only
+    // reject (geoFilter, sort). Every list arm here judges `[]` in the handler
+    // rather than at the schema: a schema-only rejection runs before the
+    // handler and surfaces as a bare -32602 with no reason and no recovery
+    // hint, leaving the declared blank_value contract unreachable for exactly
+    // the input form it names.
     const statusFilter = toArray(input.statusFilter);
     const phaseFilter = toArray(input.phaseFilter);
+    const filterIds = toArray(input.nctIds);
     const blankParam =
       firstBlankParam({
         query: input.query,
@@ -501,13 +507,22 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         advancedFilter: input.advancedFilter,
         geoFilter: input.geoFilter,
         sort: input.sort,
-      }) ?? firstBlankListParam({ fields: input.fields, statusFilter, phaseFilter });
+      }) ??
+      firstBlankListParam({ fields: input.fields, statusFilter, phaseFilter, nctIds: filterIds });
     if (blankParam) {
       throw ctx.fail('blank_value', blankValueMessage(blankParam), {
         param: blankParam,
         ...ctx.recoveryFor('blank_value'),
       });
     }
+
+    // An ID-targeted lookup must never silently filter the caller's selection,
+    // so supplying nctIds lifts the default unknown-enrollment exclusion — the
+    // rule getStudiesBatch and find_eligible already follow. Without it, an
+    // explicit ID filter answered "no such study" for any study that publishes
+    // no EnrollmentCount, while get_study_record returned it. Keyed on the
+    // filter actually reaching upstream, matching buildSearchQuery's own test.
+    const includeUnknownEnrollment = input.includeUnknownEnrollment || Boolean(filterIds?.length);
 
     const service = getClinicalTrialsService();
     const result = await service.searchStudies(
@@ -521,14 +536,14 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         queryOutc: input.outcomeQuery,
         filterOverallStatus: statusFilter,
         filterGeo: input.geoFilter,
-        filterIds: toArray(input.nctIds),
+        filterIds,
         filterAdvanced: buildAdvancedFilter(phaseFilter, input.advancedFilter),
         fields: input.fields,
         sort: input.sort,
         countTotal: input.countTotal,
         pageSize: input.pageSize,
         pageToken: input.pageToken,
-        includeUnknownEnrollment: input.includeUnknownEnrollment,
+        includeUnknownEnrollment,
       },
       ctx,
     );
@@ -562,7 +577,9 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
     if (input.geoFilter) criteria.geoFilter = input.geoFilter;
     if (input.nctIds) criteria.nctIds = input.nctIds;
-    if (!input.includeUnknownEnrollment) criteria.sentinelFilterActive = true;
+    // Reports the exclusion that actually ran, so it stays absent on the
+    // ID-targeted path where the override lifted it.
+    if (!includeUnknownEnrollment) criteria.sentinelFilterActive = true;
     if (Object.keys(criteria).length > 0) ctx.enrich({ searchCriteria: criteria });
 
     // Recovery guidance only when nothing matched.

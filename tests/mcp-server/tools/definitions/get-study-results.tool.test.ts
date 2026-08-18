@@ -908,25 +908,43 @@ describe('getStudyResults', () => {
   });
 
   describe('blank supplied values (#99)', () => {
-    it('rejects an empty sections array at the schema (defense in depth)', () => {
-      expect(() => getStudyResults.input!.parse({ nctIds: 'NCT12345678', sections: [] })).toThrow();
-    });
-
-    it('rejects an empty sections list in the handler with the blank_value contract', async () => {
+    // Through the real `.input.parse()` path — no hand-built input bypassing
+    // the schema. A schema `.min(1)` would preempt the handler and surface a
+    // bare -32602 carrying no reason and no recovery hint (#109).
+    it('answers an empty sections list with the typed blank_value contract', async () => {
       mockService.getStudiesBatch.mockResolvedValue([makeStudy('NCT12345678', true, {})]);
       const ctx = createMockContext({ errors: getStudyResults.errors });
-      // Hand-built input: the schema now rejects `[]`, so this pins the handler
-      // layer that carries the reason and recovery hint a client can act on.
-      const input = {
-        nctIds: 'NCT12345678',
-        sections: [],
-        summary: false,
-      } as unknown as Parameters<typeof getStudyResults.handler>[0];
 
-      await expect(getStudyResults.handler(input, ctx)).rejects.toMatchObject({
+      await expect(
+        getStudyResults.handler(
+          getStudyResults.input!.parse({ nctIds: 'NCT12345678', sections: [] }),
+          ctx,
+        ),
+      ).rejects.toMatchObject({
         code: JsonRpcErrorCode.ValidationError,
         data: { reason: 'blank_value', param: 'sections' },
       });
+      expect(mockService.getStudiesBatch).not.toHaveBeenCalled();
+    });
+
+    // nctIds is required and had no handler guard at all: dropping the schema
+    // constraint alone would let `[]` through to a zero-iteration loop and
+    // answer `{ results: [] }` as a silent success.
+    it('answers an empty nctIds list with the typed blank_value contract', async () => {
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+
+      await expect(
+        getStudyResults.handler(getStudyResults.input!.parse({ nctIds: [] }), ctx),
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'blank_value', param: 'nctIds' },
+      });
+      expect(mockService.getStudiesBatch).not.toHaveBeenCalled();
+    });
+
+    it('still caps nctIds at 20 in the schema', () => {
+      const ids = Array.from({ length: 21 }, (_, i) => `NCT${String(i).padStart(8, '0')}`);
+      expect(() => getStudyResults.input!.parse({ nctIds: ids })).toThrow();
     });
 
     it('leaves an omitted sections list meaning "all sections"', async () => {

@@ -36,8 +36,9 @@ describe('findEligible', () => {
   });
 
   describe('input validation', () => {
-    it('requires at least one condition', () => {
-      expect(() => findEligible.input!.parse({ ...baseInput, conditions: [] })).toThrow();
+    it('requires the conditions parameter', () => {
+      const { conditions: _omitted, ...withoutConditions } = baseInput;
+      expect(() => findEligible.input!.parse(withoutConditions)).toThrow();
     });
 
     it('rejects age outside 0-120', () => {
@@ -217,6 +218,71 @@ describe('findEligible', () => {
       expect(call.filterAdvanced).toContain('AREA[MaximumAge]RANGE[30 years, MAX]');
     });
 
+    it('ORs each age bound with its MISSING counterpart so an open-ended bound qualifies (#105)', async () => {
+      // An AREA[Field]RANGE[…] predicate matches only studies that publish the
+      // field, so a closed range on MaximumAge drops every "18 Years and older"
+      // study — the majority shape among recruiting trials. An absent bound is
+      // unbounded, not disqualifying.
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+
+      const call = mockService.searchStudies.mock.calls[0]![0];
+      expect(call.filterAdvanced).toContain(
+        '(AREA[MinimumAge]RANGE[MIN, 30 years] OR AREA[MinimumAge]MISSING)',
+      );
+      expect(call.filterAdvanced).toContain(
+        '(AREA[MaximumAge]RANGE[30 years, MAX] OR AREA[MaximumAge]MISSING)',
+      );
+    });
+
+    it('keeps the Sex and HealthyVolunteers arms strict — no MISSING widening (#105)', async () => {
+      // An unstated healthy-volunteer policy is not an affirmative yes, and an
+      // unrestricted study registers a literal Sex: ALL rather than omitting the
+      // field. Neither arm takes the MISSING widening the age bounds need —
+      // guards against it being applied by pattern across every AREA[] predicate.
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await findEligible.handler(
+        findEligible.input!.parse({ ...baseInput, healthyVolunteer: true, sex: 'FEMALE' }),
+        ctx,
+      );
+
+      const call = mockService.searchStudies.mock.calls[0]![0];
+      expect(call.filterAdvanced).toContain('AREA[HealthyVolunteers]true');
+      expect(call.filterAdvanced).not.toContain('AREA[HealthyVolunteers]MISSING');
+      expect(call.filterAdvanced).toContain('(AREA[Sex]ALL OR AREA[Sex]FEMALE)');
+      expect(call.filterAdvanced).not.toContain('AREA[Sex]MISSING');
+    });
+
+    it('carries an open-ended-age study through both channels without inventing a bound (#105)', async () => {
+      // The shape the widened predicate now admits: minimumAge published,
+      // maximumAge absent. structuredContent must carry the record verbatim and
+      // format() must render the one-sided bound as "≥", never fabricate an
+      // upper bound or drop the field.
+      const openEnded = {
+        protocolSection: {
+          identificationModule: { nctId: 'NCT06907862', briefTitle: '18 and older trial' },
+          statusModule: { overallStatus: 'RECRUITING' },
+          eligibilityModule: { minimumAge: '18 Years', sex: 'ALL' },
+        },
+      };
+      mockService.searchStudies.mockResolvedValue({ studies: [openEnded], totalCount: 1 });
+      const ctx = createMockContext({ errors: findEligible.errors });
+      const result = await findEligible.handler(
+        findEligible.input!.parse({ ...baseInput, age: 58 }),
+        ctx,
+      );
+
+      const elig = (result.studies[0] as typeof openEnded).protocolSection.eligibilityModule;
+      expect(elig.minimumAge).toBe('18 Years');
+      expect(elig).not.toHaveProperty('maximumAge');
+
+      const text = (findEligible.format!(result)[0] as { text: string }).text;
+      expect(text).toContain('Eligibility: Age: ≥18 Years');
+      expect(text).not.toMatch(/Age: 18 Years–/);
+    });
+
     it('uses maxResults as pageSize', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext({ errors: findEligible.errors });
@@ -271,7 +337,7 @@ describe('findEligible', () => {
         conditionQuery: '"Type 2 Diabetes"',
         statusFilter: ['RECRUITING'],
         advancedFilter:
-          'AREA[MinimumAge]RANGE[MIN, 30 years] AND AREA[MaximumAge]RANGE[30 years, MAX]',
+          '(AREA[MinimumAge]RANGE[MIN, 30 years] OR AREA[MinimumAge]MISSING) AND (AREA[MaximumAge]RANGE[30 years, MAX] OR AREA[MaximumAge]MISSING)',
       });
     });
 
@@ -376,6 +442,19 @@ describe('findEligible', () => {
 
     beforeEach(() => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+    });
+
+    // Through the real `.input.parse()` path. A schema `.min(1)` would preempt
+    // the handler on the fully-empty form alone, splitting one class of input
+    // across two error shapes — a typed blank_value for ['']  and a bare -32602
+    // for [] (#109).
+    it('answers an empty conditions list with the typed blank_value contract', async () => {
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await expectBlankValue(
+        findEligible.handler(findEligible.input!.parse({ ...baseInput, conditions: [] }), ctx),
+        'conditions',
+      );
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
     });
 
     it('rejects a conditions array whose only entry is blank', () => {
@@ -636,7 +715,7 @@ describe('findEligible', () => {
         conditionQuery: '"Type 2 Diabetes"',
         statusFilter: ['RECRUITING'],
         advancedFilter:
-          'AREA[MinimumAge]RANGE[MIN, 30 years] AND AREA[MaximumAge]RANGE[30 years, MAX]',
+          '(AREA[MinimumAge]RANGE[MIN, 30 years] OR AREA[MinimumAge]MISSING) AND (AREA[MaximumAge]RANGE[30 years, MAX] OR AREA[MaximumAge]MISSING)',
       });
       expect(text).toContain('conditions=[Type 2 Diabetes]');
       expect(text).toContain('conditionQuery="Type 2 Diabetes"');
@@ -645,7 +724,7 @@ describe('findEligible', () => {
       expect(text).toContain('locationQuery=Seattle, Washington, United States');
       expect(text).toContain('statusFilter=[RECRUITING]');
       expect(text).toContain(
-        'advancedFilter=AREA[MinimumAge]RANGE[MIN, 30 years] AND AREA[MaximumAge]RANGE[30 years, MAX]',
+        'advancedFilter=(AREA[MinimumAge]RANGE[MIN, 30 years] OR AREA[MinimumAge]MISSING) AND (AREA[MaximumAge]RANGE[30 years, MAX] OR AREA[MaximumAge]MISSING)',
       );
       // find_eligible always queries includeUnknownEnrollment=true; search_studies
       // defaults it false, so the reproduce set must carry it for a faithful replay (#91-C).

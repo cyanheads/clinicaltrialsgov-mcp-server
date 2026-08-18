@@ -16,6 +16,7 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
 }));
 
 import { getStudyCount } from '@/mcp-server/tools/definitions/get-study-count.tool.js';
+import { searchStudies } from '@/mcp-server/tools/definitions/search-studies.tool.js';
 
 describe('getStudyCount', () => {
   const mockService = { searchStudies: vi.fn() };
@@ -279,10 +280,19 @@ describe('getStudyCount', () => {
       },
     );
 
+    // Through the real `.input.parse()` path: the schema lets `[]` through and
+    // the handler raises the declared blank_value contract. A schema `.min(1)`
+    // would preempt the handler and surface a bare -32602 carrying no reason
+    // and no recovery hint (#109).
     it.each(['statusFilter', 'phaseFilter'] as const)(
-      'rejects an empty real %s array at the schema (defense in depth)',
-      (param) => {
-        expect(() => getStudyCount.input!.parse({ [param]: [] })).toThrow();
+      'answers an empty %s with the typed blank_value contract, not a bare schema rejection',
+      async (param) => {
+        const ctx = createMockContext({ errors: getStudyCount.errors });
+        await expectBlankValue(
+          getStudyCount.handler(getStudyCount.input!.parse({ [param]: [] }), ctx),
+          param,
+        );
+        expect(mockService.searchStudies).not.toHaveBeenCalled();
       },
     );
 
@@ -344,6 +354,34 @@ describe('getStudyCount', () => {
 
     it('declares the blank_value reason on the tool contract', () => {
       expect(getStudyCount.errors?.map((e) => e.reason)).toContain('blank_value');
+    });
+  });
+
+  // The seven *Query descriptions are literal duplicates of search_studies'
+  // — no shared constant holds them, so they drift silently unless pinned.
+  // Both tools front the same ClinicalTrials.gov search areas, so a caller
+  // reading either one must learn the same match surface (#108).
+  describe('*Query match-surface descriptions (#108)', () => {
+    const QUERY_PARAMS = [
+      'query',
+      'conditionQuery',
+      'interventionQuery',
+      'locationQuery',
+      'sponsorQuery',
+      'titleQuery',
+      'outcomeQuery',
+    ] as const;
+
+    it.each(QUERY_PARAMS)('%s carries the same description as search_studies', (param) => {
+      const countShape = getStudyCount.input!.shape as Record<string, { description?: string }>;
+      const searchShape = searchStudies.input!.shape as Record<string, { description?: string }>;
+      expect(countShape[param]?.description).toBe(searchShape[param]?.description);
+    });
+
+    it('names ConditionAncestorTerm and its broadening effect on conditionQuery', () => {
+      const shape = getStudyCount.input!.shape as Record<string, { description?: string }>;
+      expect(shape.conditionQuery?.description).toContain('ConditionAncestorTerm');
+      expect(shape.conditionQuery?.description).toMatch(/broader than/i);
     });
   });
 

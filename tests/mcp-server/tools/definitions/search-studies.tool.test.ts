@@ -371,6 +371,63 @@ describe('searchStudies', () => {
       );
     });
 
+    it('forces includeUnknownEnrollment when nctIds is supplied (#106)', async () => {
+      // #41's rule: an ID-targeted lookup must never silently filter the
+      // caller's selection. getStudiesBatch and find_eligible already opt out;
+      // this path reached the same predicate without it, so an explicit ID
+      // filter answered "no such study" for a study the record tool returns.
+      mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(searchStudies.input!.parse({ nctIds: 'NCT04586062' }), ctx);
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filterIds: ['NCT04586062'],
+          includeUnknownEnrollment: true,
+        }),
+        ctx,
+      );
+    });
+
+    it('forces includeUnknownEnrollment for a multi-ID lookup too (#106)', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(
+        searchStudies.input!.parse({ nctIds: ['NCT04586062', 'NCT01171079'] }),
+        ctx,
+      );
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ includeUnknownEnrollment: true }),
+        ctx,
+      );
+    });
+
+    it('leaves the exclusion in force when nctIds is absent (#106)', async () => {
+      // The override is scoped to ID-targeted lookups — a plain query keeps the
+      // #41 default so the sentinel still cannot pollute a RANGE or sort.
+      mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(searchStudies.input!.parse({ conditionQuery: 'diabetes' }), ctx);
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ includeUnknownEnrollment: false }),
+        ctx,
+      );
+    });
+
+    it('omits sentinelFilterActive from the echo when nctIds overrides the exclusion (#106, #78)', async () => {
+      // The disclosure states whether the exclusion is actually in effect. On an
+      // ID lookup it is not, so echoing it would report a filter that never ran.
+      mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(searchStudies.input!.parse({ nctIds: 'NCT04586062' }), ctx);
+
+      const criteria = getEnrichment(ctx).searchCriteria as Record<string, unknown>;
+      expect(criteria.nctIds).toBe('NCT04586062');
+      expect(criteria.sentinelFilterActive).toBeUndefined();
+    });
+
     it('echoes requestedFields when caller passed explicit fields (regression for #38)', async () => {
       mockService.searchStudies.mockResolvedValue({
         studies: [{ nctId: 'NCT12345678' }],
@@ -610,10 +667,6 @@ describe('searchStudies', () => {
       expect(mockService.searchStudies).not.toHaveBeenCalled();
     });
 
-    it('rejects an empty fields array at the schema (defense in depth)', () => {
-      expect(() => searchStudies.input!.parse({ fields: [] })).toThrow();
-    });
-
     it('rejects a fields array carrying a blank entry', () => {
       const ctx = createMockContext({ errors: searchStudies.errors });
       return expectBlankValue(
@@ -633,12 +686,39 @@ describe('searchStudies', () => {
       },
     );
 
-    it.each(['statusFilter', 'phaseFilter'] as const)(
-      'rejects an empty real %s array at the schema (defense in depth)',
-      (param) => {
-        expect(() => searchStudies.input!.parse({ [param]: [] })).toThrow();
+    // Every list arm on this tool answers `[]` the same way, through the real
+    // `.input.parse()` path: the schema lets it through and the handler raises
+    // the declared blank_value contract. A schema `.min(1)` would preempt the
+    // handler and surface a bare -32602 carrying no reason and no recovery hint
+    // (#109). nctIds is the arm that never had either guard — an empty list was
+    // dropped and the search widened to the whole registry (#110).
+    it.each(['fields', 'statusFilter', 'phaseFilter', 'nctIds'] as const)(
+      'answers an empty %s with the typed blank_value contract, not a bare schema rejection',
+      async (param) => {
+        const ctx = createMockContext({ errors: searchStudies.errors });
+        await expectBlankValue(
+          searchStudies.handler(searchStudies.input!.parse({ [param]: [] }), ctx),
+          param,
+        );
+        expect(mockService.searchStudies).not.toHaveBeenCalled();
       },
     );
+
+    it('never issues an unfiltered search for an empty nctIds list (#110)', async () => {
+      // The sharper half: an empty list that errors costs a retry, one that
+      // succeeds answers an ID-scoped question with the whole registry.
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expectBlankValue(
+        searchStudies.handler(searchStudies.input!.parse({ nctIds: [], pageSize: 1 }), ctx),
+        'nctIds',
+      );
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it('states the empty-list behavior in the nctIds description (#110)', () => {
+      const shape = searchStudies.input!.shape as Record<string, { description?: string }>;
+      expect(shape.nctIds?.description).toContain('an empty list is rejected');
+    });
 
     it('rejects a statusFilter carrying a blank entry', () => {
       const ctx = createMockContext({ errors: searchStudies.errors });
@@ -706,6 +786,85 @@ describe('searchStudies', () => {
     it('declares the blank_value reason on the tool contract', () => {
       expect(searchStudies.errors?.map((e) => e.reason)).toContain('blank_value');
     });
+  });
+
+  // Each *Query parameter is backed by a ClinicalTrials.gov search area with a
+  // published piece list (/studies/search-areas). A description that only says
+  // "Condition/disease-specific search" reads as an exact-field match, so a
+  // caller treats every hit as on-condition and never learns that the MeSH
+  // ancestor umbrella pulls in tangential ones (#108).
+  describe('*Query match-surface descriptions (#108)', () => {
+    const MATCH_SURFACE: Array<[string, string[]]> = [
+      ['query', ['NCTId', 'Acronym', 'Condition', 'InterventionName', 'BriefSummary', 'StudyType']],
+      [
+        'conditionQuery',
+        [
+          'Condition',
+          'BriefTitle',
+          'OfficialTitle',
+          'ConditionMeshTerm',
+          'ConditionAncestorTerm',
+          'Keyword',
+          'NCTId',
+          'MeSH',
+        ],
+      ],
+      [
+        'interventionQuery',
+        [
+          'InterventionName',
+          'InterventionType',
+          'ArmGroupType',
+          'InterventionOtherName',
+          'BriefTitle',
+          'OfficialTitle',
+          'ArmGroupLabel',
+          'InterventionMeshTerm',
+          'Keyword',
+          'InterventionAncestorTerm',
+          'InterventionDescription',
+          'ArmGroupDescription',
+          'MeSH',
+        ],
+      ],
+      [
+        'locationQuery',
+        ['LocationCity', 'LocationState', 'LocationCountry', 'LocationFacility', 'LocationZip'],
+      ],
+      ['sponsorQuery', ['LeadSponsorName', 'CollaboratorName', 'OrgFullName']],
+      ['titleQuery', ['Acronym', 'BriefTitle', 'OfficialTitle']],
+      [
+        'outcomeQuery',
+        [
+          'PrimaryOutcomeMeasure',
+          'SecondaryOutcomeMeasure',
+          'OtherOutcomeMeasure',
+          'OutcomeMeasureTitle',
+          'PrimaryOutcomeDescription',
+          'SecondaryOutcomeDescription',
+          'OtherOutcomeDescription',
+          'OutcomeMeasureDescription',
+          'OutcomeMeasurePopulationDescription',
+        ],
+      ],
+    ];
+
+    it.each(MATCH_SURFACE)('%s names the fields it actually matches', (param, pieces) => {
+      const shape = searchStudies.input!.shape as Record<string, { description?: string }>;
+      const description = shape[param]?.description ?? '';
+      for (const piece of pieces) expect(description).toContain(piece);
+    });
+
+    // The two MeSH-backed areas are the ones whose hits reach past the study's
+    // own list; find_eligible carries conditionMatchScore precisely to re-rank
+    // what ConditionAncestorTerm drags in.
+    it.each(['conditionQuery', 'interventionQuery'] as const)(
+      "warns that %s can match beyond the study's own list",
+      (param) => {
+        const shape = searchStudies.input!.shape as Record<string, { description?: string }>;
+        expect(shape[param]?.description).toMatch(/broader than/i);
+      },
+    );
   });
 
   describe('geoFilter location re-ranking (#84)', () => {

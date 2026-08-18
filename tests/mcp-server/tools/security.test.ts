@@ -360,8 +360,12 @@ describe('findEligible — injection and output safety', () => {
     await expect(findEligible.handler(input, ctx)).resolves.toBeDefined();
   });
 
-  it('rejects empty conditions array', () => {
-    expect(() => findEligible.input!.parse({ ...baseInput, conditions: [] })).toThrow();
+  it('rejects empty conditions array without reaching the service', async () => {
+    const ctx = createMockContext({ errors: findEligible.errors });
+    await expect(
+      findEligible.handler(findEligible.input!.parse({ ...baseInput, conditions: [] }), ctx),
+    ).rejects.toMatchObject({ data: { reason: 'blank_value', param: 'conditions' } });
+    expect(mockService.searchStudies).not.toHaveBeenCalled();
   });
 
   it('rejects age below 0', () => {

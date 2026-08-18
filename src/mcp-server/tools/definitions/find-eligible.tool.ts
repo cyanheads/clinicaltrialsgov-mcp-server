@@ -190,7 +190,6 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       ),
     conditions: z
       .array(z.string())
-      .min(1)
       .describe(
         'Medical conditions or diagnoses, e.g. ["Type 2 Diabetes", "Hypertension"]. Each entry is matched as a condition (multi-word entries match as a phrase); multiple entries are combined with OR, so studies for any listed condition qualify. Returned studies are re-ranked so those whose own condition list names a requested condition rank above tangential matches the upstream fuzzy search pulls in via the MeSH umbrella.',
       ),
@@ -342,9 +341,27 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
 
     const statusFilter = input.recruitingOnly ? ['RECRUITING'] : undefined;
 
+    /**
+     * Each age bound is ORed with its MISSING counterpart. An
+     * `AREA[Field]RANGE[…]` predicate matches only studies that publish that
+     * field, so a closed range alone drops every study registered as "18 Years
+     * and older" — it carries a minimumAge and no maximumAge, the most
+     * permissive eligibility shape in the registry and the majority of
+     * recruiting trials. An absent bound is unbounded, not disqualifying.
+     *
+     * The widening cannot over-admit: `MISSING` and `RANGE[…]` are mutually
+     * exclusive on the same field (a study either publishes it or it doesn't),
+     * so a study admitted through the MISSING arm never had a declared bound to
+     * violate.
+     *
+     * Neither the Sex nor the HealthyVolunteers arm takes this treatment. An
+     * unrestricted study registers a literal `Sex: ALL` rather than omitting
+     * the field, and an unstated healthy-volunteer policy is not an
+     * affirmative yes.
+     */
     const advancedParts: string[] = [
-      `AREA[MinimumAge]RANGE[MIN, ${input.age} years]`,
-      `AREA[MaximumAge]RANGE[${input.age} years, MAX]`,
+      `(AREA[MinimumAge]RANGE[MIN, ${input.age} years] OR AREA[MinimumAge]MISSING)`,
+      `(AREA[MaximumAge]RANGE[${input.age} years, MAX] OR AREA[MaximumAge]MISSING)`,
     ];
     if (input.sex !== 'ALL') {
       advancedParts.push(`(AREA[Sex]ALL OR AREA[Sex]${input.sex})`);

@@ -8,7 +8,7 @@ import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
-import { blankValueMessage, toArray } from '../utils/query-helpers.js';
+import { blankValueMessage, firstBlankListParam, toArray } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 const VALID_SECTIONS = [
@@ -672,15 +672,15 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     nctIds: z
       .union([
         nctIdSchema.describe('A single NCT ID.'),
-        z.array(nctIdSchema).min(1).max(20).describe('Multiple NCT IDs (max 20).'),
+        z.array(nctIdSchema).max(20).describe('Multiple NCT IDs (max 20).'),
       ])
       .describe(
-        'One or more NCT IDs (max 20). E.g., "NCT12345678" or ["NCT12345678", "NCT87654321"]. Use summary=true for large batches to avoid large payloads.',
+        'One or more NCT IDs (max 20) — an empty list is rejected. E.g., "NCT12345678" or ["NCT12345678", "NCT87654321"]. Use summary=true for large batches to avoid large payloads.',
       ),
     sections: z
       .union([
         z.enum(VALID_SECTIONS).describe('A single section name.'),
-        z.array(z.enum(VALID_SECTIONS)).min(1).describe('Multiple section names.'),
+        z.array(z.enum(VALID_SECTIONS)).describe('Multiple section names.'),
       ])
       .optional()
       .describe(
@@ -755,19 +755,23 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
 
   async handler(input, ctx) {
     const nctIds = toArray(input.nctIds);
-    // `[]` is truthy, so a length-blind ternary took the explicit-sections
-    // branch with nothing in it and returned a study stripped of every results
-    // module, with no signal anything was omitted. An empty list is a supplied
-    // blank, not omission — reject it rather than answering with a hollow
-    // record.
     const requestedSections = input.sections
       ? Array.isArray(input.sections)
         ? input.sections
         : [input.sections]
       : undefined;
-    if (requestedSections?.length === 0) {
-      throw ctx.fail('blank_value', blankValueMessage('sections'), {
-        param: 'sections',
+    // An empty list is a supplied blank, not omission, and each arm answers it
+    // with a different silent wrong answer: an empty `nctIds` runs the per-ID
+    // loop zero times and reports `{ results: [] }` as a success, while `[]` is
+    // truthy so a length-blind sections ternary takes the explicit-sections
+    // branch with nothing in it and returns a study stripped of every results
+    // module. Judged here rather than at the schema — a schema-only rejection
+    // runs before the handler and surfaces as a bare -32602 with no reason and
+    // no recovery hint.
+    const blankParam = firstBlankListParam({ nctIds, sections: requestedSections });
+    if (blankParam) {
+      throw ctx.fail('blank_value', blankValueMessage(blankParam), {
+        param: blankParam,
         ...ctx.recoveryFor('blank_value'),
       });
     }

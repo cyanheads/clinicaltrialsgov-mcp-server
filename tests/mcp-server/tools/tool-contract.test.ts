@@ -332,3 +332,75 @@ describe('blank_value recovery on the wire (#113)', () => {
     },
   );
 });
+
+/**
+ * Root-level tool inputs are strict: `tool()` stores `input` with `.strict()`
+ * and advertises `additionalProperties: false`, so an undeclared argument key
+ * is rejected by name rather than silently stripped. Stripping turned a
+ * caller's typo into a wrong answer they could not detect — the misspelled
+ * value vanished before the handler ran and the call failed downstream
+ * pointing at the wrong parameter.
+ */
+describe('strict tool inputs', () => {
+  const cases = [
+    { name: 'searchStudies', schema: searchStudies.input, valid: { conditionQuery: 'diabetes' } },
+    { name: 'getStudy', schema: getStudy.input, valid: { nctId: 'NCT03722472' } },
+    { name: 'getStudyResults', schema: getStudyResults.input, valid: { nctIds: 'NCT03722472' } },
+    { name: 'getFieldValues', schema: getFieldValues.input, valid: { fields: 'OverallStatus' } },
+    { name: 'getFieldDefinitions', schema: getFieldDefinitions.input, valid: { mode: 'overview' } },
+    { name: 'getStudyCount', schema: getStudyCount.input, valid: { conditionQuery: 'diabetes' } },
+    { name: 'findEligible', schema: findEligible.input, valid: eligibleInput },
+  ];
+
+  it.each(cases)('$name rejects an undeclared root key by name', ({ schema, valid }) => {
+    const result = schema.safeParse({ ...valid, querry: 'typo' });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toContainEqual(
+      expect.objectContaining({ code: 'unrecognized_keys', keys: ['querry'] }),
+    );
+  });
+
+  it.each(cases)('$name accepts the same input without the stray key', ({ schema, valid }) => {
+    expect(schema.safeParse(valid).success).toBe(true);
+  });
+
+  /**
+   * Strictness is root-level only, so the nested option bags are marked
+   * `.strict()` in their own right. Both carry a plausible near-miss key whose
+   * silent removal would produce a confidently wrong result: a `zipCode` on a
+   * patient location widens the match set to the whole country, and a
+   * `radiusKm` on `nearLocation` falls back to the 50-mile default.
+   */
+  it('findEligible rejects an undeclared key inside location', () => {
+    const result = findEligible.input.safeParse({
+      ...eligibleInput,
+      location: { country: 'United States', zipCode: '98101' },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'unrecognized_keys',
+        keys: ['zipCode'],
+        path: ['location'],
+      }),
+    );
+  });
+
+  it('getStudy rejects an undeclared key inside nearLocation', () => {
+    const result = getStudy.input.safeParse({
+      nctId: 'NCT03722472',
+      nearLocation: { lat: 47.6, lon: -122.3, radiusKm: 80 },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error?.issues).toContainEqual(
+      expect.objectContaining({
+        code: 'unrecognized_keys',
+        keys: ['radiusKm'],
+        path: ['nearLocation'],
+      }),
+    );
+  });
+});

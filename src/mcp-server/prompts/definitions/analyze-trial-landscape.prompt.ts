@@ -10,10 +10,10 @@ export const analyzeTrialLandscape = prompt('analyze_trial_landscape', {
     'Guides analysis of a clinical trial landscape using the ClinicalTrials.gov MCP tools. Adaptable workflow for breakdowns by status, phase, sponsor, geography, etc.',
 
   args: z.object({
-    // `.min(1)` serializes to an advertised minLength: 1 in prompts/list. No
-    // `.default()` here: the SDK's optionality check reads `type: 'optional'`
-    // and not `default`, so a defaulted arg is advertised required for the
-    // wrong reason — topic is required on its own merits.
+    // `.min(1)` serializes to an advertised minLength: 1 in prompts/list.
+    // Requiredness follows the emitted schema, so a `.default()`ed arg would
+    // advertise as optional — topic carries none because it is required on
+    // its own merits.
     topic: z.string().min(1).describe('Disease, condition, or research area to analyze.'),
     focusAreas: z
       .string()

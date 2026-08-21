@@ -161,6 +161,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
         lon: z.number().min(-180).max(180).describe('Longitude in decimal degrees.'),
         radiusMi: z.number().min(1).max(500).default(50).describe('Radius in miles. Default 50.'),
       })
+      .strict()
       .optional()
       .describe(
         'Filter returned locations to those within radius of (lat, lon) and sort by distance. Adds distanceMi to each location. Locations without published coordinates are dropped — most US sites carry them; international sites less reliably so. Distances reflect ClinicalTrials.gov geocoding granularity — typically city-centroid, not facility-level — so multiple sites in the same city resolve to near-identical distances. For broader geographic filtering across studies, use clinicaltrials_search_studies with geoFilter.',

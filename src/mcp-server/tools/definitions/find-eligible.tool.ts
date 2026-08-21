@@ -291,6 +291,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         state: z.string().optional().describe('State or province.'),
         city: z.string().optional().describe('City name.'),
       })
+      .strict()
       .describe(
         'Patient location as `{ country (required), state?, city? }`. Country is required; state/city narrow the match. For radius-based geographic search, use clinicaltrials_search_studies with geoFilter.',
       ),

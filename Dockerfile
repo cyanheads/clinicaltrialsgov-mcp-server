@@ -3,8 +3,16 @@
 #
 # This stage installs all dependencies (including dev), builds the TypeScript
 # source code into JavaScript, and prepares the production assets.
+#
+# Pinned to BUILDPLATFORM, not the target platform. `bun run build` emits
+# platform-independent JavaScript and only `dist/` is copied forward, so this
+# stage has no reason to run under emulation — and under QEMU it does not run
+# at all: Bun's JavaScriptCore aborts with a spurious MemoryExhaustion
+# assertion (~21 MB peak), so a cross-arch build of this stage fails outright
+# on an arm64 host. Building natively also removes emulation from the slowest
+# stage of a multi-arch build.
 # ==============================================================================
-FROM oven/bun:1.3.14 AS build
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.0 AS build
 
 WORKDIR /usr/src/app
 
@@ -30,7 +38,7 @@ RUN bun run build
 # application. It uses a slim base image and only includes production
 # dependencies and build artifacts.
 # ==============================================================================
-FROM oven/bun:1.3.14-slim AS production
+FROM oven/bun:1.4.0-slim AS production
 
 WORKDIR /usr/src/app
 

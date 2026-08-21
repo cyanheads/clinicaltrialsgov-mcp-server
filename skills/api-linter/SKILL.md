@@ -4,7 +4,7 @@ description: >
   MCP definition linter rules reference. Use when `bun run lint:mcp` or `bun run devcheck` reports a lint error or warning (`format-parity`, `schema-is-object`, `name-format`, `server-json-*`, etc.) and you need to understand the rule, its severity, and how to fix it. Every rule ID the linter emits has an entry in this doc.
 metadata:
   author: cyanheads
-  version: "1.9"
+  version: "1.12"
   audience: external
   type: reference
 ---
@@ -44,8 +44,8 @@ Grouped by family. Jump to any rule ID via its anchor.
 |:-------|:------|:--------|
 | Definition | `definition-invalid` | [Definition rules](#definition-rules) |
 | Format parity | `format-parity`, `format-parity-threw`, `format-parity-walk-failed`, `format-parity-depth-limit` | [Format parity](#format-parity) |
-| Schema | `schema-is-object`, `describe-on-fields`, `schema-serializable`, `schema-unsatisfiable` | [Schema rules](#schema-rules) |
-| Portability | `schema-format-portability`, `schema-anyof-needs-type`, `schema-no-discriminator-keyword`, `schema-no-defs`, `schema-dialect-tag` | [Portability rules](#portability-rules) |
+| Schema | `schema-is-object`, `describe-on-fields`, `schema-serializable`, `schema-unsatisfiable`, `header-param-designation` | [Schema rules](#schema-rules) |
+| Portability | `schema-format-portability`, `schema-anyof-needs-type`, `schema-no-discriminator-keyword`, `schema-no-defs`, `schema-root-oneof-portability`, `schema-dialect-tag` | [Portability rules](#portability-rules) |
 | Names | `name-required`, `name-format`, `name-unique` | [Name rules](#name-rules) |
 | Tools | `description-required`, `handler-required`, `auth-type`, `auth-scope-format`, `annotation-type`, `annotation-coherence`, `meta-ui-type`, `meta-ui-resource-uri-required`, `meta-ui-resource-uri-scheme`, `app-tool-resource-pairing`, `canvas-consumer-missing` | [Tool rules](#tool-rules) |
 | Resources | `uri-template-required`, `uri-template-valid`, `resource-name-not-uri`, `template-params-align` | [Resource rules](#resource-rules) |
@@ -169,6 +169,10 @@ input: z.array(z.string())
 input: z.object({ items: z.array(z.string()).describe('List of items') })
 ```
 
+**One exception, on tool `input` only:** a `z.discriminatedUnion(...)` of object variants is accepted, for a multi-mode tool with mutually exclusive argument sets. It advertises as `{"type": "object", "oneOf": [...]}` — the object requirement holds, and each branch keeps its own `required` list and `const`-tagged discriminator. A bare `z.union(...)` is still rejected: with no discriminator the model has no key to pick a branch by. Output roots stay object-only — the 2025-era projection rewrites a non-object output root and wraps `structuredContent` to match.
+
+The other schema rules walk every variant, so a missing `.describe()`, a non-serializable type, or an unsatisfiable node inside one branch is reported at `input|<i>.<field>`.
+
 ### describe-on-fields
 
 **Severity:** warning
@@ -186,6 +190,7 @@ Every field in `input`, `output`, `params`, or `args` needs a `.describe('...')`
 | `z.array(primitive)` element — string, number, enum, regex-branded primitive, etc. | **No** | No — outer array describe is sufficient |
 | `z.union([a, b, ...])` non-literal option | Yes | Yes, on each option |
 | `z.union([..., z.literal(X), ...])` literal option | **No** | No — outer union describe is sufficient |
+| A tool `input` root that is a `z.discriminatedUnion(...)` — its variant objects | Yes, their **fields** | No, not on the variant itself — it is a root, and roots carry no describe |
 
 The asymmetry that catches agents: inside `z.union([z.string(), z.array(z.string())])`, the outer `z.string()` option **does** need a describe (unions walk non-literal options), but the `z.string()` inside the inner array does **not** (arrays don't walk primitive elements). If the linter didn't flag a path, don't add a describe there — the redundant describe ships to the JSON Schema as clutter.
 
@@ -241,6 +246,29 @@ Evaluated on the emitted schema rather than on the Zod schema, because the two d
 **Fix:** for a closed set of non-string values, use a multi-value literal — `z.literal([1, 2, 3, 4, 5])` emits `{"type": "number", "enum": [1, 2, 3, 4, 5]}`. For an empty enum or union, the field has no legal values at all; drop it or give it real members.
 
 Not flagged, deliberately: `allOf: []` is vacuously true (matches everything), and empty `required` / `properties` / `prefixItems` are absent constraints rather than impossible ones.
+
+### header-param-designation
+
+**Severity:** error
+
+Fires when a tool's `input` carries an `x-mcp-header` designation — from `headerParam(schema, 'Name')` or a hand-written `.meta({ 'x-mcp-header': 'Name' })` — that violates one of the constraints protocol revision 2026-07-28 places on it.
+
+| Constraint | Example violation |
+|:--|:--|
+| Statically reachable through a chain of `properties` keys | A designation on an array element, a `z.record()` value, any field of a **discriminated-union input root** (the root advertises `oneOf`), or a schema hoisted into `$defs` by `.meta({ id })` |
+| Primitive-typed property — `string`, `integer`, `number`, `boolean` | `headerParam(z.object({ … }), 'Region')` |
+| Non-empty RFC 9110 token | `headerParam(z.string(), 'Bad Name')` — spaces, control characters, and HTTP delimiters are all rejected |
+| Case-insensitively unique across the whole input schema | `'Region'` and `'REGION'` on two sibling fields |
+
+Evaluated on the emitted JSON Schema, which is the same input the SDK's own scan reads — so a verdict here is the SDK's verdict.
+
+The message names the offending field in the linter's path vocabulary: `input.rows[].region` for an array element, `input.map.<key>` for a record value, `input|0.region` for a union branch.
+
+**Fix:** move the designation to a top-level or nested object property. For a multi-mode tool, there is no placement that works — a union input root puts every field behind `oneOf`; flatten the schema or drop the designation.
+
+**Why it is an error, not a warning:** the SDK enforces this with a `console.warn`. The tool still registers, and conforming Streamable HTTP clients then exclude it from `tools/list` — it silently disappears with nothing reporting the gap. `tool()` throws on the same condition at definition time, so this rule normally fires only for a definition assembled without the builder.
+
+Silent when the schema cannot be converted to JSON Schema at all — that is `schema-serializable`'s diagnostic.
 
 ---
 
@@ -308,6 +336,14 @@ Fires when a schema carries the OpenAPI `discriminator` keyword. OpenAI silently
 Fires when emitted output contains `$defs` or `$ref`. Gemini rejects these (`400: reference to undefined schema`). Typically caused by reused or recursive types built with `z.lazy(...)`. Opt-in because [SEP-1576](https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1576) (token-bloat mitigation) is moving the community toward more `$defs`.
 
 **Fix:** inline the recursive type with bounded depth, or accept the Gemini limitation if you target only Anthropic clients.
+
+### schema-root-oneof-portability
+
+**Severity:** warning (only when `portability: 'strict'`)
+
+Fires when a tool's advertised `inputSchema` has a root-level `oneOf` — that is, when `input` is a `z.discriminatedUnion(...)`. The emitted shape is valid 2020-12, every branch is a typed object, and the bytes are identical on both MCP protocol revisions. What is unmeasured is vendor handling of a `oneOf` at the *parameter* root: a client that reads only `type` and `properties` would see a parameterless tool and drop the constraint silently rather than erroring. Opt-in, because for Anthropic clients the union is the better shape.
+
+**Fix (only if you need the widest vendor reach):** flatten to a single `z.object()` with a discriminator field and optional per-mode fields, and validate the combination in the handler.
 
 ### schema-dialect-tag
 
@@ -789,7 +825,7 @@ The diagnostic message includes the declared reason(s) for the code so you can c
 
 ## Enrichment rules
 
-Validate the `enrichment` block — the success-path counterpart to `errors[]`. Enrichment fields are merged into `structuredContent` and advertised as `output.extend(enrichment)`, so the linter guards the block's shape and its disjointness from `output`. See `api-context`'s `ctx.enrich` and `add-tool`'s **Tool Response Design**.
+Validate the `enrichment` block — the success-path counterpart to `errors[]`. Enrichment fields are merged into `structuredContent` and folded into the advertised `outputSchema`, so the linter guards the block's shape and its disjointness from `output`. See `api-context`'s `ctx.enrich` and `add-tool`'s **Tool Response Design**.
 
 ### enrichment-type
 

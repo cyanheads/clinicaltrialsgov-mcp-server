@@ -2,7 +2,7 @@
 
 **Server:** clinicaltrialsgov-mcp-server
 **Version:** 2.9.1
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.11.5`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.12.3`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -342,7 +342,7 @@ Available skills:
 | `api-canvas`             | DataCanvas: register tabular data, run SQL, export, plus the `spillover()` helper for big result sets — Tier 3 opt-in |
 | `api-mirror`             | MirrorService: persistent SQLite-backed local mirror of a bulk upstream dataset — Tier 3 opt-in |
 | `api-config`             | AppConfig, parseConfig, env vars                                                           |
-| `api-context`            | Context interface, logger, state, progress                                                 |
+| `api-context`            | Context interface, RequestContext, logger, state, multi-round-trip input                   |
 | `api-errors`             | McpError, JsonRpcErrorCode, error patterns, typed contracts                                |
 | `api-linter`             | Definition lint rule reference — look up rule IDs reported by `lint:mcp`/devcheck         |
 | `api-services`           | LLM, Speech, Graph services                                                                |

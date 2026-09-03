@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.9.3](changelog/2.9.x/2.9.3.md) — 2026-09-02 · 🛡️ Security
+
+A cancelled caller surfaces RequestCancelled instead of being retried or walked one ID at a time; mcp-ts-core ^0.12.5 classifies upstream 500/501 as ServiceUnavailable and closes an SSRF DNS-guard bypass
+
 ## [2.9.2](changelog/2.9.x/2.9.2.md) — 2026-08-21
 
 mcp-ts-core ^0.12.3 (MCP SDK v2 migration); find_eligible/get_study_record nested option bags reject undeclared keys; toolchain refresh clears the last bun audit advisories

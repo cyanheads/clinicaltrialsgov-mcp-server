@@ -954,6 +954,11 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
           cause: err,
         });
       }
+      // A cancelled caller is the same shape of whole-request failure: the
+      // fallback would walk every ID only to record the same cancellation
+      // against each one, returning a result nobody is waiting for. Rethrow so
+      // the baseline RequestCancelled code reaches the transport intact.
+      if (err instanceof McpError && err.code === JsonRpcErrorCode.RequestCancelled) throw err;
       // The batch endpoint rejects the whole request if any single ID is
       // malformed or nonexistent. Fall back to per-ID fetches so valid IDs
       // still succeed and only failing IDs land in fetchErrors. Sequential

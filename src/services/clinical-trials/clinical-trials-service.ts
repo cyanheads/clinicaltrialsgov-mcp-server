@@ -9,6 +9,7 @@ import {
   McpError,
   notFound,
   rateLimited,
+  requestCancelled,
   serviceUnavailable,
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
@@ -627,7 +628,7 @@ export class ClinicalTrialsService {
     let lastStatus: number | undefined;
 
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      if (ctx.signal.aborted) throw new Error('Request cancelled');
+      if (ctx.signal.aborted) throw requestCancelled('Request cancelled by caller', { path });
 
       if (attempt > 0) {
         const base = Math.min(this.baseBackoffMs * 2 ** (attempt - 1), this.maxBackoffMs);
@@ -840,6 +841,12 @@ export class ClinicalTrialsService {
         throw await httpErrorFromResponse(res, { service: 'ClinicalTrials.gov' });
       } catch (err) {
         if (err instanceof McpError) throw err;
+        // The request signal merges the caller's signal with the per-attempt
+        // timeout, so an abort means one of two opposite things. A caller that
+        // went away is terminal — retrying spends the budget answering nobody —
+        // while a timeout is the transient case the loop exists for.
+        if (ctx.signal.aborted)
+          throw requestCancelled('Request cancelled by caller', { path }, { cause: err });
         const name = (err as Error).name ?? '';
         const code = (err as NodeJS.ErrnoException).code;
         if (

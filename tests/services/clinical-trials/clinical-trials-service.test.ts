@@ -784,12 +784,15 @@ describe('ClinicalTrialsService', () => {
       await expect(service.getStudy('NCT12345678', ctx)).rejects.toThrow(McpError);
     });
 
-    it('throws on request cancellation', async () => {
+    it('throws RequestCancelled on request cancellation', async () => {
       const controller = new AbortController();
       controller.abort();
       const ctx = createMockContext({ signal: controller.signal });
 
-      await expect(service.getStudy('NCT12345678', ctx)).rejects.toThrow('Request cancelled');
+      await expect(service.getStudy('NCT12345678', ctx)).rejects.toMatchObject({
+        code: JsonRpcErrorCode.RequestCancelled,
+      });
+      expect(mockFetch).not.toHaveBeenCalled();
     });
 
     it('throws on non-retryable HTTP errors', async () => {
@@ -912,6 +915,21 @@ describe('ClinicalTrialsService', () => {
       const result = await service.getStudy('NCT12345678', ctx);
 
       expect(result).toEqual({ ok: true });
+    }, 10_000);
+
+    it('does not retry an AbortError raised by the caller going away', async () => {
+      const controller = new AbortController();
+      const abortError = Object.assign(new Error('aborted'), { name: 'AbortError' });
+      mockFetch.mockImplementation(async () => {
+        controller.abort();
+        throw abortError;
+      });
+
+      const ctx = createMockContext({ signal: controller.signal });
+      await expect(service.getStudy('NCT12345678', ctx)).rejects.toMatchObject({
+        code: JsonRpcErrorCode.RequestCancelled,
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
     }, 10_000);
 
     it('does not retry McpError (non-retryable)', async () => {

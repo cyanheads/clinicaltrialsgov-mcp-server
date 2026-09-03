@@ -3,7 +3,12 @@
  * @module tests/mcp-server/tools/definitions/get-study-results.tool
  */
 
-import { JsonRpcErrorCode, notFound, rateLimited } from '@cyanheads/mcp-ts-core/errors';
+import {
+  JsonRpcErrorCode,
+  notFound,
+  rateLimited,
+  requestCancelled,
+} from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -1128,6 +1133,25 @@ describe('getStudyResults', () => {
       expect(result.fetchErrors).toEqual([
         { nctId: 'NCT00000000', error: expect.stringContaining('not found') },
       ]);
+    });
+  });
+
+  describe('caller cancellation', () => {
+    it('surfaces RequestCancelled instead of falling back per ID', async () => {
+      mockService.getStudiesBatch.mockRejectedValue(
+        requestCancelled('Request cancelled by caller'),
+      );
+      mockService.getStudy.mockResolvedValue(makeStudy('NCT03722472', false));
+
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+      const input = getStudyResults.input!.parse({
+        nctIds: ['NCT03722472', 'NCT05956821', 'NCT02130466'],
+      });
+
+      await expect(getStudyResults.handler(input, ctx)).rejects.toMatchObject({
+        code: JsonRpcErrorCode.RequestCancelled,
+      });
+      expect(mockService.getStudy).not.toHaveBeenCalled();
     });
   });
 

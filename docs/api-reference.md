@@ -203,16 +203,29 @@ Returns gzip-compressed JSON size distribution across all studies.
 | `types`   | `string` (pipe/comma-delimited) | Filter by `FieldStatsType`: `ENUM`, `STRING`, `DATE`, `INTEGER`, `NUMBER`, `BOOLEAN` |
 | `fields`  | `string` (pipe/comma-delimited) | Piece names or full dot-notation field paths                                         |
 
-Response is an array of objects:
+Response is an array of objects. Every entry carries the four common fields; the rest depend on `type`, and keys a variant does not carry are omitted rather than returned as `null`.
 
-| Field                 | Type      | Description                                   |
-| :-------------------- | :-------- | :-------------------------------------------- |
-| `type`                | `string`  | Data type (`ENUM`, `STRING`, etc.)            |
-| `piece`               | `string`  | Piece name                                    |
-| `field`               | `string`  | Full dot-notation path                        |
-| `missingStudiesCount` | `integer` | Studies missing this field                    |
-| `uniqueValuesCount`   | `integer` | Distinct value count                          |
-| `topValues`           | `array`   | `{ value, studiesCount }` ranked by frequency |
+| Field                 | Type      | Description                        |
+| :-------------------- | :-------- | :--------------------------------- |
+| `type`                | `string`  | `FieldStatsType` (see `types`)     |
+| `piece`               | `string`  | Piece name                         |
+| `field`               | `string`  | Full dot-notation path             |
+| `missingStudiesCount` | `integer` | Studies missing this field         |
+
+Per-variant fields:
+
+| `type`              | Field               | Type       | Required | Description                                                                |
+| :------------------ | :------------------ | :--------- | :------- | :------------------------------------------------------------------------- |
+| `ENUM`, `STRING`    | `uniqueValuesCount` | `integer`  | Yes      | Distinct value count                                                       |
+| `ENUM`, `STRING`    | `topValues`         | `array`    | No       | `{ value, studiesCount }` ranked by frequency, capped at 250 by the API    |
+| `STRING`            | `longest`           | `object`   | No       | `{ value, length, nctId }` — the longest value and a study carrying it     |
+| `BOOLEAN`           | `trueCount`         | `integer`  | Yes      | Studies where the field is true                                            |
+| `BOOLEAN`           | `falseCount`        | `integer`  | Yes      | Studies where the field is false                                           |
+| `INTEGER`, `NUMBER` | `min`, `max`, `avg` | `number`   | No       | Smallest, largest, and mean value. `INTEGER` is integral, `NUMBER` float   |
+| `DATE`              | `formats`           | `string[]` | Yes      | Date patterns observed, e.g. `["yyyy-MM", "yyyy-MM-dd"]`                   |
+| `DATE`              | `min`, `max`        | `string`   | No       | Earliest and latest value, at the precision recorded (`"1900-01"`)         |
+
+`NUMBER` is a documented variant with no live field at present — `types=NUMBER` answers `[]` against the current dataset.
 
 Errors: `400` (bad request), `404` (field not found)
 
@@ -383,13 +396,15 @@ Study
 ├── documentSection
 │   └── largeDocumentModule
 │       ├── noSap
-│       └── largeDocs[] { hasProtocol, hasSap, hasIcf, label, date, uploadDate, filename, size }
+│       └── largeDocs[] { typeAbbrev, hasProtocol, hasSap, hasIcf, label, date, uploadDate, filename, size, downloadUrl* }
 ├── derivedSection
 │   ├── miscInfoModule { versionHolder, removedCountries[], submissionTracking }
 │   ├── conditionBrowseModule { meshes[], ancestors[], browseLeaves[], browseBranches[] }
 │   └── interventionBrowseModule { meshes[], ancestors[], browseLeaves[], browseBranches[] }
 └── hasResults (boolean)
 ```
+
+\* `downloadUrl` is **not** part of the API response. The `LargeDoc` schema defines no URL field of any kind, so this server constructs one per document from the CDN's observed layout — `https://cdn.clinicaltrials.gov/large-docs/{XX}/{nctId}/{filename}`, where `{XX}` is the last two digits of the NCT number. Observed pattern, not a documented contract. See `design.md` § Tool Designs 5.
 
 ---
 

@@ -1255,6 +1255,198 @@ describe('getStudy', () => {
     });
   });
 
+  describe('document rendering — baseline', () => {
+    /**
+     * Pins the Documents block as it stood before downloadUrl existed: the
+     * per-document heading and detail line, the noSap flag, and the absence of
+     * any section at all when the study publishes no documents.
+     */
+    it('renders the document heading, kind flags, and detail line', () => {
+      const text = (
+        getStudy.format!({
+          filtersApplied: {},
+          study: {
+            protocolSection: { identificationModule: { nctId: 'NCT03722472', briefTitle: 'X' } },
+            documentSection: {
+              largeDocumentModule: {
+                noSap: false,
+                largeDocs: [
+                  {
+                    typeAbbrev: 'Prot',
+                    hasProtocol: true,
+                    hasSap: false,
+                    hasIcf: false,
+                    label: 'Study Protocol',
+                    date: '2018-10-05',
+                    uploadDate: '2023-05-05T14:37',
+                    filename: 'Prot_000.pdf',
+                    size: 812496,
+                  },
+                ],
+              },
+            },
+          },
+        })[0] as { text: string }
+      ).text;
+
+      expect(text).toContain('**No Statistical Analysis Plan:** No');
+      expect(text).toContain('## Documents (1)');
+      expect(text).toContain('- Study Protocol (Protocol) [2023-05-05T14:37]');
+      expect(text).toContain('type: Prot | document date: 2018-10-05');
+      expect(text).toContain('file: Prot_000.pdf | 812496 bytes');
+    });
+
+    it('renders no Documents section for a study that publishes none', () => {
+      const text = (
+        getStudy.format!({
+          filtersApplied: {},
+          study: {
+            protocolSection: { identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' } },
+          },
+        })[0] as { text: string }
+      ).text;
+
+      expect(text).not.toContain('## Documents');
+    });
+  });
+
+  describe('document download URLs (#125)', () => {
+    const docStudy = (
+      nctId: string,
+      largeDocs: Record<string, unknown>[],
+      extras: Record<string, unknown> = {},
+    ) => ({
+      protocolSection: { identificationModule: { nctId, briefTitle: 'Doc Study' } },
+      documentSection: { largeDocumentModule: { largeDocs, ...extras } },
+    });
+
+    const run = async (study: Record<string, unknown>, nctId: string) => {
+      mockService.getStudy.mockResolvedValue(study);
+      const ctx = createMockContext({ errors: getStudy.errors });
+      const result = await getStudy.handler(getStudy.input!.parse({ nctId }), ctx);
+      return { result, text: (getStudy.format!(result)[0] as { text: string }).text };
+    };
+
+    /** The largeDocs array of a handler result, typed for assertion. */
+    const docsOf = (result: { study: Record<string, unknown> }) =>
+      (
+        result.study as {
+          documentSection?: { largeDocumentModule?: { largeDocs?: Record<string, unknown>[] } };
+        }
+      ).documentSection?.largeDocumentModule?.largeDocs;
+
+    it('attaches a downloadUrl to every document in structuredContent', async () => {
+      const { result } = await run(
+        docStudy('NCT03722472', [
+          { typeAbbrev: 'Prot', label: 'Study Protocol', filename: 'Prot_000.pdf', size: 812496 },
+          {
+            typeAbbrev: 'SAP',
+            label: 'Statistical Analysis Plan',
+            filename: 'SAP_001.pdf',
+            size: 504746,
+          },
+        ]),
+        'NCT03722472',
+      );
+
+      expect(docsOf(result)?.map((d) => d.downloadUrl)).toEqual([
+        'https://cdn.clinicaltrials.gov/large-docs/72/NCT03722472/Prot_000.pdf',
+        'https://cdn.clinicaltrials.gov/large-docs/72/NCT03722472/SAP_001.pdf',
+      ]);
+      // Every upstream field survives untouched alongside the added one.
+      expect(docsOf(result)?.[0]).toMatchObject({
+        typeAbbrev: 'Prot',
+        label: 'Study Protocol',
+        filename: 'Prot_000.pdf',
+        size: 812496,
+      });
+    });
+
+    it('renders each downloadUrl verbatim in content[]', async () => {
+      const { result, text } = await run(
+        docStudy('NCT03722472', [
+          { label: 'Study Protocol', filename: 'Prot_000.pdf', hasProtocol: true },
+        ]),
+        'NCT03722472',
+      );
+
+      expect(text).toContain(
+        'download: https://cdn.clinicaltrials.gov/large-docs/72/NCT03722472/Prot_000.pdf',
+      );
+      // The literal URL reaching content[] is what keeps a text-only client
+      // level with a structuredContent one.
+      expect(missingLeaves(result, text)).toEqual([]);
+    });
+
+    it('derives the prefix from the record, at the 00 boundary too', async () => {
+      const { result, text } = await run(
+        docStudy('NCT03607500', [{ label: 'Protocol and SAP', filename: 'Prot_SAP_000.pdf' }]),
+        'NCT03607500',
+      );
+
+      expect(docsOf(result)?.[0]?.downloadUrl).toBe(
+        'https://cdn.clinicaltrials.gov/large-docs/00/NCT03607500/Prot_SAP_000.pdf',
+      );
+      expect(text).toContain('/large-docs/00/NCT03607500/Prot_SAP_000.pdf');
+    });
+
+    it('encodes a filename that needs it', async () => {
+      const { result, text } = await run(
+        docStudy('NCT03722472', [{ label: 'Protocol', filename: 'Study Protocol v2.pdf' }]),
+        'NCT03722472',
+      );
+
+      expect(docsOf(result)?.[0]?.downloadUrl).toBe(
+        'https://cdn.clinicaltrials.gov/large-docs/72/NCT03722472/Study%20Protocol%20v2.pdf',
+      );
+      expect(text).toContain('Study%20Protocol%20v2.pdf');
+    });
+
+    it('adds no downloadUrl to a document carrying no filename', async () => {
+      // Nothing to build the path from — an invented URL would be worse than none.
+      const { result } = await run(
+        docStudy('NCT03722472', [{ label: 'Unnamed', hasProtocol: true }]),
+        'NCT03722472',
+      );
+
+      expect(docsOf(result)?.[0]).not.toHaveProperty('downloadUrl');
+    });
+
+    it('leaves a study with an empty largeDocs list untouched', async () => {
+      const { result, text } = await run(
+        docStudy('NCT03722472', [], { noSap: true }),
+        'NCT03722472',
+      );
+
+      expect(docsOf(result)).toEqual([]);
+      expect(text).not.toContain('## Documents');
+      expect(text).not.toContain('cdn.clinicaltrials.gov');
+    });
+
+    it('leaves a study with no documentSection untouched', async () => {
+      const study = {
+        protocolSection: { identificationModule: { nctId: 'NCT12345678', briefTitle: 'No Docs' } },
+      };
+      const { result, text } = await run(study, 'NCT12345678');
+
+      expect(result.study).toStrictEqual(study);
+      expect(text).not.toContain('cdn.clinicaltrials.gov');
+    });
+
+    it('keys the URL to the record returned, not the ID requested', async () => {
+      // Upstream resolves a previous (alias) ID to its canonical record, and the
+      // CDN path follows the canonical ID — using the caller's ID would 404.
+      const { result } = await run(
+        docStudy('NCT03722472', [{ label: 'Study Protocol', filename: 'Prot_000.pdf' }]),
+        'NCT01000021',
+      );
+
+      expect(docsOf(result)?.[0]?.downloadUrl).toBe(
+        'https://cdn.clinicaltrials.gov/large-docs/72/NCT03722472/Prot_000.pdf',
+      );
+    });
+  });
+
   describe('rarely-populated record sections (#18)', () => {
     it('renders annotations, submission tracking, removed countries, and retractions', () => {
       const output = {

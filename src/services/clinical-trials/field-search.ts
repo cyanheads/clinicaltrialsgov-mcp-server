@@ -12,6 +12,14 @@ import type { FieldNode } from './types.js';
 export interface FieldIndexEntry {
   /** Field description from the data model. */
   description?: string;
+  /**
+   * Whether any ancestor node on this entry's path is array-typed (own `type`
+   * ending in `[]`). A scalar leaf under a repeated object occurs once per
+   * repetition, so it carries the same multi-valued cardinality an array-typed
+   * leaf does. Additive and independent of `type`, which stays the node's own
+   * declared type. Absent (not `false`) when no ancestor repeats.
+   */
+  hasArrayAncestor?: boolean;
   /** Whether the field is an enum. */
   isEnum?: boolean;
   /** camelCase tree name. */
@@ -26,10 +34,19 @@ export interface FieldIndexEntry {
   type?: string;
 }
 
-/** Walk the metadata tree and emit one entry per node that has a `piece` name. */
+/**
+ * Walk the metadata tree and emit one entry per node that has a `piece` name.
+ *
+ * The walk threads repeated-ancestor state down the path: a node whose own
+ * `type` ends in `[]` marks everything beneath it, so a scalar leaf under a
+ * repeated object (`LocationCountry` under `locations: Location[]`) is
+ * recoverable as multi-valued. The flag describes ancestry only — an
+ * array-typed node does not set it on itself, since its own `type` already
+ * says so.
+ */
 export function flattenMetadata(tree: FieldNode[]): FieldIndexEntry[] {
   const entries: FieldIndexEntry[] = [];
-  const walk = (nodes: FieldNode[], parentPath: string) => {
+  const walk = (nodes: FieldNode[], parentPath: string, underArray: boolean) => {
     for (const node of nodes) {
       const path = parentPath ? `${parentPath}.${node.name}` : node.name;
       if (node.piece) {
@@ -38,13 +55,19 @@ export function flattenMetadata(tree: FieldNode[]): FieldIndexEntry[] {
         if (node.sourceType) e.sourceType = node.sourceType;
         if (node.isEnum != null) e.isEnum = node.isEnum;
         if (node.description) e.description = node.description;
+        if (underArray) e.hasArrayAncestor = true;
         entries.push(e);
       }
-      if (node.children) walk(node.children, path);
+      if (node.children) walk(node.children, path, underArray || isArrayType(node.type));
     }
   };
-  walk(tree, '');
+  walk(tree, '', false);
   return entries;
+}
+
+/** Whether a metadata node's own declared type marks it as repeated (`Location[]`). */
+export function isArrayType(type: string | undefined): boolean {
+  return type?.endsWith('[]') ?? false;
 }
 
 /** Tokenize a string into lowercase parts: splits CamelCase, digits, words. */

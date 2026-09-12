@@ -18,6 +18,7 @@ import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
 import {
   type FieldIndexEntry,
   flattenMetadata,
+  isArrayType,
   nearestPieces,
   searchFields,
 } from './field-search.js';
@@ -319,12 +320,15 @@ export class ClinicalTrialsService {
   }
 
   /**
-   * Mark each stat as multi-valued by checking the metadata node `type` for an
-   * array marker (`[]`, e.g. `Phase[]`, `text[]`) — the durable source of
-   * cardinality. Note: the stat's own `type` (`ENUM`/`STRING`) is the value
-   * domain, not the array marker, so the metadata node type is the only signal.
-   * Reuses the cached field index (no round-trip); fails open silently if the
-   * metadata index is unavailable.
+   * Mark each stat as multi-valued by checking the metadata tree for an array
+   * marker (`[]`, e.g. `Phase[]`, `Location[]`) — the durable source of
+   * cardinality. Two shapes qualify: the leaf's own node type is array-typed,
+   * or an ancestor object on its path is (`LocationCountry` is scalar `text`,
+   * but sits under `locations: Location[]`, so a study carries one per site).
+   * Note: the stat's own `type` (`ENUM`/`STRING`) is the value domain, not the
+   * array marker, so the metadata tree is the only signal. Reuses the cached
+   * field index (no round-trip); fails open silently if the metadata index is
+   * unavailable.
    */
   private async annotateMultiValued(stats: FieldValueStats[], ctx: Context): Promise<void> {
     let entries: FieldIndexEntry[];
@@ -333,9 +337,11 @@ export class ClinicalTrialsService {
     } catch {
       return;
     }
-    const arrayPieces = new Set(entries.filter((e) => e.type?.endsWith('[]')).map((e) => e.piece));
+    const repeatedPieces = new Set(
+      entries.filter((e) => isArrayType(e.type) || e.hasArrayAncestor).map((e) => e.piece),
+    );
     for (const stat of stats) {
-      if (arrayPieces.has(stat.piece)) stat.multiValued = true;
+      if (repeatedPieces.has(stat.piece)) stat.multiValued = true;
     }
   }
 

@@ -399,6 +399,215 @@ describe('getFieldDefinitions', () => {
 
       await expect(getFieldDefinitions.handler(input, ctx)).rejects.toThrow(/requires `path`/);
     });
+
+    // The tool re-exports each index entry's own declared `type`; cardinality
+    // data threaded through the field index for get_field_values (#121) is
+    // additive on the index and must not reach this surface.
+    it('projects only the declared field keys from an index entry', async () => {
+      mockService.searchFieldDefinitions.mockResolvedValue({
+        entries: [
+          {
+            name: 'country',
+            piece: 'LocationCountry',
+            path: 'protocolSection.contactsLocationsModule.locations.country',
+            type: 'text',
+            hasArrayAncestor: true,
+          },
+        ],
+        total: 1,
+      });
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
+      const result = await getFieldDefinitions.handler(
+        getFieldDefinitions.input!.parse({ mode: 'search', query: 'country' }),
+        ctx,
+      );
+
+      expect(Object.keys(result.fields[0]!).sort()).toEqual(['name', 'path', 'piece', 'type']);
+      expect(result.fields[0]!.type).toBe('text');
+    });
+  });
+
+  // Arguments that belong to another mode were accepted and silently dropped,
+  // and a whitespace-only required value answered with an empty result set
+  // instead of naming the malformed input (#49).
+  describe('mode-argument validation (#49)', () => {
+    const failure = async (args: Record<string, unknown>) => {
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
+      try {
+        await getFieldDefinitions.handler(getFieldDefinitions.input!.parse(args), ctx);
+      } catch (err) {
+        expect(err).toBeInstanceOf(McpError);
+        return (err as McpError).data as Record<string, unknown>;
+      }
+      throw new Error(`Expected a rejection for ${JSON.stringify(args)}`);
+    };
+
+    const hintOf = (data: Record<string, unknown>) =>
+      (data.recovery as { hint?: string } | undefined)?.hint ?? '';
+
+    beforeEach(() => {
+      mockService.getMetadata.mockResolvedValue(sampleTree);
+      mockService.searchFieldDefinitions.mockResolvedValue({ entries: [], total: 0 });
+    });
+
+    it.each([
+      ['query', 'enrollment', 'search'],
+      ['path', 'protocolSection', 'drill'],
+      ['includeIndexedOnly', true, 'drill'],
+    ])('rejects %s under overview mode with mode_mismatch', async (param, value, owner) => {
+      const data = await failure({ mode: 'overview', [param]: value });
+      expect(data.reason).toBe('mode_mismatch');
+      expect(data.param).toBe(param);
+      expect(data.mode).toBe('overview');
+      expect(hintOf(data)).toContain(`'${param}'`);
+      expect(hintOf(data)).toContain('mode="overview"');
+      expect(hintOf(data)).toContain(`mode="${owner}"`);
+      expect(mockService.getMetadata).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['path', 'protocolSection'],
+      ['includeIndexedOnly', true],
+    ])('rejects %s under search mode with mode_mismatch', async (param, value) => {
+      const data = await failure({ mode: 'search', query: 'enrollment', [param]: value });
+      expect(data.reason).toBe('mode_mismatch');
+      expect(data.param).toBe(param);
+      expect(hintOf(data)).toContain('mode="drill"');
+      expect(mockService.searchFieldDefinitions).not.toHaveBeenCalled();
+    });
+
+    it('rejects query under drill mode with mode_mismatch', async () => {
+      const data = await failure({
+        mode: 'drill',
+        path: 'protocolSection',
+        query: 'enrollment',
+      });
+      expect(data.reason).toBe('mode_mismatch');
+      expect(data.param).toBe('query');
+      expect(hintOf(data)).toContain('mode="search"');
+    });
+
+    it('rejects a whitespace-only query under search mode with blank_value', async () => {
+      const data = await failure({ mode: 'search', query: ' ' });
+      expect(data.reason).toBe('blank_value');
+      expect(data.param).toBe('query');
+      expect(hintOf(data)).toContain('non-whitespace');
+      expect(mockService.searchFieldDefinitions).not.toHaveBeenCalled();
+    });
+
+    it('rejects a whitespace-only path under drill mode with blank_value', async () => {
+      const data = await failure({ mode: 'drill', path: '  ' });
+      expect(data.reason).toBe('blank_value');
+      expect(data.param).toBe('path');
+      expect(hintOf(data)).toContain('non-whitespace');
+    });
+
+    it('names the cross-mode argument first when both checks would fire', async () => {
+      const data = await failure({ mode: 'search', query: ' ', path: 'protocolSection' });
+      expect(data.reason).toBe('mode_mismatch');
+      expect(data.param).toBe('path');
+    });
+
+    it('declares both new reasons on the tool contract', () => {
+      const reasons = getFieldDefinitions.errors?.map((e) => e.reason);
+      expect(reasons).toContain('mode_mismatch');
+      expect(reasons).toContain('blank_value');
+    });
+
+    // limit carries a schema default, so the handler cannot tell an explicit
+    // `limit: 20` from an omitted one — it stays out of the gate, and overview
+    // and drill go on ignoring it. Passes both before and after the gate lands.
+    it.each([
+      [{ mode: 'overview' as const, limit: 50 }],
+      [{ mode: 'drill' as const, path: 'protocolSection', limit: 50 }],
+    ])('accepts an explicit limit outside search mode (%j)', async (args) => {
+      mockService.getMetadata.mockResolvedValue(sampleTree);
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
+      await expect(
+        getFieldDefinitions.handler(getFieldDefinitions.input!.parse(args), ctx),
+      ).resolves.toBeDefined();
+    });
+
+    it('leaves a well-formed search call and its enrichment untouched', async () => {
+      mockService.searchFieldDefinitions.mockResolvedValue({
+        entries: [{ name: 'a', piece: 'A', path: 'x.a', type: 'STRING' }],
+        total: 9,
+      });
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
+      const result = await getFieldDefinitions.handler(
+        getFieldDefinitions.input!.parse({ mode: 'search', query: 'enrollment', limit: 1 }),
+        ctx,
+      );
+
+      expect(mockService.searchFieldDefinitions).toHaveBeenCalledWith('enrollment', 1, ctx);
+      expect(result.totalFields).toBe(1);
+      const enrichment = getEnrichment(ctx);
+      expect(enrichment.searchQuery).toBe('enrollment');
+      expect(enrichment.totalMatches).toBe(9);
+      expect(enrichment.truncated).toBe(true);
+    });
+
+    it('leaves a well-formed drill call with includeIndexedOnly untouched', async () => {
+      mockService.getMetadata.mockResolvedValue(sampleTree);
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
+      const result = await getFieldDefinitions.handler(
+        getFieldDefinitions.input!.parse({
+          mode: 'drill',
+          path: 'protocolSection.statusModule',
+          includeIndexedOnly: true,
+        }),
+        ctx,
+      );
+
+      expect(mockService.getMetadata).toHaveBeenCalledWith(true, ctx);
+      expect(result.resolvedPath).toBe('protocolSection.statusModule');
+    });
+
+    it('leaves a bare overview call untouched', async () => {
+      mockService.getMetadata.mockResolvedValue(sampleTree);
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
+      const result = await getFieldDefinitions.handler(
+        getFieldDefinitions.input!.parse({ mode: 'overview' }),
+        ctx,
+      );
+      expect(result.totalFields).toBe(5);
+    });
+
+    it('still reports a non-blank unresolvable drill path as path_not_found', async () => {
+      mockService.getMetadata.mockResolvedValue(sampleTree);
+      const data = await failure({ mode: 'drill', path: 'nonexistent.path' });
+      expect(data.reason).toBe('path_not_found');
+      expect(hintOf(data)).toContain('mode="overview"');
+    });
+
+    it('still reports an omitted required argument with its own message, not blank_value', async () => {
+      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
+      await expect(
+        getFieldDefinitions.handler(getFieldDefinitions.input!.parse({ mode: 'search' }), ctx),
+      ).rejects.toThrow(/mode="search" requires `query`/);
+      await expect(
+        getFieldDefinitions.handler(getFieldDefinitions.input!.parse({ mode: 'drill' }), ctx),
+      ).rejects.toThrow(/mode="drill" requires `path`/);
+    });
+
+    // The omitted case used to throw a bare validationError with no `data`, so a
+    // client switching on `reason` saw nothing and content[]-only clients got no
+    // Recovery line — the one input rejection on this tool outside the typed
+    // contract, and the likeliest caller mistake of the three (#132).
+    it.each([
+      ['search', 'query'],
+      ['drill', 'path'],
+    ])(
+      'types an omitted required argument under mode="%s" as mode_requires',
+      async (mode, param) => {
+        const data = await failure({ mode });
+        expect(data.reason).toBe('mode_requires');
+        expect(data.param).toBe(param);
+        expect(data.mode).toBe(mode);
+        expect(hintOf(data)).toContain(`\`${param}\``);
+        expect(hintOf(data)).toContain('mode="overview"');
+      },
+    );
   });
 
   describe('format', () => {

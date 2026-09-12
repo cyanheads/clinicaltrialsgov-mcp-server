@@ -678,6 +678,9 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
           d.date ? `document date: ${d.date}` : '',
           d.filename && d.filename !== label ? `file: ${d.filename}` : '',
           d.size != null ? `${d.size} bytes` : '',
+          // Verbatim, not shortened or linkified: the URL is the retrieval path
+          // a content[]-only client has, and it has to survive as literal text.
+          d.downloadUrl ? `download: ${d.downloadUrl}` : '',
         ].filter(Boolean);
         if (detail.length) lines.push(`  ${detail.join(' | ')}`);
       }

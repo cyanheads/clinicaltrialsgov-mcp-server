@@ -1773,8 +1773,12 @@ describe('ClinicalTrialsService', () => {
       expect(new URL(valuesCall!).searchParams.get('fields')).toBe('OverallStatus');
     });
 
-    // Metadata fixture carrying both an array-typed piece (Phase → Phase[]) and a
-    // scalar piece (OverallStatus → Status) for the multi-valued flag (#85).
+    // Metadata fixture covering every cardinality shape the flag must read:
+    // an array-typed piece (Phase → Phase[], #85), a scalar piece with no
+    // repeated ancestor (OverallStatus → Status), a scalar piece one array
+    // ancestor deep (LocationCountry under Location[], #121), and one two
+    // array ancestors deep (LocationContactName under Contact[] under
+    // Location[]). Mirrors the live tree's shapes.
     const cardinalityMetadata: FieldNode[] = [
       {
         name: 'protocolSection',
@@ -1786,6 +1790,25 @@ describe('ClinicalTrialsService', () => {
           {
             name: 'designModule',
             children: [{ name: 'phases', piece: 'Phase', type: 'Phase[]', isEnum: true }],
+          },
+          {
+            name: 'contactsLocationsModule',
+            children: [
+              {
+                name: 'locations',
+                piece: 'Location',
+                type: 'Location[]',
+                children: [
+                  { name: 'country', piece: 'LocationCountry', type: 'text' },
+                  {
+                    name: 'contacts',
+                    piece: 'LocationContact',
+                    type: 'Contact[]',
+                    children: [{ name: 'name', piece: 'LocationContactName', type: 'text' }],
+                  },
+                ],
+              },
+            ],
           },
         ],
       },
@@ -1820,6 +1843,106 @@ describe('ClinicalTrialsService', () => {
       expect(phase?.multiValued).toBe(true);
       // Scalar field: flag is absent (not set to false).
       expect(status?.multiValued).toBeUndefined();
+    });
+
+    // A scalar leaf under a repeated object occurs once per repetition, so its
+    // value buckets sum above the study total exactly as an array leaf's do —
+    // the leaf's own type is not the cardinality signal (#121).
+    it('flags a scalar field nested under an array-typed ancestor as multiValued (#121)', async () => {
+      mockFetch.mockImplementation((url: string | URL) => {
+        const u = typeof url === 'string' ? url : url.toString();
+        if (u.includes('/studies/metadata')) {
+          return Promise.resolve(jsonResponse(cardinalityMetadata));
+        }
+        return Promise.resolve(
+          jsonResponse([
+            {
+              field: 'protocolSection.contactsLocationsModule.locations.country',
+              piece: 'LocationCountry',
+              type: 'STRING',
+              missingStudiesCount: 60566,
+              uniqueValuesCount: 226,
+              topValues: [{ value: 'United States', studiesCount: 300000 }],
+            },
+          ]),
+        );
+      });
+      const ctx = createMockContext();
+
+      const result = await validatingService.getFieldValues(['LocationCountry'], ctx);
+      expect(result[0]?.multiValued).toBe(true);
+    });
+
+    it('flags a field two array-typed ancestors deep (#121)', async () => {
+      mockFetch.mockImplementation((url: string | URL) => {
+        const u = typeof url === 'string' ? url : url.toString();
+        if (u.includes('/studies/metadata')) {
+          return Promise.resolve(jsonResponse(cardinalityMetadata));
+        }
+        return Promise.resolve(
+          jsonResponse([
+            {
+              field: 'protocolSection.contactsLocationsModule.locations.contacts.name',
+              piece: 'LocationContactName',
+              type: 'STRING',
+              missingStudiesCount: 1,
+            },
+          ]),
+        );
+      });
+      const ctx = createMockContext();
+
+      const result = await validatingService.getFieldValues(['LocationContactName'], ctx);
+      expect(result[0]?.multiValued).toBe(true);
+    });
+
+    it('leaves the provider counts byte-for-byte unchanged when flagging (#121)', async () => {
+      const upstream = {
+        field: 'protocolSection.contactsLocationsModule.locations.country',
+        piece: 'LocationCountry',
+        type: 'STRING',
+        missingStudiesCount: 60566,
+        uniqueValuesCount: 226,
+        topValues: [
+          { value: 'United States', studiesCount: 300000 },
+          { value: 'France', studiesCount: 40000 },
+        ],
+      };
+      mockFetch.mockImplementation((url: string | URL) => {
+        const u = typeof url === 'string' ? url : url.toString();
+        if (u.includes('/studies/metadata')) {
+          return Promise.resolve(jsonResponse(cardinalityMetadata));
+        }
+        return Promise.resolve(jsonResponse([structuredClone(upstream)]));
+      });
+      const ctx = createMockContext();
+
+      const result = await validatingService.getFieldValues(['LocationCountry'], ctx);
+      // Only multiValued is added; every provider-supplied number survives.
+      expect(result[0]).toEqual({ ...upstream, multiValued: true });
+    });
+
+    it('keeps a field with no array-typed ancestor at any depth unflagged (#121)', async () => {
+      mockFetch.mockImplementation((url: string | URL) => {
+        const u = typeof url === 'string' ? url : url.toString();
+        if (u.includes('/studies/metadata')) {
+          return Promise.resolve(jsonResponse(cardinalityMetadata));
+        }
+        return Promise.resolve(
+          jsonResponse([
+            {
+              field: 'protocolSection.statusModule.overallStatus',
+              piece: 'OverallStatus',
+              type: 'ENUM',
+              missingStudiesCount: 0,
+            },
+          ]),
+        );
+      });
+      const ctx = createMockContext();
+
+      const result = await validatingService.getFieldValues(['OverallStatus'], ctx);
+      expect(result[0]?.multiValued).toBeUndefined();
     });
 
     it('does not flag multiValued when the metadata index is unreachable (#85 fail-open)', async () => {

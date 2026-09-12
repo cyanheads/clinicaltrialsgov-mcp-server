@@ -278,6 +278,30 @@ toolContractSuite(getFieldDefinitions, {
       code: JsonRpcErrorCode.NotFound,
       reason: 'path_not_found',
     },
+    {
+      name: 'reports an argument belonging to another mode',
+      input: { mode: 'overview' as const, query: 'enrollment' },
+      code: JsonRpcErrorCode.ValidationError,
+      reason: 'mode_mismatch',
+    },
+    {
+      name: 'reports a whitespace-only search query',
+      input: { mode: 'search' as const, query: ' ' },
+      code: JsonRpcErrorCode.ValidationError,
+      reason: 'blank_value',
+    },
+    {
+      name: 'reports an omitted search query',
+      input: { mode: 'search' as const },
+      code: JsonRpcErrorCode.ValidationError,
+      reason: 'mode_requires',
+    },
+    {
+      name: 'reports an omitted drill path',
+      input: { mode: 'drill' as const },
+      code: JsonRpcErrorCode.ValidationError,
+      reason: 'mode_requires',
+    },
   ],
 });
 
@@ -324,6 +348,93 @@ toolContractSuite(findEligible, {
       reason: 'blank_value',
     },
   ],
+});
+
+/**
+ * The defect in #119 was silent loss at the wire boundary, not in rendering:
+ * the service returns the provider's statistics untouched, and
+ * `def.output.parse()` stripped every key the schema did not declare. A
+ * `format()`-only test cannot see that — these drive the full pipeline and
+ * assert the values survive into `structuredContent`.
+ */
+describe('get_field_values statistics variants survive the output schema (#119)', () => {
+  const variants = [
+    {
+      field: 'protocolSection.designModule.enrollmentInfo.count',
+      piece: 'EnrollmentCount',
+      type: 'INTEGER',
+      missingStudiesCount: 90210,
+      min: 1234567,
+      max: 88888888,
+      avg: 5481.161989122102,
+    },
+    {
+      field: 'protocolSection.syntheticModule.ratio',
+      piece: 'SyntheticRatio',
+      type: 'NUMBER',
+      missingStudiesCount: 606,
+      min: 0.125,
+      max: 99.875,
+      avg: 42.4242,
+    },
+    {
+      field: 'protocolSection.statusModule.startDateStruct.date',
+      piece: 'StartDate',
+      type: 'DATE',
+      missingStudiesCount: 5362,
+      min: '1900-01',
+      max: '2099-01-01',
+      formats: ['yyyy-MM', 'yyyy-MM-dd'],
+    },
+    {
+      field: 'protocolSection.designModule.targetDuration',
+      piece: 'TargetDuration',
+      type: 'STRING',
+      missingStudiesCount: 584791,
+      uniqueValuesCount: 241,
+      topValues: [{ value: '6 Months', studiesCount: 3042 }],
+      longest: { value: '2250 Months', length: 11, nctId: 'NCT05910151' },
+    },
+  ];
+
+  /** Run the mixed request through the framework pipeline once per assertion block. */
+  const run = async () => {
+    mockService.getFieldValues.mockResolvedValue(structuredClone(variants));
+    return runToolContract(getFieldValues, {
+      fields: ['EnrollmentCount', 'SyntheticRatio', 'StartDate', 'TargetDuration'],
+    });
+  };
+
+  it('keeps min, max, avg, formats, and longest in structuredContent', async () => {
+    const result = await run();
+    const stats = (result.structuredContent as { fieldStats: Record<string, unknown>[] })
+      .fieldStats;
+
+    expect(stats).toEqual(variants);
+  });
+
+  it('preserves a partial date bound as written, with no Date coercion', async () => {
+    const result = await run();
+    const stats = (result.structuredContent as { fieldStats: Record<string, unknown>[] })
+      .fieldStats;
+    const date = stats.find((s) => s.piece === 'StartDate')!;
+
+    expect(date.min).toBe('1900-01');
+    expect(date.max).toBe('2099-01-01');
+    expect(date.formats).toEqual(['yyyy-MM', 'yyyy-MM-dd']);
+  });
+
+  it('renders every surviving statistic into content[] as well', async () => {
+    const result = await run();
+    const text = (result.content as { text: string }[])[0]!.text;
+
+    expect(text).toContain('avg: 5481.161989122102');
+    expect(text).toContain('avg: 42.4242');
+    expect(text).toContain('min: 1900-01');
+    expect(text).toContain('date formats: yyyy-MM, yyyy-MM-dd');
+    expect(text).toContain('longest value: "2250 Months" (11 characters, in NCT05910151)');
+    expect(text).not.toContain('No recorded values for this field.');
+  });
 });
 
 /**

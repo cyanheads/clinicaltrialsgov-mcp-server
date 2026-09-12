@@ -489,7 +489,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        'Recovery guidance when no studies matched — echoes the constraint and suggests how to broaden. Absent on pages with results, and on an exhausted continuation page, where the cohort already matched and there is nothing to broaden.',
+        'Recovery guidance when no studies matched — echoes the constraint and suggests how to broaden, and names nctIds as part of the unmatched criteria when an ID list was supplied. Absent on pages with results, and on an exhausted continuation page, where the cohort already matched and there is nothing to broaden.',
       ),
   },
 
@@ -661,6 +661,22 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
           'Remove statusFilter to include studies in all statuses (completed, terminated, etc.).',
         );
       if (input.phaseFilter) noticeParts.push('Remove phaseFilter to include all trial phases.');
+
+      // An ID list is a third kind of constraint, and the broadening advice
+      // above covers neither of its failure modes. Upstream answers a
+      // well-formed but unregistered ID with an empty 200, so nothing upstream
+      // distinguishes "no such study" from "the study exists but the other
+      // criteria excluded it" — and settling that costs a request this handler
+      // does not make. So the ID-only case points at the two tools that resolve
+      // an ID directly, and the combined case names the combination without
+      // asserting anything about whether the IDs exist.
+      if (filterIds?.length) {
+        noticeParts.push(
+          hasQuery || hasFilter
+            ? 'The nctIds filter combined with the other search criteria matched no study — the ID(s) may not exist, or the other criteria may have excluded them. Drop the other filters and query terms to check the ID(s) alone.'
+            : 'The listed NCT ID(s) matched no study. Verify each ID at clinicaltrials.gov, or confirm a single ID with clinicaltrials_get_study_record — a previous (alias) ID resolves to its canonical study through clinicaltrials_get_study_results.',
+        );
+      }
 
       if (noticeParts.length > 0) ctx.enrich.notice(noticeParts.join(' '));
     }

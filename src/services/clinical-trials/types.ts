@@ -128,6 +128,12 @@ export interface RawStudyShape {
     largeDocumentModule?: {
       largeDocs?: Array<{
         date?: string;
+        /**
+         * Where the document can be retrieved. Constructed by this server from
+         * the CDN's observed layout — upstream returns no URL — and absent when
+         * the entry carries no `filename` to build one from.
+         */
+        downloadUrl?: string;
         filename?: string;
         hasIcf?: boolean;
         hasProtocol?: boolean;
@@ -286,18 +292,47 @@ export interface PagedStudiesResponse {
 /**
  * Field value statistics from GET /stats/field/values.
  *
- * `topValues` and `uniqueValuesCount` are omitted for BOOLEAN fields, which
- * return `trueCount`/`falseCount` instead.
+ * Upstream keys the statistics shape on `type`, omitting the keys a variant
+ * does not carry rather than nulling them:
+ *
+ * | `type`              | Variant fields                              |
+ * | :------------------ | :------------------------------------------ |
+ * | `ENUM`, `STRING`    | `uniqueValuesCount`, `topValues`, `longest` |
+ * | `BOOLEAN`           | `trueCount`, `falseCount`                   |
+ * | `INTEGER`, `NUMBER` | `min`, `max`, `avg` (numeric)               |
+ * | `DATE`              | `min`, `max` (strings), `formats`           |
+ *
+ * `longest` is STRING-only. `min`/`max`/`avg` are each individually optional,
+ * so a DATE field can legally report `formats` alone.
  */
 export interface FieldValueStats {
+  /** Mean value. INTEGER/NUMBER only. */
+  avg?: number;
   falseCount?: number;
   field: string;
+  /**
+   * Date patterns observed in this field, e.g. `["yyyy-MM", "yyyy-MM-dd"]`.
+   * DATE only, and the only required member of the DATE variant.
+   */
+  formats?: string[];
+  /** Longest recorded value, its character length, and the study carrying it. STRING only. */
+  longest?: { value: string; length: number; nctId: string };
+  /**
+   * Largest value — a number for INTEGER/NUMBER, a date string for DATE. Date
+   * strings keep the upstream precision verbatim, including partial forms like
+   * `"2099-01"`; never coerce them through `Date`.
+   */
+  max?: number | string;
+  /** Smallest value — a number for INTEGER/NUMBER, a date string for DATE. See `max`. */
+  min?: number | string;
   missingStudiesCount: number;
   /**
-   * Whether the field is multi-valued (array type in the data model, e.g. `Phase`,
-   * `Condition`). A single study can carry several values, so per-value
-   * `studiesCount` buckets sum above the study total. Derived from the metadata
-   * node `type` ending in `[]`; absent when local validation is disabled.
+   * Whether the field is multi-valued — repeated in the data model, so a single
+   * study can carry several values and the per-value `studiesCount` buckets sum
+   * above the study total. Covers both an array-typed leaf (`Phase`) and a
+   * scalar leaf under a repeated ancestor object (`LocationCountry`, one per
+   * site). Derived from a metadata node `type` ending in `[]` on the leaf or
+   * anywhere above it; absent when local validation is disabled.
    */
   multiValued?: boolean;
   piece: string;

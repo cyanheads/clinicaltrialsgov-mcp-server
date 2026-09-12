@@ -1,11 +1,13 @@
 /**
- * @fileoverview Bounding helpers shared by the surfaces that return a whole study —
- * caps on its location, outcome, and reference lists, and compact counts for the
- * heavy resultsSection. Applied once, before either output channel sees the
- * record, so `structuredContent` and `format()` render the same data.
+ * @fileoverview The pre-render pass shared by the surfaces that return a whole
+ * study — caps on its location, outcome, and reference lists, a download URL on
+ * each uploaded document, and compact counts for the heavy resultsSection.
+ * Applied once, before either output channel sees the record, so
+ * `structuredContent` and `format()` render the same data.
  * @module mcp-server/tools/utils/study-filters
  */
 
+import { buildDocumentDownloadUrl } from '@/services/clinical-trials/document-url.js';
 import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
 import { haversineMi, type LocationWithDistance } from './geo-helpers.js';
 
@@ -31,18 +33,55 @@ export interface FilterMeta {
 }
 
 /**
+ * Give each uploaded document the URL it can be fetched from. Upstream carries
+ * only a bare `filename`, which leaves a caller who can see that a protocol
+ * exists with no way to reach it.
+ *
+ * Returns the study untouched — the same object, so an unchanged record stays
+ * strictly equal — when there is nothing to enrich: no documents, or no NCT ID
+ * on the record to key the CDN path to. An individual entry with no `filename`
+ * is likewise left alone rather than given a fabricated URL.
+ */
+function attachDocumentUrls(study: RawStudyShape): RawStudyShape {
+  const docModule = study.documentSection?.largeDocumentModule;
+  const docs = docModule?.largeDocs;
+  const nctId = study.protocolSection?.identificationModule?.nctId;
+  if (!docs?.length || !nctId) return study;
+
+  return {
+    ...study,
+    documentSection: {
+      ...study.documentSection,
+      largeDocumentModule: {
+        ...docModule,
+        largeDocs: docs.map((doc) =>
+          doc.filename
+            ? { ...doc, downloadUrl: buildDocumentDownloadUrl(nctId, doc.filename) }
+            : doc,
+        ),
+      },
+    },
+  };
+}
+
+/**
  * Apply the requested filters to the study so structuredContent and format()
  * see the same data. A limit (and its corresponding upstream total) is recorded
  * in `meta` only when it actually reduced the set — reporting a cap that trimmed
  * nothing would imply a filter was applied when none was. `nearLocation` always
  * filters (drops non-geo sites, sorts, applies radius), so it is always echoed.
+ *
+ * Document URLs are attached here rather than at either call site: this pass is
+ * the one place both the tool and the resource route a whole record through, so
+ * neither surface can drift from the other on where a document lives.
  */
 export function applyFilters(
   study: RawStudyShape,
   input: FilterInputs,
 ): { study: RawStudyShape; meta: FilterMeta } {
-  const ps = study.protocolSection;
-  if (!ps) return { study, meta: {} };
+  const record = attachDocumentUrls(study);
+  const ps = record.protocolSection;
+  if (!ps) return { study: record, meta: {} };
 
   const meta: FilterMeta = {};
   let nextPs = ps;
@@ -123,7 +162,7 @@ export function applyFilters(
     };
   }
 
-  return { study: { ...study, protocolSection: nextPs }, meta };
+  return { study: { ...record, protocolSection: nextPs }, meta };
 }
 
 /** Compact counts of a study's posted results. */

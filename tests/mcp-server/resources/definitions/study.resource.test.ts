@@ -181,6 +181,44 @@ describe('studyResource', () => {
       expect(result.study).toEqual({ hasResults: false });
     });
 
+    it('carries a downloadUrl on every document in the JSON output (#125)', async () => {
+      const result = await read({
+        protocolSection: { identificationModule: { nctId: 'NCT03722472' } },
+        documentSection: {
+          largeDocumentModule: {
+            largeDocs: [
+              { label: 'Study Protocol', filename: 'Prot_000.pdf', size: 812496 },
+              { label: 'Statistical Analysis Plan', filename: 'SAP_001.pdf', size: 504746 },
+            ],
+          },
+        },
+      });
+
+      // Same shared builder as clinicaltrials_get_study_record, so the two
+      // surfaces cannot disagree about where a document lives.
+      expect(
+        result.study.documentSection.largeDocumentModule.largeDocs.map(
+          (d: { downloadUrl?: string }) => d.downloadUrl,
+        ),
+      ).toEqual([
+        'https://cdn.clinicaltrials.gov/large-docs/72/NCT03722472/Prot_000.pdf',
+        'https://cdn.clinicaltrials.gov/large-docs/72/NCT03722472/SAP_001.pdf',
+      ]);
+      // An added field is not an omission — the read is still complete.
+      expect(result.truncated).toBe(false);
+    });
+
+    it('introduces no new fields for a study with no documents (#125)', async () => {
+      const study = {
+        hasResults: false,
+        protocolSection: { identificationModule: { nctId: 'NCT03722472' } },
+      };
+      const result = await read(study);
+
+      expect(result.study).toEqual(study);
+      expect(JSON.stringify(result)).not.toContain('downloadUrl');
+    });
+
     it('validates against its own output schema', async () => {
       const result = await read(bulkStudy({ locations: 120 }));
       expect(() => studyResource.output!.parse(result)).not.toThrow();

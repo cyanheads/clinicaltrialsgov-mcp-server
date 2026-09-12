@@ -11,6 +11,7 @@
 | `clinicaltrials_get_field_values`  | Discover valid values for any ClinicalTrials.gov field with study counts per value. Use before constructing searches to find valid filter options.                | `fields`                                                                                                                                                                                 | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_get_study_count`   | Get total study count matching a query without fetching study data. Use for quick stats and building breakdowns by calling multiple times with different filters. | `query`, `conditionQuery`, `interventionQuery`, `statusFilter`, `phaseFilter`, `advancedFilter`                                                                                          | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_get_field_definitions` | Get field definitions from the study data model — piece names, types, nesting. For discovering available fields and AREA[] filter targets.                   | `mode`, `query`, `path`, `limit`, `includeIndexedOnly`                                                                                                                                                             | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
+| `clinicaltrials_get_study_record`  | Fetch a single study by NCT ID. The tool equivalent of the `clinicaltrials://{nctId}` resource, for clients that don't read resources.                            | `nctId`, `locationLimit`, `outcomeLimit`, `referenceLimit`, `nearLocation`                                                                                                               | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 | `clinicaltrials_find_eligible`     | Match patient demographics to recruiting clinical trials. Builds optimized API queries from a patient profile and returns studies with eligibility/location fields. | `age`, `sex`, `conditions`, `location`, `healthyVolunteer`, `recruitingOnly`, `maxResults`, `locationLimit`                                                                                             | `readOnlyHint`, `idempotentHint`, `openWorldHint` |
 
 ### Resources
@@ -100,7 +101,7 @@ selection. Returns a compact per-study index by default; pass the fields paramet
 **Error messages:**
 
 - Invalid filter syntax: `"Invalid advancedFilter expression. AREA[] syntax: AREA[FieldName]value. Combine with AND/OR/NOT. Check field names via get_field_values."`
-- No results: returns empty studies array with `totalCount: 0`, not an error.
+- No results: returns empty studies array with `totalCount: 0`, not an error. An empty first page carries a `notice` naming the constraints that matched nothing: broadening guidance for queries and filters, and — when `nctIds` was supplied — an ID-aware clause. An ID-only lookup gets the ID clause alone, pointing at `clinicaltrials_get_study_record` (a direct not-found check; upstream 404s a nonexistent NCT ID cleanly) and `clinicaltrials_get_study_results` (which resolves a previous/alias ID to its canonical study). Combined with a query or filter, the ID clause is added alongside the existing guidance and asserts nothing about whether the IDs exist — distinguishing "no such study" from "excluded by the other criteria" would cost an extra upstream request. A partial match is not an empty result and carries no notice. An exhausted continuation page (`pageExhausted`) carries no notice of any kind, `nctIds` or not.
 
 **Format function:** Summary line (`Found N studies (M total matching)`), then **every** study in the page as a compact index row (NCT ID, title, status; a phase/enrollment/sponsor/conditions meta line; and a lead-or-nearest site line with the total site count), pagination note if more pages. With explicit `fields`, each study instead renders every requested leaf, including all locations.
 
@@ -182,11 +183,22 @@ InterventionType, StudyType, or LeadSponsorClass values.
 
 **Output schema:**
 
-| Field        | Type          | Description                                                                                             |
-| :----------- | :------------ | :------------------------------------------------------------------------------------------------------ |
-| `fieldStats` | `FieldStat[]` | Per-field stats. Each: `{ field, piece, type, uniqueValuesCount, topValues: {value, studiesCount}[] }`. |
+| Field        | Type          | Description                                                                                                                                          |
+| :----------- | :------------ | :--------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `fieldStats` | `FieldStat[]` | Per-field stats. Always `{ field, piece, type, missingStudiesCount?, multiValued? }`, plus the statistics variant the field's `type` carries (below). |
 
-**Format function:** List each field with its values and counts, sorted by frequency descending.
+Upstream keys the statistics shape on `type` and omits the keys a variant does not carry:
+
+| `type`              | Variant fields                                                                                                                |
+| :------------------ | :---------------------------------------------------------------------------------------------------------------------------- |
+| `ENUM`, `STRING`    | `uniqueValuesCount`, `topValues: {value, studiesCount}[]`; `STRING` may add `longest: {value, length, nctId}`                  |
+| `BOOLEAN`           | `trueCount`, `falseCount`                                                                                                     |
+| `INTEGER`, `NUMBER` | `min`, `max`, `avg` — numbers, each individually optional                                                                      |
+| `DATE`              | `min`, `max` — date strings keeping the upstream precision, so `"1900-01"` stays partial — and `formats: string[]`             |
+
+`multiValued` marks a repeated field: array-typed itself (`Phase`) or nested under a repeated object (`LocationCountry`, one per site). Its per-value `studiesCount` buckets sum above the study total, so they are not percentages of the corpus.
+
+**Format function:** One block per field. `type` picks the header and, when a field reports no statistics at all, which absence line is honest for that variant; every statistic renders on presence, since upstream already omits the keys a variant does not carry. ENUM/STRING list every fetched value with its count, the 250-cap disclosure, and the longest value; BOOLEAN lists the true/false counts; INTEGER/NUMBER and DATE render their range. An absent `topValues` on those last two is a different statistics variant, not an empty dataset, so they never render the ENUM/STRING "No recorded values" line.
 
 ---
 
@@ -226,12 +238,69 @@ names for AREA[] filter expressions, or explore the study data model structure.
 - `mode="overview"`: returns top-level overview (2 levels deep) — sections and their direct children. Prevents context bloat.
 - `mode="drill"`: navigates to the `path` subtree and flattens all descendants.
 - `mode="search"`: returns keyword matches for `query`, ranked by relevance and capped by `limit`.
+- The per-parameter mode scope above is enforced, not advisory: an argument belonging to another mode is rejected rather than silently ignored, and so is a whitespace-only value for the selected mode's required argument. `limit` is the one exception — it carries a schema default, so an explicit value is indistinguishable from an omitted one by the time the handler runs, and `overview`/`drill` go on ignoring it.
 
 **Error messages:**
 
 - Invalid path: `"Path 'X' not found. Top-level sections: protocolSection, resultsSection, annotationSection, documentSection, derivedSection, hasResults."`
+- Cross-mode argument: `"Parameter 'query' does not apply to mode=\"overview\" and would be ignored."` (reason `mode_mismatch`)
+- Blank required argument: the shared `blank_value` message, naming `query` or `path`.
+- Omitted required argument: `"mode=\"search\" requires \`query\`. Pass a keyword to search by."` (reason `mode_requires`, `data.param` naming the argument)
 
 **Format function:** Tree-style display.
+
+---
+
+### 5. `clinicaltrials_get_study_record`
+
+Single-study lookup by NCT ID. Wraps `GET /studies/{nctId}`. The tool equivalent of the `clinicaltrials://{nctId}` resource, for clients that don't read resources — the difference is that the caps here are the caller's to set (or omit), while the resource's are fixed server-side.
+
+**Description:**
+
+```
+Fetch a single clinical trial study by NCT ID from ClinicalTrials.gov. Returns the full study
+record including protocol details, eligibility criteria, outcomes, arms, interventions, contacts,
+and locations. Optional locationLimit / outcomeLimit / referenceLimit / nearLocation parameters
+trim locations, outcomes, and references — original totals are preserved in filtersApplied only
+when a cap actually trims the set.
+```
+
+**Input schema:**
+
+| Parameter        | Type      | Description                                                                                                 |
+| :--------------- | :-------- | :---------------------------------------------------------------------------------------------------------- |
+| `nctId`          | `string`  | Required. `NCT` followed by 8 digits (e.g., `NCT03722472`).                                                 |
+| `locationLimit`  | `number?` | Cap on locations returned (1–500). Omit for the full upstream list.                                         |
+| `outcomeLimit`   | `number?` | Cap on secondary and other outcomes (1–100). Primary outcomes are never capped.                             |
+| `referenceLimit` | `number?` | Cap on references (1–100). `seeAlsoLinks` are never capped.                                                 |
+| `nearLocation`   | `object?` | `{ lat, lon, radiusMi }` (radius default 50). Filters locations to the radius, sorts by distance, adds `distanceMi`. Sites without published coordinates are dropped. |
+
+**Output schema:**
+
+| Field            | Type       | Description                                                                                                  |
+| :--------------- | :--------- | :------------------------------------------------------------------------------------------------------------ |
+| `study`          | `Study`    | The record with the caller's filters already applied. `protocolSection`, `derivedSection`, `documentSection`, `annotationSection`, `hasResults`. The heavy `resultsSection` is omitted. |
+| `filtersApplied` | `object`   | Which caps trimmed a list, each with the upstream total. Empty when nothing was trimmed.                     |
+| `resultsSummary` | `object?`  | Counts of the omitted posted results, present when the study has results to count.                           |
+
+**Behavior:**
+
+- Filters are applied once, before either output channel sees the record, so `structuredContent` and `format()` render the same data. A cap (and its upstream total) is echoed in `filtersApplied` only when it actually trimmed something — reporting a cap that trimmed nothing would imply a filter ran when none did. `nearLocation` always filters, so it is always echoed.
+- The `resultsSection` (up to ~600KB on a large trial, against ~70KB of protocol) is dropped and replaced by `resultsSummary` counts. Fetch the data itself with `clinicaltrials_get_study_results`.
+- A `nearLocation` filter that matched nothing still renders the Locations header and the reason. Omitting the section would make "sites exist, none within the radius" indistinguishable from "this study publishes no sites at all".
+- **Document download URLs.** Each entry in `documentSection.largeDocumentModule.largeDocs[]` gains a `downloadUrl`. Upstream carries only a bare `filename`, which leaves a caller who can see that a protocol or SAP exists with no way to retrieve it.
+  - Construction: `https://cdn.clinicaltrials.gov/large-docs/{XX}/{nctId}/{filename}`, where `{XX}` is the last two digits of the NCT number (zero-padded — `NCT03607500` → `00`) and the filename is URL-encoded as a path segment. `{XX}` is a per-study shard, not a fixed segment: the same filename under another study's prefix 404s.
+  - This is an **observed CDN pattern, not a documented API contract** — the official OpenAPI v2 `LargeDoc` schema defines no URL field. Treat it as best-effort.
+  - The NCT ID comes from the record's own `identificationModule.nctId`, not the one the caller passed: upstream resolves a previous (alias) ID to its canonical record, and the shard follows the canonical ID.
+  - An entry with no `filename` gets no `downloadUrl` rather than a fabricated one.
+  - The builder lives in `services/clinical-trials/document-url.ts` — its own module, so tool and resource tests that mock the service module still reach it. It is applied in the shared pre-render pass (`applyFilters`), the one place both this tool and the `clinicaltrials://{nctId}` resource route a whole record through, so the two surfaces cannot disagree about where a document lives.
+
+**Error messages:**
+
+- Unknown NCT ID: `study_not_found` (`NotFound`) — upstream 404s a nonexistent ID cleanly.
+- Upstream 429 after the retry budget: `rate_limited` (`RateLimited`, retryable).
+
+**Format function:** A `# Study {nctId}: {title}` header, then the protocol record section by section — status/design, dates, sponsor, conditions and MeSH terms, summary, eligibility, interventions, arms, outcomes, results summary, contacts, locations, IPD sharing, documents (each with its `downloadUrl` rendered verbatim), references, annotations — closing with a `*Filters applied: …*` footer that guarantees every `filtersApplied` field reaches `content[]` regardless of which sections rendered.
 
 ---
 
@@ -536,7 +605,7 @@ Each step is independently testable via `bun run rebuild && bun run start:stdio`
 
 ### Resource vs. tool for single study
 
-Single study by NCT ID is a **resource** — it's addressable by stable URI, read-only, parameterless beyond the ID. This lets clients inject study data as context without a tool call. Batch multi-study is handled by `search_studies` with `nctIds` filter.
+Single study by NCT ID is a **resource** — it's addressable by stable URI, read-only, parameterless beyond the ID. This lets clients inject study data as context without a tool call. `clinicaltrials_get_study_record` (§ Tool Designs 5) mirrors it as a tool for clients that don't read resources, and takes the list caps as caller arguments where the resource fixes them server-side. Batch multi-study is handled by `search_studies` with `nctIds` filter.
 
 ### Count tool replaces trend analysis
 

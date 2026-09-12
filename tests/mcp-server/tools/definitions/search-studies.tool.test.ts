@@ -587,6 +587,94 @@ describe('searchStudies', () => {
     });
   });
 
+  // An ID-targeted lookup that matches nothing is its own kind of empty: the
+  // constraint is a list of identifiers, and broadening guidance aimed at
+  // queries and filters says nothing about it.
+  describe('ID-aware empty-result notice (#130)', () => {
+    const emptyPage = () => mockService.searchStudies.mockResolvedValue({ studies: [] });
+
+    const noticeFor = async (input: Record<string, unknown>) => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(searchStudies.input!.parse(input), ctx);
+      return getEnrichment(ctx).notice as string | undefined;
+    };
+
+    it('names the IDs when an ID-only lookup matches nothing', async () => {
+      emptyPage();
+      const notice = await noticeFor({ nctIds: ['NCT00000001'], fields: ['NCTId'] });
+
+      expect(notice).toBeDefined();
+      expect(notice).toContain('NCT ID');
+      // A well-formed but unregistered ID is answered 200-with-nothing, so the
+      // two tools that can settle the question by ID are the way forward.
+      expect(notice).toContain('clinicaltrials_get_study_record');
+      expect(notice).toContain('clinicaltrials_get_study_results');
+      // Nothing to broaden — no query or filter was in play.
+      expect(notice).not.toContain('broaden');
+    });
+
+    it('adds an ID clause without displacing the filter guidance', async () => {
+      emptyPage();
+      const notice = await noticeFor({
+        nctIds: ['NCT03722472'],
+        statusFilter: 'RECRUITING',
+        fields: ['NCTId', 'OverallStatus'],
+      });
+
+      expect(notice).toBeDefined();
+      // The pre-existing advice is still correct on its own axis.
+      expect(notice).toContain('Try removing or broadening filters.');
+      expect(notice).toContain(
+        'Remove statusFilter to include studies in all statuses (completed, terminated, etc.).',
+      );
+      // And the IDs are now part of the picture.
+      expect(notice).toContain('nctIds');
+      expect(notice).toContain('Drop the other filters');
+    });
+
+    it('claims nothing about whether a combined-lookup ID exists', async () => {
+      emptyPage();
+      const notice = await noticeFor({ nctIds: ['NCT03722472'], conditionQuery: 'diabetes' });
+
+      // Settling that needs an extra upstream call this handler does not make.
+      expect(notice).toContain('may not exist');
+      expect(notice).toContain('may have excluded them');
+    });
+
+    it('stays silent when at least one ID resolves (partial match)', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [{ protocolSection: { identificationModule: { nctId: 'NCT03722472' } } }],
+        totalCount: 1,
+      });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({
+          nctIds: ['NCT03722472', 'NCT00000001'],
+          fields: ['NCTId'],
+        }),
+        ctx,
+      );
+
+      // A page with results is not an empty result, however many IDs missed.
+      expect(result.studies).toHaveLength(1);
+      expect(getEnrichment(ctx).notice).toBeUndefined();
+    });
+
+    it('stays silent on an exhausted continuation page carrying nctIds', async () => {
+      emptyPage();
+      const notice = await noticeFor({
+        nctIds: ['NCT03722472', 'NCT06323538'],
+        fields: ['NCTId'],
+        pageSize: 1,
+        pageToken: 'tok_page3',
+      });
+
+      // The IDs already matched on an earlier page — finished pagination, not
+      // an unmatched lookup.
+      expect(notice).toBeUndefined();
+    });
+  });
+
   // An empty continuation page is pagination finishing, not a search failing.
   // Upstream gives nothing to tell them apart — an exhausted page carries
   // neither totalCount nor nextPageToken — so the call's own input is the only

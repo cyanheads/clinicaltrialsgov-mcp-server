@@ -66,7 +66,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
               .boolean()
               .optional()
               .describe(
-                'True when the field is array-typed (a study can carry several values, e.g. Phase, Condition), so the per-value studiesCount buckets sum above the study total. Use to avoid computing a percentage against the corpus.',
+                'True when the field is repeated — array-typed itself (Phase, Condition) or nested under a repeated object (LocationCountry, one per site) — so a study can carry several values and the per-value studiesCount buckets sum above the study total. Use to avoid computing a percentage against the corpus.',
               ),
             // ENUM / STRING fields
             uniqueValuesCount: z.number().optional().describe('Number of distinct values.'),
@@ -83,6 +83,16 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
               .describe(
                 'Values ranked by frequency (capped at 250 by the API). Present for ENUM/STRING fields. When multiValued is true, studiesCount sums can exceed the study total.',
               ),
+            longest: z
+              .object({
+                value: z.string().describe('The longest recorded value.'),
+                length: z.number().describe('Its length in characters.'),
+                nctId: z.string().describe('NCT ID of a study carrying it.'),
+              })
+              .optional()
+              .describe(
+                'Longest recorded value with its length and a study carrying it. Present for STRING fields only.',
+              ),
             // BOOLEAN fields
             trueCount: z
               .number()
@@ -92,11 +102,44 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
               .number()
               .optional()
               .describe('Studies where field is false. Present for BOOLEAN fields.'),
+            // INTEGER / NUMBER / DATE fields
+            min: z
+              .union([
+                z.number().describe('Smallest value of an INTEGER/NUMBER field.'),
+                z
+                  .string()
+                  .describe(
+                    'Earliest value of a DATE field, at the precision recorded — a partial date such as "1900-01" stays partial.',
+                  ),
+              ])
+              .optional()
+              .describe(
+                'Smallest recorded value — a number for INTEGER/NUMBER, a date string for DATE.',
+              ),
+            max: z
+              .union([
+                z.number().describe('Largest value of an INTEGER/NUMBER field.'),
+                z.string().describe('Latest value of a DATE field, at the precision recorded.'),
+              ])
+              .optional()
+              .describe(
+                'Largest recorded value — a number for INTEGER/NUMBER, a date string for DATE.',
+              ),
+            avg: z
+              .number()
+              .optional()
+              .describe('Mean of the recorded values. Present for INTEGER/NUMBER fields.'),
+            formats: z
+              .array(z.string().describe('A date pattern, e.g. "yyyy-MM-dd".'))
+              .optional()
+              .describe(
+                'Date patterns this field is recorded in. Present for DATE fields; more than one means the field mixes precisions across studies.',
+              ),
           })
           .describe('Statistics for a single requested field.'),
       )
       .describe(
-        'One entry per requested field: canonical path, PascalCase piece name, data type, missing/unique counts, and top values with study counts (or trueCount/falseCount for BOOLEAN fields).',
+        'One entry per requested field: canonical path, PascalCase piece name, data type, and the statistics variant that type carries — top values with study counts plus unique/longest for ENUM/STRING, trueCount/falseCount for BOOLEAN, min/max/avg for INTEGER/NUMBER, min/max/formats for DATE.',
       ),
   }),
 
@@ -126,35 +169,64 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
   format: (result) => {
     const lines: string[] = [];
     for (const stat of result.fieldStats) {
-      const header =
-        stat.type === 'BOOLEAN'
-          ? `**${stat.piece}** — ${stat.field} (boolean):`
-          : `**${stat.piece}** — ${stat.field} (${stat.type}, ${stat.uniqueValuesCount ?? '?'} unique values):`;
-      lines.push(header);
-      if (stat.trueCount != null) lines.push(`  true: ${stat.trueCount} studies`);
-      if (stat.falseCount != null) lines.push(`  false: ${stat.falseCount} studies`);
+      // `type` selects the header and, when nothing at all was reported, which
+      // absence line is honest for that variant. Everything else renders on
+      // presence rather than on type: upstream omits the keys a variant does not
+      // carry, so presence already is the variant, and rendering only what one
+      // type branch expects is what dropped the INTEGER/NUMBER/DATE statistics
+      // and reported a populated range as an empty dataset (#119).
+      const ranged = stat.type === 'INTEGER' || stat.type === 'NUMBER';
+      const dated = stat.type === 'DATE';
+      const boolish = stat.type === 'BOOLEAN';
+      const typeLabel = boolish
+        ? 'boolean'
+        : ranged || dated
+          ? stat.type
+          : `${stat.type}, ${stat.uniqueValuesCount ?? '?'} unique values`;
+      lines.push(`**${stat.piece}** — ${stat.field} (${typeLabel}):`);
+
+      const body: string[] = [];
+      if (stat.trueCount != null) body.push(`  true: ${stat.trueCount} studies`);
+      if (stat.falseCount != null) body.push(`  false: ${stat.falseCount} studies`);
+      // String() and nothing else: a date bound keeps the precision it was
+      // written with ("1900-01" stays a month), and an average keeps every
+      // digit, so content[] carries exactly what structuredContent does.
+      if (stat.min != null) body.push(`  min: ${String(stat.min)}`);
+      if (stat.max != null) body.push(`  max: ${String(stat.max)}`);
+      if (stat.avg != null) body.push(`  avg: ${String(stat.avg)}`);
+      if (stat.formats?.length) body.push(`  date formats: ${stat.formats.join(', ')}`);
+      // Render every fetched value with its study count — content[] must carry
+      // the same topValues the handler returns in structuredContent, or
+      // content-only clients go blind past the 16th value (#90).
       const topValues = stat.topValues ?? [];
-      if (stat.type !== 'BOOLEAN') {
-        if (topValues.length === 0) {
-          lines.push('  No recorded values for this field.');
-        } else {
-          // Render every fetched value with its study count — content[] must
-          // carry the same topValues the handler returns in structuredContent,
-          // or content-only clients go blind past the 16th value (#90).
-          for (const tv of topValues) {
-            lines.push(`  ${tv.value}: ${tv.studiesCount} studies`);
-          }
-          // topValues is upstream-capped at 250. When the field has more distinct
-          // values than were fetched, the tail is unreachable (beyond the API cap),
-          // not omitted by us — disclose that honestly rather than implying we trimmed.
-          const unique = stat.uniqueValuesCount;
-          if (unique != null && unique > topValues.length) {
-            lines.push(
-              `  Showing all ${topValues.length} fetched values (of ${unique} unique; topValues capped at 250 by the API).`,
-            );
-          }
-        }
+      for (const tv of topValues) body.push(`  ${tv.value}: ${tv.studiesCount} studies`);
+      // topValues is upstream-capped at 250. When the field has more distinct
+      // values than were fetched, the tail is unreachable (beyond the API cap),
+      // not omitted by us — disclose that honestly rather than implying we trimmed.
+      const unique = stat.uniqueValuesCount;
+      if (topValues.length > 0 && unique != null && unique > topValues.length) {
+        body.push(
+          `  Showing all ${topValues.length} fetched values (of ${unique} unique; topValues capped at 250 by the API).`,
+        );
       }
+      if (stat.longest)
+        body.push(
+          `  longest value: "${stat.longest.value}" (${stat.longest.length} characters, in ${stat.longest.nctId})`,
+        );
+
+      if (body.length > 0) {
+        lines.push(...body);
+      } else if (ranged) {
+        // Distinct from the ENUM/STRING empty-value line (#25), which would name
+        // the wrong variant: upstream reports no value buckets for these types at
+        // all, so a missing bucket list says nothing about whether values exist.
+        lines.push('  No range or average reported for this field.');
+      } else if (dated) {
+        lines.push('  No date range or formats reported for this field.');
+      } else if (!boolish) {
+        lines.push('  No recorded values for this field.');
+      }
+
       if (stat.missingStudiesCount != null && stat.missingStudiesCount > 0)
         lines.push(`  (missing in ${stat.missingStudiesCount} studies)`);
       if (stat.multiValued)

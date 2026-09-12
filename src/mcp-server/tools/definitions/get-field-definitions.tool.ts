@@ -5,7 +5,8 @@
  */
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { blankValueMessage, firstBlankParam } from '@/mcp-server/tools/utils/query-helpers.js';
 import { RECOVERY_HINTS } from '@/mcp-server/tools/utils/recovery-hints.js';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { FieldIndexEntry } from '@/services/clinical-trials/field-search.js';
@@ -44,6 +45,22 @@ function indexEntryToResult(entry: FieldIndexEntry): FieldDefResult {
   return r;
 }
 
+/**
+ * The three arguments that belong to exactly one mode, paired with the mode that
+ * reads each. A mode rejects every entry here it does not own, checked in this
+ * order, so a call carrying several is named deterministically.
+ *
+ * `limit` is absent. It carries a schema default, so Zod resolves it before the
+ * handler runs and an explicit `limit: 20` is indistinguishable from an omitted
+ * one; gating on it would reject every default call. `overview` and `drill` go
+ * on ignoring it silently.
+ */
+const GATED_ARGS = [
+  ['query', 'search'],
+  ['path', 'drill'],
+  ['includeIndexedOnly', 'drill'],
+] as const;
+
 export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', {
   description:
     'Resolve valid field names from the ClinicalTrials.gov data model — the canonical PascalCase identifiers (OverallStatus, EnrollmentCount, LeadSponsorName) accepted by the `fields`, `advancedFilter`, and `sort` parameters of other tools, and as input to clinicaltrials_get_field_values. Select a mode: `"search"` — keyword search returning ranked matches (pass `query`, e.g. "enrollment", "sponsor", "adverse events"); `"drill"` — drill into a specific section by dot-notation path (pass `path`, e.g. "protocolSection.designModule"); `"overview"` — top-level summary of all sections (no additional args).',
@@ -54,6 +71,24 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
   },
 
   errors: [
+    {
+      reason: 'blank_value',
+      code: JsonRpcErrorCode.ValidationError,
+      when: "The selected mode's required argument was supplied with a whitespace-only value.",
+      recovery: RECOVERY_HINTS.blank_value,
+    },
+    {
+      reason: 'mode_mismatch',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'An argument belonging to a different mode was supplied alongside the selected mode.',
+      recovery: RECOVERY_HINTS.mode_mismatch,
+    },
+    {
+      reason: 'mode_requires',
+      code: JsonRpcErrorCode.ValidationError,
+      when: "The selected mode's required argument was omitted.",
+      recovery: RECOVERY_HINTS.mode_requires,
+    },
     {
       reason: 'path_not_found',
       code: JsonRpcErrorCode.NotFound,
@@ -159,10 +194,52 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
   async handler(input, ctx) {
     const service = getClinicalTrialsService();
 
+    // Reject a cross-mode argument instead of dropping it silently. A caller who
+    // passed `query` under mode="overview" asked to narrow the result; answering
+    // with the full overview reads as if that narrowing had been applied. Only an
+    // explicitly supplied value is judged — omission keeps its meaning.
+    for (const [arg, owner] of GATED_ARGS) {
+      if (owner === input.mode || input[arg] === undefined) continue;
+      throw ctx.fail(
+        'mode_mismatch',
+        `Parameter '${arg}' does not apply to mode="${input.mode}" and would be ignored.`,
+        {
+          param: arg,
+          mode: input.mode,
+          recovery: {
+            hint: `mode="${input.mode}" does not read '${arg}'. Remove '${arg}', or re-issue the call with mode="${owner}", which does read it.`,
+          },
+        },
+      );
+    }
+
+    // A whitespace-only required value clears the truthy checks below and reaches
+    // the field tree as an unmatchable query or path: search answers zero matches
+    // with a broaden-your-keyword notice, drill answers `path_not_found`, and both
+    // describe the tree rather than naming the malformed input. An omitted value
+    // still falls through to that mode's `mode_requires` error.
+    const blankParam = firstBlankParam(
+      input.mode === 'search'
+        ? { query: input.query }
+        : input.mode === 'drill'
+          ? { path: input.path }
+          : {},
+    );
+    if (blankParam) {
+      throw ctx.fail('blank_value', blankValueMessage(blankParam), {
+        param: blankParam,
+        ...ctx.recoveryFor('blank_value'),
+      });
+    }
+
     switch (input.mode) {
       case 'search': {
         if (!input.query) {
-          throw validationError('mode="search" requires `query`. Pass a keyword to search by.');
+          throw ctx.fail(
+            'mode_requires',
+            'mode="search" requires `query`. Pass a keyword to search by.',
+            { param: 'query', mode: 'search', ...ctx.recoveryFor('mode_requires') },
+          );
         }
         const { entries: matches, total } = await service.searchFieldDefinitions(
           input.query,
@@ -194,8 +271,10 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
 
       case 'drill': {
         if (!input.path) {
-          throw validationError(
+          throw ctx.fail(
+            'mode_requires',
             'mode="drill" requires `path`. Pass a dot-notation path such as "protocolSection.designModule".',
+            { param: 'path', mode: 'drill', ...ctx.recoveryFor('mode_requires') },
           );
         }
         const tree = await service.getMetadata(input.includeIndexedOnly ?? false, ctx);

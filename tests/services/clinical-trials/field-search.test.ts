@@ -214,6 +214,79 @@ describe('flattenMetadata', () => {
     expect(entries[0]!.path).toBe('a.b.c');
   });
 
+  // Repeated-ancestor cardinality (#121). The upstream marker is a node's own
+  // `type` ending in `[]` (`Location[]`, `Contact[]`); a scalar leaf beneath one
+  // occurs once per repetition and carries the same cardinality as an
+  // array-typed leaf.
+  describe('hasArrayAncestor', () => {
+    const repeatedTree: FieldNode[] = [
+      {
+        name: 'protocolSection',
+        children: [
+          {
+            name: 'statusModule',
+            children: [{ name: 'overallStatus', piece: 'OverallStatus', type: 'Status' }],
+          },
+          {
+            name: 'designModule',
+            children: [{ name: 'phases', piece: 'Phase', type: 'Phase[]', isEnum: true }],
+          },
+          {
+            name: 'contactsLocationsModule',
+            children: [
+              {
+                name: 'locations',
+                piece: 'Location',
+                type: 'Location[]',
+                children: [
+                  { name: 'country', piece: 'LocationCountry', type: 'text' },
+                  {
+                    name: 'contacts',
+                    piece: 'LocationContact',
+                    type: 'Contact[]',
+                    children: [{ name: 'name', piece: 'LocationContactName', type: 'text' }],
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const byPiece = (piece: string) =>
+      flattenMetadata(repeatedTree).find((e) => e.piece === piece)!;
+
+    it('flags a scalar leaf nested under an array-typed ancestor', () => {
+      expect(byPiece('LocationCountry').hasArrayAncestor).toBe(true);
+    });
+
+    it('flags a leaf two array-typed ancestors deep', () => {
+      expect(byPiece('LocationContactName').hasArrayAncestor).toBe(true);
+    });
+
+    it('leaves a field with no array-typed ancestor unflagged rather than false', () => {
+      expect(byPiece('OverallStatus').hasArrayAncestor).toBeUndefined();
+      expect('hasArrayAncestor' in byPiece('OverallStatus')).toBe(false);
+    });
+
+    it('does not flag an array-typed node on itself — its own type already says so', () => {
+      const phase = byPiece('Phase');
+      expect(phase.type).toBe('Phase[]');
+      expect(phase.hasArrayAncestor).toBeUndefined();
+    });
+
+    it('flags the nested array-typed node but not the outermost one', () => {
+      expect(byPiece('Location').hasArrayAncestor).toBeUndefined();
+      expect(byPiece('LocationContact').hasArrayAncestor).toBe(true);
+    });
+
+    it("leaves each entry's own declared type untouched", () => {
+      expect(byPiece('LocationCountry').type).toBe('text');
+      expect(byPiece('LocationContactName').type).toBe('text');
+    });
+  });
+
   it('skips nodes where piece is undefined or falsy', () => {
     const tree: FieldNode[] = [
       { name: 'container', type: 'OBJECT', children: [{ name: 'inner', type: 'STRING' }] },

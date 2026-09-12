@@ -1,8 +1,8 @@
 # Agent Protocol
 
 **Server:** clinicaltrialsgov-mcp-server
-**Version:** 2.9.3
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.12.5`
+**Version:** 2.9.4
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.12.8`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -222,7 +222,7 @@ Note: `ctx.state` is available but unused — this is a stateless read-only serv
 
 Handlers throw — the framework catches, classifies, and formats.
 
-**Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable? }]` on `tool()` / `resource()` to receive a typed `ctx.fail(reason, …)` keyed by the declared reason union. TypeScript catches `ctx.fail('typo')` at compile time, `data.reason` is auto-populated for observability, and the linter enforces conformance against the handler body. The `recovery` field is required descriptive metadata (≥ 5 words, lint-validated); for the wire payload's `data.recovery.hint` (which the framework mirrors into `content[]` text), spread `ctx.recoveryFor('reason')` for the contract default, or pass `{ recovery: { hint: '...' } }` explicitly when dynamic context matters. Baseline codes (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`, `SerializationError`) bubble freely and don't need declaring.
+**Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable? }]` on `tool()` / `resource()` to receive a typed `ctx.fail(reason, …)` keyed by the declared reason union. TypeScript catches `ctx.fail('typo')` at compile time, `data.reason` is auto-populated for observability, and the linter enforces conformance against the handler body. The `recovery` field is required descriptive metadata (≥ 5 words, lint-validated); for the wire payload's `data.recovery.hint` (which the framework mirrors into `content[]` text), spread `ctx.recoveryFor('reason')` for the contract default, or pass `{ recovery: { hint: '...' } }` explicitly when dynamic context matters. Baseline codes (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`, `SerializationError`, `RequestCancelled`) bubble freely and don't need declaring.
 
 ```ts
 import { JsonRpcErrorCode } from "@cyanheads/mcp-ts-core/errors";
@@ -334,8 +334,9 @@ Available skills:
 | `devcheck`               | Lint, format, typecheck, audit                                                             |
 | `polish-docs-meta`       | Finalize docs, README, metadata, and agent protocol for shipping                           |
 | `maintenance`            | Investigate changelogs, adopt upstream changes, sync skills to agent dirs                  |
-| `git-wrapup`             | Version bump, changelog, commit, and annotated tag — local only, stops before push        |
-| `release-and-publish`    | Post-wrapup ship workflow: verification gate, push, publish to npm/GHCR                    |
+| `git-wrapup`             | Land working-tree changes as a commit stack — version bump, changelog, verify, commit by concern, release commit on top. No tag, no push to `main`; halts at the open release PR |
+| `release-pr-review`      | Review pass on the open release PR — simplifier + correctness review, fixup commits autosquashed into the stack, PR body kept in sync |
+| `release-and-publish`    | Fast-forwards `main`, tags, pushes, publishes to npm/MCP Registry/GH Release/GHCR. Picks up from `release-pr-review` |
 | `report-issue-framework` | File a bug or feature request against `@cyanheads/mcp-ts-core` via `gh` CLI               |
 | `report-issue-local`     | File a bug or feature request against this server's own repo via `gh` CLI                  |
 | `api-auth`               | Auth modes, scopes, JWT/OAuth                                                              |
@@ -398,7 +399,7 @@ Each per-version file opens with YAML frontmatter:
 ---
 summary: "One-line headline, ≤350 chars"  # required — powers the rollup index
 breaking: false                            # optional — true flags breaking changes
-security: false                            # optional — true flags security fixes
+security: false                            # optional — true ONLY for a source-code security fix, never a dependency CVE bump
 ---
 
 # 2.4.0 — YYYY-MM-DD
@@ -409,11 +410,15 @@ security: false                            # optional — true flags security fi
 
 `agent-notes` is an optional free-form field for maintenance agents processing the release downstream. Content here won't appear in the rendered CHANGELOG — it's consumed by agents running the `maintenance` skill. Omit entirely when there's nothing to say.
 
+**Section order:** the Keep a Changelog sequence — Added, Changed, Deprecated, Removed, Fixed, Security — then `Dependencies` last. Include only sections with entries — don't ship empty headers.
+
 ---
 
 ## Publishing
 
-Run the `release-and-publish` skill after the git wrapup (version bumps, CHANGELOG, commit, tag) is complete. It runs the verification gate (`devcheck`, `rebuild`, `test`), pushes commits and tags, then publishes to npm and GHCR — halting on the first non-zero exit. Reference commands:
+**Every release goes through a gated release PR** — `git-wrapup`'s "Release PR mode", mode `gated`. Three separate runs, never one: `git-wrapup` lands the commit stack on `release/<version>`, pushes it, and opens the PR (title = the release commit subject, body = the changelog entry plus a gates section); `release-pr-review` reviews and fixes on that branch (fixup commits autosquashed into the stack, `--force-with-lease` on the release branch only, PR body kept in sync, one summary comment); then `release-and-publish` fast-forwards `main` locally with `git merge --ff-only`, creates the tag on `main`'s tip, pushes `main` and the tag, deletes the branch, and publishes. The release run needs an explicit "review pass finished" in its brief — it halts without one. **Never merge through the GitHub UI or `gh pr merge`**: squash and rebase-merge are disabled in the repo settings because both rewrite the stack, and a merge commit breaks the linear history.
+
+`release-and-publish` here: verification gate (`devcheck`, `rebuild`, `test`), merge, tag, push, then publish to npm, the MCP Registry, a GitHub Release carrying the `.mcpb` bundle, and GHCR — halting on the first non-zero exit. Reference commands:
 
 ```bash
 bun publish --access public

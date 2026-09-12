@@ -236,13 +236,21 @@ export class ClinicalTrialsService {
     return this.fetchJson<Study>(`/studies/${encodeURIComponent(nctId)}`, {}, ctx);
   }
 
-  /** Fetch multiple studies by NCT IDs in a single request. Returns identification and results section data. */
+  /**
+   * Fetch multiple studies by NCT IDs in a single request. Returns
+   * identification and results section data.
+   *
+   * `NCTIdAlias` is requested alongside `NCTId` because the endpoint resolves a
+   * previous (alias) ID to its canonical record silently: the record comes back
+   * under an ID the caller never asked for, and the alias list is the only thing
+   * tying it to the ID they did ask for.
+   */
   async getStudiesBatch(nctIds: string[], ctx: Context): Promise<Study[]> {
     ctx.log.debug('getStudiesBatch', { count: nctIds.length });
     const response = await this.searchStudies(
       {
         filterIds: nctIds,
-        fields: ['NCTId', 'BriefTitle', 'HasResults', 'ResultsSection'],
+        fields: ['NCTId', 'NCTIdAlias', 'BriefTitle', 'HasResults', 'ResultsSection'],
         pageSize: nctIds.length,
         // ID-targeted lookups must never filter the caller's selection.
         includeUnknownEnrollment: true,

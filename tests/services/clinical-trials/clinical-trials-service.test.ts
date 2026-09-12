@@ -309,6 +309,9 @@ describe('ClinicalTrialsService', () => {
       expect(fields).toContain('NCTId');
       expect(fields).toContain('HasResults');
       expect(fields).toContain('ResultsSection');
+      // Without it a record fetched under a previous (alias) ID comes back keyed
+      // only by its canonical ID, with nothing tying it to the request (#127).
+      expect(fields).toContain('NCTIdAlias');
     });
   });
 

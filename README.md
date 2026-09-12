@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![Version](https://img.shields.io/badge/Version-2.9.3-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![Version](https://img.shields.io/badge/Version-2.9.4-blue.svg?style=flat-square)](./CHANGELOG.md) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -38,7 +38,7 @@ Seven tools for searching, discovering, analyzing, and matching clinical trials:
 | `clinicaltrials_get_study_count`       | Get total study count for a query without fetching data. Fast statistics and breakdowns.         |
 | `clinicaltrials_get_field_values`      | Discover valid values for API fields (status, phase, study type, etc.) with per-value counts.    |
 | `clinicaltrials_get_field_definitions` | Browse the study data model field tree — piece names, types, nesting. Supports subtree navigation and keyword search. |
-| `clinicaltrials_get_study_results`     | Extract outcomes, adverse events, participant flow, and baseline from completed studies. Optional summary mode reduces ~200KB payloads to ~5KB; `outcomeLimit` / `adverseEventLimit` cap full mode without leaving it. |
+| `clinicaltrials_get_study_results`     | Extract outcomes, adverse events, participant flow, and baseline from completed studies. A results-rich record can exceed 500KB per study in full mode; summary mode typically cuts that to a few KB, and `outcomeLimit` / `adverseEventLimit` cap full mode without leaving it. `outcomeOffset` / `seriousEventOffset` / `otherEventOffset` resume a capped list, with the next offset reported per study. |
 | `clinicaltrials_find_eligible`         | Match patient demographics and conditions to eligible recruiting trials. Provide age, sex, conditions, and location to find studies with matching eligibility criteria, contacts, and recruiting locations. |
 
 | Resource                   | Description                                         |
@@ -70,8 +70,11 @@ Fetch posted results data for completed studies.
 
 - Outcome measures with statistics, adverse events, participant flow, baseline characteristics
 - Section-level filtering (request only the data you need)
-- Optional summary mode condenses full results (~200KB) to essential metadata (~5KB per study)
-- Batch multiple NCT IDs per call with partial-success reporting
+- Optional summary mode condenses full results — which can exceed 500KB per study — to per-measure metadata, denominators, and a labelled top-line projection, typically a few KB per study
+- `outcomeLimit` and `adverseEventLimit` cap the two lists that carry the bulk without leaving full mode, capping serious and other adverse events separately
+- `outcomeOffset`, `seriousEventOffset`, and `otherEventOffset` resume a capped list from where the last page stopped — each study reports the next offset for every list left short, and the group rosters ride every page
+- Batch multiple NCT IDs per call with partial-success reporting; repeated IDs collapse to one entry
+- Previous (alias) NCT IDs resolve to their canonical study, named alongside the ID you requested
 - Separate tracking of studies without results and fetch errors
 
 ---

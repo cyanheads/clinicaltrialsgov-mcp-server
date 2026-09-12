@@ -20,6 +20,17 @@ const VALID_SECTIONS = [
 ] as const;
 type Section = (typeof VALID_SECTIONS)[number];
 
+/**
+ * Which section each offset bounds. An offset is only meaningful when the call
+ * returns that section's list in full mode, so this is also the table the
+ * handler validates against before fetching anything.
+ */
+const OFFSET_SECTIONS = [
+  ['outcomeOffset', 'outcomes'],
+  ['seriousEventOffset', 'adverseEvents'],
+  ['otherEventOffset', 'adverseEvents'],
+] as const satisfies ReadonlyArray<readonly [string, Section]>;
+
 /** Map section names to resultsSection module keys. */
 const SECTION_MAP: Record<Section, string> = {
   outcomes: 'outcomeMeasuresModule',
@@ -29,44 +40,146 @@ const SECTION_MAP: Record<Section, string> = {
   moreInfo: 'moreInfoModule',
 };
 
-/**
- * Resolve a measurement value for the condensed/text channels. The caller's
- * `!= null` guard drops genuinely-empty cells; the `"NA"`/`"NR"` sentinels are
- * NOT dropped — for time-to-event MEDIAN measures they encode "median not
- * reached", and silently dropping them removes an entire arm from the rendered
- * measure (the comparator then reads as the headline result). Surface that
- * explicitly for MEDIAN; pass other sentinel-bearing values through unchanged.
- */
-function displayMeasurementValue(value: unknown, paramType: unknown): string {
-  const v = String(value);
-  return (v === 'NA' || v === 'NR') && paramType === 'MEDIAN' ? 'not reached' : v;
+/** Coerce a raw value to a trimmed display string, or undefined when absent/blank. */
+function text(value: unknown): string | undefined {
+  if (value == null) return;
+  const s = String(value).trim();
+  return s.length > 0 ? s : undefined;
+}
+
+/** The measurement fields both channels render, common to the raw and condensed shapes. */
+interface MeasurementFields {
+  comment?: unknown;
+  lowerLimit?: unknown;
+  spread?: unknown;
+  upperLimit?: unknown;
+  value?: unknown;
+}
+
+/** One per-group cell of the summary projection, carried verbatim from upstream. */
+interface TopStat extends MeasurementFields {
+  comment?: string;
+  group: string;
+  lowerLimit?: string;
+  spread?: string;
+  upperLimit?: string;
+  value: string;
+}
+
+/** Which cell of the classes tree the summary kept, and what it stands in for. */
+interface TopStatsProvenance {
+  categoryTitle?: string;
+  classTitle?: string;
+  note?: string;
+  omittedCategories?: number;
+  omittedClasses?: number;
 }
 
 /**
- * Extract top-line per-group stats from a raw outcome object for summary mode's
- * `topStats`. Reads only the first class/category — deliberate condensation, and
- * the reason full mode walks the whole tree in format() instead of calling this.
- * Returns undefined if no measurement values are present.
+ * Label the projected cell and disclose the siblings it displaced. Upstream
+ * titles a class or category exactly when more than one exists, so the title
+ * that disambiguates a retained value is the one the projection would otherwise
+ * discard. Returns undefined when the measure holds a single untitled cell —
+ * nothing to name and nothing omitted.
+ */
+function topStatsProvenance(
+  firstClass: Record<string, unknown>,
+  categories: Array<Record<string, unknown>>,
+  classCount: number,
+): TopStatsProvenance | undefined {
+  const omittedClasses = classCount - 1;
+  const omittedCategories = categories.length - 1;
+  const classTitle = text(firstClass.title);
+  const categoryTitle = text(categories[0]?.title);
+  const dropped = [
+    omittedClasses > 0 ? `${omittedClasses} of ${classCount} classes` : '',
+    omittedCategories > 0
+      ? `${omittedCategories} of ${categories.length} categories in the shown class`
+      : '',
+  ].filter(Boolean);
+  const from: TopStatsProvenance = {
+    ...(classTitle ? { classTitle } : {}),
+    ...(categoryTitle ? { categoryTitle } : {}),
+    ...(omittedClasses > 0 ? { omittedClasses } : {}),
+    ...(omittedCategories > 0 ? { omittedCategories } : {}),
+    ...(dropped.length
+      ? {
+          note: `Summary projects one cell: ${dropped.join(' and ')} omitted. Re-run with summary: false for the complete measurement tree.`,
+        }
+      : {}),
+  };
+  return Object.keys(from).length > 0 ? from : undefined;
+}
+
+/**
+ * Project one cell of a measure's classes tree into summary mode's `topStats`.
+ * Reads only `classes[0].categories[0]` — deliberate condensation (#63), and the
+ * reason full mode walks the whole tree in format() instead of calling this. The
+ * cell travels with the titles that say what it measures and a count of the
+ * siblings it displaced, so a retained value is never read as the whole measure.
+ *
+ * Values are carried verbatim. The caller's `!= null` guard drops genuinely-empty
+ * cells; the `NA`/`NR` sentinels stay, as does the record's own `comment` — the
+ * only place ClinicalTrials.gov says why a value is missing. Nothing is inferred
+ * from `paramType`: an `NA` median is "not reached" only when the comment says so.
  */
 function extractTopStats(
   o: Record<string, unknown>,
-): Array<{ group: string; value: string; spread?: string }> | undefined {
+): { from?: TopStatsProvenance; stats: TopStat[] } | undefined {
   const groups = o.groups as Array<Record<string, unknown>> | undefined;
   const classes = o.classes as Array<Record<string, unknown>> | undefined;
   if (!groups?.length || !classes?.length) return;
   const firstClass = classes[0] as Record<string, unknown>;
   const categories = firstClass.categories as Array<Record<string, unknown>> | undefined;
-  const measurements = categories?.[0]?.measurements as Array<Record<string, unknown>> | undefined;
+  if (!categories?.length) return;
+  const measurements = categories[0]?.measurements as Array<Record<string, unknown>> | undefined;
   if (!measurements?.length) return;
   const groupMap = new Map(groups.map((g) => [g.id as string, (g.title ?? g.id) as string]));
-  const stats = measurements
+  const stats: TopStat[] = measurements
     .filter((m) => m.value != null)
-    .map((m) => ({
-      group: groupMap.get(m.groupId as string) ?? (m.groupId as string),
-      value: displayMeasurementValue(m.value, o.paramType),
-      ...(m.spread != null ? { spread: m.spread as string } : {}),
-    }));
-  return stats.length ? stats : undefined;
+    .map((m) => {
+      const comment = text(m.comment);
+      return {
+        group: groupMap.get(m.groupId as string) ?? (m.groupId as string),
+        value: String(m.value),
+        ...(m.spread != null ? { spread: String(m.spread) } : {}),
+        ...(m.lowerLimit != null ? { lowerLimit: String(m.lowerLimit) } : {}),
+        ...(m.upperLimit != null ? { upperLimit: String(m.upperLimit) } : {}),
+        ...(comment ? { comment } : {}),
+      };
+    });
+  if (!stats.length) return;
+  const from = topStatsProvenance(firstClass, categories, classes.length);
+  return { stats, ...(from ? { from } : {}) };
+}
+
+/**
+ * Condense a measure's denominators — what each retained value is counted out
+ * of. Keyed by group title rather than group id: summary mode carries no group
+ * roster, so an id would reach the caller with nothing to resolve it against.
+ */
+function condenseDenoms(
+  denoms: unknown,
+  groups: Array<Record<string, unknown>>,
+): Array<{ counts: Array<{ group: string; value: string }>; units?: string }> | undefined {
+  const rows = denoms as Array<Record<string, unknown>> | undefined;
+  if (!rows?.length) return;
+  const titles = new Map(groups.map((g) => [g.id as string, (g.title ?? g.id) as string]));
+  const condensed = rows
+    .map((d) => {
+      const units = text(d.units);
+      return {
+        ...(units ? { units } : {}),
+        counts: ((d.counts as Array<Record<string, unknown>> | undefined) ?? [])
+          .filter((c) => c.value != null)
+          .map((c) => ({
+            group: titles.get(c.groupId as string) ?? (c.groupId as string),
+            value: String(c.value),
+          })),
+      };
+    })
+    .filter((d) => d.counts.length > 0);
+  return condensed.length ? condensed : undefined;
 }
 
 /**
@@ -101,18 +214,25 @@ function extractTopAnalysis(o: Record<string, unknown>): Record<string, unknown>
 function summarizeOutcome(o: Record<string, unknown>) {
   const groups = o.groups as Array<Record<string, unknown>> | undefined;
   const classes = o.classes as Array<Record<string, unknown>> | undefined;
-  const topStats = extractTopStats(o);
+  const projection = extractTopStats(o);
   const topAnalysis = extractTopAnalysis(o);
+  const denoms = condenseDenoms(o.denoms, groups ?? []);
+  const dispersionType = text(o.dispersionType);
   return {
     type: o.type,
     title: o.title,
     timeFrame: o.timeFrame,
     paramType: o.paramType,
+    // Measure-level qualifier: without it a retained `spread` renders as a bare
+    // `±` value with nothing saying whether it is an SD, an SE, or a CI half-width.
+    ...(dispersionType ? { dispersionType } : {}),
     unitOfMeasure: o.unitOfMeasure,
     reportingStatus: o.reportingStatus,
     groupCount: groups?.length,
     classCount: classes?.length,
-    ...(topStats ? { topStats } : {}),
+    ...(denoms ? { denoms } : {}),
+    ...(projection ? { topStats: projection.stats } : {}),
+    ...(projection?.from ? { topStatsFrom: projection.from } : {}),
     ...(topAnalysis ? { topAnalysis } : {}),
   };
 }
@@ -224,61 +344,129 @@ function summarizeMoreInfo(mi: Record<string, unknown>) {
   };
 }
 
-/** What a caller-requested cap actually trimmed on one study's results. */
+/** What the caller-requested bounds actually trimmed on one study's results. */
 interface ResultsFilterMeta {
-  adverseEventLimit?: number;
-  outcomeLimit?: number;
-  totalOtherEvents?: number;
-  totalOutcomes?: number;
-  totalSeriousEvents?: number;
+  adverseEventLimit?: number | undefined;
+  nextOtherEventOffset?: number | undefined;
+  nextOutcomeOffset?: number | undefined;
+  nextSeriousEventOffset?: number | undefined;
+  otherEventOffset?: number | undefined;
+  outcomeLimit?: number | undefined;
+  outcomeOffset?: number | undefined;
+  seriousEventOffset?: number | undefined;
+  totalOtherEvents?: number | undefined;
+  totalOutcomes?: number | undefined;
+  totalSeriousEvents?: number | undefined;
+}
+
+/** One list's caller-supplied bounds — where to start, and how many to take. */
+interface ListBound {
+  limit?: number | undefined;
+  offset?: number | undefined;
+}
+
+/** A windowed list plus what the window left out, or `items` alone when it left out nothing. */
+interface ListWindow<T> {
+  items: T[];
+  /** Echo of the applied limit — set only when the limit is what cut the tail. */
+  limit?: number;
+  /** Where the next page starts — set only when items remain past the window. */
+  next?: number;
+  /** Echo of the applied offset — set only when it skipped a prefix. */
+  offset?: number;
+  /** Upstream length — set whenever the window trimmed either end. */
+  total?: number;
 }
 
 /**
- * Cap a study's outcome measure list. The cap drops whole measures — every
+ * Slice one upstream list to the caller's offset/limit window and report what
+ * the window left out.
+ *
+ * A window that starts at zero and reaches the end trimmed nothing, so it
+ * returns the list alone and the caller discloses no filter — echoing a bound
+ * that removed nothing reports a filter that was never applied (#80). An offset
+ * past the end is not an error: the window is empty and `total` says why.
+ *
+ * `next` is the resume point and exists only when the limit cut the tail, which
+ * is the only way items can remain past the window.
+ */
+function windowList<T>(items: T[], { offset, limit }: ListBound): ListWindow<T> {
+  const applied = offset ?? 0;
+  const start = Math.min(applied, items.length);
+  const end = limit == null ? items.length : Math.min(start + limit, items.length);
+  if (start === 0 && end === items.length) return { items };
+  const cutTail = limit != null && end < items.length;
+  return {
+    items: items.slice(start, end),
+    total: items.length,
+    ...(applied > 0 ? { offset: applied } : {}),
+    ...(cutTail ? { limit, next: end } : {}),
+  };
+}
+
+/**
+ * Window a study's outcome measure list. The bound drops whole measures — every
  * surviving one keeps its complete groups/classes/measurements/analyses tree.
- * Recorded in `meta` only when the slice actually removed something; echoing a
- * cap that trimmed nothing would report a filter that was never applied (#80).
  */
 function capOutcomes(
   measures: Record<string, unknown>[],
-  limit: number | undefined,
+  bound: ListBound,
   meta: ResultsFilterMeta,
 ): Record<string, unknown>[] {
-  if (limit == null || measures.length <= limit) return measures;
-  meta.totalOutcomes = measures.length;
-  meta.outcomeLimit = limit;
-  return measures.slice(0, limit);
+  const w = windowList(measures, bound);
+  if (w.total != null) {
+    meta.totalOutcomes = w.total;
+    if (w.limit != null) meta.outcomeLimit = w.limit;
+    if (w.offset != null) meta.outcomeOffset = w.offset;
+    if (w.next != null) meta.nextOutcomeOffset = w.next;
+  }
+  return w.items;
 }
 
 /**
- * Cap the serious and other event lists of a full-mode adverse-events module.
- * The two lists are capped independently — one list exceeding the limit says
- * nothing about the other — and the event group roster is never capped, since
- * every per-event stat joins back to it by id.
+ * Window the serious and other event lists of a full-mode adverse-events
+ * module. The two walk on their own axes — their lengths are uncorrelated, so
+ * one position across both would overrun the shorter list and under-serve the
+ * longer — while the event group roster is never bounded, since every per-event
+ * stat joins back to it by id and a page without its roster carries unjoinable
+ * numbers.
  */
 function capAdverseEvents(
   ae: Record<string, unknown>,
-  limit: number | undefined,
+  serious: ListBound,
+  other: ListBound,
   meta: ResultsFilterMeta,
 ): Record<string, unknown> {
-  if (limit == null) return ae;
   const next = { ...ae };
   let trimmed = false;
-  const serious = ae.seriousEvents as unknown[] | undefined;
-  if (serious && serious.length > limit) {
-    meta.totalSeriousEvents = serious.length;
-    next.seriousEvents = serious.slice(0, limit);
-    trimmed = true;
+
+  const seriousEvents = ae.seriousEvents as unknown[] | undefined;
+  if (seriousEvents) {
+    const w = windowList(seriousEvents, serious);
+    if (w.total != null) {
+      next.seriousEvents = w.items;
+      meta.totalSeriousEvents = w.total;
+      if (w.limit != null) meta.adverseEventLimit = w.limit;
+      if (w.offset != null) meta.seriousEventOffset = w.offset;
+      if (w.next != null) meta.nextSeriousEventOffset = w.next;
+      trimmed = true;
+    }
   }
-  const other = ae.otherEvents as unknown[] | undefined;
-  if (other && other.length > limit) {
-    meta.totalOtherEvents = other.length;
-    next.otherEvents = other.slice(0, limit);
-    trimmed = true;
+
+  const otherEvents = ae.otherEvents as unknown[] | undefined;
+  if (otherEvents) {
+    const w = windowList(otherEvents, other);
+    if (w.total != null) {
+      next.otherEvents = w.items;
+      meta.totalOtherEvents = w.total;
+      if (w.limit != null) meta.adverseEventLimit = w.limit;
+      if (w.offset != null) meta.otherEventOffset = w.offset;
+      if (w.next != null) meta.nextOtherEventOffset = w.next;
+      trimmed = true;
+    }
   }
-  if (!trimmed) return ae;
-  meta.adverseEventLimit = limit;
-  return next;
+
+  return trimmed ? next : ae;
 }
 
 /* ------------------------------------------------------------------ */
@@ -287,22 +475,33 @@ function capAdverseEvents(
 
 type RO = Record<string, unknown>;
 
-/** Build a groupId→title lookup from a groups array. */
-function groupMap(obj: RO): Map<string, string> {
-  const groups = (obj.groups ?? obj.eventGroups) as Array<RO> | undefined;
-  return new Map((groups ?? []).map((g) => [g.id as string, (g.title ?? g.id) as string]));
+/**
+ * Key a rendered cell by the group id it belongs to. The id is the join key
+ * upstream publishes and `renderGroupRoster` prints untruncated once per
+ * section; a shortened title is not a substitute, since two arms can differ
+ * only past the truncation point and then render the same label (#128).
+ */
+function cellGroup(groupId: unknown): string {
+  return text(groupId) ?? 'Group';
 }
 
-/** Truncate a group title to keep tables readable. */
-function shortGroup(title: string, max = 40): string {
-  return title.length <= max ? title : `${title.slice(0, max - 1)}…`;
-}
-
-/** Coerce a raw value to a trimmed display string, or undefined when absent/blank. */
-function text(value: unknown): string | undefined {
-  if (value == null) return;
-  const s = String(value).trim();
-  return s.length > 0 ? s : undefined;
+/**
+ * Render one cell's value, spread, limit range, and comment — '' when it carries
+ * none of them. Shared by the full-mode tree walk and the summary projection so
+ * both channels present the same cell the same way by construction.
+ */
+function cellValue(m: MeasurementFields): string {
+  const comment = text(m.comment);
+  return [
+    m.value != null ? String(m.value) : '',
+    m.spread != null ? `±${m.spread}` : '',
+    m.lowerLimit != null || m.upperLimit != null
+      ? `[${m.lowerLimit ?? ''} to ${m.upperLimit ?? ''}]`
+      : '',
+    comment ? `(${comment})` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 }
 
 /**
@@ -332,17 +531,17 @@ function renderGroupRoster(obj: RO, indent: string, lines: string[], label = 'Gr
   }
 }
 
-/** Render denominator rows — the units and the per-group counts they apply to. */
-function renderDenoms(
-  denoms: unknown,
-  gm: Map<string, string>,
-  indent: string,
-  lines: string[],
-): void {
+/**
+ * Render denominator rows — the units and the per-group counts they apply to.
+ * Full-mode rows key on the upstream `groupId`; summary-mode rows arrive from
+ * `condenseDenoms` already resolved to a `group` title, since that channel
+ * publishes no roster to resolve an id against.
+ */
+function renderDenoms(denoms: unknown, indent: string, lines: string[]): void {
   for (const d of (denoms as Array<RO> | undefined) ?? []) {
     const counts = ((d.counts as Array<RO> | undefined) ?? [])
       .map((c) => {
-        const g = shortGroup(gm.get(c.groupId as string) ?? String(c.groupId));
+        const g = text(c.group) ?? cellGroup(c.groupId);
         return c.value != null ? `${g}: ${c.value}` : g;
       })
       .join(', ');
@@ -353,33 +552,24 @@ function renderDenoms(
 }
 
 /**
- * Render per-group participant counts as `Group: subjects / units (comment)`
+ * Render per-group participant counts as `GroupId: subjects / units (comment)`
  * segments — the shape both participant-flow milestone achievements and
  * drop/withdraw reasons publish.
  */
-function countsByGroup(rows: unknown, gm: Map<string, string>): string {
+function countsByGroup(rows: unknown): string {
   return ((rows as Array<RO> | undefined) ?? [])
     .map((r) => {
-      const gName = shortGroup(gm.get(r.groupId as string) ?? (r.groupId as string));
       const comment = text(r.comment);
       const count = [r.numSubjects, r.numUnits].filter((v) => v != null).join(' / ') || '?';
-      return `${gName}: ${count}${comment ? ` (${comment})` : ''}`;
+      return `${cellGroup(r.groupId)}: ${count}${comment ? ` (${comment})` : ''}`;
     })
     .join(', ');
 }
 
-/** Render one measurement cell — value, spread, confidence limits, and comment. */
-function measurementCell(m: RO, gm: Map<string, string>, paramType: unknown): string | undefined {
-  const parts: string[] = [];
-  if (m.value != null) parts.push(displayMeasurementValue(m.value, paramType));
-  if (m.spread != null) parts.push(`±${m.spread}`);
-  if (m.lowerLimit != null || m.upperLimit != null)
-    parts.push(`[${m.lowerLimit ?? ''} to ${m.upperLimit ?? ''}]`);
-  const comment = text(m.comment);
-  if (comment) parts.push(`(${comment})`);
-  if (parts.length === 0) return;
-  const g = shortGroup(gm.get(m.groupId as string) ?? String(m.groupId));
-  return `${g}: ${parts.join(' ')}`;
+/** Render one measurement cell, keyed by its group id — undefined when empty. */
+function measurementCell(m: RO): string | undefined {
+  const value = cellValue(m);
+  return value ? `${cellGroup(m.groupId)}: ${value}` : undefined;
 }
 
 /**
@@ -388,21 +578,15 @@ function measurementCell(m: RO, gm: Map<string, string>, paramType: unknown): st
  * the per-group cells — so reading only the first entry drops the rest of the
  * measure from the text channel.
  */
-function renderClasses(
-  classes: unknown,
-  gm: Map<string, string>,
-  paramType: unknown,
-  indent: string,
-  lines: string[],
-): void {
+function renderClasses(classes: unknown, indent: string, lines: string[]): void {
   for (const cls of (classes as Array<RO> | undefined) ?? []) {
     const clsTitle = text(cls.title);
     if (clsTitle) lines.push(`${indent}_${clsTitle}_`);
-    renderDenoms(cls.denoms, gm, `${indent}  `, lines);
+    renderDenoms(cls.denoms, `${indent}  `, lines);
     for (const cat of (cls.categories as Array<RO> | undefined) ?? []) {
       const catTitle = text(cat.title);
       const cells = ((cat.measurements as Array<RO> | undefined) ?? [])
-        .map((m) => measurementCell(m, gm, paramType))
+        .map(measurementCell)
         .filter((v): v is string => Boolean(v));
       // Label the row even when upstream titles neither the class nor the
       // category, so a measurement row is never mistaken for a denominator row.
@@ -449,32 +633,83 @@ function formatAnalysisLine(a: RO): string {
 }
 
 /**
- * Disclose a trim on the text channel. Both channels carry the same capped
+ * Render one bounded list's disclosure: how much of it came back, where the
+ * window started, and where the next one starts. Every number `filtersApplied`
+ * carries is named here — a continuation value the text channel never prints is
+ * reachable in one channel and not the other, which is the parity defect the
+ * bounds exist inside of, not beside.
+ */
+function formatBound({
+  noun,
+  offsetParam,
+  total,
+  limit,
+  offset,
+  next,
+}: {
+  limit?: number | undefined;
+  next?: number | undefined;
+  noun: string;
+  offset?: number | undefined;
+  offsetParam: string;
+  total?: number | undefined;
+}): string {
+  // No upstream total means this list was never trimmed — nothing to disclose.
+  if (total == null) return '';
+  const head = limit != null ? `${limit} of ${total} ${noun}` : `${total} ${noun} upstream`;
+  const tail = [
+    offset != null ? `from ${offsetParam} ${offset}` : '',
+    next != null ? `next ${offsetParam} ${next}` : '',
+  ].filter(Boolean);
+  return tail.length ? `${head} (${tail.join('; ')})` : head;
+}
+
+/**
+ * Disclose a trim on the text channel. Both channels carry the same bounded
  * data, so the counts and the route back to the omitted rows have to reach the
  * caller who only reads `content[]`.
+ *
+ * `adverseEventLimit` covers both event lists, so which list it actually cut is
+ * read off that list's own `next` offset — items remain past a window only when
+ * a limit cut the tail.
  */
-function formatCaps(meta: RO, lines: string[]) {
+function formatCaps(meta: ResultsFilterMeta, lines: string[]) {
+  const aeLimit = meta.adverseEventLimit;
   const parts = [
-    meta.totalOutcomes != null
-      ? `${meta.outcomeLimit} of ${meta.totalOutcomes} outcome measures`
-      : '',
-    meta.totalSeriousEvents != null
-      ? `${meta.adverseEventLimit} of ${meta.totalSeriousEvents} serious adverse events`
-      : '',
-    meta.totalOtherEvents != null
-      ? `${meta.adverseEventLimit} of ${meta.totalOtherEvents} other adverse events`
-      : '',
+    formatBound({
+      noun: 'outcome measures',
+      offsetParam: 'outcomeOffset',
+      total: meta.totalOutcomes,
+      limit: meta.outcomeLimit,
+      offset: meta.outcomeOffset,
+      next: meta.nextOutcomeOffset,
+    }),
+    formatBound({
+      noun: 'serious adverse events',
+      offsetParam: 'seriousEventOffset',
+      total: meta.totalSeriousEvents,
+      limit: meta.nextSeriousEventOffset != null ? aeLimit : undefined,
+      offset: meta.seriousEventOffset,
+      next: meta.nextSeriousEventOffset,
+    }),
+    formatBound({
+      noun: 'other adverse events',
+      offsetParam: 'otherEventOffset',
+      total: meta.totalOtherEvents,
+      limit: meta.nextOtherEventOffset != null ? aeLimit : undefined,
+      offset: meta.otherEventOffset,
+      next: meta.nextOtherEventOffset,
+    }),
   ].filter(Boolean);
   if (!parts.length) return;
   lines.push(
-    `_Capped: returning ${parts.join('; ')}. Raise outcomeLimit / adverseEventLimit on clinicaltrials_get_study_results, or narrow sections and re-run, to reach the omitted rows._`,
+    `_Bounded: returning ${parts.join('; ')}. Re-run clinicaltrials_get_study_results with the named next offset to continue a list, raise outcomeLimit / adverseEventLimit, or narrow sections, to reach the omitted rows._`,
   );
 }
 
 function formatOutcomes(outcomes: RO[], lines: string[]) {
   lines.push(`\n### Outcomes (${outcomes.length} measures)`);
   for (const o of outcomes) {
-    const gm = groupMap(o);
     const title = text(o.title) ?? 'Untitled';
     const timeFrame = text(o.timeFrame);
     const groupCount =
@@ -510,20 +745,25 @@ function formatOutcomes(outcomes: RO[], lines: string[]) {
     ].filter(Boolean);
     if (outcomeUnits.length) lines.push(`  ${outcomeUnits.join(' | ')}`);
 
-    // Summary mode: the per-group top-line stats the handler condensed.
-    const topStats = o.topStats as
-      | Array<{ group: string; spread?: string; value: string }>
-      | undefined;
+    // The arm roster and measure-level denominators. Summary mode publishes no
+    // roster, so the first call is a full-mode no-op there; denominators reach
+    // both modes and `renderDenoms` reads whichever group key each shape carries.
+    renderGroupRoster(o, '  ', lines);
+    renderDenoms(o.denoms, '  ', lines);
+
+    // Summary mode: the one class/category cell the handler projected, labelled
+    // with the titles it came from and what it stands in for.
+    const topStats = o.topStats as TopStat[] | undefined;
     if (topStats?.length) {
-      lines.push(
-        `  ${topStats.map((s) => `${s.group}: ${s.value}${s.spread ? ` ±${s.spread}` : ''}`).join(' | ')}`,
-      );
+      const from = o.topStatsFrom as TopStatsProvenance | undefined;
+      const label = [from?.classTitle, from?.categoryTitle].filter(Boolean).join(' — ');
+      const cells = topStats.map((s) => `${s.group}: ${cellValue(s)}`);
+      lines.push(`  ${label ? `${label}: ` : ''}${cells.join(' | ')}`);
+      if (from?.note) lines.push(`  _${from.note}_`);
     }
 
-    // Full mode: the complete arm roster, denominators, and measurement tree.
-    renderGroupRoster(o, '  ', lines);
-    renderDenoms(o.denoms, gm, '  ', lines);
-    renderClasses(o.classes, gm, o.paramType, '  ', lines);
+    // Full mode: the complete classes → categories → measurements tree.
+    renderClasses(o.classes, '  ', lines);
 
     // Summary mode: single condensed analysis lifted from analyses[0].
     const topAnalysis = o.topAnalysis as RO | undefined;
@@ -542,7 +782,6 @@ function formatOutcomes(outcomes: RO[], lines: string[]) {
 
 function formatAdverseEvents(ae: RO, lines: string[]) {
   lines.push('\n### Adverse Events');
-  const gm = groupMap(ae);
   const timeFrame = text(ae.timeFrame);
   if (timeFrame) lines.push(`Assessment period: ${timeFrame}`);
   const description = text(ae.description);
@@ -588,9 +827,8 @@ function formatAdverseEvents(ae: RO, lines: string[]) {
       ].filter(Boolean);
       const statStr = ((ev.stats as Array<RO> | undefined) ?? [])
         .map((s) => {
-          const gName = shortGroup(gm.get(s.groupId as string) ?? (s.groupId as string));
           const events_ = s.numEvents != null ? ` (${s.numEvents} events)` : '';
-          return `${gName}: ${s.numAffected}/${s.numAtRisk}${events_}`;
+          return `${cellGroup(s.groupId)}: ${s.numAffected}/${s.numAtRisk}${events_}`;
         })
         .join(', ');
       lines.push(
@@ -609,7 +847,6 @@ function formatAdverseEvents(ae: RO, lines: string[]) {
 
 function formatParticipantFlow(pf: RO, lines: string[]) {
   lines.push('\n### Participant Flow');
-  const gm = groupMap(pf);
 
   // Summary shape — only counts.
   if ('groupCount' in pf || 'periodCount' in pf) {
@@ -634,7 +871,7 @@ function formatParticipantFlow(pf: RO, lines: string[]) {
     const periodTitle = text(period.title);
     if (periodTitle) lines.push(`\n**${periodTitle}**`);
     for (const ms of (period.milestones as Array<RO> | undefined) ?? []) {
-      const achStr = countsByGroup(ms.achievements, gm);
+      const achStr = countsByGroup(ms.achievements);
       const msComment = text(ms.comment);
       lines.push(
         `- **${text(ms.type) ?? 'Milestone'}**: ${achStr}${msComment ? ` — ${msComment}` : ''}`,
@@ -642,7 +879,7 @@ function formatParticipantFlow(pf: RO, lines: string[]) {
     }
 
     for (const d of (period.dropWithdraws as Array<RO> | undefined) ?? []) {
-      const rStr = countsByGroup(d.reasons, gm);
+      const rStr = countsByGroup(d.reasons);
       const dComment = text(d.comment);
       lines.push(
         `- Drop/Withdraw — ${text(d.type) ?? 'reason'}: ${rStr}${dComment ? ` — ${dComment}` : ''}`,
@@ -653,7 +890,6 @@ function formatParticipantFlow(pf: RO, lines: string[]) {
 
 function formatBaseline(bl: RO, lines: string[]) {
   lines.push('\n### Baseline Characteristics');
-  const gm = groupMap(bl);
   const measures = bl.measures as Array<RO> | undefined;
 
   // Summary shape — counts plus each measure's identifying metadata.
@@ -676,7 +912,7 @@ function formatBaseline(bl: RO, lines: string[]) {
   const unitsAnalyzed = text(bl.typeUnitsAnalyzed);
   if (unitsAnalyzed) lines.push(`Units analyzed: ${unitsAnalyzed}`);
   renderGroupRoster(bl, '', lines);
-  renderDenoms(bl.denoms, gm, '', lines);
+  renderDenoms(bl.denoms, '', lines);
 
   for (const m of measures ?? []) {
     const title = text(m.title) ?? 'Measure';
@@ -690,8 +926,8 @@ function formatBaseline(bl: RO, lines: string[]) {
     if (m.calculatePct != null) lines.push(`  Percentages: ${m.calculatePct ? 'yes' : 'no'}`);
     const denomUnits = text(m.denomUnitsSelected);
     if (denomUnits) lines.push(`  Denominator units: ${denomUnits}`);
-    renderDenoms(m.denoms, gm, '  ', lines);
-    renderClasses(m.classes, gm, m.paramType, '  ', lines);
+    renderDenoms(m.denoms, '  ', lines);
+    renderClasses(m.classes, '  ', lines);
   }
 }
 
@@ -725,7 +961,7 @@ function formatMoreInfo(mi: RO, lines: string[]) {
 }
 
 export const getStudyResults = tool('clinicaltrials_get_study_results', {
-  description: `Fetch clinical trial results data from ClinicalTrials.gov for completed studies — outcome measures with statistics, adverse events, participant flow, baseline characteristics, and results metadata (limitations & caveats, certain-agreement disclosure restrictions, results point of contact). Only available for studies where hasResults is true. Use clinicaltrials_search_studies first to find studies with results. A results-rich record can exceed 500KB per study in full mode — bound it with summary=true, narrower sections, or the outcomeLimit / adverseEventLimit caps, whose trims are reported per study in filtersApplied.`,
+  description: `Fetch clinical trial results data from ClinicalTrials.gov for completed studies — outcome measures with statistics, adverse events, participant flow, baseline characteristics, and results metadata (limitations & caveats, certain-agreement disclosure restrictions, results point of contact). Only available for studies where hasResults is true. Use clinicaltrials_search_studies first to find studies with results. A results-rich record can exceed 500KB per study in full mode — bound it with summary=true, narrower sections, or the outcomeLimit / adverseEventLimit caps. A bounded list is resumable: outcomeOffset / seriousEventOffset / otherEventOffset start the next window, and each study's filtersApplied reports what was trimmed and the next offset for every list left short. A previous (alias) NCT ID resolves to its canonical study, named in canonicalNctId.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -738,6 +974,13 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       code: JsonRpcErrorCode.ValidationError,
       when: 'A parameter was supplied with a blank, whitespace-only, or empty-list value.',
       recovery: RECOVERY_HINTS.blank_value,
+    },
+    {
+      reason: 'offset_not_applicable',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'An offset was supplied for a list this call does not return — summary mode returns a condensed projection rather than a bounded window, or the sections filter excludes the offset’s own section.',
+      recovery:
+        'Drop the offset, or re-run with summary: false and the offset’s own section named in sections — outcomes for outcomeOffset, adverseEvents for seriousEventOffset and otherEventOffset.',
     },
     {
       reason: 'rate_limited',
@@ -755,7 +998,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
         z.array(nctIdSchema).max(20).describe('Multiple NCT IDs (max 20).'),
       ])
       .describe(
-        'One or more NCT IDs (max 20) — an empty list is rejected. E.g., "NCT12345678" or ["NCT12345678", "NCT87654321"]. Use summary=true for large batches to avoid large payloads.',
+        'One or more NCT IDs (max 20) — an empty list is rejected, and a repeated ID collapses to one results entry in first-occurrence order. E.g., "NCT12345678" or ["NCT12345678", "NCT87654321"]. Use summary=true for large batches to avoid large payloads.',
       ),
     sections: z
       .union([
@@ -770,7 +1013,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       .boolean()
       .default(false)
       .describe(
-        'Return condensed summaries instead of full data. Full mode renders every row and field on both output channels, so a large results set can exceed 500KB per study; summary mode reduces that to ~5KB. Summaries include outcome titles, types, timeframes, group counts, and top-level stats — omitting individual measurements, analyses, and per-group data. For a middle ground, keep full mode and cap the two lists that carry the bulk with outcomeLimit / adverseEventLimit.',
+        'Return condensed summaries instead of full data. Full mode renders every row and field on both output channels, so a large results set can exceed 500KB per study; summary mode typically cuts that to a few KB, scaling with the measure count rather than to a fixed ceiling. An outcome summary keeps the title, type, timeframe, paramType, dispersionType, unit, group/class counts, per-group denominators, one statistical analysis, and a top-line projection of a single class/category cell — labelled with the class and category titles it came from and a count of the siblings it omits. The measurements outside that cell and the remaining analyses are dropped; re-run with summary=false to reach them. For a middle ground, keep full mode and cap the two lists that carry the bulk with outcomeLimit / adverseEventLimit.',
       ),
     outcomeLimit: z
       .number()
@@ -790,6 +1033,30 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       .describe(
         'Optional cap on the number of serious and other adverse events returned per study, applied to each list separately in upstream order. Omit for no cap (every event). Applies to full mode only — summary mode already ranks the top 20 by participants affected. Event groups are never capped. Upstream totals preserved in filtersApplied.totalSeriousEvents / totalOtherEvents only when the cap trims a list.',
       ),
+    outcomeOffset: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe(
+        'Optional index of the first outcome measure to return, in the order ClinicalTrials.gov publishes them. Omit or 0 to start at the first. Pair with outcomeLimit to page a long list: each response reports filtersApplied.nextOutcomeOffset for the study, and the list is exhausted when that field is absent. Applied to every study in the call. An offset at or past the end returns an empty list with filtersApplied.totalOutcomes stating the upstream length, not an error. Rejected with summary: true or when sections excludes outcomes.',
+      ),
+    seriousEventOffset: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe(
+        'Optional index of the first serious adverse event to return, in upstream order. Omit or 0 to start at the first. Pages independently of otherEventOffset — the two lists have uncorrelated lengths — and pairs with adverseEventLimit, which bounds each list separately. Continue from filtersApplied.nextSeriousEventOffset until that field is absent. Applied to every study in the call. Rejected with summary: true or when sections excludes adverseEvents.',
+      ),
+    otherEventOffset: z
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe(
+        'Optional index of the first other (non-serious) adverse event to return, in upstream order. Omit or 0 to start at the first. Pages independently of seriousEventOffset and pairs with adverseEventLimit. Continue from filtersApplied.nextOtherEventOffset until that field is absent. Applied to every study in the call. Rejected with summary: true or when sections excludes adverseEvents.',
+      ),
   }),
 
   output: z.object({
@@ -797,14 +1064,24 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       .array(
         z
           .object({
-            nctId: z.string().describe('NCT identifier.'),
+            nctId: z
+              .string()
+              .describe(
+                'The NCT identifier as requested, echoed verbatim. When it is a previous (alias) ID, ClinicalTrials.gov answers with the canonical record and canonicalNctId names it.',
+              ),
+            canonicalNctId: z
+              .string()
+              .optional()
+              .describe(
+                'The canonical NCT identifier of the study that answered — present only when the requested nctId is a previous (alias) ID pointing at a different record. Absent means nctId is already canonical. Requesting an alias and its own canonical ID together returns one entry per requested ID, both carrying the same study.',
+              ),
             title: z.string().describe('Study title.'),
             hasResults: z.boolean().describe('Whether study has posted results.'),
             outcomes: z
               .array(z.record(z.string(), z.unknown()))
               .optional()
               .describe(
-                'Outcome measures with per-group statistics. Summary mode (compact): type, title, timeFrame, paramType, unitOfMeasure, group/class counts, plus topStats (per-group measurements) and topAnalysis (statisticalMethod, pValue, paramType/Value, ciPctValue/Lower/Upper, nonInferiorityType, groupIds — lifted from analyses[0]) when present. Full mode (default): adds raw groups, classes, categories, measurements, and analyses arrays.',
+                'Outcome measures with per-group statistics. Summary mode (compact): type, title, timeFrame, paramType, dispersionType, unitOfMeasure, group/class counts, denoms (per-group denominators keyed by group title), topStats (the per-group cells of one class/category — each carrying the upstream value verbatim, including an NA/NR sentinel, plus spread, lowerLimit/upperLimit, and the record’s own comment when present), topStatsFrom (classTitle / categoryTitle naming where that cell came from, with omittedClasses / omittedCategories counts and a note pointing at summary=false when siblings were dropped), and topAnalysis (statisticalMethod, pValue, paramType/Value, ciPctValue/Lower/Upper, nonInferiorityType, groupIds — lifted from analyses[0]) when present. Full mode (default): adds raw groups, classes, categories, measurements, and analyses arrays.',
               ),
             adverseEvents: z
               .record(z.string(), z.unknown())
@@ -836,39 +1113,81 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
                   .number()
                   .int()
                   .optional()
-                  .describe('Upstream outcome measure count before outcomeLimit trimmed the list.'),
+                  .describe('Upstream outcome measure count, before the bounds trimmed the list.'),
                 outcomeLimit: z
                   .number()
                   .int()
                   .optional()
                   .describe(
-                    'Echo of the outcomeLimit input — present only when the cap trimmed the list.',
+                    'Echo of the outcomeLimit input — present only when the cap cut measures off the end of the window.',
+                  ),
+                outcomeOffset: z
+                  .number()
+                  .int()
+                  .optional()
+                  .describe(
+                    'Echo of the outcomeOffset input — present only when it skipped measures before the window.',
+                  ),
+                nextOutcomeOffset: z
+                  .number()
+                  .int()
+                  .optional()
+                  .describe(
+                    'The outcomeOffset to request next for this study — present only when measures remain past the window. Absent means this study’s outcome list is exhausted.',
                   ),
                 totalSeriousEvents: z
                   .number()
                   .int()
                   .optional()
                   .describe(
-                    'Upstream serious adverse event count before adverseEventLimit trimmed the list.',
+                    'Upstream serious adverse event count, before the bounds trimmed the list.',
                   ),
                 totalOtherEvents: z
                   .number()
                   .int()
                   .optional()
                   .describe(
-                    'Upstream other adverse event count before adverseEventLimit trimmed the list.',
+                    'Upstream other adverse event count, before the bounds trimmed the list.',
                   ),
                 adverseEventLimit: z
                   .number()
                   .int()
                   .optional()
                   .describe(
-                    'Echo of the adverseEventLimit input — present only when the cap trimmed a list.',
+                    'Echo of the adverseEventLimit input — present only when the cap cut events off the end of a window. Which list it cut is named by that list’s own next offset.',
+                  ),
+                seriousEventOffset: z
+                  .number()
+                  .int()
+                  .optional()
+                  .describe(
+                    'Echo of the seriousEventOffset input — present only when it skipped events before the window.',
+                  ),
+                nextSeriousEventOffset: z
+                  .number()
+                  .int()
+                  .optional()
+                  .describe(
+                    'The seriousEventOffset to request next for this study — present only when serious events remain past the window. Absent means this study’s serious event list is exhausted.',
+                  ),
+                otherEventOffset: z
+                  .number()
+                  .int()
+                  .optional()
+                  .describe(
+                    'Echo of the otherEventOffset input — present only when it skipped events before the window.',
+                  ),
+                nextOtherEventOffset: z
+                  .number()
+                  .int()
+                  .optional()
+                  .describe(
+                    'The otherEventOffset to request next for this study — present only when other events remain past the window. Absent means this study’s other event list is exhausted.',
                   ),
               })
               .optional()
               .describe(
-                'What a cap trimmed on this study — present only when a cap actually reduced a list. Absent means the payload is the complete upstream set for the requested sections.',
+                'What the outcomeLimit / adverseEventLimit caps and the outcomeOffset / seriousEventOffset / otherEventOffset offsets trimmed on this study, plus the next offset for each list left short. Present only when a bound actually reduced a list — a window that started at zero and reached the end trimmed nothing. Absent means the payload is the complete upstream set for the requested sections. Offsets apply uniformly to every study in the call, so continuation is reported per study: each exhausts its lists at a different index.',
               ),
           })
           .describe('Extracted results for one study.'),
@@ -893,12 +1212,17 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       .boolean()
       .optional()
       .describe(
-        'True when a cap trimmed a list on at least one study; absent when nothing was trimmed, matching filtersApplied one level down. Which study and which list is named in that study’s filtersApplied.',
+        'True when a bound — a cap or an offset — trimmed a list on at least one study; absent when nothing was trimmed, matching filtersApplied one level down. Which study, which list, and where to resume is named in that study’s filtersApplied.',
       ),
   }),
 
   async handler(input, ctx) {
-    const nctIds = toArray(input.nctIds);
+    // Deduplicated on the requested ID, first occurrence winning: the same ID
+    // twice named one study once, and answering it with two byte-identical
+    // entries spent the caller's payload on a copy. An alias and its own
+    // canonical ID stay distinct here — they are different requested IDs, and
+    // each gets its own entry even though upstream returns one record.
+    const nctIds = [...new Set(toArray(input.nctIds))];
     const requestedSections = input.sections
       ? Array.isArray(input.sections)
         ? input.sections
@@ -921,9 +1245,33 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     }
     const sections: Section[] = requestedSections ?? [...VALID_SECTIONS];
 
+    // An offset the call cannot honor is answered, not swallowed. Summary mode
+    // condenses every measure rather than returning a window, and a section the
+    // caller filtered out has no list to start from — either way the caller
+    // asked to resume a list this call never bounds, and a silently ignored
+    // offset returns page one again while the caller believes they advanced.
+    for (const [param, section] of OFFSET_SECTIONS) {
+      if (input[param] == null) continue;
+      if (input.summary) {
+        throw ctx.fail(
+          'offset_not_applicable',
+          `Parameter '${param}' has no effect in summary mode, which returns a condensed projection of the whole '${section}' section rather than a bounded window of it.`,
+          { param, ...ctx.recoveryFor('offset_not_applicable') },
+        );
+      }
+      if (!sections.includes(section)) {
+        throw ctx.fail(
+          'offset_not_applicable',
+          `Parameter '${param}' bounds the '${section}' section, which this call's sections filter excludes.`,
+          { param, section, ...ctx.recoveryFor('offset_not_applicable') },
+        );
+      }
+    }
+
     interface StudyResult {
       adverseEvents?: Record<string, unknown>;
       baseline?: Record<string, unknown>;
+      canonicalNctId?: string;
       filtersApplied?: ResultsFilterMeta;
       hasResults: boolean;
       moreInfo?: Record<string, unknown>;
@@ -959,10 +1307,12 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       // against each one, returning a result nobody is waiting for. Rethrow so
       // the baseline RequestCancelled code reaches the transport intact.
       if (err instanceof McpError && err.code === JsonRpcErrorCode.RequestCancelled) throw err;
-      // The batch endpoint rejects the whole request if any single ID is
-      // malformed or nonexistent. Fall back to per-ID fetches so valid IDs
-      // still succeed and only failing IDs land in fetchErrors. Sequential
-      // to honor the service's rate limit (~1 req/sec).
+      // The batch endpoint rejects the whole request when a single ID is
+      // malformed — an ordinary nonexistent-but-well-formed ID is answered 200
+      // with the record simply absent, so only a format rejection reaches here.
+      // Fall back to per-ID fetches so valid IDs still succeed and only failing
+      // IDs land in fetchErrors. Sequential to honor the service's rate limit
+      // (~1 req/sec).
       const batchMessage = err instanceof Error ? err.message : String(err);
       ctx.log.warning('Batch fetch rejected; falling back to per-ID fetches', {
         count: nctIds.length,
@@ -980,11 +1330,18 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       }
     }
 
-    const studyMap = new Map(
-      fetched
-        .map((s) => [s.protocolSection?.identificationModule?.nctId, s])
-        .filter((e): e is [string, RawStudyShape] => e[0] != null),
-    );
+    // Keyed by every ID a study answers to, not just its canonical one. A
+    // previous (alias) NCT ID resolves upstream to the canonical record on both
+    // fetch paths — the batch endpoint rewrites it silently, the single-study
+    // endpoint 301-redirects — so a canonical-only map misses every requested
+    // alias and reports an existing study as not found (#127).
+    const studyMap = new Map<string, RawStudyShape>();
+    for (const study of fetched) {
+      const ids = study.protocolSection?.identificationModule;
+      for (const id of [ids?.nctId, ...(ids?.nctIdAliases ?? [])]) {
+        if (id != null) studyMap.set(id, study);
+      }
+    }
 
     for (const nctId of nctIds) {
       if (erroredIds.has(nctId)) continue;
@@ -996,18 +1353,25 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
 
       const title = study.protocolSection?.identificationModule?.briefTitle ?? 'Unknown';
       const hasResults = study.hasResults === true;
+      // Disclosed only when the two differ — the caller followed an older
+      // citation and needs to know which study actually answered.
+      const canonical = study.protocolSection?.identificationModule?.nctId;
+      const canonicalNctId = canonical != null && canonical !== nctId ? canonical : undefined;
+      const identity = { nctId, ...(canonicalNctId ? { canonicalNctId } : {}), title };
 
       if (!hasResults) {
         studiesWithoutResults.push(nctId);
-        results.push({ nctId, title, hasResults: false });
+        results.push({ ...identity, hasResults: false });
         continue;
       }
 
       const rs = study.resultsSection ?? {};
-      const entry: StudyResult = { nctId, title, hasResults: true };
-      // Caps are applied here, once, ahead of both the returned value and
-      // format() — a format()-side cap would leave structuredContent carrying
-      // rows the text channel never shows (#46).
+      const entry: StudyResult = { ...identity, hasResults: true };
+      // Bounds are applied here, once, ahead of both the returned value and
+      // format() — a format()-side bound would leave structuredContent carrying
+      // rows the text channel never shows (#46). The same offsets apply to every
+      // study in the call; each study's own continuation lives in its
+      // filtersApplied, since each exhausts its lists at a different index.
       const meta: ResultsFilterMeta = {};
       for (const section of sections) {
         const moduleKey = SECTION_MAP[section];
@@ -1017,7 +1381,11 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
             const measures = (data.outcomeMeasures as Record<string, unknown>[] | undefined) ?? [];
             entry.outcomes = input.summary
               ? measures.map(summarizeOutcome)
-              : capOutcomes(measures, input.outcomeLimit, meta);
+              : capOutcomes(
+                  measures,
+                  { limit: input.outcomeLimit, offset: input.outcomeOffset },
+                  meta,
+                );
           } else if (input.summary) {
             if (section === 'adverseEvents') entry.adverseEvents = summarizeAdverseEvents(data);
             else if (section === 'participantFlow')
@@ -1025,7 +1393,12 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
             else if (section === 'baseline') entry.baseline = summarizeBaseline(data);
             else if (section === 'moreInfo') entry.moreInfo = summarizeMoreInfo(data);
           } else if (section === 'adverseEvents') {
-            entry.adverseEvents = capAdverseEvents(data, input.adverseEventLimit, meta);
+            entry.adverseEvents = capAdverseEvents(
+              data,
+              { limit: input.adverseEventLimit, offset: input.seriousEventOffset },
+              { limit: input.adverseEventLimit, offset: input.otherEventOffset },
+              meta,
+            );
           } else {
             entry[section] = data;
           }
@@ -1036,7 +1409,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     }
 
     // Batch-level roll-up of the per-study filtersApplied, which is only ever
-    // set when a cap actually trimmed. A caller reading one boolean learns
+    // set when a bound actually trimmed. A caller reading one boolean learns
     // whether any list is short before walking every study to find out.
     const truncated = results.some((r) => r.filtersApplied !== undefined);
 
@@ -1059,7 +1432,10 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     const lines: string[] = [];
 
     for (const r of result.results) {
-      lines.push(`## ${r.nctId}: ${r.title}`);
+      // The requested ID leads — it is what the caller asked for — with the
+      // canonical ID named beside it when following an alias landed elsewhere.
+      const id = r.canonicalNctId ? `${r.nctId} (canonical ${r.canonicalNctId})` : r.nctId;
+      lines.push(`## ${id}: ${r.title}`);
       if (!r.hasResults) {
         lines.push('No results available.\n');
         continue;
@@ -1080,10 +1456,10 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       lines.push(
         `Fetch errors: ${result.fetchErrors.map((e) => `${e.nctId}: ${e.error}`).join(', ')}`,
       );
-    // The per-study cap lines above say which list was trimmed; this says a trim
-    // happened at all, so a reader who skimmed the studies still sees it.
+    // The per-study bound lines above say which list was trimmed; this says a
+    // trim happened at all, so a reader who skimmed the studies still sees it.
     if (result.truncated)
-      lines.push('Truncated: a cap trimmed at least one list. See filtersApplied per study.');
+      lines.push('Truncated: a bound trimmed at least one list. See filtersApplied per study.');
     return [{ type: 'text', text: lines.join('\n') }];
   },
 });

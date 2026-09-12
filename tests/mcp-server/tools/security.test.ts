@@ -248,6 +248,38 @@ describe('getStudyResults — injection and output safety', () => {
     const ids = Array.from({ length: 25 }, (_, i) => `NCT${String(i).padStart(8, '0')}`);
     expect(() => getStudyResults.input!.parse({ nctIds: ids })).toThrow();
   });
+
+  it.each(['outcomeOffset', 'seriousEventOffset', 'otherEventOffset'])(
+    'rejects a non-integer, negative, or non-finite %s',
+    (param) => {
+      for (const bad of [-1, 1.5, '2', Number.NaN, Number.POSITIVE_INFINITY]) {
+        expect(() =>
+          getStudyResults.input!.parse({ nctIds: 'NCT12345678', [param]: bad }),
+        ).toThrow();
+      }
+    },
+  );
+
+  it('renders a bounded window and an alias resolution without leaking env var names', () => {
+    const formatted = getStudyResults.format!({
+      results: [
+        {
+          nctId: 'NCT12345678',
+          canonicalNctId: 'NCT87654321',
+          title: 'Test',
+          hasResults: true,
+          filtersApplied: {
+            totalOutcomes: 40,
+            outcomeLimit: 5,
+            outcomeOffset: 10,
+            nextOutcomeOffset: 15,
+          },
+        },
+      ],
+      truncated: true,
+    });
+    assertNoSecretLeak(formatted);
+  });
 });
 
 // ---------------------------------------------------------------------------

@@ -185,6 +185,27 @@ toolContractSuite(getStudyResults, {
         expect(structured.results[0]?.hasResults).toBe(true);
       },
     },
+    {
+      // The fixture carries 10 outcome measures, so this window sits mid-list
+      // and every continuation field has to survive the output-schema parse.
+      name: 'reports the next offset for a bounded outcome window',
+      input: { nctIds: 'NCT03722472', sections: 'outcomes', outcomeLimit: 3, outcomeOffset: 3 },
+      async assert(result) {
+        const structured = result.structuredContent as {
+          results: { filtersApplied?: Record<string, number>; outcomes?: unknown[] }[];
+          truncated?: boolean;
+        };
+        expect(structured.results[0]?.outcomes).toHaveLength(3);
+        expect(structured.results[0]?.filtersApplied).toMatchObject({
+          totalOutcomes: 10,
+          outcomeLimit: 3,
+          outcomeOffset: 3,
+          nextOutcomeOffset: 6,
+        });
+        expect(structured.truncated).toBe(true);
+        expect(JSON.stringify(result.content)).toContain('next outcomeOffset 6');
+      },
+    },
   ],
   errors: [
     {
@@ -192,6 +213,18 @@ toolContractSuite(getStudyResults, {
       input: { nctIds: [] },
       code: JsonRpcErrorCode.ValidationError,
       reason: 'blank_value',
+    },
+    {
+      name: 'rejects an offset the requested sections exclude',
+      input: { nctIds: 'NCT03722472', sections: 'baseline', outcomeOffset: 2 },
+      code: JsonRpcErrorCode.ValidationError,
+      reason: 'offset_not_applicable',
+    },
+    {
+      name: 'rejects an offset in summary mode',
+      input: { nctIds: 'NCT03722472', summary: true, seriousEventOffset: 2 },
+      code: JsonRpcErrorCode.ValidationError,
+      reason: 'offset_not_applicable',
     },
   ],
 });

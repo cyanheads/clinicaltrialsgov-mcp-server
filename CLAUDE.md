@@ -1,7 +1,7 @@
 # Agent Protocol
 
 **Server:** clinicaltrialsgov-mcp-server
-**Version:** 2.9.5
+**Version:** 2.9.6
 **Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.12.8`
 **Engines:** Bun ≥1.3.0, Node ≥24.0.0
 

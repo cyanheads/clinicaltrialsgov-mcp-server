@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.9.6](changelog/2.9.x/2.9.6.md) — 2026-09-12
+
+Fixes numeric/date/string field-value stats, get_field_definitions argument validation, and ID-aware search notices; adds document download URLs on get_study_record.
+
 ## [2.9.5](changelog/2.9.x/2.9.5.md) — 2026-09-12
 
 clinicaltrials_search_studies validates geoFilter before querying, distinguishes exhausted pagination from no matches, and fixes phase-filter grouping and field-parity gaps; find_eligible's location query is AND-joined with quoting instead of comma-joined.

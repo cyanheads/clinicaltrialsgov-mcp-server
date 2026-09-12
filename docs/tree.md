@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-08-18 16:03:28
+Generated on: 2026-09-12 18:09:20
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -127,6 +127,8 @@ clinicaltrialsgov-mcp-server/
 │   │   │   └── server-json.md
 │   │   └── SKILL.md
 │   ├── release-and-publish/
+│   │   └── SKILL.md
+│   ├── release-pr-review/
 │   │   └── SKILL.md
 │   ├── report-issue-framework/
 │   │   └── SKILL.md

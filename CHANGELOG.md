@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.9.4](changelog/2.9.x/2.9.4.md) — 2026-09-12
+
+clinicaltrials_get_study_results stops mislabeling missing values, keeps summary stats attributable to their class/category, disambiguates arms after group-title truncation, resolves alias NCT IDs, and gains offset-based pagination for capped lists
+
 ## [2.9.3](changelog/2.9.x/2.9.3.md) — 2026-09-02 · 🛡️ Security
 
 A cancelled caller surfaces RequestCancelled instead of being retried or walked one ID at a time; mcp-ts-core ^0.12.5 classifies upstream 500/501 as ServiceUnavailable and closes an SSRF DNS-guard bypass

@@ -137,7 +137,7 @@ describe('findEligible', () => {
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
-        expect.objectContaining({ queryLocn: 'Seattle, Washington, United States' }),
+        expect.objectContaining({ queryLocn: 'Seattle AND Washington AND "United States"' }),
         ctx,
       );
     });
@@ -154,7 +154,7 @@ describe('findEligible', () => {
       );
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
-        expect.objectContaining({ queryLocn: 'United States' }),
+        expect.objectContaining({ queryLocn: '"United States"' }),
         ctx,
       );
     });
@@ -339,7 +339,7 @@ describe('findEligible', () => {
       // caller can reproduce the full match set via clinicaltrials_search_studies.
       expect(enrichment.searchCriteria).toEqual({
         conditions: ['Type 2 Diabetes'],
-        location: 'Seattle, Washington, United States',
+        location: 'Seattle AND Washington AND "United States"',
         age: 30,
         sex: 'ALL',
         conditionQuery: '"Type 2 Diabetes"',
@@ -524,13 +524,106 @@ describe('findEligible', () => {
         ),
       ).resolves.toBeDefined();
       expect(mockService.searchStudies).toHaveBeenCalledWith(
-        expect.objectContaining({ queryLocn: 'United States' }),
+        expect.objectContaining({ queryLocn: '"United States"' }),
         ctx,
       );
     });
 
     it('declares the blank_value reason on the tool contract', () => {
       expect(findEligible.errors?.map((e) => e.reason)).toContain('blank_value');
+    });
+  });
+
+  // A comma-joined location reaches upstream as loose tokens, so a study that
+  // lists exactly the requested site can score zero — the tool then reports no
+  // trials in a location that has them, and tells the patient to remove it.
+  describe('location query composition (#118)', () => {
+    /** The queryLocn of every searchStudies call the handler made, in order. */
+    const locationArgs = () =>
+      mockService.searchStudies.mock.calls.map(
+        (call) => (call[0] as { queryLocn?: string }).queryLocn,
+      );
+
+    const runWithLocation = async (location: Record<string, string>) => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await findEligible.handler(findEligible.input!.parse({ ...baseInput, location }), ctx);
+      return ctx;
+    };
+
+    it('quotes each multiword component and joins with AND', async () => {
+      await runWithLocation({
+        country: 'United States',
+        state: 'New York',
+        city: 'East Northport',
+      });
+      expect(locationArgs()).toContain('"East Northport" AND "New York" AND "United States"');
+    });
+
+    it('sends the identical expression to the main search and the location-stage funnel', async () => {
+      // A funnel counting a different expression than the search returns is a
+      // diagnostic that contradicts the result it is supposed to explain.
+      await runWithLocation({
+        country: 'United States',
+        state: 'New York',
+        city: 'East Northport',
+      });
+      const supplied = locationArgs().filter((locn) => locn !== undefined);
+      // Main search + location-stage funnel; the condition-only stage sends none.
+      expect(supplied).toHaveLength(2);
+      expect(new Set(supplied)).toEqual(
+        new Set(['"East Northport" AND "New York" AND "United States"']),
+      );
+    });
+
+    it('echoes the corrected expression as searchCriteria.location', async () => {
+      const ctx = await runWithLocation({
+        country: 'United States',
+        state: 'New York',
+        city: 'East Northport',
+      });
+      const sc = getEnrichment(ctx).searchCriteria as Record<string, unknown>;
+      expect(sc.location).toBe('"East Northport" AND "New York" AND "United States"');
+    });
+
+    it('leaves an all-single-word location unquoted, AND-joined', async () => {
+      await runWithLocation({ country: 'Canada', state: 'Ontario', city: 'Toronto' });
+      expect(locationArgs()).toContain('Toronto AND Ontario AND Canada');
+    });
+
+    it('quotes a lone multiword country', async () => {
+      await runWithLocation({ country: 'United States' });
+      expect(locationArgs()).toContain('"United States"');
+    });
+
+    it('leaves a lone single-word country bare', async () => {
+      await runWithLocation({ country: 'Canada' });
+      expect(locationArgs()).toContain('Canada');
+    });
+
+    it('strips an embedded double quote instead of letting it split the phrase', async () => {
+      // Upstream has no working escape for a `"` inside a quoted phrase — an
+      // unescaped one silently reparses into a plausible but wrong result set.
+      await runWithLocation({
+        country: 'United States',
+        state: 'New York',
+        city: 'East "Northport" City',
+      });
+      expect(locationArgs()).toContain('"East Northport City" AND "New York" AND "United States"');
+    });
+
+    it('renders the corrected expression in the content[] reproduce trailer', () => {
+      // The trailer is the content[]-only caller's copy of the replay query —
+      // it must carry the same expression the search actually ran.
+      const text = findEligible.enrichmentTrailer!.searchCriteria!.render!({
+        conditions: ['Type 2 Diabetes'],
+        location: '"East Northport" AND "New York" AND "United States"',
+        age: 60,
+        sex: 'MALE',
+        conditionQuery: '"Type 2 Diabetes"',
+        statusFilter: ['RECRUITING'],
+      });
+      expect(text).toContain('locationQuery="East Northport" AND "New York" AND "United States"');
     });
   });
 
@@ -717,7 +810,7 @@ describe('findEligible', () => {
       // sub-field VALUE must render here, or it reaches structuredContent only.
       const text = findEligible.enrichmentTrailer!.searchCriteria!.render!({
         conditions: ['Type 2 Diabetes'],
-        location: 'Seattle, Washington, United States',
+        location: 'Seattle AND Washington AND "United States"',
         age: 30,
         sex: 'ALL',
         conditionQuery: '"Type 2 Diabetes"',
@@ -729,7 +822,7 @@ describe('findEligible', () => {
       expect(text).toContain('conditionQuery="Type 2 Diabetes"');
       // location is an applied upstream filter (queryLocn) — it must ride in the
       // reproduce set, else a caller replays a broader, all-locations query (#91-C).
-      expect(text).toContain('locationQuery=Seattle, Washington, United States');
+      expect(text).toContain('locationQuery=Seattle AND Washington AND "United States"');
       expect(text).toContain('statusFilter=[RECRUITING]');
       expect(text).toContain(
         'advancedFilter=(AREA[MinimumAge]RANGE[MIN, 30 years] OR AREA[MinimumAge]MISSING) AND (AREA[MaximumAge]RANGE[30 years, MAX] OR AREA[MaximumAge]MISSING)',

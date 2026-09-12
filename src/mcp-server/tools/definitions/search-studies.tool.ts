@@ -11,6 +11,7 @@ import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/ty
 import { nctIdSchema } from '../utils/_schemas.js';
 import { formatRemainingStudyFields } from '../utils/format-helpers.js';
 import {
+  describeGeoFilterRejection,
   haversineMi,
   type LocationWithDistance,
   parseGeoFilterCenter,
@@ -26,16 +27,35 @@ import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 const { maxPageSize } = getServerConfig();
 
-/** Dot-notation prefixes already rendered by the search formatter. */
+/**
+ * Dot-notation prefixes already rendered by the search formatter, named at the
+ * leaf the dedicated renderers actually emit.
+ *
+ * Excluding a whole subtree here drops every leaf under it from the field-dump
+ * fallback, so a subtree the renderers cover only partly lost the rest —
+ * `enrollmentInfo.type`, `leadSponsor.class`, `locations[].zip` and
+ * `locations[].contacts[]` survived in structuredContent but never reached
+ * content[], even when the caller named them in `fields`. Leaf-level prefixes
+ * route everything the renderers skip back through the shared fallback, which
+ * already carries the array-entry attribution and label widening those leaves
+ * need. Array indices sit outside the dotted path, so one entry here covers
+ * every entry of `locations[]`.
+ */
 const SEARCH_RENDERED = new Set([
   'protocolSection.identificationModule.nctId',
   'protocolSection.identificationModule.briefTitle',
   'protocolSection.statusModule.overallStatus',
   'protocolSection.designModule.phases',
-  'protocolSection.designModule.enrollmentInfo',
-  'protocolSection.sponsorCollaboratorsModule.leadSponsor',
+  'protocolSection.designModule.enrollmentInfo.count',
+  'protocolSection.sponsorCollaboratorsModule.leadSponsor.name',
   'protocolSection.conditionsModule.conditions',
-  'protocolSection.contactsLocationsModule.locations',
+  'protocolSection.contactsLocationsModule.locations.facility',
+  'protocolSection.contactsLocationsModule.locations.city',
+  'protocolSection.contactsLocationsModule.locations.state',
+  'protocolSection.contactsLocationsModule.locations.country',
+  'protocolSection.contactsLocationsModule.locations.status',
+  'protocolSection.contactsLocationsModule.locations.geoPoint',
+  'protocolSection.contactsLocationsModule.locations.distanceMi',
 ]);
 
 /**
@@ -194,12 +214,13 @@ function renderIndexEntry(entry: StudyIndexEntry): string[] {
 }
 
 /**
- * Render every site in a requested-`fields` study. The field-dump fallback dedups
- * object-array leaves by label (so it would collapse `locations[]` to the lead
- * site) and SEARCH_RENDERED suppresses the `locations` subtree from it — a
- * dedicated loop is the only way sites 2..N reach content[]. Carries every typed
- * StudyLocation leaf (place, status, distance, geoPoint) so any requested
- * location field has channel parity. Mirrors get-study's Locations loop.
+ * Render the place, status and distance of every site in a requested-`fields`
+ * study. The field-dump fallback dedups object-array leaves by label (so it
+ * would collapse these to the lead site), which is why the loop is dedicated;
+ * the leaves it emits are the ones SEARCH_RENDERED suppresses. Every other
+ * location leaf — `zip`, `contacts[]`, anything upstream adds — flows through
+ * the fallback, which attributes it to its own site. Mirrors get-study's
+ * Locations loop.
  */
 function renderSiteLines(locations: LocationWithDistance[]): string[] {
   const lines = [`  Locations (${locations.length}):`];
@@ -383,7 +404,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        `Geographic proximity filter. Format: distance(lat,lon,radius), where radius carries a \`mi\` or \`km\` suffix — e.g. "distance(47.6062,-122.3321,50mi)" for studies within 50 miles of Seattle. Always include the suffix: a bare radius is accepted upstream but interpreted as meters, which silently matches almost nothing. When set, each study's locations are re-sorted by proximity to the center so the nearest matched site leads, annotated with its distance in miles; the full location list is preserved.`,
+        `Geographic proximity filter. Format: distance(lat,lon,radius), where radius carries a \`mi\` or \`km\` suffix — e.g. "distance(47.6062,-122.3321,50mi)" for studies within 50 miles of Seattle. The suffix is required: a radius with no unit is rejected, as are a non-positive radius, a latitude outside [-90, 90], and a longitude outside [-180, 180]. When set, each study's locations are re-sorted by proximity to the center so the nearest matched site leads, annotated with its distance in miles; the full location list is preserved.`,
       ),
     nctIds: z
       .union([
@@ -448,6 +469,12 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .describe(
         'Echo of the explicit fields parameter — present only when the caller passed fields. Signals that studies carry the requested leaves at full fidelity (not the default compact index) and that the rendered truncation cap is lifted so all of them appear.',
       ),
+    pageExhausted: z
+      .boolean()
+      .optional()
+      .describe(
+        'True when this call supplied a pageToken and the continuation page came back empty — the walk is finished and no further pages exist. Absent on every other response, including an empty first page, which is an unmatched search rather than exhausted pagination.',
+      ),
   }),
 
   // Agent-facing context — query echo and empty-result guidance, disjoint from output.
@@ -462,7 +489,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        'Recovery guidance when no studies matched — echoes the constraint and suggests how to broaden. Absent on pages with results.',
+        'Recovery guidance when no studies matched — echoes the constraint and suggests how to broaden. Absent on pages with results, and on an exhausted continuation page, where the cohort already matched and there is nothing to broaden.',
       ),
   },
 
@@ -507,6 +534,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         advancedFilter: input.advancedFilter,
         geoFilter: input.geoFilter,
         sort: input.sort,
+        pageToken: input.pageToken,
       }) ??
       firstBlankListParam({ fields: input.fields, statusFilter, phaseFilter, nctIds: filterIds });
     if (blankParam) {
@@ -514,6 +542,22 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         param: blankParam,
         ...ctx.recoveryFor('blank_value'),
       });
+    }
+
+    // Validate the geo expression before spending a round trip on it.
+    // ClinicalTrials.gov answers a unit-less radius with an empty 200 (read as
+    // metres), a zero radius with a 500 through the whole retry budget, and an
+    // out-of-range coordinate with an unclassifiable 400 — so three ordinary
+    // input mistakes reached the caller as an empty cohort, a service outage,
+    // and a reason-less validation error respectively. Handler-level, like the
+    // blank check above: a schema-level constraint is classified InvalidParams
+    // before the handler runs, where the declared geo_invalid contract and its
+    // recovery hint are unreachable.
+    if (input.geoFilter) {
+      const geoRejection = describeGeoFilterRejection(input.geoFilter);
+      if (geoRejection) {
+        throw ctx.fail('geo_invalid', geoRejection, ctx.recoveryFor('geo_invalid'));
+      }
     }
 
     // An ID-targeted lookup must never silently filter the caller's selection,
@@ -582,8 +626,17 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     if (!includeUnknownEnrollment) criteria.sentinelFilterActive = true;
     if (Object.keys(criteria).length > 0) ctx.enrich({ searchCriteria: criteria });
 
-    // Recovery guidance only when nothing matched.
-    if (result.studies.length === 0) {
+    // An empty continuation page is pagination finishing, not a search failing.
+    // Upstream offers nothing to tell the two apart — an exhausted page carries
+    // neither totalCount nor nextPageToken — so whether this call itself
+    // supplied a cursor is the only available signal, and no look-ahead request
+    // or cross-call state is needed to read it.
+    const pageExhausted = input.pageToken !== undefined && result.studies.length === 0;
+
+    // Recovery guidance only when nothing matched. Withheld on an exhausted
+    // continuation: that cohort already matched on earlier pages, so telling
+    // the caller to broaden the query misreads finished pagination as failure.
+    if (result.studies.length === 0 && !pageExhausted) {
       const hasQuery =
         input.query ||
         input.conditionQuery ||
@@ -643,18 +696,33 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       studies,
       ...(nextPageToken !== undefined && !exhausted ? { nextPageToken } : {}),
       ...(input.fields?.length ? { requestedFields: input.fields } : {}),
+      ...(pageExhausted ? { pageExhausted } : {}),
     };
   },
 
   format: (result) => {
     const lines: string[] = [];
     const count = result.studies.length;
-    if (count === 0) {
+    // What kind of page this is and how many studies it holds are separate
+    // lines, not one if/else chain. A finished walk and an unmatched search are
+    // different answers, so the exhaustion line replaces the no-match line
+    // rather than joining it — an exhausted page is always empty, so only one
+    // of the two ever fires. Keeping the count out of that chain is also what
+    // lets the definition linter's synthetic sample reach both pageExhausted
+    // and totalCount and confirm each one renders.
+    if (result.pageExhausted) {
+      lines.push(
+        'This continuation page is past the end of the results — the previous page was the last one carrying studies, and no further pages exist.',
+      );
+    } else if (count === 0) {
       lines.push('No studies matched the search criteria.');
-    } else if (result.totalCount !== undefined) {
-      lines.push(`Found ${count} studies (${result.totalCount} total matching)`);
-    } else {
-      lines.push(`Found ${count} studies`);
+    }
+    if (count > 0) {
+      lines.push(
+        result.totalCount === undefined
+          ? `Found ${count} studies`
+          : `Found ${count} studies (${result.totalCount} total matching)`,
+      );
     }
     if (result.requestedFields?.length) {
       lines.push(`Requested fields: ${result.requestedFields.join(', ')}`);

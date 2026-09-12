@@ -21,7 +21,7 @@ export const RECOVERY_HINTS = {
   query_parse_error:
     'Field-scoped search uses AREA[FieldName]value, which works in the free-text fields (query, conditionQuery, etc.) as well as in advancedFilter — call clinicaltrials_get_field_definitions to look up the right FieldName. A `[` or `]` outside an AREA[…] / RANGE[…] expression fails; `( )` group sub-expressions and are safe when matched; `,` acts as AND. Free-text fields otherwise take plain words plus AND, OR, NOT.',
   geo_invalid:
-    'Build geoFilter as distance(lat,lon,radius) with a `mi` or `km` suffix on the radius, e.g. distance(47.6062,-122.3321,50mi) — a bare radius is read as meters. Look up the city coordinates first.',
+    'Build geoFilter as distance(lat,lon,radius) with a `mi` or `km` suffix on the radius, e.g. distance(47.6062,-122.3321,50mi) — a bare radius is rejected, since upstream would read it as meters. Keep latitude within [-90, 90], longitude within [-180, 180], and the radius above 0. Look up the city coordinates first.',
   sort_invalid:
     'Set sort to FieldName:asc or FieldName:desc, e.g. LastUpdatePostDate:desc — at most 2 fields, comma-separated. Call clinicaltrials_get_field_definitions to confirm the PascalCase field name.',
   path_not_found:

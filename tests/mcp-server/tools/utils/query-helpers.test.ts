@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import {
   blankValueMessage,
   buildAdvancedFilter,
+  quoteQueryTerm,
   toArray,
 } from '@/mcp-server/tools/utils/query-helpers.js';
 
@@ -82,14 +83,88 @@ describe('buildAdvancedFilter', () => {
 
   it('combines phase filter with advancedFilter using AND', () => {
     expect(buildAdvancedFilter(['PHASE3'], 'AREA[StudyType]INTERVENTIONAL')).toBe(
-      'AREA[Phase]PHASE3 AND AREA[StudyType]INTERVENTIONAL',
+      'AREA[Phase]PHASE3 AND (AREA[StudyType]INTERVENTIONAL)',
     );
   });
 
   it('combines multi-phase filter with advancedFilter', () => {
     expect(buildAdvancedFilter(['PHASE1', 'PHASE2'], 'AREA[StudyType]INTERVENTIONAL')).toBe(
-      '(AREA[Phase]PHASE1 OR AREA[Phase]PHASE2) AND AREA[StudyType]INTERVENTIONAL',
+      '(AREA[Phase]PHASE1 OR AREA[Phase]PHASE2) AND (AREA[StudyType]INTERVENTIONAL)',
     );
+  });
+
+  // Essie applies no precedence rule that scopes a trailing OR back under a
+  // preceding AND, so an ungrouped caller expression let the OR branch escape
+  // the phase constraint entirely — a PHASE3 search returning phase-less
+  // observational studies (#117).
+  it('groups an OR-carrying advancedFilter under the phase constraint (#117)', () => {
+    expect(
+      buildAdvancedFilter(
+        ['PHASE3'],
+        'AREA[StudyType]INTERVENTIONAL OR AREA[StudyType]OBSERVATIONAL',
+      ),
+    ).toBe('AREA[Phase]PHASE3 AND (AREA[StudyType]INTERVENTIONAL OR AREA[StudyType]OBSERVATIONAL)');
+  });
+
+  it('groups an OR-carrying advancedFilter under a multi-phase constraint (#117)', () => {
+    expect(
+      buildAdvancedFilter(
+        ['PHASE3', 'PHASE4'],
+        'AREA[StudyType]INTERVENTIONAL OR AREA[StudyType]OBSERVATIONAL',
+      ),
+    ).toBe(
+      '(AREA[Phase]PHASE3 OR AREA[Phase]PHASE4) AND (AREA[StudyType]INTERVENTIONAL OR AREA[StudyType]OBSERVATIONAL)',
+    );
+  });
+
+  // Essie tolerates redundant nested parentheses, so the wrap is unconditional
+  // rather than conditional on detecting the caller's own grouping — a detector
+  // would have to reimplement the parser to know whether an outer `(` closes at
+  // the end of the expression or mid-way (#117).
+  it('wraps an already-parenthesized advancedFilter without corrupting it (#117)', () => {
+    expect(
+      buildAdvancedFilter(
+        ['PHASE3'],
+        '(AREA[StudyType]INTERVENTIONAL OR AREA[StudyType]OBSERVATIONAL)',
+      ),
+    ).toBe(
+      'AREA[Phase]PHASE3 AND ((AREA[StudyType]INTERVENTIONAL OR AREA[StudyType]OBSERVATIONAL))',
+    );
+  });
+
+  it('leaves an advancedFilter-only expression ungrouped (#117)', () => {
+    // No AND boundary exists to leak past, so the caller's expression reaches
+    // upstream exactly as written.
+    expect(
+      buildAdvancedFilter(
+        undefined,
+        'AREA[StudyType]INTERVENTIONAL OR AREA[StudyType]OBSERVATIONAL',
+      ),
+    ).toBe('AREA[StudyType]INTERVENTIONAL OR AREA[StudyType]OBSERVATIONAL');
+  });
+});
+
+describe('quoteQueryTerm (#118)', () => {
+  it('quotes a multiword term so it matches as a literal phrase', () => {
+    expect(quoteQueryTerm('East Northport')).toBe('"East Northport"');
+    expect(quoteQueryTerm('United States')).toBe('"United States"');
+  });
+
+  it('leaves a single-word term bare', () => {
+    expect(quoteQueryTerm('Toronto')).toBe('Toronto');
+    expect(quoteQueryTerm('Asthma')).toBe('Asthma');
+  });
+
+  // Upstream Essie has no working escape for a `"` inside a quoted phrase: an
+  // unescaped one silently reparses into a different query and a backslash-
+  // escaped one matches nothing. Stripping is the only safe handling.
+  it('strips an embedded double quote rather than escaping it', () => {
+    expect(quoteQueryTerm('East "Northport" City')).toBe('"East Northport City"');
+    expect(quoteQueryTerm('Sea"ttle')).toBe('Seattle');
+  });
+
+  it('quotes on any whitespace, not just a literal space', () => {
+    expect(quoteQueryTerm('New\tYork')).toBe('"New\tYork"');
   });
 });
 

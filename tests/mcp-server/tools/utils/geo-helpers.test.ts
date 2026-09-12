@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  describeGeoFilterRejection,
   EARTH_RADIUS_MI,
   haversineMi,
   parseGeoFilterCenter,
@@ -72,4 +73,101 @@ describe('parseGeoFilterCenter', () => {
     expect(parseGeoFilterCenter('distance(47.6062)')).toBeUndefined();
     expect(parseGeoFilterCenter('distance(,,50mi)')).toBeUndefined();
   });
+
+  // parseGeoFilterCenter is the re-ranking reader, not the validation gate: it
+  // must keep answering silently for anything it cannot read, so a shape the
+  // validator rejects still returns a center (or undefined) without throwing.
+  it('stays non-throwing for shapes the validator rejects (#123)', () => {
+    expect(parseGeoFilterCenter('distance(47.6,-122.9,50)')).toEqual({ lat: 47.6, lon: -122.9 });
+    expect(parseGeoFilterCenter('distance(147.6,-122.9,50mi)')).toEqual({
+      lat: 147.6,
+      lon: -122.9,
+    });
+  });
+});
+
+describe('describeGeoFilterRejection (#123)', () => {
+  const ACCEPTED = [
+    'distance(47.6,-122.9,50mi)',
+    'distance(47.6,-122.9,50km)',
+    'distance(47.6,-122.9,50.5mi)',
+    'distance(0,0,1km)',
+    'distance(-90,-180,0.5mi)',
+    'distance(90,180,12000km)',
+  ];
+
+  it.each(ACCEPTED)('accepts %s', (geoFilter) => {
+    expect(describeGeoFilterRejection(geoFilter)).toBeUndefined();
+  });
+
+  it('rejects surrounding whitespace — the value is forwarded as supplied and upstream rejects it too', () => {
+    expect(describeGeoFilterRejection('  distance(47.6,-122.9,50mi)  ')).toContain(
+      'Format must be distance(lat,lon,radius)',
+    );
+  });
+
+  // Upstream returns 200 for a unit-less radius and reads it as metres, so the
+  // caller gets an ordinary empty result for what is an input mistake.
+  it('rejects a bare radius with no unit', () => {
+    const message = describeGeoFilterRejection('distance(47.6,-122.9,50)');
+    expect(message).toContain("Invalid value for `geoFilter`: 'distance(47.6,-122.9,50)'");
+    expect(message).toContain('`mi` or `km` suffix');
+  });
+
+  it.each([
+    'distance(47.6,-122.9,0mi)',
+    'distance(47.6,-122.9,0km)',
+    'distance(47.6,-122.9,0.0mi)',
+  ])('rejects a zero radius (%s)', (geoFilter) => {
+    expect(describeGeoFilterRejection(geoFilter)).toContain('radius must be greater than 0');
+  });
+
+  it('rejects a negative radius', () => {
+    // The sign fails the shape before the positivity check, so this lands on
+    // the same format guidance upstream returns for it.
+    expect(describeGeoFilterRejection('distance(47.6,-122.9,-50mi)')).toContain(
+      'Format must be distance(lat,lon,radius)',
+    );
+  });
+
+  it.each(['distance(147.6,-122.9,50mi)', 'distance(-90.1,-122.9,50mi)'])(
+    'rejects a latitude outside [-90, 90] (%s)',
+    (geoFilter) => {
+      expect(describeGeoFilterRejection(geoFilter)).toContain(
+        'Latitude must be between -90 and 90',
+      );
+    },
+  );
+
+  it.each(['distance(47.6,-222.9,50mi)', 'distance(47.6,180.5,50mi)'])(
+    'rejects a longitude outside [-180, 180] (%s)',
+    (geoFilter) => {
+      expect(describeGeoFilterRejection(geoFilter)).toContain(
+        'Longitude must be between -180 and 180',
+      );
+    },
+  );
+
+  it.each([
+    'distance(47.6,-122.9,50MI)',
+    'distance(47.6,-122.9,50KM)',
+    'distance(47.6,-122.9,50Mi)',
+  ])('rejects a case-variant unit upstream also rejects (%s)', (geoFilter) => {
+    expect(describeGeoFilterRejection(geoFilter)).toContain(
+      'Format must be distance(lat,lon,radius)',
+    );
+  });
+
+  it('rejects internal whitespace, which upstream also rejects', () => {
+    expect(describeGeoFilterRejection('distance( 47.6 , -122.9 , 50mi )')).toContain(
+      'Format must be distance(lat,lon,radius)',
+    );
+  });
+
+  it.each(['Seattle, WA', 'distance(47.6062)', '50mi', 'distance(47.6,-122.9)'])(
+    'rejects a non-distance expression (%s)',
+    (geoFilter) => {
+      expect(describeGeoFilterRejection(geoFilter)).toContain('Invalid value for `geoFilter`');
+    },
+  );
 });

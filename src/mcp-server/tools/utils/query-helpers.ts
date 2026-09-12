@@ -72,19 +72,45 @@ export function blankValueMessage(param: string): string {
   return `Parameter '${param}' was supplied with a blank value — an empty or whitespace-only string, an empty list, or a list carrying a blank entry. Supply a value containing non-whitespace, or for a list at least one non-blank entry; omit the parameter entirely only if it is optional and you meant to leave it unset.`;
 }
 
-/** Build AREA[] phase filter and combine with user's advancedFilter. */
+/**
+ * Build the AREA[] phase filter and combine it with the caller's advancedFilter.
+ *
+ * The caller's expression is parenthesized as a unit before the AND join. Essie
+ * has no precedence rule that scopes a trailing `OR` back under a preceding
+ * `AND`, so an ungrouped operand let the OR branch escape the phase constraint
+ * entirely — a PHASE3 search answered with phase-less observational studies.
+ * The wrap is unconditional: Essie tolerates redundant nested parentheses, and
+ * deciding whether a caller's own leading `(` closes at the end of the
+ * expression or midway through it would mean reimplementing the parser.
+ *
+ * An advancedFilter with no phase expression alongside it is returned untouched
+ * — there is no AND boundary for its meaning to leak past.
+ */
 export function buildAdvancedFilter(
   phaseFilter?: string[],
   advancedFilter?: string,
 ): string | undefined {
-  const parts: string[] = [];
-  if (phaseFilter?.length) {
-    const expr =
-      phaseFilter.length === 1
-        ? `AREA[Phase]${phaseFilter[0]}`
-        : `(${phaseFilter.map((p) => `AREA[Phase]${p}`).join(' OR ')})`;
-    parts.push(expr);
-  }
-  if (advancedFilter) parts.push(advancedFilter);
-  return parts.length > 0 ? parts.join(' AND ') : undefined;
+  const phaseExpr = phaseFilter?.length
+    ? phaseFilter.length === 1
+      ? `AREA[Phase]${phaseFilter[0]}`
+      : `(${phaseFilter.map((p) => `AREA[Phase]${p}`).join(' OR ')})`
+    : undefined;
+  if (!advancedFilter) return phaseExpr;
+  return phaseExpr ? `${phaseExpr} AND (${advancedFilter})` : advancedFilter;
+}
+
+/**
+ * Render one structured term as an upstream query operand: quoted when it
+ * carries whitespace so it matches as a literal phrase, bare otherwise.
+ *
+ * An embedded `"` is stripped rather than escaped. Upstream Essie has no
+ * working escape for a literal quote inside a quoted phrase and does not fail
+ * on one — an unescaped `"` silently reparses into a different query that
+ * returns a plausible-looking wrong result set, and a backslash-escaped one
+ * matches nothing. Removing the character is the only handling that keeps the
+ * phrase intact.
+ */
+export function quoteQueryTerm(term: string): string {
+  const sanitized = term.replaceAll('"', '');
+  return /\s/.test(sanitized) ? `"${sanitized}"` : sanitized;
 }

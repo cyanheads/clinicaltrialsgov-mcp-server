@@ -143,6 +143,49 @@ describe('getStudyCount', () => {
       );
     });
 
+    it('groups a joined phaseFilter + advancedFilter so an OR cannot escape the phase (#117)', async () => {
+      // Ungrouped, Essie reads this as
+      // `(PHASE3 AND INTERVENTIONAL) OR OBSERVATIONAL` and the count swells
+      // with phase-less observational studies the caller never asked for.
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      await getStudyCount.handler(
+        getStudyCount.input!.parse({
+          phaseFilter: 'PHASE3',
+          advancedFilter: 'AREA[StudyType]INTERVENTIONAL OR AREA[StudyType]OBSERVATIONAL',
+        }),
+        ctx,
+      );
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filterAdvanced:
+            'AREA[Phase]PHASE3 AND (AREA[StudyType]INTERVENTIONAL OR AREA[StudyType]OBSERVATIONAL)',
+        }),
+        ctx,
+      );
+    });
+
+    it('groups a joined AND-only advancedFilter the same way (#117)', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      await getStudyCount.handler(
+        getStudyCount.input!.parse({
+          phaseFilter: ['PHASE1', 'PHASE2'],
+          advancedFilter: 'AREA[StudyType]INTERVENTIONAL',
+        }),
+        ctx,
+      );
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filterAdvanced:
+            '(AREA[Phase]PHASE1 OR AREA[Phase]PHASE2) AND (AREA[StudyType]INTERVENTIONAL)',
+        }),
+        ctx,
+      );
+    });
+
     it('forwards locationQuery, titleQuery, outcomeQuery to service (#59)', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 3 });
       const ctx = createMockContext({ errors: getStudyCount.errors });

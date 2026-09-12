@@ -21,6 +21,7 @@ import {
   nearestPieces,
   searchFields,
 } from './field-search.js';
+import { geoFilterShapeMessage } from './geo-filter-message.js';
 import type {
   FieldNode,
   FieldValueStats,
@@ -751,10 +752,10 @@ export class ClinicalTrialsService {
             // than echoing the upstream body.
             const geo = params['filter.geo'];
             if (geo && blamed('filter.geo')) {
-              throw validationError(
-                `Invalid value for \`geoFilter\`: '${geo}'. Format must be distance(lat,lon,radius) with a \`mi\` or \`km\` suffix on the radius — e.g. "distance(47.6062,-122.3321,50mi)". A bare radius is accepted upstream but read as meters, so it silently matches almost nothing.`,
-                { reason: 'geo_invalid', ...ctx.recoveryFor('geo_invalid') },
-              );
+              throw validationError(geoFilterShapeMessage(geo), {
+                reason: 'geo_invalid',
+                ...ctx.recoveryFor('geo_invalid'),
+              });
             }
             if (params.sort && blamed('sort')) {
               throw validationError(`Invalid value for \`sort\`: '${params.sort}'. ${SORT_SHAPE}`, {

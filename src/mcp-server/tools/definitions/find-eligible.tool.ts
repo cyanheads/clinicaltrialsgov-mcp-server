@@ -8,7 +8,12 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
 import { formatRemainingStudyFields } from '../utils/format-helpers.js';
-import { blankValueMessage, firstBlankListParam, firstBlankParam } from '../utils/query-helpers.js';
+import {
+  blankValueMessage,
+  firstBlankListParam,
+  firstBlankParam,
+  quoteQueryTerm,
+} from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 interface UserLocation {
@@ -331,7 +336,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         location: z
           .string()
           .describe(
-            'The exact queryLocn string sent upstream (city/state/country joined). Pass as locationQuery to clinicaltrials_search_studies to reproduce the location filter beyond the maxResults cap.',
+            'The exact queryLocn string sent upstream (city/state/country, multi-word components quoted, AND-joined). Pass as locationQuery to clinicaltrials_search_studies to reproduce the location filter beyond the maxResults cap.',
           ),
         age: z.number().describe('Patient age.'),
         sex: z.string().describe('Patient sex.'),
@@ -432,16 +437,20 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
 
     const service = getClinicalTrialsService();
 
-    const conditionQuery = input.conditions
-      .map((c) => (c.includes(' ') ? `"${c}"` : c))
-      .join(' OR ');
+    const conditionQuery = input.conditions.map(quoteQueryTerm).join(' OR ');
 
-    const locationParts = [
-      input.location.city,
-      input.location.state,
-      input.location.country,
-    ].filter(Boolean);
-    const locationQuery = locationParts.join(', ');
+    // Each component is preserved as a literal phrase and joined with an
+    // explicit AND. A comma-joined multiword location reached upstream as loose
+    // tokens and scored zero against studies that list exactly that site, so
+    // the tool reported no trials in a location that has them — and told the
+    // patient to drop the location. Quoting alone is not enough: the comma
+    // separator fails outright once components are quoted. One string feeds the
+    // main search, the location-stage funnel count, and the searchCriteria
+    // echo, so they cannot diverge.
+    const locationQuery = [input.location.city, input.location.state, input.location.country]
+      .filter((part): part is string => Boolean(part))
+      .map(quoteQueryTerm)
+      .join(' AND ');
 
     const statusFilter = input.recruitingOnly ? ['RECRUITING'] : undefined;
 

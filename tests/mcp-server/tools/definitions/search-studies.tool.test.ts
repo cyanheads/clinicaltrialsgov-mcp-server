@@ -17,6 +17,7 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
 
 import { searchStudies } from '@/mcp-server/tools/definitions/search-studies.tool.js';
 import { haversineMi } from '@/mcp-server/tools/utils/geo-helpers.js';
+import { missingLeaves } from '../../../helpers/format-parity.js';
 
 describe('searchStudies', () => {
   const mockService = { searchStudies: vi.fn() };
@@ -188,7 +189,29 @@ describe('searchStudies', () => {
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
         expect.objectContaining({
-          filterAdvanced: 'AREA[Phase]PHASE3 AND AREA[StudyType]INTERVENTIONAL',
+          filterAdvanced: 'AREA[Phase]PHASE3 AND (AREA[StudyType]INTERVENTIONAL)',
+        }),
+        ctx,
+      );
+    });
+
+    it('groups an OR-carrying advancedFilter under the phase constraint (#117)', async () => {
+      // Ungrouped, the trailing OR branch escapes the AND boundary and the
+      // search returns studies with no phase at all.
+      mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(
+        searchStudies.input!.parse({
+          phaseFilter: 'PHASE3',
+          advancedFilter: 'AREA[StudyType]INTERVENTIONAL OR AREA[StudyType]OBSERVATIONAL',
+        }),
+        ctx,
+      );
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          filterAdvanced:
+            'AREA[Phase]PHASE3 AND (AREA[StudyType]INTERVENTIONAL OR AREA[StudyType]OBSERVATIONAL)',
         }),
         ctx,
       );
@@ -564,6 +587,87 @@ describe('searchStudies', () => {
     });
   });
 
+  // An empty continuation page is pagination finishing, not a search failing.
+  // Upstream gives nothing to tell them apart — an exhausted page carries
+  // neither totalCount nor nextPageToken — so the call's own input is the only
+  // signal, and both channels have to carry the distinction.
+  describe('exhausted continuation pages (#122)', () => {
+    const renderText = (result: Parameters<NonNullable<typeof searchStudies.format>>[0]) =>
+      (searchStudies.format!(result)[0] as { text: string }).text;
+
+    it('flags an empty continuation page on both channels', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: undefined });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({
+          nctIds: ['NCT03722472', 'NCT06323538'],
+          fields: ['NCTId'],
+          pageSize: 1,
+          pageToken: 'tok_page3',
+        }),
+        ctx,
+      );
+
+      expect(result.pageExhausted).toBe(true);
+      const text = renderText(result);
+      expect(text).not.toContain('No studies matched the search criteria.');
+      expect(text).toMatch(/past the end/i);
+    });
+
+    it('offers no broaden-the-search guidance on an exhausted continuation', async () => {
+      // The cohort already succeeded on earlier pages — telling the caller to
+      // widen the query misreads finished pagination as a failed search.
+      mockService.searchStudies.mockResolvedValue({ studies: [] });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(
+        searchStudies.input!.parse({
+          conditionQuery: 'diabetes',
+          statusFilter: 'RECRUITING',
+          pageToken: 'tok_page4',
+        }),
+        ctx,
+      );
+
+      expect(getEnrichment(ctx).notice).toBeUndefined();
+    });
+
+    it('leaves the empty first-page cohort exactly as it was', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({ conditionQuery: 'rare disease', statusFilter: 'RECRUITING' }),
+        ctx,
+      );
+
+      expect(result.pageExhausted).toBeUndefined();
+      expect(Object.hasOwn(result, 'pageExhausted')).toBe(false);
+      expect(renderText(result)).toContain('No studies matched the search criteria.');
+      expect(getEnrichment(ctx).notice).toContain('broaden');
+    });
+
+    it('leaves a continuation page that still carries studies unflagged', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [{ protocolSection: { identificationModule: { nctId: 'NCT03722472' } } }],
+        nextPageToken: 'tok_page4',
+      });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      const result = await searchStudies.handler(
+        searchStudies.input!.parse({ query: 'diabetes', pageSize: 1, pageToken: 'tok_page3' }),
+        ctx,
+      );
+
+      expect(result.pageExhausted).toBeUndefined();
+      expect(renderText(result)).toContain('Found 1 studies');
+    });
+
+    it('renders the exhaustion line from the output field alone (content[] parity)', () => {
+      const text = renderText({ studies: [], pageExhausted: true });
+      expect(text).not.toContain('No studies matched');
+      expect(text).toMatch(/past the end/i);
+      expect(text).toMatch(/no further pages/i);
+    });
+  });
+
   describe('blank supplied values (#99)', () => {
     const QUERY_PARAMS = [
       'query',
@@ -605,12 +709,14 @@ describe('searchStudies', () => {
       );
     });
 
-    // Three constraint strings whose consumers guard on plain truthiness:
-    // '' is falsy and silently dropped — the widening #99 exists to stop —
-    // while ' ' is truthy and forwarded upstream, splicing a blank term into a
-    // joined boolean expression for advancedFilter and sending a malformed
-    // value for geoFilter and sort.
-    const CONSTRAINT_PARAMS = ['advancedFilter', 'geoFilter', 'sort'] as const;
+    // Four strings whose consumers guard on plain truthiness: '' is falsy and
+    // silently dropped — the widening #99 exists to stop — while ' ' is truthy
+    // and forwarded upstream, splicing a blank term into a joined boolean
+    // expression for advancedFilter and sending a malformed value for
+    // geoFilter and sort. pageToken fails both ways too (#122): '' restarts the
+    // walk at page one under the guise of continuing it, and ' ' 400s upstream
+    // with a shape the service's 400 handler cannot classify.
+    const CONSTRAINT_PARAMS = ['advancedFilter', 'geoFilter', 'sort', 'pageToken'] as const;
 
     it.each(CONSTRAINT_PARAMS)(
       'rejects an empty %s instead of silently dropping the constraint',
@@ -995,6 +1101,90 @@ describe('searchStudies', () => {
           ctx,
         ),
       ).resolves.toBeDefined();
+    });
+  });
+
+  // #93 routed the shapes upstream rejects with `incorrect format` to the typed
+  // geo_invalid contract. The shapes upstream does NOT reject are the gap this
+  // covers: a unit-less radius answers 200 with an empty set (read as metres),
+  // a zero radius 500s through the whole retry budget, and an out-of-range
+  // coordinate 400s with a bare `Search error` the service cannot classify.
+  describe('geoFilter validation (#123)', () => {
+    const expectGeoInvalid = (call: unknown) =>
+      expect(call).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: { reason: 'geo_invalid' },
+      });
+
+    beforeEach(() => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+    });
+
+    const REJECTED = [
+      'distance(47.6,-122.9,50)',
+      'distance(47.6,-122.9,0mi)',
+      'distance(47.6,-122.9,-50mi)',
+      'distance(147.6,-122.9,50mi)',
+      'distance(47.6,-222.9,50mi)',
+      'distance(47.6,-122.9,50MI)',
+      'distance( 47.6 , -122.9 , 50mi )',
+      'Seattle, WA',
+    ] as const;
+
+    it.each(REJECTED)('rejects %s as geo_invalid before the upstream call', async (geoFilter) => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expectGeoInvalid(searchStudies.handler(searchStudies.input!.parse({ geoFilter }), ctx));
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it('carries the geo_invalid recovery hint on the rejection', async () => {
+      // The declared contract's hint is the actionable half — a reason with no
+      // hint leaves the caller knowing only that something was wrong.
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expect(
+        searchStudies.handler(
+          searchStudies.input!.parse({ geoFilter: 'distance(47.6,-122.9,50)' }),
+          ctx,
+        ),
+      ).rejects.toMatchObject({
+        data: {
+          reason: 'geo_invalid',
+          recovery: { hint: expect.stringContaining('`mi` or `km` suffix') },
+        },
+      });
+    });
+
+    const ACCEPTED = [
+      'distance(47.6,-122.9,50mi)',
+      'distance(47.6,-122.9,50km)',
+      'distance(47.6,-122.9,50.5mi)',
+    ] as const;
+
+    it.each(ACCEPTED)('forwards %s to the service unchanged', async (geoFilter) => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expect(
+        searchStudies.handler(searchStudies.input!.parse({ geoFilter }), ctx),
+      ).resolves.toBeDefined();
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterGeo: geoFilter }),
+        ctx,
+      );
+    });
+
+    it('still answers a blank geoFilter with blank_value, not geo_invalid (#99)', async () => {
+      // A blank value is a different mistake with a different fix, and the
+      // blank check runs first so it keeps naming the parameter.
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expect(
+        searchStudies.handler(searchStudies.input!.parse({ geoFilter: '   ' }), ctx),
+      ).rejects.toMatchObject({ data: { reason: 'blank_value', param: 'geoFilter' } });
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it('states that a unit-less radius is rejected in the geoFilter description', () => {
+      const shape = searchStudies.input!.shape as Record<string, { description?: string }>;
+      expect(shape.geoFilter?.description).toMatch(/rejected/i);
+      expect(shape.geoFilter?.description).not.toContain('interpreted as meters');
     });
   });
 
@@ -1471,6 +1661,172 @@ describe('searchStudies', () => {
       const text = renderText(result);
       expect(text).toContain(longSummary);
       expect(text).not.toContain('…');
+    });
+
+    // The exclusion set suppressed three whole subtrees from the field dump
+    // while the dedicated renderers covered only some of their leaves, so every
+    // uncovered leaf was dropped from content[] despite being explicitly
+    // requested. Values here are chosen not to collide with any other rendered
+    // string — the parity walker is a literal-substring check, so a colliding
+    // value passes while the leaf is never actually rendered.
+    describe('explicitly requested leaves under a partly-rendered prefix (#120)', () => {
+      const projection = () => ({
+        protocolSection: {
+          identificationModule: { nctId: 'NCT07770001', briefTitle: 'Renal cohort study' },
+          designModule: { enrollmentInfo: { count: 4821, type: 'ESTIMATED' } },
+          sponsorCollaboratorsModule: {
+            leadSponsor: { name: 'Zephyr Biosciences', class: 'INDUSTRY' },
+          },
+          contactsLocationsModule: {
+            locations: [
+              {
+                facility: 'Larkspur Research Center',
+                city: 'Emeryville',
+                state: 'California',
+                country: 'United States',
+                zip: '94608',
+                contacts: [
+                  {
+                    name: 'Marisol Okonkwo',
+                    phone: '555-0142',
+                    email: 'okonkwo@larkspur.example',
+                    role: 'STUDY_COORDINATOR',
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+
+      const runWithFields = async (fields: string[], study: unknown = projection()) => {
+        mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
+        const ctx = createMockContext({ errors: searchStudies.errors });
+        return await searchStudies.handler(
+          searchStudies.input!.parse({ nctIds: ['NCT07770001'], fields, pageSize: 1 }),
+          ctx,
+        );
+      };
+
+      it('renders every requested leaf under its own label, with no parity gap', async () => {
+        const result = await runWithFields([
+          'NCTId',
+          'BriefTitle',
+          'EnrollmentCount',
+          'EnrollmentType',
+          'LeadSponsorName',
+          'LeadSponsorClass',
+          'LocationFacility',
+          'LocationCity',
+          'LocationState',
+          'LocationCountry',
+          'LocationZip',
+          'LocationContactName',
+          'LocationContactPhone',
+          'LocationContactEMail',
+          'LocationContactRole',
+        ]);
+        const text = renderText(result);
+
+        expect(text).toContain('Enrollment > Type: ESTIMATED');
+        expect(text).toContain('Lead Sponsor > Class: INDUSTRY');
+        expect(text).toContain('Locations > Zip: 94608');
+        expect(text).toContain('Contacts > Name: Marisol Okonkwo');
+        expect(text).toContain('Contacts > Phone: 555-0142');
+        expect(text).toContain('Contacts > Email: okonkwo@larkspur.example');
+        expect(text).toContain('Contacts > Role: STUDY_COORDINATOR');
+        // The leaves the dedicated renderers already cover stay where they are.
+        expect(text).toContain('N=4821');
+        expect(text).toContain('Zephyr Biosciences');
+        expect(text).toContain('Larkspur Research Center, Emeryville, California, United States');
+        expect(missingLeaves(result, text)).toEqual([]);
+      });
+
+      it('surfaces the requested leaf, not just the companion upstream bundles along', async () => {
+        // Asking for LeadSponsorClass alone still returns leadSponsor.name from
+        // upstream; the renderer used to show that unrequested half and drop the
+        // requested one.
+        const result = await runWithFields(['NCTId', 'LeadSponsorClass']);
+        const text = renderText(result);
+        expect(text).toContain('Lead Sponsor > Class: INDUSTRY');
+        expect(missingLeaves(result, text)).toEqual([]);
+      });
+
+      it('surfaces EnrollmentType requested without EnrollmentCount', async () => {
+        const result = await runWithFields(['NCTId', 'EnrollmentType']);
+        const text = renderText(result);
+        expect(text).toContain('Enrollment > Type: ESTIMATED');
+        expect(missingLeaves(result, text)).toEqual([]);
+      });
+
+      it('attributes nested contacts to their own site when several sites carry several contacts', async () => {
+        const multiSite = {
+          protocolSection: {
+            identificationModule: { nctId: 'NCT07770002' },
+            contactsLocationsModule: {
+              locations: [
+                {
+                  facility: 'Larkspur Research Center',
+                  city: 'Emeryville',
+                  zip: '94608',
+                  contacts: [
+                    { name: 'Marisol Okonkwo', phone: '555-0142' },
+                    { name: 'Tobias Ferreira', phone: '555-0143' },
+                  ],
+                },
+                {
+                  facility: 'Windward Clinical',
+                  city: 'Asheville',
+                  zip: '28801',
+                  contacts: [
+                    { name: 'Priya Raghunathan', phone: '555-0144' },
+                    { name: 'Desmond Achebe', phone: '555-0145' },
+                  ],
+                },
+              ],
+            },
+          },
+        };
+        const result = await runWithFields(
+          ['NCTId', 'LocationFacility', 'LocationCity', 'LocationZip', 'LocationContactName'],
+          multiSite,
+        );
+        const text = renderText(result);
+
+        // Each site's ZIP and each contact stay attributed to the site they
+        // belong to — a flat label would splice two sites' staff together.
+        expect(text).toContain('Locations[0] > Zip: 94608');
+        expect(text).toContain('Locations[1] > Zip: 28801');
+        expect(text).toContain('Locations[0] > Contacts[0] > Name: Marisol Okonkwo');
+        expect(text).toContain('Locations[0] > Contacts[1] > Name: Tobias Ferreira');
+        expect(text).toContain('Locations[1] > Contacts[0] > Name: Priya Raghunathan');
+        expect(text).toContain('Locations[1] > Contacts[1] > Name: Desmond Achebe');
+        expect(missingLeaves(result, text)).toEqual([]);
+      });
+
+      it('leaves the default no-fields index rendering untouched', async () => {
+        // The exclusion set governs the requested-fields renderer only; the
+        // compact index must render exactly as it did before.
+        mockService.searchStudies.mockResolvedValue({
+          studies: [projection()],
+          totalCount: 1,
+        });
+        const ctx = createMockContext({ errors: searchStudies.errors });
+        const result = await searchStudies.handler(
+          searchStudies.input!.parse({ conditionQuery: 'renal' }),
+          ctx,
+        );
+        const text = renderText(result);
+
+        expect(text).toBe(
+          [
+            'Found 1 studies (1 total matching)',
+            '- **NCT07770001**: Renal cohort study',
+            '  N=4821 | Zephyr Biosciences',
+            '  Site: Larkspur Research Center, Emeryville, California, United States',
+          ].join('\n'),
+        );
+      });
     });
   });
 });

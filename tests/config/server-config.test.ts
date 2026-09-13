@@ -41,6 +41,27 @@ describe('getServerConfig', () => {
     expect(config.maxPageSize).toBe(100);
   });
 
+  it('treats empty env values as unset and falls back to defaults', async () => {
+    vi.stubEnv('CT_API_BASE_URL', '');
+    vi.stubEnv('CT_REQUEST_TIMEOUT_MS', '');
+    vi.stubEnv('CT_MAX_PAGE_SIZE', '');
+    const config = await loadConfig();
+    expect(config.apiBaseUrl).toBe('https://clinicaltrials.gov/api/v2');
+    expect(config.requestTimeoutMs).toBe(30_000);
+    expect(config.maxPageSize).toBe(200);
+  });
+
+  it('treats unsubstituted MCPB user_config placeholders as unset', async () => {
+    const placeholder = (option: string) => `\${user_config.${option}}`;
+    vi.stubEnv('CT_API_BASE_URL', placeholder('CT_API_BASE_URL'));
+    vi.stubEnv('CT_REQUEST_TIMEOUT_MS', placeholder('CT_REQUEST_TIMEOUT_MS'));
+    vi.stubEnv('CT_MAX_PAGE_SIZE', placeholder('CT_MAX_PAGE_SIZE'));
+    const config = await loadConfig();
+    expect(config.apiBaseUrl).toBe('https://clinicaltrials.gov/api/v2');
+    expect(config.requestTimeoutMs).toBe(30_000);
+    expect(config.maxPageSize).toBe(200);
+  });
+
   it('caches config on subsequent calls', async () => {
     const mod = await import('@/config/server-config.js');
     const first = mod.getServerConfig();

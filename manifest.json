@@ -21,7 +21,11 @@
       "env": {
         "MCP_TRANSPORT_TYPE": "stdio",
         "MCP_AUTH_MODE": "none",
-        "NODE_ENV": "production"
+        "NODE_ENV": "production",
+        "CT_API_BASE_URL": "${user_config.CT_API_BASE_URL}",
+        "CT_REQUEST_TIMEOUT_MS": "${user_config.CT_REQUEST_TIMEOUT_MS}",
+        "CT_MAX_PAGE_SIZE": "${user_config.CT_MAX_PAGE_SIZE}",
+        "MCP_LOG_LEVEL": "${user_config.MCP_LOG_LEVEL}"
       }
     }
   },

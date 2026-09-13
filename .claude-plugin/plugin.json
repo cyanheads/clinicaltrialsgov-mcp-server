@@ -1,13 +1,25 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "clinicaltrialsgov-mcp-server",
   "version": "2.9.6",
   "description": "Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to eligible trials via MCP. STDIO or Streamable HTTP.",
   "author": {
-    "name": "cyanheads"
+    "name": "cyanheads",
+    "email": "casey@caseyjhand.com",
+    "url": "https://github.com/cyanheads"
   },
   "homepage": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server#readme",
   "repository": "https://github.com/cyanheads/clinicaltrialsgov-mcp-server",
   "license": "Apache-2.0",
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "model-context-protocol",
+    "clinical-trials",
+    "clinicaltrials.gov",
+    "health-tech",
+    "research-tools"
+  ],
   "mcpServers": {
     "clinicaltrialsgov-mcp-server": {
       "command": "npx",

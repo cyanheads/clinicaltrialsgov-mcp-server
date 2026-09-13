@@ -234,7 +234,7 @@ See [`CLAUDE.md`](./CLAUDE.md) for development guidelines and architectural rule
 
 ## Contributing
 
-Issues and pull requests are welcome. Run checks before submitting:
+Issues are welcome. Run checks before submitting:
 
 ```sh
 bun run devcheck

@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-09-12 20:42:20
+Generated on: 2026-09-13 17:44:36
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -41,23 +41,7 @@ clinicaltrialsgov-mcp-server/
 ├── docs/
 │   ├── api-reference.md
 │   └── design.md
-├── scripts/
-│   ├── build-changelog.ts
-│   ├── build.ts
-│   ├── check-dependency-specifiers.ts
-│   ├── check-docs-sync.ts
-│   ├── check-framework-antipatterns.ts
-│   ├── check-skill-versions.ts
-│   ├── check-skills-sync.ts
-│   ├── clean-mcpb.ts
-│   ├── clean.ts
-│   ├── devcheck.ts
-│   ├── lint-mcp.ts
-│   ├── lint-packaging.ts
-│   ├── list-skills.ts
-│   ├── release-github.ts
-│   └── tree.ts
-├── skills/
+├── framework-skills/
 │   ├── add-app-tool/
 │   │   └── SKILL.md
 │   ├── add-prompt/
@@ -144,6 +128,22 @@ clinicaltrialsgov-mcp-server/
 │   │   └── SKILL.md
 │   └── tool-defs-analysis/
 │       └── SKILL.md
+├── scripts/
+│   ├── build-changelog.ts
+│   ├── build.ts
+│   ├── check-dependency-specifiers.ts
+│   ├── check-docs-sync.ts
+│   ├── check-framework-antipatterns.ts
+│   ├── check-skill-versions.ts
+│   ├── check-skills-sync.ts
+│   ├── clean-mcpb.ts
+│   ├── clean.ts
+│   ├── devcheck.ts
+│   ├── lint-mcp.ts
+│   ├── lint-packaging.ts
+│   ├── list-skills.ts
+│   ├── release-github.ts
+│   └── tree.ts
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts

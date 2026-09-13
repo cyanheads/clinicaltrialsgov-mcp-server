@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.9.7](changelog/2.9.x/2.9.7.md) — 2026-09-13
+
+manifest.json's MCPB user_config options now reach the server, and a blank or unsubstituted ${...} config value falls back to its default (mcp-ts-core 0.13.0); development skills move from skills/ to framework-skills/ so installing the plugin no longer loads them.
+
 ## [2.9.6](changelog/2.9.x/2.9.6.md) — 2026-09-12
 
 Fixes numeric/date/string field-value stats, get_field_definitions argument validation, and ID-aware search notices; adds document download URLs on get_study_record.

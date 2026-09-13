@@ -29,7 +29,7 @@
 
 ## Overview
 
-An MCP server over the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — the US National Library of Medicine's registry of ~577K clinical trial studies. Search trials, fetch full study records and posted results, discover field names and valid values, and match patient demographics to eligible recruiting trials. Public, read-only, no authentication required. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — the US National Library of Medicine's registry of ~577K clinical trial studies. Search trials, fetch full study records and posted results, discover field names and valid values, and match patient demographics to eligible recruiting trials. Public, read-only, no authentication required. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
 
 ### Tools
 

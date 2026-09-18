@@ -4,7 +4,7 @@ All notable changes to this project. Each entry links to its full per-version fi
 
 ## [2.9.8](changelog/2.9.x/2.9.8.md) — 2026-09-18
 
-HTTP declares stateless session mode by default (mcp-ts-core 0.13.4) — source, bunx, and npm start now match the Docker image and issue no Mcp-Session-Id unless MCP_SESSION_MODE overrides it.
+HTTP declares stateless session mode by default (createApp option from mcp-ts-core 0.13.1) — source, bunx, and npm start now match the Docker image and issue no Mcp-Session-Id unless MCP_SESSION_MODE overrides it.
 
 ## [2.9.7](changelog/2.9.x/2.9.7.md) — 2026-09-13
 

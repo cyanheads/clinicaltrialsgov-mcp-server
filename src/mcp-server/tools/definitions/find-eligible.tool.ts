@@ -161,7 +161,7 @@ function boundLocations(
   // recruits.
   let admitted: LocationWithDistance | undefined;
   if (!capped.some(isRecruiting)) {
-    const open = sortedLocations.filter((loc) => isRecruiting(loc) && !capped.includes(loc));
+    const open = sortedLocations.filter(isRecruiting);
     const home = open.filter((loc) => samePlace(loc.country, user.country));
     admitted = admitRecruitingSite(home.length > 0 ? home : open, matched);
   }

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.9.9](changelog/2.9.x/2.9.9.md) — 2026-09-22
+
+search_studies' default index gains hasResults and key dates, and statusFilter/NCT ID inputs now accept case and spacing variants instead of failing upstream.
+
 ## [2.9.8](changelog/2.9.x/2.9.8.md) — 2026-09-18
 
 HTTP declares stateless session mode by default (createApp option from mcp-ts-core 0.13.1) — source, bunx, and npm start now match the Docker image and issue no Mcp-Session-Id unless MCP_SESSION_MODE overrides it.

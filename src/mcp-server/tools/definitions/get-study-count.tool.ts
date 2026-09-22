@@ -11,6 +11,7 @@ import {
   buildAdvancedFilter,
   firstBlankListParam,
   firstBlankParam,
+  normalizeStatusFilter,
   toArray,
 } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
@@ -35,18 +36,21 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       code: JsonRpcErrorCode.ValidationError,
       when: 'A field name in the advanced filter or AREA[] expression is invalid (often a module name instead of a piece name).',
       recovery: RECOVERY_HINTS.field_invalid,
+      thrownBy: 'service',
     },
     {
       reason: 'enum_invalid',
       code: JsonRpcErrorCode.ValidationError,
       when: 'statusFilter or phaseFilter contains a value ClinicalTrials.gov does not accept.',
       recovery: RECOVERY_HINTS.enum_invalid,
+      thrownBy: 'service',
     },
     {
       reason: 'query_parse_error',
       code: JsonRpcErrorCode.ValidationError,
       when: 'A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a `[` or `]` outside an AREA[…] / RANGE[…] expression, an unmatched `(` / `)`, or an unterminated quote in a query/conditionQuery/etc. value.',
       recovery: RECOVERY_HINTS.query_parse_error,
+      thrownBy: 'service',
     },
     {
       reason: 'rate_limited',
@@ -54,6 +58,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
       recovery: RECOVERY_HINTS.rate_limited,
       retryable: true,
+      thrownBy: 'service',
     },
   ],
 
@@ -172,7 +177,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     // a blank term into a joined boolean expression. Reject in the handler — a
     // schema-only rejection surfaces as a bare -32602 with no reason and no
     // recovery hint.
-    const statusFilter = toArray(input.statusFilter);
+    const statusFilter = normalizeStatusFilter(input.statusFilter);
     const phaseFilter = toArray(input.phaseFilter);
     const blankParam =
       firstBlankParam({
@@ -221,7 +226,12 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     if (input.sponsorQuery) criteria.sponsorQuery = input.sponsorQuery;
     if (input.titleQuery) criteria.titleQuery = input.titleQuery;
     if (input.outcomeQuery) criteria.outcomeQuery = input.outcomeQuery;
-    if (input.statusFilter) criteria.statusFilter = input.statusFilter;
+    // The canonical status values actually sent, in the caller's scalar/list shape.
+    if (statusFilter)
+      criteria.statusFilter =
+        Array.isArray(input.statusFilter) || statusFilter.length !== 1
+          ? statusFilter
+          : statusFilter[0];
     if (input.phaseFilter) criteria.phaseFilter = input.phaseFilter;
     if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
     // Flag the default unknown-enrollment exclusion (EnrollmentCount=99999999),

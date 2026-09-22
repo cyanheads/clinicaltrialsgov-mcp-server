@@ -2649,5 +2649,77 @@ describe('getStudyResults', () => {
       expect(text).toContain(CANONICAL);
       expect(missingLeaves(result, text)).toEqual([]);
     });
+
+    // The schema canonicalizes case and surrounding whitespace, so the Set-based
+    // dedup and the studyMap lookup — both keyed on the literal string — agree
+    // with upstream, which resolves every casing to the same record.
+    describe('case and whitespace variants of a requested ID (#140)', () => {
+      it('collapses two casings of one ID to a single lookup and a single entry', async () => {
+        const { result } = await run(
+          [OTHER, OTHER.toLowerCase(), ` Nct${OTHER.slice(3)} `],
+          [otherStudy()],
+        );
+
+        expect(mockService.getStudiesBatch).toHaveBeenCalledTimes(1);
+        expect(mockService.getStudiesBatch).toHaveBeenCalledWith([OTHER], expect.anything());
+        expect(result.fetchErrors).toBeUndefined();
+        expect(result.results.map((r) => r.nctId)).toEqual([OTHER]);
+        expect(result.results[0]!.canonicalNctId).toBeUndefined();
+      });
+
+      it('keeps first-occurrence order across a mixed-case batch', async () => {
+        const { result } = await run(
+          [OTHER.toLowerCase(), CANONICAL, OTHER, CANONICAL.toLowerCase()],
+          [otherStudy(), aliasStudy()],
+        );
+        expect(mockService.getStudiesBatch).toHaveBeenCalledWith(
+          [OTHER, CANONICAL],
+          expect.anything(),
+        );
+        expect(result.results.map((r) => r.nctId)).toEqual([OTHER, CANONICAL]);
+      });
+
+      it('resolves a lowercase alias to its canonical study, not a false not-found', async () => {
+        const { result, text } = await run(ALIAS.toLowerCase(), [aliasStudy()]);
+
+        expect(result.fetchErrors).toBeUndefined();
+        expect(result.results[0]!.nctId).toBe(ALIAS);
+        expect(result.results[0]!.canonicalNctId).toBe(CANONICAL);
+        expect(text).toContain(ALIAS);
+        expect(missingLeaves(result, text)).toEqual([]);
+      });
+
+      it('passes the canonical ID to the per-ID fallback path', async () => {
+        mockService.getStudiesBatch.mockRejectedValue(
+          new Error('Study ID(s) not found or rejected by API: NCT00000000'),
+        );
+        mockService.getStudy.mockImplementation(async (nctId: string) => {
+          if (nctId === 'NCT00000000') throw new Error('Study NCT00000000 not found');
+          return otherStudy();
+        });
+        const ctx = createMockContext({ errors: getStudyResults.errors });
+        const input = getStudyResults.input!.parse({
+          nctIds: [OTHER.toLowerCase(), 'nct00000000'],
+          sections: 'outcomes',
+        });
+        const result = await getStudyResults.handler(input, ctx);
+
+        expect(mockService.getStudy.mock.calls.map((c) => c[0])).toEqual([OTHER, 'NCT00000000']);
+        expect(result.results.map((r) => r.nctId)).toEqual([OTHER]);
+        expect(result.fetchErrors).toEqual([
+          { nctId: 'NCT00000000', error: expect.stringContaining('not found') },
+        ]);
+      });
+
+      it.each(['ABC123', 'nct0372247', 'NCT 03722472'])(
+        'still rejects the malformed ID %j',
+        (bad) => {
+          expect(() => getStudyResults.input!.parse({ nctIds: bad })).toThrow(/NCTxxxxxxxx/);
+          expect(() => getStudyResults.input!.parse({ nctIds: [OTHER, bad] })).toThrow(
+            /NCTxxxxxxxx/,
+          );
+        },
+      );
+    });
   });
 });

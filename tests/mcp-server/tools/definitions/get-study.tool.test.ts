@@ -33,7 +33,23 @@ describe('getStudy', () => {
     it('rejects invalid NCT ID format', () => {
       expect(() => getStudy.input!.parse({ nctId: 'INVALID' })).toThrow();
       expect(() => getStudy.input!.parse({ nctId: 'NCT1234' })).toThrow();
-      expect(() => getStudy.input!.parse({ nctId: 'nct12345678' })).toThrow();
+      expect(() => getStudy.input!.parse({ nctId: 'ABC123' })).toThrow(/NCTxxxxxxxx/);
+    });
+
+    it('canonicalizes a case or whitespace variant of the NCT ID (#140)', () => {
+      expect(getStudy.input!.parse({ nctId: 'nct12345678' }).nctId).toBe('NCT12345678');
+      expect(getStudy.input!.parse({ nctId: ' Nct12345678\n' }).nctId).toBe('NCT12345678');
+    });
+
+    it('looks up the canonical ID when the caller sends a lowercase one (#140)', async () => {
+      const study = {
+        protocolSection: { identificationModule: { nctId: 'NCT03722472', briefTitle: 'Test' } },
+      };
+      mockService.getStudy.mockResolvedValue(study);
+      const ctx = createMockContext({ errors: getStudy.errors });
+      const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'nct03722472' }), ctx);
+      expect(mockService.getStudy).toHaveBeenCalledWith('NCT03722472', ctx);
+      expect(result.study).toStrictEqual(study);
     });
 
     it('rejects missing nctId', () => {

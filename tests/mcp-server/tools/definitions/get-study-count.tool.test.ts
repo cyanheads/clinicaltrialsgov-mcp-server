@@ -428,6 +428,56 @@ describe('getStudyCount', () => {
     });
   });
 
+  // Same normalization as search_studies: upstream matches filter.overallStatus
+  // case-sensitively, so each entry is canonicalized in the handler.
+  describe('statusFilter case and spacing variants (#140)', () => {
+    beforeEach(() => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 7 });
+    });
+
+    it.each([
+      ['recruiting', 'RECRUITING'],
+      ['Recruiting', 'RECRUITING'],
+      ['not_yet_recruiting', 'NOT_YET_RECRUITING'],
+      ['active not recruiting', 'ACTIVE_NOT_RECRUITING'],
+      ['Enrolling-By-Invitation', 'ENROLLING_BY_INVITATION'],
+      [' temporarily  not - available ', 'TEMPORARILY_NOT_AVAILABLE'],
+      ['COMPLETED', 'COMPLETED'],
+    ])('counts %j as %s', async (variant, canonical) => {
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      await getStudyCount.handler(getStudyCount.input!.parse({ statusFilter: variant }), ctx);
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterOverallStatus: [canonical] }),
+        ctx,
+      );
+      expect(getEnrichment(ctx).searchCriteria).toMatchObject({ statusFilter: canonical });
+    });
+
+    it('canonicalizes every entry of a list and echoes the list', async () => {
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      await getStudyCount.handler(
+        getStudyCount.input!.parse({ statusFilter: ['recruiting', 'Completed', 'WITHDRAWN'] }),
+        ctx,
+      );
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterOverallStatus: ['RECRUITING', 'COMPLETED', 'WITHDRAWN'] }),
+        ctx,
+      );
+      expect(getEnrichment(ctx).searchCriteria).toMatchObject({
+        statusFilter: ['RECRUITING', 'COMPLETED', 'WITHDRAWN'],
+      });
+    });
+
+    it('forwards a value with no canonical match unchanged in meaning for upstream to reject', async () => {
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      await getStudyCount.handler(getStudyCount.input!.parse({ statusFilter: 'open' }), ctx);
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterOverallStatus: ['OPEN'] }),
+        ctx,
+      );
+    });
+  });
+
   describe('format', () => {
     it('shows count for non-zero results', () => {
       const blocks = getStudyCount.format!({ totalCount: 42 });

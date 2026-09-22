@@ -7,9 +7,76 @@ import { describe, expect, it } from 'vitest';
 import {
   blankValueMessage,
   buildAdvancedFilter,
+  normalizeStatusFilter,
   quoteQueryTerm,
   toArray,
 } from '@/mcp-server/tools/utils/query-helpers.js';
+
+describe('normalizeStatusFilter (#140)', () => {
+  it('returns undefined when the filter is omitted', () => {
+    expect(normalizeStatusFilter(undefined)).toBeUndefined();
+  });
+
+  it.each([
+    ['recruiting', 'RECRUITING'],
+    ['Active Not Recruiting', 'ACTIVE_NOT_RECRUITING'],
+    ['not-yet-recruiting', 'NOT_YET_RECRUITING'],
+    ['  enrolling \t by - invitation  ', 'ENROLLING_BY_INVITATION'],
+    ['no__longer__available', 'NO_LONGER_AVAILABLE'],
+    ['APPROVED_FOR_MARKETING', 'APPROVED_FOR_MARKETING'],
+  ])('canonicalizes %j to %s', (raw, canonical) => {
+    expect(normalizeStatusFilter(raw)).toEqual([canonical]);
+  });
+
+  it('normalizes each entry of a list and of a stringified list', () => {
+    expect(normalizeStatusFilter(['recruiting', 'Completed'])).toEqual(['RECRUITING', 'COMPLETED']);
+    expect(normalizeStatusFilter('["recruiting","withdrawn"]')).toEqual([
+      'RECRUITING',
+      'WITHDRAWN',
+    ]);
+  });
+
+  it('leaves a delimiter-joined canonical value intact', () => {
+    // Upstream splits filter.overallStatus on `|` and `,`; neither is a separator run here.
+    expect(normalizeStatusFilter('RECRUITING|COMPLETED')).toEqual(['RECRUITING|COMPLETED']);
+    expect(normalizeStatusFilter('recruiting,completed')).toEqual(['RECRUITING,COMPLETED']);
+  });
+
+  it('drops whitespace around a delimiter instead of turning it into an underscore', () => {
+    // Upstream rejects ` COMPLETED` and `RECRUITING ` alike, and `_COMPLETED` would
+    // name a value the caller never sent.
+    expect(normalizeStatusFilter('recruiting, completed')).toEqual(['RECRUITING,COMPLETED']);
+    expect(normalizeStatusFilter('Recruiting | Not Yet Recruiting')).toEqual([
+      'RECRUITING|NOT_YET_RECRUITING',
+    ]);
+    expect(normalizeStatusFilter(['active not recruiting ,withdrawn'])).toEqual([
+      'ACTIVE_NOT_RECRUITING,WITHDRAWN',
+    ]);
+  });
+
+  it('maps the registry display labels that differ from their API value', () => {
+    expect(normalizeStatusFilter('Active, not recruiting')).toEqual(['ACTIVE_NOT_RECRUITING']);
+    expect(normalizeStatusFilter('Unknown status')).toEqual(['UNKNOWN']);
+    expect(normalizeStatusFilter(['Recruiting', 'Active, not recruiting'])).toEqual([
+      'RECRUITING',
+      'ACTIVE_NOT_RECRUITING',
+    ]);
+    expect(normalizeStatusFilter('Recruiting, Active, not recruiting | Unknown status')).toEqual([
+      'RECRUITING,ACTIVE_NOT_RECRUITING|UNKNOWN',
+    ]);
+    // Only a whole list token is aliased.
+    expect(normalizeStatusFilter('INACTIVE,NOT_RECRUITING')).toEqual(['INACTIVE,NOT_RECRUITING']);
+  });
+
+  it('reduces a blank entry to an empty string, which the blank-value check still catches', () => {
+    expect(normalizeStatusFilter(['RECRUITING', ' \t '])).toEqual(['RECRUITING', '']);
+    expect(normalizeStatusFilter([])).toEqual([]);
+  });
+
+  it('maps a value with no canonical match to its normalized form, never to a different status', () => {
+    expect(normalizeStatusFilter('open to enrollment')).toEqual(['OPEN_TO_ENROLLMENT']);
+  });
+});
 
 describe('toArray', () => {
   it('returns undefined for undefined input', () => {

@@ -56,9 +56,9 @@ Each `query.*` parameter maps to a named **search area** -- a weighted set of fi
 
 | Parameter                  | Type                            | Description                                                                               |
 | :------------------------- | :------------------------------ | :---------------------------------------------------------------------------------------- |
-| `filter.overallStatus`     | `string` (pipe/comma-delimited) | Filter by study status. Values from `Status` enum.                                        |
+| `filter.overallStatus`     | `string` (pipe/comma-delimited) | Filter by study status. Values from `Status` enum, matched case-sensitively: `RECRUITING` succeeds, `recruiting` / `Recruiting` / `active not recruiting` return 400 `Invalid value in parameter \`overallStatus\``, as does whitespace around a value or delimiter. |
 | `filter.geo`               | `string`                        | Geographic filter. Syntax: `distance(lat,lon,dist)` where dist is e.g. `50mi` or `100km`. |
-| `filter.ids`               | `string` (pipe/comma-delimited) | Filter by NCT IDs. Pattern: `NCT\d+`.                                                     |
+| `filter.ids`               | `string` (pipe/comma-delimited) | Filter by NCT IDs. Pattern: `NCT\d+`, case-insensitive (`nct03722472` matches, as does `/studies/nct03722472`). |
 | `filter.advanced`          | `string`                        | Advanced Essie expression using `AREA[]` syntax.                                          |
 | `filter.synonyms`          | `string` (pipe/comma-delimited) | Synonym pairs: `area:synonym_id`.                                                         |
 | `postFilter.overallStatus` | same as filter.\*               | Equivalent post-filter versions of all filter params.                                     |
@@ -190,7 +190,7 @@ Returns gzip-compressed JSON size distribution across all studies.
 
 | Response Field     | Type      | Description                                          |
 | :----------------- | :-------- | :--------------------------------------------------- |
-| `totalStudies`     | `integer` | Total study count (~577K)                            |
+| `totalStudies`     | `integer` | Total study count (600K+)                            |
 | `averageSizeBytes` | `number`  | Mean study size (~17.2 KB)                           |
 | `percentiles`      | `object`  | Size thresholds: 5th through 99th percentile         |
 | `ranges`           | `array`   | Histogram buckets with `studiesCount` per size range |

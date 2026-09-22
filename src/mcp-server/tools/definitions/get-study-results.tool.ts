@@ -1067,7 +1067,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
             nctId: z
               .string()
               .describe(
-                'The NCT identifier as requested, echoed verbatim. When it is a previous (alias) ID, ClinicalTrials.gov answers with the canonical record and canonicalNctId names it.',
+                'The NCT identifier as requested, trimmed and uppercased. When it is a previous (alias) ID, ClinicalTrials.gov answers with the canonical record and canonicalNctId names it.',
               ),
             canonicalNctId: z
               .string()

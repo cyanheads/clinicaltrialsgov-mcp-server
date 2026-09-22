@@ -1,6 +1,6 @@
 /**
  * @fileoverview Shared helpers for normalizing tool inputs into API search parameters.
- * @module mcp-server/tools/definitions/query-helpers
+ * @module mcp-server/tools/utils/query-helpers
  */
 
 /**
@@ -31,6 +31,37 @@ export function toArray(v: string | string[] | undefined): string[] | undefined 
     }
   }
   return [v];
+}
+
+/**
+ * Normalize a `statusFilter` to upstream's canonical `OverallStatus` spelling.
+ *
+ * `filter.overallStatus` is matched case-sensitively upstream — `recruiting`
+ * and `Recruiting` both 400 while `RECRUITING` succeeds — so each entry is
+ * trimmed, uppercased, and every run of whitespace, hyphens, and underscores
+ * collapsed to one `_`. No two statuses differ only in case or separators, so
+ * the mapping is one-to-one. Whitespace around a `,` or `|` list delimiter
+ * (both of which upstream splits on) is dropped first, so `recruiting, completed`
+ * becomes `RECRUITING,COMPLETED` rather than a `_COMPLETED` token the caller
+ * never wrote. The two registry display labels that differ from their API value
+ * by more than case and separators, `Active, not recruiting` (its comma would
+ * split it) and `Unknown status`, are mapped to `ACTIVE_NOT_RECRUITING` and
+ * `UNKNOWN`; neither `ACTIVE`, `NOT_RECRUITING`, nor `UNKNOWN_STATUS` is a
+ * status, so the mapping stays one-to-one. A value that still names no status
+ * reaches upstream in its normalized form and fails there with `enum_invalid`,
+ * the same contract and recovery hint an unknown canonical value gets. A blank
+ * entry becomes `''`, which `firstBlankListParam` still rejects.
+ */
+export function normalizeStatusFilter(v: string | string[] | undefined): string[] | undefined {
+  return toArray(v)?.map((s) =>
+    s
+      .trim()
+      .toUpperCase()
+      .replace(/\s*([,|])\s*/g, '$1')
+      .replace(/[\s_-]+/g, '_')
+      .replace(/(^|[,|])ACTIVE,NOT_RECRUITING(?=$|[,|])/g, '$1ACTIVE_NOT_RECRUITING')
+      .replace(/(^|[,|])UNKNOWN_STATUS(?=$|[,|])/g, '$1UNKNOWN'),
+  );
 }
 
 /**

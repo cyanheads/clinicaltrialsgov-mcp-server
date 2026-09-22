@@ -26,15 +26,46 @@ describe('nctIdSchema', () => {
     });
   });
 
+  // Upstream resolves NCT IDs case-insensitively on every path this server
+  // calls; the schema canonicalizes so Set/Map lookups keyed on the ID agree.
+  describe('case and whitespace variants canonicalize (#140)', () => {
+    it.each([
+      ['nct12345678', 'NCT12345678'],
+      ['Nct12345678', 'NCT12345678'],
+      ['nCt12345678', 'NCT12345678'],
+      ['  NCT12345678  ', 'NCT12345678'],
+      ['\tnct12345678\n', 'NCT12345678'],
+      // No-break space and a BOM — both are whitespace to trim().
+      [`${String.fromCharCode(0xa0)}nct12345678${String.fromCharCode(0xfeff)}`, 'NCT12345678'],
+    ])('parses %j to %s', (raw, canonical) => {
+      expect(nctIdSchema.parse(raw)).toBe(canonical);
+    });
+
+    it('keeps the canonical form as-is', () => {
+      expect(nctIdSchema.parse('NCT03722472')).toBe('NCT03722472');
+    });
+
+    it('still rejects a lowercase ID with the wrong digit count', () => {
+      expect(() => nctIdSchema.parse('nct1234567')).toThrow();
+      expect(() => nctIdSchema.parse(' nct123456789 ')).toThrow();
+    });
+
+    it('still rejects whitespace-only input and characters trim() leaves in place', () => {
+      expect(() => nctIdSchema.parse('   ')).toThrow();
+      // U+200B (zero-width space) is not whitespace to trim().
+      expect(() => nctIdSchema.parse(`${String.fromCharCode(0x200b)}nct12345678`)).toThrow();
+    });
+
+    it('rejects a malformed ID with the same actionable message as before', () => {
+      const result = nctIdSchema.safeParse('ABC123');
+      expect(result.success).toBe(false);
+      expect(result.error?.issues[0]?.message).toBe(
+        'NCT IDs must match format NCTxxxxxxxx (8 digits).',
+      );
+    });
+  });
+
   describe('invalid inputs', () => {
-    it('rejects lowercase prefix', () => {
-      expect(() => nctIdSchema.parse('nct12345678')).toThrow();
-    });
-
-    it('rejects mixed-case prefix', () => {
-      expect(() => nctIdSchema.parse('Nct12345678')).toThrow();
-    });
-
     it('rejects too few digits (7)', () => {
       expect(() => nctIdSchema.parse('NCT1234567')).toThrow();
     });
@@ -57,6 +88,7 @@ describe('nctIdSchema', () => {
 
     it('rejects NCT ID with embedded space', () => {
       expect(() => nctIdSchema.parse('NCT 12345678')).toThrow();
+      expect(() => nctIdSchema.parse('nct 12345678')).toThrow();
     });
 
     it('rejects null', () => {

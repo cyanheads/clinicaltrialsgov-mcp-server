@@ -36,8 +36,11 @@ describe('studyResource', () => {
       expect(() => params.parse({ nctId: 'NCT1234' })).toThrow();
     });
 
-    it('rejects lowercase nct prefix', () => {
-      expect(() => params.parse({ nctId: 'nct03722472' })).toThrow();
+    it('canonicalizes a lowercase or padded URI parameter (#140)', () => {
+      // URI template matching hands the handler factory raw strings, which it
+      // parses through this schema before the handler runs.
+      expect(params.parse({ nctId: 'nct03722472' }).nctId).toBe('NCT03722472');
+      expect(params.parse({ nctId: ' Nct03722472 ' }).nctId).toBe('NCT03722472');
     });
 
     it('rejects NCT ID with wrong digit count', () => {
@@ -95,6 +98,20 @@ describe('studyResource', () => {
       expect(result.study).toEqual(study);
       expect(result.nctId).toBe('NCT03722472');
       expect(mockService.getStudy).toHaveBeenCalledWith('NCT03722472', expect.anything());
+    });
+
+    it('reads a lowercase URI by its canonical ID in the lookup, echo, and retrieval pointer (#140)', async () => {
+      const result = await read(
+        {
+          hasResults: true,
+          protocolSection: { identificationModule: { nctId: 'NCT03722472' } },
+          resultsSection: { outcomeMeasuresModule: { outcomeMeasures: [{ title: 'A' }] } },
+        },
+        'nct03722472',
+      );
+      expect(mockService.getStudy).toHaveBeenCalledWith('NCT03722472', expect.anything());
+      expect(result.nctId).toBe('NCT03722472');
+      expect(result.retrieval?.nctId).toBe('NCT03722472');
     });
 
     it('reports an untrimmed study as complete, with no retrieval pointers (#102)', async () => {

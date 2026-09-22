@@ -4,7 +4,7 @@ All notable changes to this project. Each entry links to its full per-version fi
 
 ## [2.9.9](changelog/2.9.x/2.9.9.md) — 2026-09-22
 
-search_studies' default index gains hasResults and key dates, and statusFilter/NCT ID inputs now accept case and spacing variants instead of failing upstream.
+search_studies' default index gains hasResults and key dates, and statusFilter/NCT ID inputs now accept case and spacing variants instead of being rejected.
 
 ## [2.9.8](changelog/2.9.x/2.9.8.md) — 2026-09-18
 

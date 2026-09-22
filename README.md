@@ -61,7 +61,7 @@ Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltr
 
 - Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`; `statusFilter` (case- and separator-insensitive, registry display labels included: `"Active, not recruiting"` works) / `phaseFilter` enums, `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]` syntax), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix) for proximity search with nearest-site re-ranking
 - Returns a compact per-study index by default (`nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `leadSponsor`, `conditions`, `hasResults`, `startDate`, `primaryCompletionDate`, a bounded locations summary); pass `fields` (PascalCase leaves) for a full-fidelity projection — full records run ~70KB
-- `pageSize` 1–`CT_MAX_PAGE_SIZE` (default 200), cursor pagination via `pageToken`, `sort` on up to 2 fields
+- `pageSize` 1–`CT_MAX_PAGE_SIZE` (default 10; the cap is 200 unless overridden), cursor pagination via `pageToken`, `sort` on up to 2 fields
 - Excludes the upstream "unknown" enrollment sentinel (`99999999`) by default — `includeUnknownEnrollment` to include it, or automatically lifted when `nctIds` is supplied
 - Typed errors: `blank_value`, `ids_not_found`, `field_invalid`, `enum_invalid`, `query_parse_error`, `geo_invalid`, `sort_invalid`, `rate_limited`
 

@@ -29,6 +29,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
       code: JsonRpcErrorCode.ValidationError,
       when: 'A requested field name is not a valid PascalCase piece name.',
       recovery: RECOVERY_HINTS.field_invalid,
+      thrownBy: 'service',
     },
     {
       reason: 'rate_limited',
@@ -36,6 +37,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
       when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
       recovery: RECOVERY_HINTS.rate_limited,
       retryable: true,
+      thrownBy: 'service',
     },
   ],
 

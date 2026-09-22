@@ -101,6 +101,7 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
       when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
       recovery: RECOVERY_HINTS.rate_limited,
       retryable: true,
+      thrownBy: 'service',
     },
   ],
 

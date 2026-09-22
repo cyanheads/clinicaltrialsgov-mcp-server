@@ -114,6 +114,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       code: JsonRpcErrorCode.NotFound,
       when: 'The provided NCT ID does not match any study at ClinicalTrials.gov.',
       recovery: RECOVERY_HINTS.study_not_found,
+      thrownBy: 'service',
     },
     {
       reason: 'rate_limited',
@@ -121,6 +122,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
       recovery: RECOVERY_HINTS.rate_limited,
       retryable: true,
+      thrownBy: 'service',
     },
   ],
 

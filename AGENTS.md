@@ -2,10 +2,10 @@
 
 **Server:** clinicaltrialsgov-mcp-server
 **Version:** 2.9.8
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.4`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.6`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.0.0
-**Zod:** ^4.6.1
+**Zod:** ^4.6.5
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
 
@@ -13,7 +13,7 @@
 
 ## Overview
 
-MCP server wrapping the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — the US National Library of Medicine's registry of ~577K clinical trial studies. Public, read-only, no auth required.
+MCP server wrapping the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — the US National Library of Medicine's registry of 600K+ clinical trial studies. Public, read-only, no auth required.
 
 **Design doc:** `docs/design.md` — full MCP surface design, tool schemas, service plan, implementation checklist.
 **API reference:** `docs/api-reference.md` — complete ClinicalTrials.gov v2 endpoint reference.
@@ -228,7 +228,7 @@ Note: `ctx.state` is available but unused — this is a stateless read-only serv
 
 Handlers throw — the framework catches, classifies, and formats.
 
-**Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable? }]` on `tool()` / `resource()` to receive a typed `ctx.fail(reason, …)` keyed by the declared reason union. TypeScript catches `ctx.fail('typo')` at compile time, `data.reason` is auto-populated for observability, and the linter enforces conformance against the handler body. The `recovery` field is required descriptive metadata (≥ 5 words, lint-validated); for the wire payload's `data.recovery.hint` (which the framework mirrors into `content[]` text), spread `ctx.recoveryFor('reason')` for the contract default, or pass `{ recovery: { hint: '...' } }` explicitly when dynamic context matters. Baseline codes (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`, `SerializationError`, `RequestCancelled`) bubble freely and don't need declaring.
+**Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable?, severity?, thrownBy? }]` on `tool()` / `resource()` to receive a typed `ctx.fail(reason, …)` keyed by the declared reason union. TypeScript catches `ctx.fail('typo')` at compile time, `data.reason` is auto-populated for observability, and the linter enforces conformance against the handler body. The `recovery` field is required descriptive metadata (≥ 5 words, lint-validated); for the wire payload's `data.recovery.hint` (which the framework mirrors into `content[]` text unless the message already contains it verbatim), spread `ctx.recoveryFor('reason')` for the contract default, or pass `{ recovery: { hint: '...' } }` explicitly when dynamic context matters. Forwarding it is lint-enforced per throw site (`error-contract-recovery-unforwarded`). Most reasons here are raised in `ClinicalTrialsService` (a factory error carrying `data.reason` and a recovery hint), not by the handler — mark those entries `thrownBy: 'service'` so `error-contract-unthrown`, which reads only the handler body, skips them; it is lint-only metadata. Baseline codes (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`, `SerializationError`, `RequestCancelled`) bubble freely and don't need declaring.
 
 ```ts
 import { JsonRpcErrorCode } from "@cyanheads/mcp-ts-core/errors";

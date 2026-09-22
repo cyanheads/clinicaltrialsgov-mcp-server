@@ -275,6 +275,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
       recovery: RECOVERY_HINTS.rate_limited,
       retryable: true,
+      thrownBy: 'service',
     },
   ],
 

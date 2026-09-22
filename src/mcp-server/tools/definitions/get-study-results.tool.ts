@@ -47,6 +47,11 @@ function text(value: unknown): string | undefined {
   return s.length > 0 ? s : undefined;
 }
 
+/** Render a section's group count, singular for one group. */
+function groupsLabel(count: unknown): string {
+  return `${count} ${count === 1 ? 'group' : 'groups'}`;
+}
+
 /** The measurement fields both channels render, common to the raw and condensed shapes. */
 interface MeasurementFields {
   comment?: unknown;
@@ -239,34 +244,50 @@ function summarizeOutcome(o: Record<string, unknown>) {
 
 const TOP_EVENTS_LIMIT = 20;
 
-interface TopAdverseEvent {
-  kind: 'serious' | 'other';
+/** One event group's affected/at-risk count for a single adverse event. */
+interface EventGroupStat {
+  groupId: string;
   numAffected: number;
   numAtRisk: number;
+}
+
+interface TopAdverseEvent {
+  byGroup: EventGroupStat[];
+  kind: 'serious' | 'other';
   organSystem: string;
   term: string;
 }
 
-/** Sum an adverse event's per-group stats into trial-wide affected/at-risk totals. */
-function aggregateEventStats(ev: Record<string, unknown>): {
-  numAffected: number;
-  numAtRisk: number;
-} {
+/**
+ * An adverse event's per-group stats, one row per event group, keyed by group
+ * id against the `eventGroups` roster the summary carries — the full-mode
+ * convention (#128). Twenty events each repeating every group's title cost more
+ * than the counts they label, and two titles can differ only in a trailing
+ * "(Second Course)". Never summed: event groups can overlap (a crossover or
+ * second-course group re-counts participants of its parent arm), so a
+ * cross-group total is not a participant count and its ratio is not an incidence.
+ */
+function eventStatsByGroup(ev: Record<string, unknown>): EventGroupStat[] {
   const stats = (ev.stats as Array<Record<string, unknown>> | undefined) ?? [];
-  let numAffected = 0;
-  let numAtRisk = 0;
-  for (const s of stats) {
-    numAffected += Number(s.numAffected) || 0;
-    numAtRisk += Number(s.numAtRisk) || 0;
-  }
-  return { numAffected, numAtRisk };
+  return stats.map((s) => ({
+    groupId: s.groupId as string,
+    numAffected: Number(s.numAffected) || 0,
+    numAtRisk: Number(s.numAtRisk) || 0,
+  }));
+}
+
+/** The most participants one event group reports for an event — its ranking key. */
+function peakAffected(ev: TopAdverseEvent): number {
+  return Math.max(0, ...ev.byGroup.map((s) => s.numAffected));
 }
 
 /**
- * Rank the most frequent adverse events across serious and other groups,
- * aggregating each term's affected/at-risk counts across all arms. Trial-wide
- * incidence view for summary mode — "which AEs and how common" in ~5KB rather
- * than the full ~450KB nested structure.
+ * Rank the most frequent adverse events across serious and other events for
+ * summary mode — "which AEs and how common, per arm" in a few KB rather than the
+ * full ~450KB nested structure. Ranked by the largest single group's count, a
+ * figure upstream actually reports, so which events make the cut never depends
+ * on a sum that can double-count. The sort is stable: ties keep serious events
+ * first, then upstream order.
  */
 function topAdverseEvents(ae: Record<string, unknown>): TopAdverseEvent[] {
   const collect = (events: unknown, kind: 'serious' | 'other'): TopAdverseEvent[] =>
@@ -275,23 +296,35 @@ function topAdverseEvents(ae: Record<string, unknown>): TopAdverseEvent[] {
           term: (ev.term as string) ?? 'Unspecified',
           organSystem: (ev.organSystem as string) ?? '',
           kind,
-          ...aggregateEventStats(ev),
+          byGroup: eventStatsByGroup(ev),
         }))
       : [];
   return [...collect(ae.seriousEvents, 'serious'), ...collect(ae.otherEvents, 'other')]
-    .sort((a, b) => b.numAffected - a.numAffected)
+    .sort((a, b) => peakAffected(b) - peakAffected(a))
     .slice(0, TOP_EVENTS_LIMIT);
 }
 
-/** Condense the adverse events module to counts plus a ranked top-events view. */
+/**
+ * Condense the adverse events module to counts, the event group roster the
+ * top-events rows are keyed against (id and title only), and a ranked
+ * top-events view.
+ */
 function summarizeAdverseEvents(ae: Record<string, unknown>) {
-  const events = ae.eventGroups as Array<Record<string, unknown>> | undefined;
+  const groups = ae.eventGroups as Array<Record<string, unknown>> | undefined;
   const topEvents = topAdverseEvents(ae);
   return {
     timeFrame: ae.timeFrame,
-    groupCount: Array.isArray(events) ? events.length : undefined,
+    groupCount: Array.isArray(groups) ? groups.length : undefined,
     seriousEventCount: Array.isArray(ae.seriousEvents) ? ae.seriousEvents.length : undefined,
     otherEventCount: Array.isArray(ae.otherEvents) ? ae.otherEvents.length : undefined,
+    ...(groups?.length
+      ? {
+          eventGroups: groups.map((g) => {
+            const title = text(g.title);
+            return { id: g.id as string, ...(title ? { title } : {}) };
+          }),
+        }
+      : {}),
     ...(topEvents.length > 0 ? { topEvents } : {}),
   };
 }
@@ -723,7 +756,7 @@ function formatOutcomes(outcomes: RO[], lines: string[]) {
       text(o.paramType),
       text(o.dispersionType),
       text(o.unitOfMeasure),
-      groupCount != null ? `${groupCount} groups` : '',
+      groupCount != null ? groupsLabel(groupCount) : '',
       classCount != null ? `${classCount} classes` : '',
       o.reportingStatus ? `reporting: ${o.reportingStatus as string}` : '',
     ]
@@ -791,22 +824,29 @@ function formatAdverseEvents(ae: RO, lines: string[]) {
   const mortality = text(ae.allCauseMortalityComment);
   if (mortality) lines.push(`All-cause mortality: ${mortality}`);
 
-  // Summary shape — counts plus the ranked top-events view, no raw event arrays.
-  // Detected on the summarizer's own keys, so a full module that happens to
-  // publish no events still takes the full path and renders its event groups.
+  // Summary shape — counts, the id/title roster, and the ranked top-events view
+  // keyed against it; no raw event arrays. Detected on the summarizer's own
+  // keys, so a full module that happens to publish no events still takes the
+  // full path and renders its event groups.
   if ('groupCount' in ae || 'seriousEventCount' in ae || 'otherEventCount' in ae) {
     const parts = [
-      ae.groupCount != null ? `${ae.groupCount} groups` : '',
+      ae.groupCount != null ? groupsLabel(ae.groupCount) : '',
       ae.seriousEventCount != null ? `${ae.seriousEventCount} serious events` : '',
       ae.otherEventCount != null ? `${ae.otherEventCount} other events` : '',
     ].filter(Boolean);
     if (parts.length) lines.push(parts.join(' | '));
+    renderGroupRoster(ae, '', lines, 'Event Groups');
     const topEvents = ae.topEvents as Array<RO> | undefined;
     if (topEvents?.length) {
-      lines.push(`\n**Most frequent events** (top ${topEvents.length} by participants affected)`);
+      lines.push(
+        `\n**Most frequent events** (top ${topEvents.length} by participants affected in any one event group; affected/at risk per group)`,
+      );
       for (const ev of topEvents) {
         const sys = ev.organSystem ? ` _(${ev.organSystem as string})_` : '';
-        lines.push(`- ${ev.term}${sys} — ${ev.numAffected}/${ev.numAtRisk} affected [${ev.kind}]`);
+        const cells = ((ev.byGroup as Array<RO> | undefined) ?? [])
+          .map((s) => `${cellGroup(s.groupId)}: ${s.numAffected}/${s.numAtRisk}`)
+          .join(' | ');
+        lines.push(`- ${ev.term}${sys} [${ev.kind}]${cells ? ` — ${cells}` : ''}`);
       }
     }
     return;
@@ -851,7 +891,7 @@ function formatParticipantFlow(pf: RO, lines: string[]) {
   // Summary shape — only counts.
   if ('groupCount' in pf || 'periodCount' in pf) {
     const parts = [
-      pf.groupCount != null ? `${pf.groupCount} groups` : '',
+      pf.groupCount != null ? groupsLabel(pf.groupCount) : '',
       pf.periodCount != null ? `${pf.periodCount} periods` : '',
     ].filter(Boolean);
     if (parts.length) lines.push(parts.join(' | '));
@@ -895,7 +935,7 @@ function formatBaseline(bl: RO, lines: string[]) {
   // Summary shape — counts plus each measure's identifying metadata.
   if ('groupCount' in bl || 'measureCount' in bl) {
     const parts = [
-      bl.groupCount != null ? `${bl.groupCount} groups` : '',
+      bl.groupCount != null ? groupsLabel(bl.groupCount) : '',
       bl.measureCount != null ? `${bl.measureCount} measures` : '',
     ].filter(Boolean);
     if (parts.length) lines.push(parts.join(' | '));
@@ -1031,7 +1071,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       .max(500)
       .optional()
       .describe(
-        'Optional cap on the number of serious and other adverse events returned per study, applied to each list separately in upstream order. Omit for no cap (every event). Applies to full mode only — summary mode already ranks the top 20 by participants affected. Event groups are never capped. Upstream totals preserved in filtersApplied.totalSeriousEvents / totalOtherEvents only when the cap trims a list.',
+        'Optional cap on the number of serious and other adverse events returned per study, applied to each list separately in upstream order. Omit for no cap (every event). Applies to full mode only — summary mode already ranks the top 20 by the most participants affected in any one event group. Event groups are never capped. Upstream totals preserved in filtersApplied.totalSeriousEvents / totalOtherEvents only when the cap trims a list.',
       ),
     outcomeOffset: z
       .number()
@@ -1087,7 +1127,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
               .record(z.string(), z.unknown())
               .optional()
               .describe(
-                'Adverse events. Summary mode: timeFrame, groupCount, seriousEventCount, otherEventCount, plus topEvents — the most frequent events ranked by participants affected, aggregated across arms (term, organSystem, kind, numAffected, numAtRisk). Full mode: adds eventGroups, seriousEvents, otherEvents with per-event term and per-group affected/at-risk stats.',
+                'Adverse events. Summary mode: timeFrame, groupCount, seriousEventCount, otherEventCount, eventGroups (id and title of each event group), plus topEvents — up to 20 events ranked by the most participants affected in any one event group, each with term, organSystem, kind, and byGroup (one { groupId, numAffected, numAtRisk } row per event group; resolve groupId against eventGroups). Counts are never pooled across groups: groups can overlap (a crossover or second-course group re-counts participants of its parent arm), so compare arms row by row. Full mode: eventGroups with descriptions and per-group totals, plus seriousEvents and otherEvents with per-event term and per-group affected/at-risk stats.',
               ),
             participantFlow: z
               .record(z.string(), z.unknown())

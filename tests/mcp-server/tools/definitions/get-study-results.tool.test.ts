@@ -355,7 +355,7 @@ describe('getStudyResults', () => {
       expect(ae.topEvents).toHaveLength(3);
     });
 
-    it('ranks topEvents by participants affected across arms in summary mode (#61)', async () => {
+    it('ranks topEvents by participants affected in their largest group (#61, #137)', async () => {
       const study = makeStudy('NCT02130466', true, {
         adverseEventsModule: {
           timeFrame: '3 years',
@@ -398,20 +398,27 @@ describe('getStudyResults', () => {
         term: string;
         organSystem: string;
         kind: string;
-        numAffected: number;
-        numAtRisk: number;
+        byGroup: Array<{ groupId: string; numAffected: number; numAtRisk: number }>;
       }>;
 
       expect(topEvents).toHaveLength(2);
-      // Headache (30+40=70 affected) outranks Anaemia (5+12=17).
+      // Headache (40 in its largest group) outranks Anaemia (12).
       expect(topEvents[0]).toEqual({
         term: 'Headache',
         organSystem: 'Nervous system disorders',
         kind: 'other',
-        numAffected: 70,
-        numAtRisk: 200,
+        byGroup: [
+          { groupId: 'G1', numAffected: 30, numAtRisk: 100 },
+          { groupId: 'G2', numAffected: 40, numAtRisk: 100 },
+        ],
       });
-      expect(topEvents[1]).toMatchObject({ term: 'Anaemia', kind: 'serious', numAffected: 17 });
+      // The roster the rows are keyed against, trimmed to id and title.
+      expect(result.results[0]!.adverseEvents!.eventGroups).toEqual([
+        { id: 'G1', title: 'Placebo' },
+        { id: 'G2', title: 'Drug' },
+      ]);
+      expect(topEvents[1]).toMatchObject({ term: 'Anaemia', kind: 'serious' });
+      expect(topEvents[1]!.byGroup.map((s) => s.numAffected)).toEqual([5, 12]);
       // Raw event arrays must not leak into summary mode.
       expect(result.results[0]!.adverseEvents!.seriousEvents).toBeUndefined();
     });
@@ -436,6 +443,228 @@ describe('getStudyResults', () => {
       const topEvents = result.results[0]!.adverseEvents!.topEvents as Array<{ term: string }>;
       expect(topEvents).toHaveLength(20);
       expect(topEvents[0]!.term).toBe('Event 29');
+    });
+
+    describe('topEvents keep each event group separate (#137)', () => {
+      /**
+       * KEYNOTE-189's event groups (NCT02578680). EG002–EG004 are drawn from the
+       * participants of EG000/EG001, so the five groups overlap: their at-risk
+       * counts sum to 702 against 607 treated participants.
+       */
+      const keynoteGroups = [
+        {
+          id: 'EG000',
+          title:
+            'Pembrolizumab+Pemetrexed+Platinum Chemotherapy Followed by Pembrolizumab+Pemetrexed',
+        },
+        { id: 'EG001', title: 'Control' },
+        { id: 'EG002', title: 'Control Switched Over to Pembrolizumab Monotherapy' },
+        {
+          id: 'EG003',
+          title: 'Control Switched Over to Pembrolizumab Monotherapy (Second Course)',
+        },
+        {
+          id: 'EG004',
+          title:
+            'Pembrolizumab+Pemetrexed+Platinum Chemotherapy Followed by Pembrolizumab+Pemetrexed (Second Course)',
+        },
+      ];
+
+      /** Per-group stat rows from `[groupId, numAffected, numAtRisk]` triples. */
+      const stats = (...rows: Array<[string, number, number]>) =>
+        rows.map(([groupId, numAffected, numAtRisk]) => ({ groupId, numAffected, numAtRisk }));
+
+      /** KEYNOTE-189's three most frequent other events, per group as upstream publishes them. */
+      const keynoteModule = () => ({
+        timeFrame: 'Up to approximately 88 months',
+        eventGroups: keynoteGroups,
+        otherEvents: [
+          {
+            term: 'Anaemia',
+            organSystem: 'Blood and lymphatic system disorders',
+            stats: stats(
+              ['EG000', 186, 405],
+              ['EG001', 91, 202],
+              ['EG002', 6, 84],
+              ['EG003', 0, 2],
+              ['EG004', 0, 9],
+            ),
+          },
+          {
+            term: 'Nausea',
+            organSystem: 'Gastrointestinal disorders',
+            stats: stats(
+              ['EG000', 232, 405],
+              ['EG001', 103, 202],
+              ['EG002', 16, 84],
+              ['EG003', 0, 2],
+              ['EG004', 1, 9],
+            ),
+          },
+          {
+            term: 'Fatigue',
+            organSystem: 'General disorders',
+            stats: stats(
+              ['EG000', 173, 405],
+              ['EG001', 80, 202],
+              ['EG002', 8, 84],
+              ['EG003', 0, 2],
+              ['EG004', 1, 9],
+            ),
+          },
+        ],
+      });
+
+      const summarize = (adverseEventsModule: Record<string, unknown>) =>
+        runTool(
+          { sections: 'adverseEvents', summary: true },
+          makeStudy('NCT12345678', true, { adverseEventsModule }),
+        );
+
+      type Row = { groupId: string; numAffected: number; numAtRisk: number };
+      type TopEvent = {
+        byGroup: Row[];
+        kind: string;
+        numAffected?: number;
+        numAtRisk?: number;
+        organSystem: string;
+        term: string;
+      };
+      const topEventsOf = (entry: { adverseEvents?: Record<string, unknown> | undefined }) =>
+        entry.adverseEvents!.topEvents as TopEvent[];
+
+      it('leaves topEvents absent when the module publishes no events', async () => {
+        const { entry, text } = await summarize({ eventGroups: keynoteGroups });
+        expect(entry.adverseEvents).not.toHaveProperty('topEvents');
+        expect(text).toContain('5 groups');
+        expect(text).not.toContain('Most frequent events');
+      });
+
+      it('reports overlapping groups one row each, never pooled across groups', async () => {
+        const { entry } = await summarize(keynoteModule());
+        const nausea = topEventsOf(entry).find((e) => e.term === 'Nausea')!;
+        expect(nausea.byGroup).toEqual([
+          { groupId: 'EG000', numAffected: 232, numAtRisk: 405 },
+          { groupId: 'EG001', numAffected: 103, numAtRisk: 202 },
+          { groupId: 'EG002', numAffected: 16, numAtRisk: 84 },
+          { groupId: 'EG003', numAffected: 0, numAtRisk: 2 },
+          { groupId: 'EG004', numAffected: 1, numAtRisk: 9 },
+        ]);
+        expect(entry.adverseEvents!.eventGroups).toEqual(keynoteGroups);
+        // The pooled 352/702 is gone from every entry, not just this one.
+        for (const event of topEventsOf(entry)) {
+          expect(event).not.toHaveProperty('numAffected');
+          expect(event).not.toHaveProperty('numAtRisk');
+          expect(event.byGroup).toHaveLength(5);
+        }
+        expect(topEventsOf(entry).map((e) => e.term)).toEqual(['Nausea', 'Anaemia', 'Fatigue']);
+      });
+
+      it('ranks by the largest single group, not the sum across groups', async () => {
+        // Sum ranking puts the two-group event first (30 + 40 = 70 > 45); the
+        // largest single group puts the one-group event first (45 > 40).
+        const { entry } = await summarize({
+          eventGroups: [
+            { id: 'G1', title: 'Arm A' },
+            { id: 'G2', title: 'Arm B' },
+          ],
+          otherEvents: [
+            { term: 'Spread out', stats: stats(['G1', 30, 100], ['G2', 40, 100]) },
+            { term: 'Concentrated', stats: stats(['G1', 45, 100]) },
+          ],
+        });
+        expect(topEventsOf(entry).map((e) => e.term)).toEqual(['Concentrated', 'Spread out']);
+      });
+
+      it('keeps list order, serious first, between events tied on their largest group', async () => {
+        const { entry } = await summarize({
+          eventGroups: [
+            { id: 'G1', title: 'Arm A' },
+            { id: 'G2', title: 'Arm B' },
+          ],
+          seriousEvents: [{ term: 'Serious tie', stats: stats(['G1', 10, 50]) }],
+          otherEvents: [
+            { term: 'Other tie', stats: stats(['G1', 10, 50], ['G2', 9, 50]) },
+            { term: 'Other lower', stats: stats(['G2', 9, 50]) },
+          ],
+        });
+        expect(topEventsOf(entry).map((e) => e.term)).toEqual([
+          'Serious tie',
+          'Other tie',
+          'Other lower',
+        ]);
+      });
+
+      it('carries exactly one row for a single-group study and renders no comparison', async () => {
+        const { entry, text } = await summarize({
+          eventGroups: [{ id: 'EG000', title: 'All participants' }],
+          otherEvents: [{ term: 'Headache', stats: stats(['EG000', 5, 100]) }],
+        });
+        expect(topEventsOf(entry)[0]!.byGroup).toEqual([
+          { groupId: 'EG000', numAffected: 5, numAtRisk: 100 },
+        ]);
+        expect(text).toContain('Event Groups:\n- EG000: All participants\n');
+        const line = text.split('\n').find((l) => l.startsWith('- Headache'));
+        expect(line).toBe('- Headache [other] — EG000: 5/100');
+        expect(text).toContain('1 group');
+        expect(text).not.toContain('1 groups');
+      });
+
+      it('still lists an event that publishes no per-group stats, with an empty byGroup', async () => {
+        const { entry, text } = await summarize({
+          eventGroups: keynoteGroups,
+          seriousEvents: [{ term: 'Sepsis', organSystem: 'Infections and infestations' }],
+        });
+        expect(topEventsOf(entry).map((e) => [e.term, e.kind, e.byGroup])).toEqual([
+          ['Sepsis', 'serious', []],
+        ]);
+        expect(text).toContain('- Sepsis _(Infections and infestations)_ [serious]\n');
+      });
+
+      it('keeps a row whose group is untitled or missing from the roster, named by its id', async () => {
+        const { entry, text } = await summarize({
+          eventGroups: [{ id: 'EG000' }],
+          otherEvents: [{ term: 'Rash', stats: stats(['EG000', 2, 10], ['EG009', 3, 12]) }],
+        });
+        expect(entry.adverseEvents!.eventGroups).toEqual([{ id: 'EG000' }]);
+        expect(topEventsOf(entry)[0]!.byGroup).toEqual([
+          { groupId: 'EG000', numAffected: 2, numAtRisk: 10 },
+          { groupId: 'EG009', numAffected: 3, numAtRisk: 12 },
+        ]);
+        expect(text).toContain('Event Groups:\n- EG000\n');
+        expect(text).toContain('- Rash [other] — EG000: 2/10 | EG009: 3/12');
+      });
+
+      it('still caps at 20 ranked events when the cap is reached', async () => {
+        const { entry } = await summarize({
+          eventGroups: [
+            { id: 'G1', title: 'Arm A' },
+            { id: 'G2', title: 'Arm B' },
+          ],
+          otherEvents: Array.from({ length: 25 }, (_, i) => ({
+            term: `Event ${i}`,
+            // Every sum is 100; only the largest single group separates them.
+            stats: stats(['G1', 50 + i, 200], ['G2', 50 - i, 200]),
+          })),
+        });
+        const terms = topEventsOf(entry).map((e) => e.term);
+        expect(terms).toHaveLength(20);
+        expect(terms[0]).toBe('Event 24');
+        expect(terms[19]).toBe('Event 5');
+      });
+
+      it('renders the roster once and every byGroup row by id in content[] (channel parity)', async () => {
+        const { entry, text } = await summarize(keynoteModule());
+        expect(missingLeaves(entry.adverseEvents, text)).toEqual([]);
+        // Each title is printed once, in the roster, and never on the event rows.
+        for (const g of keynoteGroups) expect(text).toContain(`\n- ${g.id}: ${g.title}\n`);
+        expect(text.split('\n').filter((l) => l.includes('Control Switched'))).toHaveLength(2);
+        expect(text).toContain(
+          '- Nausea _(Gastrointestinal disorders)_ [other] — EG000: 232/405 | EG001: 103/202 | EG002: 16/84 | EG003: 0/2 | EG004: 1/9',
+        );
+        expect(text).not.toContain('352/702');
+        expect(text).toContain('in any one event group');
+      });
     });
 
     it('summarizes participant flow in summary mode', async () => {
@@ -1620,7 +1849,7 @@ describe('getStudyResults', () => {
       expect(text).toContain('12 months');
     });
 
-    it('renders the topEvents table in summary-mode adverse events (#61)', () => {
+    it('renders the topEvents table in summary-mode adverse events, one cell per group (#61, #137)', () => {
       const blocks = getStudyResults.format!({
         results: [
           {
@@ -1631,20 +1860,28 @@ describe('getStudyResults', () => {
               timeFrame: '3 years',
               seriousEventCount: 1,
               otherEventCount: 1,
+              eventGroups: [
+                { id: 'G1', title: 'Placebo' },
+                { id: 'G2', title: 'Drug' },
+              ],
               topEvents: [
                 {
                   term: 'Headache',
                   organSystem: 'Nervous system disorders',
                   kind: 'other',
-                  numAffected: 70,
-                  numAtRisk: 200,
+                  byGroup: [
+                    { groupId: 'G1', numAffected: 30, numAtRisk: 100 },
+                    { groupId: 'G2', numAffected: 40, numAtRisk: 100 },
+                  ],
                 },
                 {
                   term: 'Anaemia',
                   organSystem: 'Blood and lymphatic system disorders',
                   kind: 'serious',
-                  numAffected: 17,
-                  numAtRisk: 200,
+                  byGroup: [
+                    { groupId: 'G1', numAffected: 5, numAtRisk: 100 },
+                    { groupId: 'G2', numAffected: 12, numAtRisk: 100 },
+                  ],
                 },
               ],
             },
@@ -1652,10 +1889,14 @@ describe('getStudyResults', () => {
         ],
       });
       const text = (blocks[0] as { text: string }).text;
+      expect(text).toContain('Event Groups:\n- G1: Placebo\n- G2: Drug\n');
       expect(text).toContain('Most frequent events');
-      expect(text).toContain('Headache');
-      expect(text).toContain('70/200 affected');
-      expect(text).toContain('[other]');
+      expect(text).toContain(
+        '- Headache _(Nervous system disorders)_ [other] — G1: 30/100 | G2: 40/100',
+      );
+      expect(text).toContain(
+        '- Anaemia _(Blood and lymphatic system disorders)_ [serious] — G1: 5/100 | G2: 12/100',
+      );
     });
 
     it('renders every adverse event in full mode without a row cap (#63)', () => {

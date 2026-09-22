@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.9.10](changelog/2.9.x/2.9.10.md) — 2026-09-22
+
+get_study_results' adverse-event summary reports each event group separately instead of pooling them, and find_eligible admits its fallback recruiting site by distance instead of upstream list order.
+
 ## [2.9.9](changelog/2.9.x/2.9.9.md) — 2026-09-22
 
 search_studies' default index gains hasResults and key dates, and statusFilter/NCT ID inputs now accept case and spacing variants instead of being rejected.

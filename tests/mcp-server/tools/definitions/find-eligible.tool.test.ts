@@ -19,6 +19,7 @@ import {
   conditionMatchScore,
   findEligible,
 } from '@/mcp-server/tools/definitions/find-eligible.tool.js';
+import { loadStudyFixture } from '../../../helpers/format-parity.js';
 
 const baseInput = {
   age: 30,
@@ -1129,12 +1130,14 @@ describe('findEligible', () => {
       state: string,
       country = 'United States',
       status = 'RECRUITING',
+      geoPoint?: { lat: number; lon: number },
     ) => ({
       facility,
       city,
       state,
       country,
       status,
+      ...(geoPoint ? { geoPoint } : {}),
     });
 
     /** Run the handler and return the single bounded candidate it produced. */
@@ -1576,8 +1579,410 @@ describe('findEligible', () => {
         );
         expect(text).toContain('showing 2 of 5');
         expect(text).toContain('1 match the requested location');
-        expect(text).toContain('nearest recruiting site');
+        // No site here publishes coordinates, so the admission is by match
+        // order and the text makes no distance claim (#138).
+        expect(text).toContain('none of them is recruiting, so one recruiting site');
+        expect(text).not.toContain('nearest');
         expect(text).not.toContain('Deaconess');
+      });
+
+      it('surfaces a matched-tier recruiting site listed past the cap inside the cap, admitting nothing', async () => {
+        // The recruiting tie-break sorts an open matched site ahead of its
+        // closed peers, so it can never sit past the cap while the cap shows
+        // only closed sites — the admission rule is never reached for it.
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            ...Array.from({ length: 12 }, (_, i) =>
+              site(`Seattle ${i}`, 'Seattle', 'Washington', 'United States', 'NOT_YET_RECRUITING'),
+            ),
+            site('Seattle open', 'Seattle', 'Washington'),
+            site('Renton open', 'Renton', 'Washington'),
+          ]),
+          { locationLimit: 3 },
+        );
+        expect(facilities(candidate)).toEqual(['Seattle open', 'Seattle 0', 'Seattle 1']);
+        expect(candidate.locationSummary?.nearestRecruitingSiteAdded).toBeUndefined();
+      });
+    });
+
+    describe('recruiting site admitted by distance (#138)', () => {
+      const at = (lat: number, lon: number) => ({ lat, lon });
+      // Published coordinates from NCT07062965's own site list.
+      const SEATTLE = at(47.60621, -122.33207);
+      const CHANDLER = at(33.30616, -111.84125);
+      const SALT_LAKE_CITY = at(40.76078, -111.89105);
+
+      type Located = Record<string, unknown> & { distanceMi?: number; facility?: string };
+      const admittedSite = (candidate: CandidateStudy) =>
+        candidate.protocolSection.contactsLocationsModule!.locations!.at(-1) as Located;
+
+      const run = async (study: unknown, overrides: Record<string, unknown> = {}) => {
+        mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
+        const ctx = createMockContext({ errors: findEligible.errors });
+        const result = await findEligible.handler(
+          findEligible.input!.parse({ ...baseInput, ...overrides }),
+          ctx,
+        );
+        return {
+          candidate: result.studies[0] as CandidateStudy,
+          text: (findEligible.format!(result)[0] as { text: string }).text,
+        };
+      };
+
+      it('requests LocationGeoPoint alongside the eligibility fields', async () => {
+        mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+        const ctx = createMockContext({ errors: findEligible.errors });
+        await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+        const fields = mockService.searchStudies.mock.calls[0]![0].fields as string[];
+        expect(fields).toContain('LocationGeoPoint');
+        expect(fields).toContain('LocationStatus');
+      });
+
+      it('admits the nearest recruiting site on the reported study, not the first listed', async () => {
+        // NCT07062965 as ClinicalTrials.gov returns it for these fields: one
+        // closed Seattle site, and 118 recruiting sites with coordinates, where
+        // Chandler, AZ (~1,129 mi) is listed first and Salt Lake City (~700 mi)
+        // is the nearest.
+        const { candidate, text } = await run(loadStudyFixture('nct07062965'), {
+          age: 58,
+          sex: 'FEMALE',
+          conditions: ['breast cancer'],
+          locationLimit: 3,
+        });
+        expect(facilities(candidate)).toEqual([
+          'Fred Hutchinson Cancer Center',
+          'Huntsman Cancer Institute',
+        ]);
+        expect(admittedSite(candidate)).toMatchObject({
+          city: 'Salt Lake City',
+          status: 'RECRUITING',
+          distanceMi: 699.8,
+        });
+        expect(candidate.locationSummary).toEqual({
+          totalLocations: 202,
+          matchedLocations: 1,
+          locationsTruncated: false,
+          nearestRecruitingSiteAdded: true,
+          retrieveFullStudyWith: 'clinicaltrials_get_study_record',
+        });
+        expect(text).toContain(
+          'none of them is recruiting, so the nearest recruiting site is included',
+        );
+        expect(text).toContain(
+          'Huntsman Cancer Institute, Salt Lake City, Utah, United States [RECRUITING] (699.8 mi from the nearest matched site)',
+        );
+        expect(text).not.toContain('Chandler');
+      });
+
+      it('lets a nearer site listed later beat a farther site listed earlier', async () => {
+        const { candidate } = await run(
+          studyWith('NCT07062965', [
+            site(
+              'Fred Hutch',
+              'Seattle',
+              'Washington',
+              'United States',
+              'NOT_YET_RECRUITING',
+              SEATTLE,
+            ),
+            site('Ironwood', 'Chandler', 'Arizona', 'United States', 'RECRUITING', CHANDLER),
+            site(
+              'Huntsman',
+              'Salt Lake City',
+              'Utah',
+              'United States',
+              'RECRUITING',
+              SALT_LAKE_CITY,
+            ),
+          ]),
+        );
+        expect(facilities(candidate)).toEqual(['Fred Hutch', 'Huntsman']);
+        expect(admittedSite(candidate).distanceMi).toBe(699.8);
+      });
+
+      it('carries the same distance in structuredContent and content[] (#46/#91)', async () => {
+        const { candidate, text } = await run(
+          studyWith('NCT1', [
+            site(
+              'Fred Hutch',
+              'Seattle',
+              'Washington',
+              'United States',
+              'NOT_YET_RECRUITING',
+              SEATTLE,
+            ),
+            site('Ironwood', 'Chandler', 'Arizona', 'United States', 'RECRUITING', CHANDLER),
+          ]),
+        );
+        const distance = admittedSite(candidate).distanceMi;
+        expect(distance).toBe(1129.2);
+        // The admitted site completes the study's list, so no Sites line renders
+        // (#80) — the distance still reaches content[] on the site itself.
+        expect(candidate.locationSummary).toBeUndefined();
+        expect(text).not.toContain('registered');
+        expect(text).toContain(
+          `Ironwood, Chandler, Arizona, United States [RECRUITING] (${distance} mi from the nearest matched site)`,
+        );
+        // Coordinates are an input to the ranking, not an output: no site in
+        // either channel carries them, so neither channel has a leaf the other lacks.
+        for (const loc of candidate.protocolSection.contactsLocationsModule!.locations!)
+          expect(loc).not.toHaveProperty('geoPoint');
+        expect(text).not.toContain('47.60621');
+      });
+
+      it('keeps list order between candidates tied on distance', async () => {
+        const { candidate } = await run(
+          studyWith('NCT1', [
+            site(
+              'Fred Hutch',
+              'Seattle',
+              'Washington',
+              'United States',
+              'NOT_YET_RECRUITING',
+              SEATTLE,
+            ),
+            site('Ironwood', 'Chandler', 'Arizona', 'United States', 'RECRUITING', CHANDLER),
+            site(
+              'Huntsman A',
+              'Salt Lake City',
+              'Utah',
+              'United States',
+              'RECRUITING',
+              SALT_LAKE_CITY,
+            ),
+            site(
+              'Huntsman B',
+              'Salt Lake City',
+              'Utah',
+              'United States',
+              'RECRUITING',
+              SALT_LAKE_CITY,
+            ),
+          ]),
+        );
+        expect(facilities(candidate)).toEqual(['Fred Hutch', 'Huntsman A']);
+      });
+
+      it('measures from the nearest matched site, including matched sites past the cap', async () => {
+        // Two closed matched sites far apart. The first listed — the only one the
+        // cap shows — is nearest the Washington candidate; the second, past the
+        // cap, is nearest the Oregon one, which is closer still. Measuring from
+        // the first listed or only from the shown sites would pick Washington.
+        const north = at(48.75, -122.48);
+        const south = at(45.52, -122.68);
+        const washington = at(48.42, -122.33);
+        const oregon = at(45.44, -122.62);
+        const { candidate, text } = await run(
+          studyWith('NCT1', [
+            site(
+              'Seattle north',
+              'Seattle',
+              'Washington',
+              'United States',
+              'NOT_YET_RECRUITING',
+              north,
+            ),
+            site(
+              'Seattle south',
+              'Seattle',
+              'Washington',
+              'United States',
+              'NOT_YET_RECRUITING',
+              south,
+            ),
+            site(
+              'Washington open',
+              'Mount Vernon',
+              'Washington',
+              'United States',
+              'RECRUITING',
+              washington,
+            ),
+            site('Oregon open', 'Milwaukie', 'Oregon', 'United States', 'RECRUITING', oregon),
+          ]),
+          { locationLimit: 1 },
+        );
+        expect(facilities(candidate)).toEqual(['Seattle north', 'Oregon open']);
+        expect(admittedSite(candidate).distanceMi).toBe(6.2);
+        expect(candidate.locationSummary).toMatchObject({
+          matchedLocations: 2,
+          locationsTruncated: true,
+          nearestRecruitingSiteAdded: true,
+        });
+        expect(text).toContain('6.2 mi from the nearest matched site');
+      });
+
+      it('ranks only the candidates that publish coordinates', async () => {
+        const { candidate } = await run(
+          studyWith('NCT1', [
+            site(
+              'Fred Hutch',
+              'Seattle',
+              'Washington',
+              'United States',
+              'NOT_YET_RECRUITING',
+              SEATTLE,
+            ),
+            site('Renton open', 'Renton', 'Washington'),
+            site(
+              'Huntsman',
+              'Salt Lake City',
+              'Utah',
+              'United States',
+              'RECRUITING',
+              SALT_LAKE_CITY,
+            ),
+          ]),
+        );
+        expect(facilities(candidate)).toEqual(['Fred Hutch', 'Huntsman']);
+        expect(admittedSite(candidate).distanceMi).toBe(699.8);
+      });
+
+      it('keeps the admitted site in the requested country while one there recruits', async () => {
+        // Vancouver, BC is ~119 mi from Seattle and Duarte, CA ~957 mi; distance
+        // alone would send a patient who named the United States to Canada.
+        const { candidate } = await run(
+          studyWith('NCT1', [
+            site(
+              'Fred Hutch',
+              'Seattle',
+              'Washington',
+              'United States',
+              'NOT_YET_RECRUITING',
+              SEATTLE,
+            ),
+            site('BC Cancer', 'Vancouver', '', 'Canada', 'RECRUITING', at(49.24966, -123.11934)),
+            site(
+              'City of Hope',
+              'Duarte',
+              'California',
+              'United States',
+              'RECRUITING',
+              at(34.13945, -117.97729),
+            ),
+          ]),
+        );
+        expect(facilities(candidate)).toEqual(['Fred Hutch', 'City of Hope']);
+        expect(admittedSite(candidate).distanceMi).toBeGreaterThan(900);
+      });
+
+      it('crosses the border when no site in the requested country recruits', async () => {
+        const { candidate } = await run(
+          studyWith('NCT1', [
+            site(
+              'Fred Hutch',
+              'Seattle',
+              'Washington',
+              'United States',
+              'NOT_YET_RECRUITING',
+              SEATTLE,
+            ),
+            site('Boston', 'Boston', 'Massachusetts', 'United States', 'NOT_YET_RECRUITING'),
+            site('BC Cancer', 'Vancouver', '', 'Canada', 'RECRUITING', at(49.24966, -123.11934)),
+          ]),
+        );
+        expect(facilities(candidate)).toEqual(['Fred Hutch', 'BC Cancer']);
+        expect(admittedSite(candidate).distanceMi).toBeLessThan(150);
+      });
+
+      it('prefers a nearer out-of-state site over a farther in-state one', async () => {
+        // Portland, OR: Vancouver, WA sits across the river; Salem, OR is ~44 mi out.
+        const { candidate } = await run(
+          studyWith('NCT1', [
+            site(
+              'OHSU',
+              'Portland',
+              'Oregon',
+              'United States',
+              'NOT_YET_RECRUITING',
+              at(45.52345, -122.67621),
+            ),
+            site(
+              'Salem clinic',
+              'Salem',
+              'Oregon',
+              'United States',
+              'RECRUITING',
+              at(44.9429, -123.0351),
+            ),
+            site(
+              'Vancouver clinic',
+              'Vancouver',
+              'Washington',
+              'United States',
+              'RECRUITING',
+              at(45.63873, -122.66149),
+            ),
+          ]),
+          { location: { country: 'United States', state: 'Oregon', city: 'Portland' } },
+        );
+        expect(facilities(candidate)).toEqual(['OHSU', 'Vancouver clinic']);
+        expect(admittedSite(candidate).distanceMi).toBeLessThan(10);
+      });
+
+      it('falls back to match order with no distance when no matched site has coordinates', async () => {
+        const { candidate, text } = await run(
+          studyWith('NCT1', [
+            site('Fred Hutch', 'Seattle', 'Washington', 'United States', 'NOT_YET_RECRUITING'),
+            site('Ironwood', 'Chandler', 'Arizona', 'United States', 'RECRUITING', CHANDLER),
+            site(
+              'Huntsman',
+              'Salt Lake City',
+              'Utah',
+              'United States',
+              'RECRUITING',
+              SALT_LAKE_CITY,
+            ),
+            site('Elsewhere', 'Boston', 'Massachusetts', 'United States', 'NOT_YET_RECRUITING'),
+          ]),
+        );
+        expect(facilities(candidate)).toEqual(['Fred Hutch', 'Ironwood']);
+        expect(admittedSite(candidate)).not.toHaveProperty('distanceMi');
+        expect(candidate.locationSummary?.nearestRecruitingSiteAdded).toBe(true);
+        expect(text).toContain(
+          'none of them is recruiting, so one recruiting site from a wider area',
+        );
+        expect(text).not.toContain('nearest');
+        expect(text).not.toContain(' mi ');
+      });
+
+      it('falls back to match order with no distance when no recruiting candidate has coordinates', async () => {
+        const { candidate, text } = await run(
+          studyWith('NCT1', [
+            site(
+              'Fred Hutch',
+              'Seattle',
+              'Washington',
+              'United States',
+              'NOT_YET_RECRUITING',
+              SEATTLE,
+            ),
+            site('Ironwood', 'Chandler', 'Arizona'),
+            site('Huntsman', 'Salt Lake City', 'Utah'),
+            site('Elsewhere', 'Boston', 'Massachusetts', 'United States', 'NOT_YET_RECRUITING'),
+          ]),
+        );
+        expect(facilities(candidate)).toEqual(['Fred Hutch', 'Ironwood']);
+        expect(admittedSite(candidate)).not.toHaveProperty('distanceMi');
+        expect(text).not.toContain('nearest');
+      });
+
+      it('still admits nothing when a matched site is recruiting, coordinates or not', async () => {
+        const { candidate } = await run(
+          studyWith('NCT1', [
+            site('Fred Hutch', 'Seattle', 'Washington', 'United States', 'RECRUITING', SEATTLE),
+            site(
+              'Huntsman',
+              'Salt Lake City',
+              'Utah',
+              'United States',
+              'RECRUITING',
+              SALT_LAKE_CITY,
+            ),
+          ]),
+        );
+        expect(facilities(candidate)).toEqual(['Fred Hutch']);
+        expect(candidate.locationSummary?.nearestRecruitingSiteAdded).toBeUndefined();
       });
     });
   });

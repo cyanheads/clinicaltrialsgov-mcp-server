@@ -8,6 +8,7 @@ import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
 import { formatRemainingStudyFields } from '../utils/format-helpers.js';
+import { haversineMi, type LocationWithDistance } from '../utils/geo-helpers.js';
 import {
   blankValueMessage,
   firstBlankListParam,
@@ -22,18 +23,21 @@ interface UserLocation {
   state?: string | undefined;
 }
 
+/** Case-insensitive equality of two place names, false when either is absent. */
+function samePlace(a?: string, b?: string): boolean {
+  return a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
+}
+
 /**
  * How closely a site's geography matches the user's stated location. City
  * equality dominates, then state, then country, so the score doubles as a match
  * tier: every site sharing the study's best score matched at the same level.
  */
 function locationGeoScore(loc: StudyLocation, user: UserLocation): number {
-  const eq = (a?: string, b?: string) =>
-    a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
   let score = 0;
-  if (eq(loc.city, user.city)) score += 4;
-  if (eq(loc.state, user.state)) score += 2;
-  if (eq(loc.country, user.country)) score += 1;
+  if (samePlace(loc.city, user.city)) score += 4;
+  if (samePlace(loc.state, user.state)) score += 2;
+  if (samePlace(loc.country, user.country)) score += 1;
   return score;
 }
 
@@ -58,13 +62,53 @@ function locationMatchScore(loc: StudyLocation, user: UserLocation): number {
   return locationGeoScore(loc, user) + (isRecruiting(loc) ? 0.5 : 0);
 }
 
+/** A site whose published coordinates can be measured from. */
+type GeoLocated = StudyLocation & { geoPoint: { lat: number; lon: number } };
+
+function hasGeoPoint(loc: StudyLocation): loc is GeoLocated {
+  return loc.geoPoint != null;
+}
+
+/**
+ * Pick the one recruiting site to admit when a candidate's matched tier holds
+ * none (#114), from the recruiting candidates the caller narrowed down.
+ *
+ * The nearest by great-circle distance to the closest site of the whole matched
+ * tier — measured before the locationLimit cap, since the cap bounds payload,
+ * not which sites the patient is near. Ties keep match order. Candidates that
+ * publish no coordinates cannot be measured and sit out, as in the other
+ * geo-aware tools. With no coordinates on the matched tier or on any candidate,
+ * the first candidate in match order is admitted and carries no distanceMi, so
+ * nothing downstream presents it as the nearest.
+ */
+function admitRecruitingSite(
+  candidates: StudyLocation[],
+  matched: StudyLocation[],
+): LocationWithDistance | undefined {
+  const origins = matched.filter(hasGeoPoint);
+  let nearest: { distanceMi: number; loc: GeoLocated } | undefined;
+  if (origins.length > 0) {
+    for (const loc of candidates.filter(hasGeoPoint)) {
+      const distanceMi = Math.min(...origins.map((o) => haversineMi(o.geoPoint, loc.geoPoint)));
+      if (!nearest || distanceMi < nearest.distanceMi) nearest = { distanceMi, loc };
+    }
+  }
+  if (!nearest) return candidates[0];
+  // One decimal, as rendered — both channels then carry the identical value.
+  return { ...nearest.loc, distanceMi: Math.round(nearest.distanceMi * 10) / 10 };
+}
+
 /** What a candidate's site list was bounded to, and how to retrieve the rest. */
 interface LocationSummary {
   /** True when the locationLimit cap cut sites that matched the requested location. */
   locationsTruncated: boolean;
   /** Sites matching the requested location, before the cap. */
   matchedLocations: number;
-  /** Present when no matched site is recruiting and the nearest recruiting site was added. */
+  /**
+   * Present when no matched site is recruiting and one recruiting site was
+   * added — the nearest by distance when coordinates allow (it then carries
+   * distanceMi), otherwise the first in match order.
+   */
   nearestRecruitingSiteAdded?: true;
   /** Tool that returns the study's complete site list. */
   retrieveFullStudyWith: 'clinicaltrials_get_study_record';
@@ -83,11 +127,12 @@ interface LocationSummary {
  *
  * Geography alone decides the tier, so a tier can hold nothing but closed sites
  * while the study's one open site sits further out — a patient-matching answer
- * whose every shown site can enroll no one (#114). When that happens, admit the
- * nearest recruiting site alongside the tier. Admitting one site keeps the
- * local answer local; widening to that site's whole tier would trade a
- * city-precise answer for a statewide dump and reinflate the payload this bound
- * exists to hold down.
+ * whose every shown site can enroll no one (#114). When that happens, admit one
+ * recruiting site alongside the tier, the nearest one by distance when the sites
+ * publish coordinates (#138), in the requested country when one recruits there.
+ * Admitting one site keeps the local answer local;
+ * widening to that site's whole tier would trade a city-precise answer for a
+ * statewide dump and reinflate the payload this bound exists to hold down.
  *
  * The summary is returned only when the returned set is genuinely smaller than
  * the upstream one — reporting a bound that dropped nothing would imply a filter
@@ -97,7 +142,7 @@ function boundLocations(
   sortedLocations: StudyLocation[],
   user: UserLocation,
   limit: number,
-): { locations: StudyLocation[]; summary?: LocationSummary } {
+): { locations: LocationWithDistance[]; summary?: LocationSummary } {
   const total = sortedLocations.length;
   let best = 0;
   for (const loc of sortedLocations) best = Math.max(best, locationGeoScore(loc, user));
@@ -106,13 +151,20 @@ function boundLocations(
   // would answer with a candidate that appears to have nowhere to enroll.
   const matched = sortedLocations.filter((loc) => locationGeoScore(loc, user) === best);
   const capped = matched.slice(0, limit);
-  // sortedLocations runs best-match first, so the first recruiting site below
-  // the tier is the nearest one. Nothing is found when best === 0 (no site
-  // scores below it) or when the study registers no recruiting site at all —
-  // both leave the tier answer exactly as it was.
-  const admitted = capped.some(isRecruiting)
-    ? undefined
-    : sortedLocations.find((loc) => isRecruiting(loc) && locationGeoScore(loc, user) < best);
+  // The recruiting tie-break sorts any open matched site to the front of the
+  // tier, so a cap showing no open site means the tier holds none: every
+  // candidate sits below it. Nothing is admitted when best === 0 (the tier is
+  // every site) or when the study registers no recruiting site at all — both
+  // leave the tier answer exactly as it was. Candidates in the requested country
+  // go first when there are any: distance alone would send a patient who named
+  // their country across a border (Seattle → Vancouver, BC) while a site at home
+  // recruits.
+  let admitted: LocationWithDistance | undefined;
+  if (!capped.some(isRecruiting)) {
+    const open = sortedLocations.filter((loc) => isRecruiting(loc) && !capped.includes(loc));
+    const home = open.filter((loc) => samePlace(loc.country, user.country));
+    admitted = admitRecruitingSite(home.length > 0 ? home : open, matched);
+  }
   const locations = admitted ? [...capped, admitted] : capped;
   if (locations.length === total) return { locations };
   return {
@@ -248,6 +300,7 @@ const ELIGIBLE_FIELDS = [
   'LocationState',
   'LocationCountry',
   'LocationStatus',
+  'LocationGeoPoint',
   'CentralContactName',
   'CentralContactPhone',
   'CentralContactEMail',
@@ -255,7 +308,7 @@ const ELIGIBLE_FIELDS = [
 
 export const findEligible = tool('clinicaltrials_find_eligible', {
   description:
-    "Match patient demographics and conditions to eligible recruiting clinical trials. Provide age, sex, conditions, and location to find studies with matching eligibility criteria, contact information, and recruiting locations. Results are re-ranked so studies whose own condition matches a requested condition surface above tangential matches from ClinicalTrials.gov's fuzzy condition search. Each candidate returns only the sites matching the requested location (capped by locationLimit), not the study's full registered site list — a large trial can register hundreds of sites worldwide. When none of a candidate's matched sites is recruiting, its nearest recruiting site is added, so an enrollable site is never hidden behind a closer closed one. Fetch a study's complete record with clinicaltrials_get_study_record.",
+    "Match patient demographics and conditions to eligible recruiting clinical trials. Provide age, sex, conditions, and location to find studies with matching eligibility criteria, contact information, and recruiting locations. Results are re-ranked so studies whose own condition matches a requested condition surface above tangential matches from ClinicalTrials.gov's fuzzy condition search. Each candidate returns only the sites matching the requested location (capped by locationLimit), not the study's full registered site list — a large trial can register hundreds of sites worldwide. When none of a candidate's matched sites is recruiting, one recruiting site is added so an enrollable site is never hidden behind a closer closed one: the one nearest the matched sites by their published coordinates, in the requested country whenever a site there recruits, carrying distanceMi, or the first in match order when coordinates are missing. Fetch a study's complete record with clinicaltrials_get_study_record.",
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -316,7 +369,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       .max(500)
       .default(10)
       .describe(
-        "Cap on the sites returned per candidate. Each candidate keeps only the sites matching the requested location at the narrowest level that matched (city, else state, else country), capped at this many; the rest of the study's registered sites are omitted. The cap governs those matched sites — when none of them is recruiting, the candidate's nearest recruiting site is added on top of it, so a candidate can carry one site more than this. Raise it to see more nearby sites, or fetch the complete site list with clinicaltrials_get_study_record. Each candidate reports totalLocations / matchedLocations / locationsTruncated / nearestRecruitingSiteAdded in locationSummary only when the bound actually dropped sites.",
+        "Cap on the sites returned per candidate. Each candidate keeps only the sites matching the requested location at the narrowest level that matched (city, else state, else country), capped at this many; the rest of the study's registered sites are omitted. The cap governs those matched sites — when none of them is recruiting, one recruiting site is added on top of it (the nearest to any matched site, measured before this cap, when coordinates allow — in the requested country whenever a site there recruits), so a candidate can carry one site more than this. Raise it to see more nearby sites, or fetch the complete site list with clinicaltrials_get_study_record. Each candidate reports totalLocations / matchedLocations / locationsTruncated / nearestRecruitingSiteAdded in locationSummary only when the bound actually dropped sites.",
       ),
   }),
 
@@ -324,7 +377,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     studies: z
       .array(z.record(z.string(), z.unknown()))
       .describe(
-        "Matching studies with eligibility and location fields. Each candidate's protocolSection.contactsLocationsModule.locations is BOUNDED to the sites matching the requested location (capped at locationLimit) plus, when none of those is recruiting, the candidate's nearest recruiting site — not the study's full registered site list. A candidate whose sites were bounded also carries a top-level locationSummary object — { totalLocations, matchedLocations, locationsTruncated, nearestRecruitingSiteAdded?, retrieveFullStudyWith } — absent when nothing was dropped; nearestRecruitingSiteAdded is present only when that extra site was added. Fetch a study's complete record and site list with clinicaltrials_get_study_record.",
+        "Matching studies with eligibility and location fields. Each candidate's protocolSection.contactsLocationsModule.locations is BOUNDED to the sites matching the requested location (capped at locationLimit) plus, when none of those is recruiting, one added recruiting site — not the study's full registered site list. The added site is the one nearest any matched site by published coordinates, taken from the requested country whenever a site there recruits, and carries distanceMi (miles to that nearest matched site); when the matched or recruiting sites publish no coordinates it is the first in match order and carries no distanceMi. A candidate whose sites were bounded also carries a top-level locationSummary object — { totalLocations, matchedLocations, locationsTruncated, nearestRecruitingSiteAdded?, retrieveFullStudyWith } — absent when nothing was dropped; nearestRecruitingSiteAdded is present only when that extra site was added (the key keeps its name in the match-order fallback). Fetch a study's complete record and site list with clinicaltrials_get_study_record.",
       ),
     totalCount: z.number().optional().describe('Total matching studies from the API.'),
   }),
@@ -568,7 +621,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     // buries the answer and dominates the payload. The bound is applied here,
     // once, before either output channel sees the record, so structuredContent
     // and format() render the same sites (#46, #91). Stable sort preserves
-    // upstream order for sites with equal match scores.
+    // upstream order for sites with equal match scores. Site coordinates are
+    // requested only to measure the admitted site's distance (#138) and are
+    // dropped here, so neither channel carries a leaf the other never renders.
     const studies: Record<string, unknown>[] = result.studies.map((study) => {
       const raw = study as RawStudyShape;
       const locationsModule = raw.protocolSection?.contactsLocationsModule;
@@ -582,7 +637,10 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         ...study,
         protocolSection: {
           ...raw.protocolSection,
-          contactsLocationsModule: { ...locationsModule, locations },
+          contactsLocationsModule: {
+            ...locationsModule,
+            locations: locations.map(({ geoPoint: _measuredOnly, ...loc }) => loc),
+          },
         },
         ...(summary ? { locationSummary: summary } : {}),
       };
@@ -734,9 +792,14 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         const locationSummary = (study as { locationSummary?: LocationSummary }).locationSummary;
         if (locationSummary) {
           const truncated = locationSummary.locationsTruncated ? ', list truncated' : '';
-          const admitted = locationSummary.nearestRecruitingSiteAdded
-            ? '; none of them is recruiting, so the nearest recruiting site is included'
-            : '';
+          // "Nearest" is claimed only when the admitted site was measured — it
+          // then carries distanceMi, rendered on the site itself below (#138).
+          const measured = locs.some((l) => (l as LocationWithDistance).distanceMi != null);
+          const admitted = !locationSummary.nearestRecruitingSiteAdded
+            ? ''
+            : measured
+              ? '; none of them is recruiting, so the nearest recruiting site is included'
+              : '; none of them is recruiting, so one recruiting site from a wider area is included (picked by match order — coordinates to measure distance are missing)';
           lines.push(
             `  Sites: showing ${locs.length} of ${locationSummary.totalLocations} registered (${locationSummary.matchedLocations} match the requested location${truncated}${admitted}). Full site list: ${locationSummary.retrieveFullStudyWith} with ${nctId}.`,
           );
@@ -751,12 +814,16 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         // rides along: the tool requests LocationStatus and returns it in
         // structuredContent, and a site-level status can differ from the study's
         // overall status, so omitting it made a NOT_YET_RECRUITING site read as
-        // currently open (#91).
+        // currently open (#91). An admitted site's distanceMi renders on the site
+        // itself, so it reaches content[] even when no Sites line does (#138).
         if (locs.length > 0) {
-          const locStr = locs
+          const locStr = (locs as LocationWithDistance[])
             .map((l) => {
               const site = [l.facility, l.city, l.state, l.country].filter(Boolean).join(', ');
-              return l.status ? `${site} [${l.status}]` : site;
+              const status = l.status ? ` [${l.status}]` : '';
+              const distance =
+                l.distanceMi != null ? ` (${l.distanceMi} mi from the nearest matched site)` : '';
+              return `${site}${status}${distance}`;
             })
             .join(' | ');
           lines.push(`  Locations: ${locStr}`);

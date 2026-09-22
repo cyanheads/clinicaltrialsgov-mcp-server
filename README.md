@@ -115,7 +115,7 @@ Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltr
 
 - Takes `age`, `sex` (`FEMALE` / `MALE` / `ALL`), `conditions[]`, `location` (`country` required, `state` / `city` optional), `healthyVolunteer`, `recruitingOnly` (default true), `maxResults` (≤50)
 - Re-ranks results so studies whose own condition list names a requested condition surface above tangential MeSH-umbrella matches from the upstream fuzzy search
-- Bounds each candidate's locations to the sites matching the requested location (capped by `locationLimit`, ≤500) instead of every registered site, adding the nearest recruiting site when none of the matched ones is open
+- Bounds each candidate's locations to the sites matching the requested location (capped by `locationLimit`, ≤500) instead of every registered site, adding one recruiting site when none of the matched ones is open — the one nearest the matched sites by published coordinates (with `distanceMi`), kept to the requested country when a site there recruits, or the first in match order when coordinates are missing
 - `funnel` reports match counts at each filter stage (condition → +location → +demographics) to show where the query narrowed to zero
 - Typed errors: `blank_value`, `rate_limited`
 

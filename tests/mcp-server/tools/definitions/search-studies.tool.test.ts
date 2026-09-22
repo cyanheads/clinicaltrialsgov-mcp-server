@@ -4,7 +4,7 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetService } = vi.hoisted(() => ({
@@ -1916,5 +1916,322 @@ describe('searchStudies', () => {
         );
       });
     });
+  });
+
+  // The results workflow gates on hasResults and timeline questions need the
+  // start / primary-completion dates, so the default index carries all three —
+  // read from the full record the default search already fetches. Every case
+  // runs the real pipeline (input parse → handler → output parse → format).
+  describe('compact index — results flag and key dates (#139)', () => {
+    const record = (
+      nctId: string,
+      statusModule: Record<string, unknown>,
+      hasResults?: boolean,
+    ) => ({
+      protocolSection: {
+        identificationModule: { nctId, briefTitle: `Study ${nctId}` },
+        statusModule: { overallStatus: 'COMPLETED', ...statusModule },
+      } as Record<string, unknown>,
+      ...(hasResults === undefined ? {} : { hasResults }),
+    });
+
+    const run = async (studies: unknown[], input: Record<string, unknown> = {}) => {
+      mockService.searchStudies.mockResolvedValue({ studies, totalCount: studies.length });
+      const result = await runToolContract(
+        searchStudies,
+        { conditionQuery: 'diabetes', ...input },
+        { context: { errors: searchStudies.errors } },
+      );
+      expect(result.isError).toBeFalsy();
+      const structured = result.structuredContent as { studies: Record<string, unknown>[] };
+      const text = (result.content as Array<{ type: string; text?: string }>)
+        .filter((b) => b.type === 'text')
+        .map((b) => b.text ?? '')
+        .join('\n');
+      return { structured, text };
+    };
+
+    it('carries hasResults and both dates on the default index, verbatim, in both channels', async () => {
+      const { structured, text } = await run([
+        record(
+          'NCT02000001',
+          {
+            startDateStruct: { date: '2016-02', type: 'ACTUAL' },
+            primaryCompletionDateStruct: { date: '2017-11-01', type: 'ACTUAL' },
+          },
+          true,
+        ),
+      ]);
+      expect(structured.studies[0]).toEqual({
+        nctId: 'NCT02000001',
+        briefTitle: 'Study NCT02000001',
+        overallStatus: 'COMPLETED',
+        hasResults: true,
+        startDate: '2016-02',
+        primaryCompletionDate: '2017-11-01',
+      });
+      expect(text).toContain(
+        '- **NCT02000001**: Study NCT02000001 [COMPLETED]\n  results posted | start 2016-02 | primary completion 2017-11-01',
+      );
+      expect(missingLeaves(structured, text)).toEqual([]);
+    });
+
+    it('renders hasResults=false as "no results", never as "results posted"', async () => {
+      const { structured, text } = await run([record('NCT02000002', {}, false)]);
+      expect(structured.studies[0]?.hasResults).toBe(false);
+      expect(text).toContain('  no results');
+      expect(text).not.toContain('results posted');
+    });
+
+    it('omits every new key and meta segment when the record publishes none of them', async () => {
+      const { structured, text } = await run([record('NCT02000003', {})]);
+      expect(structured.studies[0]).toEqual({
+        nctId: 'NCT02000003',
+        briefTitle: 'Study NCT02000003',
+        overallStatus: 'COMPLETED',
+      });
+      expect(text).not.toMatch(/results|start |primary completion/);
+    });
+
+    it('omits a date whose struct carries no date string (type-only struct)', async () => {
+      const { structured, text } = await run([
+        record('NCT02000004', {
+          startDateStruct: { type: 'ESTIMATED' },
+          primaryCompletionDateStruct: { date: '2031-06' },
+        }),
+      ]);
+      expect(structured.studies[0]).not.toHaveProperty('startDate');
+      expect(structured.studies[0]?.primaryCompletionDate).toBe('2031-06');
+      expect(text).not.toContain('start ');
+      expect(text).toContain('primary completion 2031-06');
+    });
+
+    it('keeps each study’s flag and dates attributed to its own entry across a mixed page', async () => {
+      const { structured, text } = await run([
+        record('NCT02000011', { startDateStruct: { date: '2004-10' } }, true),
+        record('NCT02000012', {}),
+        record('NCT02000013', { primaryCompletionDateStruct: { date: '2010-01-01' } }, false),
+      ]);
+      expect(
+        structured.studies.map((s) => [s.hasResults, s.startDate, s.primaryCompletionDate]),
+      ).toEqual([
+        [true, '2004-10', undefined],
+        [undefined, undefined, undefined],
+        [false, undefined, '2010-01-01'],
+      ]);
+      // The study list ends where the Search Criteria trailer begins.
+      const blocks = text.split('\n\n')[0]!.split('\n- **').slice(1);
+      expect(blocks).toHaveLength(3);
+      expect(blocks[0]).toContain('results posted | start 2004-10');
+      expect(blocks[0]).not.toContain('primary completion');
+      expect(blocks[1]).not.toMatch(/results|start |primary completion/);
+      expect(blocks[2]).toContain('no results | primary completion 2010-01-01');
+      expect(blocks[2]).not.toContain('start ');
+      expect(missingLeaves(structured, text)).toEqual([]);
+    });
+
+    it('appends the new segments after the existing meta line fields', async () => {
+      const study = record('NCT02000021', { startDateStruct: { date: '2019-03-15' } }, true);
+      Object.assign(study.protocolSection, {
+        designModule: { phases: ['PHASE2'], enrollmentInfo: { count: 40 } },
+        sponsorCollaboratorsModule: { leadSponsor: { name: 'Acme Health' } },
+        conditionsModule: { conditions: ['Asthma'] },
+      });
+      const { text } = await run([study]);
+      expect(text).toContain(
+        '  PHASE2 | N=40 | Acme Health | Asthma | results posted | start 2019-03-15',
+      );
+    });
+
+    it('sends no fields param upstream on the default path', async () => {
+      await run([record('NCT02000031', {}, true)]);
+      expect(mockService.searchStudies).toHaveBeenCalledTimes(1);
+      expect(mockService.searchStudies.mock.calls[0]?.[0]?.fields).toBeUndefined();
+    });
+
+    it('describes the new index keys and the HasResults advanced filter', () => {
+      const out = searchStudies.output!.shape as Record<string, { description?: string }>;
+      for (const key of ['hasResults', 'startDate', 'primaryCompletionDate'])
+        expect(out.studies?.description).toContain(key);
+      const input = searchStudies.input!.shape as Record<string, { description?: string }>;
+      expect(input.advancedFilter?.description).toContain('AREA[HasResults]true');
+    });
+
+    it('leaves the explicit-fields render unchanged — no index meta segments are added', async () => {
+      const { text } = await run(
+        [
+          record(
+            'NCT02000041',
+            {
+              startDateStruct: { date: '2016-02', type: 'ACTUAL' },
+              primaryCompletionDateStruct: { date: '2017-11-01', type: 'ACTUAL' },
+            },
+            true,
+          ),
+        ],
+        {
+          fields: [
+            'NCTId',
+            'BriefTitle',
+            'OverallStatus',
+            'StartDate',
+            'PrimaryCompletionDate',
+            'HasResults',
+          ],
+        },
+      );
+      expect(text.split('\n\n')[0]).toBe(
+        [
+          'Found 1 studies (1 total matching)',
+          'Requested fields: NCTId, BriefTitle, OverallStatus, StartDate, PrimaryCompletionDate, HasResults',
+          '- **NCT02000041**: Study NCT02000041 [COMPLETED]',
+          '  Start Date > Date: 2016-02',
+          '  Start Date > Type: ACTUAL',
+          '  Primary Completion Date > Date: 2017-11-01',
+          '  Primary Completion Date > Type: ACTUAL',
+          '  Has Results: true',
+        ].join('\n'),
+      );
+    });
+  });
+
+  // statusFilter values upstream matches as case-sensitive literals, so the
+  // handler canonicalizes each entry before the request: uppercase, separator
+  // runs (whitespace, hyphen, underscore) collapsed to one underscore.
+  describe('statusFilter case and spacing variants (#140)', () => {
+    const STATUSES = [
+      'RECRUITING',
+      'COMPLETED',
+      'ACTIVE_NOT_RECRUITING',
+      'NOT_YET_RECRUITING',
+      'ENROLLING_BY_INVITATION',
+      'SUSPENDED',
+      'TERMINATED',
+      'WITHDRAWN',
+      'UNKNOWN',
+      'WITHHELD',
+      'NO_LONGER_AVAILABLE',
+      'AVAILABLE',
+      'APPROVED_FOR_MARKETING',
+      'TEMPORARILY_NOT_AVAILABLE',
+    ] as const;
+    const titleSpaced = (s: string) =>
+      s
+        .toLowerCase()
+        .split('_')
+        .map((w) => w[0]!.toUpperCase() + w.slice(1))
+        .join(' ');
+    const VARIANTS = STATUSES.flatMap((canonical) => [
+      [canonical.toLowerCase(), canonical],
+      [titleSpaced(canonical), canonical],
+      [canonical.toLowerCase().replaceAll('_', '-'), canonical],
+      [`  ${canonical.toLowerCase().replaceAll('_', '  ')}\t`, canonical],
+      [canonical, canonical],
+    ]);
+
+    beforeEach(() => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+    });
+
+    it.each(VARIANTS)('sends %j upstream as %s', async (variant, canonical) => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(searchStudies.input!.parse({ statusFilter: variant }), ctx);
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterOverallStatus: [canonical] }),
+        ctx,
+      );
+    });
+
+    it('canonicalizes every entry of a mixed array and a stringified array', async () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(
+        searchStudies.input!.parse({
+          statusFilter: ['recruiting', 'Not Yet Recruiting', 'ACTIVE_NOT_RECRUITING'],
+        }),
+        ctx,
+      );
+      await searchStudies.handler(
+        searchStudies.input!.parse({ statusFilter: '["recruiting","completed"]' }),
+        ctx,
+      );
+      expect(mockService.searchStudies.mock.calls.map((c) => c[0].filterOverallStatus)).toEqual([
+        ['RECRUITING', 'NOT_YET_RECRUITING', 'ACTIVE_NOT_RECRUITING'],
+        ['RECRUITING', 'COMPLETED'],
+      ]);
+    });
+
+    it('echoes the canonical value in searchCriteria, keeping the caller’s scalar/list shape', async () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(searchStudies.input!.parse({ statusFilter: 'recruiting' }), ctx);
+      expect(getEnrichment(ctx).searchCriteria).toMatchObject({ statusFilter: 'RECRUITING' });
+
+      const listCtx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(
+        searchStudies.input!.parse({ statusFilter: ['recruiting', 'completed'] }),
+        listCtx,
+      );
+      expect(getEnrichment(listCtx).searchCriteria).toMatchObject({
+        statusFilter: ['RECRUITING', 'COMPLETED'],
+      });
+    });
+
+    it('forwards a value with no canonical match for upstream to reject (enum_invalid stays the service’s)', async () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(
+        searchStudies.input!.parse({ statusFilter: 'pending review' }),
+        ctx,
+      );
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterOverallStatus: ['PENDING_REVIEW'] }),
+        ctx,
+      );
+    });
+
+    it('still answers a blank entry with blank_value before any request', async () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expect(
+        searchStudies.handler(
+          searchStudies.input!.parse({ statusFilter: ['recruiting', ' \t'] }),
+          ctx,
+        ),
+      ).rejects.toMatchObject({ data: { reason: 'blank_value', param: 'statusFilter' } });
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('nctIds case and whitespace variants (#140)', () => {
+    beforeEach(() => {
+      mockService.searchStudies.mockResolvedValue({ studies: [{}], totalCount: 1 });
+    });
+
+    it('canonicalizes a lowercase single ID before the filter and the echo', async () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(searchStudies.input!.parse({ nctIds: 'nct03722472' }), ctx);
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterIds: ['NCT03722472'], includeUnknownEnrollment: true }),
+        ctx,
+      );
+      expect(getEnrichment(ctx).searchCriteria).toMatchObject({ nctIds: 'NCT03722472' });
+    });
+
+    it('canonicalizes every entry of an ID list', async () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(
+        searchStudies.input!.parse({ nctIds: [' nct03722472 ', 'Nct06323538', 'NCT01171079'] }),
+        ctx,
+      );
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterIds: ['NCT03722472', 'NCT06323538', 'NCT01171079'] }),
+        ctx,
+      );
+    });
+
+    it.each(['ABC123', 'nct0372247', 'NCT 03722472', 'NCT0372247X', 'xnct03722472'])(
+      'still rejects the malformed ID %j at the schema',
+      (nctIds) => {
+        expect(() => searchStudies.input!.parse({ nctIds })).toThrow(/NCTxxxxxxxx/);
+        expect(() => searchStudies.input!.parse({ nctIds: [nctIds] })).toThrow(/NCTxxxxxxxx/);
+      },
+    );
   });
 });

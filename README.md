@@ -29,7 +29,7 @@
 
 ## Overview
 
-Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — the US National Library of Medicine's registry of ~577K clinical trial studies. Search trials, fetch full study records and posted results, discover field names and valid values, and match patient demographics to eligible recruiting trials. Public, read-only, no authentication required. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — the US National Library of Medicine's registry of 600K+ clinical trial studies. Search trials, fetch full study records and posted results, discover field names and valid values, and match patient demographics to eligible recruiting trials. Public, read-only, no authentication required. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
 
 ### Tools
 
@@ -59,8 +59,8 @@ Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltr
 
 ### `clinicaltrials_search_studies` <sub>tool</sub>
 
-- Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`; `statusFilter` / `phaseFilter` enums, `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]` syntax), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix) for proximity search with nearest-site re-ranking
-- Returns a compact per-study index by default (`nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `leadSponsor`, `conditions`, a bounded locations summary); pass `fields` (PascalCase leaves) for a full-fidelity projection — full records run ~70KB
+- Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`; `statusFilter` (case- and separator-insensitive, registry display labels included: `"Active, not recruiting"` works) / `phaseFilter` enums, `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]` syntax), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix) for proximity search with nearest-site re-ranking
+- Returns a compact per-study index by default (`nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `leadSponsor`, `conditions`, `hasResults`, `startDate`, `primaryCompletionDate`, a bounded locations summary); pass `fields` (PascalCase leaves) for a full-fidelity projection — full records run ~70KB
 - `pageSize` 1–`CT_MAX_PAGE_SIZE` (default 200), cursor pagination via `pageToken`, `sort` on up to 2 fields
 - Excludes the upstream "unknown" enrollment sentinel (`99999999`) by default — `includeUnknownEnrollment` to include it, or automatically lifted when `nctIds` is supplied
 - Typed errors: `blank_value`, `ids_not_found`, `field_invalid`, `enum_invalid`, `query_parse_error`, `geo_invalid`, `sort_invalid`, `rate_limited`

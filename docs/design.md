@@ -30,7 +30,7 @@
 
 ## Overview
 
-MCP server wrapping the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — the US National Library of Medicine's registry of ~577K clinical trial studies. Public, read-only, no auth required.
+MCP server wrapping the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — the US National Library of Medicine's registry of 600K+ clinical trial studies. Public, read-only, no auth required.
 
 **Target users:** LLM agents helping people research clinical trials — patients seeking eligible studies, researchers analyzing trial landscapes, clinicians comparing treatment options.
 
@@ -77,14 +77,14 @@ selection. Returns a compact per-study index by default; pass the fields paramet
 | `sponsorQuery`      | `string?`             | Sponsor/collaborator name search. Searches both lead sponsor and collaborators. For lead sponsor only, use `advancedFilter` with `AREA[LeadSponsorName]`. Maps to `query.spons`.                                                                                                                        |
 | `titleQuery`        | `string?`             | Search within study titles and acronyms only. Maps to `query.titles`.                                                                                                                                                                                                                                   |
 | `outcomeQuery`      | `string?`             | Search within outcome measure fields. Maps to `query.outc`.                                                                                                                                                                                                                                             |
-| `statusFilter`      | `string \| string[]?` | Filter by overall study status. Values: `RECRUITING`, `COMPLETED`, `ACTIVE_NOT_RECRUITING`, `NOT_YET_RECRUITING`, `ENROLLING_BY_INVITATION`, `SUSPENDED`, `TERMINATED`, `WITHDRAWN`.                                                                                                                    |
+| `statusFilter`      | `string \| string[]?` | Filter by overall study status. Values: `RECRUITING`, `COMPLETED`, `ACTIVE_NOT_RECRUITING`, `NOT_YET_RECRUITING`, `ENROLLING_BY_INVITATION`, `SUSPENDED`, `TERMINATED`, `WITHDRAWN`, `UNKNOWN`, `WITHHELD`, `NO_LONGER_AVAILABLE`, `AVAILABLE`, `APPROVED_FOR_MARKETING`, `TEMPORARILY_NOT_AVAILABLE`. Each entry is trimmed, uppercased, stripped of whitespace around a `,`/`|` delimiter, and its remaining whitespace/hyphen/underscore runs collapsed to `_` before the request (`"active not recruiting"` → `ACTIVE_NOT_RECRUITING`, `"recruiting, completed"` → `RECRUITING,COMPLETED`) — upstream matches the value case-sensitively and splits it on `,` and `|`. The registry display labels `"Active, not recruiting"` and `"Unknown status"` map to `ACTIVE_NOT_RECRUITING` and `UNKNOWN`. A value that still names no status fails upstream as `enum_invalid`. |
 | `phaseFilter`       | `string \| string[]?` | Filter by trial phase. Values: `EARLY_PHASE1`, `PHASE1`, `PHASE2`, `PHASE3`, `PHASE4`, `NA`.                                                                                                                                                                                                            |
-| `advancedFilter`    | `string?`             | Advanced filter using AREA[] Essie syntax. Examples: `AREA[StudyType]INTERVENTIONAL`, `AREA[MinimumAge]RANGE[MIN, 18 years]`, `AREA[EnrollmentCount]RANGE[100, 1000]`. Combine with `AND`/`OR`/`NOT` and parentheses.                                                                                   |
+| `advancedFilter`    | `string?`             | Advanced filter using AREA[] Essie syntax. Examples: `AREA[StudyType]INTERVENTIONAL`, `AREA[MinimumAge]RANGE[MIN, 18 years]`, `AREA[EnrollmentCount]RANGE[100, 1000]`, `AREA[HasResults]true` (studies with posted results). Combine with `AND`/`OR`/`NOT` and parentheses.                                                                                   |
 | `geoFilter`         | `string?`             | Geographic proximity filter. Format: `distance(lat,lon,radius)` where radius carries a required `mi` or `km` suffix. Example: `distance(47.6062,-122.3321,50mi)` for studies within 50 miles of Seattle. Validated in the handler before the upstream call — a unit-less radius, a non-positive radius, a latitude outside [-90, 90] or a longitude outside [-180, 180] all fail as `geo_invalid` (upstream reads a bare radius as meters and answers an empty 200, so none of these would otherwise surface as an input error). |
-| `nctIds`            | `string \| string[]?` | Filter to specific NCT IDs. Use for batch lookups of known studies.                                                                                                                                                                                                                                     |
+| `nctIds`            | `string \| string[]?` | Filter to specific NCT IDs. Use for batch lookups of known studies. Each ID is trimmed and uppercased before the format check (`nct03722472` → `NCT03722472`).                                                                                                                                          |
 | `fields`            | `string[]?`           | Specific fields to return (PascalCase piece names). **Strongly recommended** — without this, results are a compact per-study index; pass `fields` to receive those leaves at full fidelity (a full record is ~70KB). Common fields: `NCTId`, `BriefTitle`, `OverallStatus`, `Phase`, `LeadSponsorName`, `Condition`, `InterventionName`, `BriefSummary`, `EnrollmentCount`, `StartDate`. |
 | `sort`              | `string?`             | Sort order. Format: `FieldName:asc` or `FieldName:desc`. E.g., `LastUpdatePostDate:desc`, `EnrollmentCount:desc`. Default: relevance when query params present. Max 2 sort fields comma-separated.                                                                                                      |
-| `pageSize`          | `number?`             | Results per page, 1–1000. Default: 10.                                                                                                                                                                                                                                                                  |
+| `pageSize`          | `number?`             | Results per page, 1–`CT_MAX_PAGE_SIZE` (200 unless overridden). Default: 10.                                                                                                                                                                                                                            |
 | `pageToken`         | `string?`             | Pagination cursor from a previous response's `nextPageToken`.                                                                                                                                                                                                                                           |
 | `countTotal`        | `boolean?`            | Include total study count in response. Only computed on the first page. Default: true.                                                                                                                                                                                                                  |
 
@@ -92,7 +92,7 @@ selection. Returns a compact per-study index by default; pass the fields paramet
 
 | Field           | Type      | Description                                                               |
 | :-------------- | :-------- | :------------------------------------------------------------------------ |
-| `studies`       | `Study[]` | Matching studies. By default each entry is a **compact index projection** — `nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `leadSponsor`, `conditions`, and a bounded `{ total, nearest }` locations summary — mirroring the rendered summary, **not** the full ~70KB record. With explicit `fields`, each entry carries exactly the requested leaves at full fidelity (e.g. every location). |
+| `studies`       | `Study[]` | Matching studies. By default each entry is a **compact index projection** — `nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `leadSponsor`, `conditions`, `hasResults`, `startDate` and `primaryCompletionDate` (the `statusModule` date strings as upstream sends them, `YYYY-MM` or `YYYY-MM-DD`), and a bounded `{ total, nearest }` locations summary, each key omitted when the study does not publish it — mirroring the rendered summary, **not** the full ~70KB record. With explicit `fields`, each entry carries exactly the requested leaves at full fidelity (e.g. every location). |
 | `totalCount`    | `number?` | Total matching studies (present when `countTotal=true`, first page only). |
 | `nextPageToken` | `string?` | Token for the next page. Absent on last page.                             |
 | `requestedFields` | `string[]?` | Echo of the explicit `fields` input — present only when `fields` was passed. Signals the full-fidelity (non-index) study shape. |
@@ -103,7 +103,7 @@ selection. Returns a compact per-study index by default; pass the fields paramet
 - Invalid filter syntax: `"Invalid advancedFilter expression. AREA[] syntax: AREA[FieldName]value. Combine with AND/OR/NOT. Check field names via get_field_values."`
 - No results: returns empty studies array with `totalCount: 0`, not an error. An empty first page carries a `notice` naming the constraints that matched nothing: broadening guidance for queries and filters, and — when `nctIds` was supplied — an ID-aware clause. An ID-only lookup gets the ID clause alone, pointing at `clinicaltrials_get_study_record` (a direct not-found check; upstream 404s a nonexistent NCT ID cleanly) and `clinicaltrials_get_study_results` (which resolves a previous/alias ID to its canonical study). Combined with a query or filter, the ID clause is added alongside the existing guidance and asserts nothing about whether the IDs exist — distinguishing "no such study" from "excluded by the other criteria" would cost an extra upstream request. A partial match is not an empty result and carries no notice. An exhausted continuation page (`pageExhausted`) carries no notice of any kind, `nctIds` or not.
 
-**Format function:** Summary line (`Found N studies (M total matching)`), then **every** study in the page as a compact index row (NCT ID, title, status; a phase/enrollment/sponsor/conditions meta line; and a lead-or-nearest site line with the total site count), pagination note if more pages. With explicit `fields`, each study instead renders every requested leaf, including all locations.
+**Format function:** Summary line (`Found N studies (M total matching)`), then **every** study in the page as a compact index row (NCT ID, title, status; a phase/enrollment/sponsor/conditions meta line that ends with `results posted` or `no results`, `start <date>`, and `primary completion <date>` when the study carries them; and a lead-or-nearest site line with the total site count), pagination note if more pages. With explicit `fields`, each study instead renders every requested leaf, including all locations.
 
 **Output-channel parity (#86):** `structuredContent` is bound to exactly what `format()` renders — the compact index by default, the requested-leaf projection with `fields`. Search is an index: it never carries full ~70KB records in `structuredContent` while summarizing them in `content[]`. This keeps `content[]`-only clients (e.g. Claude Desktop) and `structuredContent` clients (e.g. Claude Code) in parity. Fetch one full record with `clinicaltrials_get_study_record`.
 
@@ -125,7 +125,7 @@ hasResults is true. Use search_studies first to find studies with results.
 
 | Parameter  | Type                  | Description                                                                                                                 |
 | :--------- | :-------------------- | :-------------------------------------------------------------------------------------------------------------------------- |
-| `nctIds`   | `string \| string[]`  | One or more NCT IDs (max 20). E.g., `"NCT12345678"` or `["NCT12345678", "NCT87654321"]`. Repeated IDs collapse to one entry, in first-occurrence order. A previous (alias) ID resolves to its canonical study. |
+| `nctIds`   | `string \| string[]`  | One or more NCT IDs (max 20). E.g., `"NCT12345678"` or `["NCT12345678", "NCT87654321"]`. IDs are trimmed and uppercased first, so repeated IDs — case variants included — collapse to one entry, in first-occurrence order. A previous (alias) ID resolves to its canonical study. |
 | `sections` | `string \| string[]?` | Filter which sections to return. Values: `outcomes`, `adverseEvents`, `participantFlow`, `baseline`, `moreInfo`. Omit for all sections. |
 | `summary`  | `boolean?`            | Return condensed summaries instead of full data, which can exceed 500KB per study. Typically a few KB — it scales with the measure count, not to a fixed ceiling. Default: `false`.                                     |
 | `outcomeLimit` | `number?` | Cap on outcome measures returned per study (1–100), in upstream order. Omit for no cap. Full mode only. |
@@ -269,7 +269,7 @@ when a cap actually trims the set.
 
 | Parameter        | Type      | Description                                                                                                 |
 | :--------------- | :-------- | :---------------------------------------------------------------------------------------------------------- |
-| `nctId`          | `string`  | Required. `NCT` followed by 8 digits (e.g., `NCT03722472`).                                                 |
+| `nctId`          | `string`  | Required. `NCT` followed by 8 digits (e.g., `NCT03722472`); trimmed and uppercased before the check.       |
 | `locationLimit`  | `number?` | Cap on locations returned (1–500). Omit for the full upstream list.                                         |
 | `outcomeLimit`   | `number?` | Cap on secondary and other outcomes (1–100). Primary outcomes are never capped.                             |
 | `referenceLimit` | `number?` | Cap on references (1–100). `seeAlsoLinks` are never capped.                                                 |
@@ -327,7 +327,7 @@ Use for quick statistics or to build breakdowns by calling multiple times with d
 | `sponsorQuery`      | `string?`             | Sponsor search.                    |
 | `titleQuery`        | `string?`             | Search within study titles/acronyms. Maps to `query.titles`. |
 | `outcomeQuery`      | `string?`             | Search within outcome measures. Maps to `query.outc`. |
-| `statusFilter`      | `string \| string[]?` | Filter by study status.            |
+| `statusFilter`      | `string \| string[]?` | Filter by study status. Normalized like `search_studies`' (`"recruiting"` → `RECRUITING`). |
 | `phaseFilter`       | `string \| string[]?` | Filter by phase.                   |
 | `advancedFilter`    | `string?`             | Advanced AREA[] filter expression. |
 
@@ -404,6 +404,8 @@ Single study by NCT ID. Wraps `GET /studies/{nctId}`. Returns a bounded study re
 
 - `clinicaltrials://NCT03722472`
 - `clinicaltrials://NCT04852770`
+
+**Params:** `nctId` — the shared NCT ID schema, so `clinicaltrials://nct03722472` reads `NCT03722472`.
 
 **Handler:** Fetch study, cap its three unbounded protocol lists (locations, secondary/other outcomes, references — 50 each), drop `resultsSection` in favor of `resultsSummary` counts, and report every omission via `truncated`, `filtersApplied`, and a `retrieval` block naming `clinicaltrials_get_study_record` / `clinicaltrials_get_study_results`. A resource read carries no arguments, so the caps are fixed server-side. Throws `notFound` for 404, `serviceUnavailable` for API errors.
 
@@ -618,6 +620,10 @@ The search tool exposes 14 parameters — intentionally rich. Search is the prim
 ### Simplified find_eligible
 
 Dropped from the old server: complex multi-signal condition relevance scoring, healthy volunteer matching, criteria snippet extraction, multi-tier proximity ranking. Kept: demographic AREA[] filter construction, basic post-filtering, location sorting, and (reinstated in #72) a lightweight single-pass condition re-rank that keeps tangential MeSH-umbrella matches from outranking on-condition trials. The LLM can evaluate nuanced eligibility from the returned study data — the tool's job is query construction, not clinical judgment.
+
+### Input normalization for statusFilter and NCT IDs
+
+Case and spacing variants that map one-to-one onto a valid value are accepted rather than rejected. `statusFilter` is normalized in the handler (`normalizeStatusFilter`) instead of a schema `z.enum`, so a value that still names no status reaches upstream and keeps the `enum_invalid` reason and recovery hint — a schema rejection would surface as a bare `-32602`. NCT IDs are canonicalized in the shared `nctIdSchema` with `z.preprocess` (trim + uppercase): one change covers every tool and the resource, the advertised JSON Schema `pattern` stays `^NCT\d{8}$`, and handlers that dedup or look up by ID see one spelling. A `/i` regex flag was rejected because it accepts without canonicalizing, and `.transform()` cannot be emitted as JSON Schema.
 
 ### No wrapper for every endpoint
 

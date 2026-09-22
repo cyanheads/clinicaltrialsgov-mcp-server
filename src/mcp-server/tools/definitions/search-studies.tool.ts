@@ -21,6 +21,7 @@ import {
   buildAdvancedFilter,
   firstBlankListParam,
   firstBlankParam,
+  normalizeStatusFilter,
   toArray,
 } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
@@ -119,8 +120,14 @@ interface StudyHeaderFields {
  * need one complete record use clinicaltrials_get_study_record.
  */
 interface StudyIndexEntry extends StudyHeaderFields {
+  /** Whether results are posted — the gate for clinicaltrials_get_study_results. */
+  hasResults?: boolean;
   /** Bounded locations summary — the lead/nearest site plus the total site count. */
   locations?: { nearest?: NearestSite; total: number };
+  /** `statusModule.primaryCompletionDateStruct.date`, as upstream sends it (YYYY-MM or YYYY-MM-DD). */
+  primaryCompletionDate?: string;
+  /** `statusModule.startDateStruct.date`, as upstream sends it (YYYY-MM or YYYY-MM-DD). */
+  startDate?: string;
 }
 
 /** Pick the rendered subset of the lead/nearest site for the index projection. */
@@ -145,11 +152,16 @@ function projectStudyIndex(study: RawStudyShape): Record<string, unknown> {
   const ps = study.protocolSection;
   const id = ps?.identificationModule;
   const design = ps?.designModule;
+  const statusModule = ps?.statusModule;
   const entry: StudyIndexEntry = {};
   if (id?.nctId != null) entry.nctId = id.nctId;
   if (id?.briefTitle != null) entry.briefTitle = id.briefTitle;
-  const status = ps?.statusModule?.overallStatus;
-  if (status != null) entry.overallStatus = status;
+  if (statusModule?.overallStatus != null) entry.overallStatus = statusModule.overallStatus;
+  if (study.hasResults != null) entry.hasResults = study.hasResults;
+  const startDate = statusModule?.startDateStruct?.date;
+  if (startDate != null) entry.startDate = startDate;
+  const primaryCompletionDate = statusModule?.primaryCompletionDateStruct?.date;
+  if (primaryCompletionDate != null) entry.primaryCompletionDate = primaryCompletionDate;
   if (design?.phases?.length) entry.phases = design.phases;
   const enrollment = design?.enrollmentInfo?.count;
   if (enrollment != null) entry.enrollmentCount = enrollment;
@@ -172,8 +184,11 @@ function projectStudyIndex(study: RawStudyShape): Record<string, unknown> {
   return { ...entry };
 }
 
-/** Render the shared `- **NCT**: title [status]` headline + meta line. */
-function renderStudyHeaderLine(e: StudyHeaderFields): string {
+/**
+ * Render the shared `- **NCT**: title [status]` headline + meta line.
+ * `extraMeta` appends caller-specific segments to the meta line.
+ */
+function renderStudyHeaderLine(e: StudyHeaderFields, extraMeta: string[] = []): string {
   const nctId = e.nctId ?? 'Unknown';
   const titleStr = e.briefTitle ? `: ${e.briefTitle}` : '';
   const statusStr = e.overallStatus ? ` [${e.overallStatus}]` : '';
@@ -182,13 +197,20 @@ function renderStudyHeaderLine(e: StudyHeaderFields): string {
   if (e.enrollmentCount != null) meta.push(`N=${e.enrollmentCount}`);
   if (e.leadSponsor) meta.push(e.leadSponsor);
   if (e.conditions?.length) meta.push(e.conditions.join(', '));
+  meta.push(...extraMeta);
   const metaStr = meta.length ? `\n  ${meta.join(' | ')}` : '';
   return `- **${nctId}**${titleStr}${statusStr}${metaStr}`;
 }
 
 /** Render one compact index entry (the default, no-`fields` search projection). */
 function renderIndexEntry(entry: StudyIndexEntry): string[] {
-  const lines: string[] = [renderStudyHeaderLine(entry)];
+  // `false` is data, not absence — it renders as "no results"; an absent flag renders nothing.
+  const indexMeta: string[] = [];
+  if (entry.hasResults != null) indexMeta.push(entry.hasResults ? 'results posted' : 'no results');
+  if (entry.startDate) indexMeta.push(`start ${entry.startDate}`);
+  if (entry.primaryCompletionDate)
+    indexMeta.push(`primary completion ${entry.primaryCompletionDate}`);
+  const lines: string[] = [renderStudyHeaderLine(entry, indexMeta)];
 
   // Surface the study's site — the headline carries no location. With an active
   // geoFilter the projection's nearest site is annotated with distanceMi: lead
@@ -293,24 +315,28 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       code: JsonRpcErrorCode.NotFound,
       when: 'One or more NCT IDs in the nctIds filter are not present at ClinicalTrials.gov.',
       recovery: RECOVERY_HINTS.ids_not_found,
+      thrownBy: 'service',
     },
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
       when: 'A field name in the fields parameter or AREA[] expression is invalid (often a module name instead of a piece name).',
       recovery: RECOVERY_HINTS.field_invalid,
+      thrownBy: 'service',
     },
     {
       reason: 'enum_invalid',
       code: JsonRpcErrorCode.ValidationError,
       when: 'statusFilter or phaseFilter contains a value ClinicalTrials.gov does not accept.',
       recovery: RECOVERY_HINTS.enum_invalid,
+      thrownBy: 'service',
     },
     {
       reason: 'query_parse_error',
       code: JsonRpcErrorCode.ValidationError,
       when: 'A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a `[` or `]` outside an AREA[…] / RANGE[…] expression, an unmatched `(` / `)`, or an unterminated quote in a query/conditionQuery/etc. value.',
       recovery: RECOVERY_HINTS.query_parse_error,
+      thrownBy: 'service',
     },
     {
       reason: 'geo_invalid',
@@ -323,6 +349,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       code: JsonRpcErrorCode.ValidationError,
       when: 'sort is not FieldName:asc / FieldName:desc, or names more than 2 fields.',
       recovery: RECOVERY_HINTS.sort_invalid,
+      thrownBy: 'service',
     },
     {
       reason: 'rate_limited',
@@ -330,6 +357,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
       recovery: RECOVERY_HINTS.rate_limited,
       retryable: true,
+      thrownBy: 'service',
     },
   ],
 
@@ -398,7 +426,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        `Advanced filter using AREA[FieldName]value syntax. Examples: "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]", "AREA[Phase]PHASE2 AND AREA[StudyType]INTERVENTIONAL", "(AREA[Phase]PHASE3 OR AREA[Phase]PHASE4) AND AREA[StudyType]INTERVENTIONAL". AND/OR/NOT join complete AREA[FieldName]value expressions; parentheses group them. Call clinicaltrials_get_field_definitions to find AREA[]-compatible field names.`,
+        `Advanced filter using AREA[FieldName]value syntax. Examples: "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]", "AREA[Phase]PHASE2 AND AREA[StudyType]INTERVENTIONAL", "(AREA[Phase]PHASE3 OR AREA[Phase]PHASE4) AND AREA[StudyType]INTERVENTIONAL". "AREA[HasResults]true" restricts to studies with posted results. AND/OR/NOT join complete AREA[FieldName]value expressions; parentheses group them. Call clinicaltrials_get_field_definitions to find AREA[]-compatible field names.`,
       ),
     geoFilter: z
       .string()
@@ -451,7 +479,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     studies: z
       .array(z.record(z.string(), z.unknown()))
       .describe(
-        'Matching studies. By default each entry is a COMPACT index projection — nctId, briefTitle, overallStatus, phases, enrollmentCount, leadSponsor, conditions, and a bounded locations summary ({ total, nearest }) — mirroring the rendered result, NOT the full ~70KB record. Pass the fields parameter to receive exactly the requested leaves at full fidelity instead (e.g. all locations). Fetch a full single record with clinicaltrials_get_study_record.',
+        'Matching studies. By default each entry is a COMPACT index projection — nctId, briefTitle, overallStatus, phases, enrollmentCount, leadSponsor, conditions, hasResults, startDate and primaryCompletionDate (YYYY-MM or YYYY-MM-DD, as registered), and a bounded locations summary ({ total, nearest }); keys the study does not publish are omitted — mirroring the rendered result, NOT the full ~70KB record. Pass the fields parameter to receive exactly the requested leaves at full fidelity instead (e.g. all locations). Fetch a full single record with clinicaltrials_get_study_record.',
       ),
     totalCount: z
       .number()
@@ -519,7 +547,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     // handler and surfaces as a bare -32602 with no reason and no recovery
     // hint, leaving the declared blank_value contract unreachable for exactly
     // the input form it names.
-    const statusFilter = toArray(input.statusFilter);
+    const statusFilter = normalizeStatusFilter(input.statusFilter);
     const phaseFilter = toArray(input.phaseFilter);
     const filterIds = toArray(input.nctIds);
     const blankParam =
@@ -616,7 +644,12 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     if (input.sponsorQuery) criteria.sponsorQuery = input.sponsorQuery;
     if (input.titleQuery) criteria.titleQuery = input.titleQuery;
     if (input.outcomeQuery) criteria.outcomeQuery = input.outcomeQuery;
-    if (input.statusFilter) criteria.statusFilter = input.statusFilter;
+    // The canonical status values actually sent, in the caller's scalar/list shape.
+    if (statusFilter)
+      criteria.statusFilter =
+        Array.isArray(input.statusFilter) || statusFilter.length !== 1
+          ? statusFilter
+          : statusFilter[0];
     if (input.phaseFilter) criteria.phaseFilter = input.phaseFilter;
     if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
     if (input.geoFilter) criteria.geoFilter = input.geoFilter;

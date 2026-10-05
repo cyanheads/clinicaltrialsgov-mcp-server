@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.9.11](changelog/2.9.x/2.9.11.md) — 2026-10-05
+
+Moves to mcp-ts-core 0.13.12: tool error results name their request ID, client-facing error data no longer carries stack traces or request context, and the Docker image installs dependencies on the build platform with musl bindings pruned.
+
 ## [2.9.10](changelog/2.9.x/2.9.10.md) — 2026-09-22
 
 get_study_results' adverse-event summary reports each event group separately instead of pooling them, and find_eligible admits its fallback recruiting site by distance instead of upstream list order.

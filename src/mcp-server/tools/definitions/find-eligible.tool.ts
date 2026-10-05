@@ -483,10 +483,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       firstBlankListParam({ conditions: input.conditions }) ??
       firstBlankParam({ 'location.country': input.location.country });
     if (blankParam) {
-      throw ctx.fail('blank_value', blankValueMessage(blankParam), {
-        param: blankParam,
-        ...ctx.recoveryFor('blank_value'),
-      });
+      throw ctx.fail('blank_value', blankValueMessage(blankParam), { param: blankParam });
     }
 
     const service = getClinicalTrialsService();

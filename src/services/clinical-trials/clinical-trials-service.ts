@@ -5,6 +5,7 @@
 
 import type { Context } from '@cyanheads/mcp-ts-core';
 import {
+  internalError,
   JsonRpcErrorCode,
   McpError,
   notFound,
@@ -312,7 +313,7 @@ export class ClinicalTrialsService {
           : `Invalid field name(s): ${fields.join(', ')}.`;
         throw validationError(
           `${message} Use PascalCase piece names like OverallStatus, Phase, StudyType, InterventionType, LeadSponsorClass, Sex, StdAge. Call clinicaltrials_get_field_definitions to browse the full field tree.`,
-          { reason: 'field_invalid', ...ctx.recoveryFor('field_invalid') },
+          { reason: 'field_invalid' },
         );
       }
       throw err;
@@ -573,7 +574,6 @@ export class ClinicalTrialsService {
       reason: 'field_invalid',
       invalid,
       ...(Object.keys(suggestions).length > 0 ? { suggestions } : {}),
-      ...ctx.recoveryFor('field_invalid'),
     });
   }
 
@@ -682,10 +682,7 @@ export class ClinicalTrialsService {
         if (res.status === 404) {
           if (path.startsWith('/studies/')) {
             const id = path.split('/').pop() ?? path;
-            throw notFound(`Study ${id} not found`, {
-              reason: 'study_not_found',
-              ...ctx.recoveryFor('study_not_found'),
-            });
+            throw notFound(`Study ${id} not found`, { reason: 'study_not_found' });
           }
           // Non-/studies/ endpoints (e.g. /stats/field/values) — surface the
           // upstream body so callers can extract specific offenders instead of
@@ -731,7 +728,7 @@ export class ClinicalTrialsService {
               : ' Use PascalCase piece names (e.g., DesignPrimaryPurpose, DesignInterventionModel, LeadSponsorName), not module names.';
             throw validationError(
               `${text.trim()}${offender} Call clinicaltrials_get_field_definitions to browse valid piece names.`,
-              { reason: 'field_invalid', ...ctx.recoveryFor('field_invalid') },
+              { reason: 'field_invalid' },
             );
           }
           if (text.includes('incorrect format')) {
@@ -739,7 +736,7 @@ export class ClinicalTrialsService {
               const id = path.split('/').pop() ?? path;
               throw notFound(
                 `Study ${id} not found. Verify the NCT ID exists on ClinicalTrials.gov.`,
-                { reason: 'study_not_found', ...ctx.recoveryFor('study_not_found') },
+                { reason: 'study_not_found' },
               );
             }
             // Upstream names the offending parameter in backticks — `Parameter
@@ -758,16 +755,12 @@ export class ClinicalTrialsService {
             // than echoing the upstream body.
             const geo = params['filter.geo'];
             if (geo && blamed('filter.geo')) {
-              throw validationError(geoFilterShapeMessage(geo), {
-                reason: 'geo_invalid',
-                ...ctx.recoveryFor('geo_invalid'),
-              });
+              throw validationError(geoFilterShapeMessage(geo), { reason: 'geo_invalid' });
             }
             if (params.sort && blamed('sort')) {
               throw validationError(`Invalid value for \`sort\`: '${params.sort}'. ${SORT_SHAPE}`, {
                 reason: 'sort_invalid',
                 value: params.sort,
-                ...ctx.recoveryFor('sort_invalid'),
               });
             }
             // filter.ids rejection — the API may reject IDs that match the
@@ -778,7 +771,7 @@ export class ClinicalTrialsService {
               const idList = ids.split('|').join(', ');
               throw notFound(
                 `Study ID(s) not found or rejected by API: ${idList}. Verify the NCT IDs exist on ClinicalTrials.gov.`,
-                { reason: 'ids_not_found', ...ctx.recoveryFor('ids_not_found') },
+                { reason: 'ids_not_found' },
               );
             }
             throw validationError(`Invalid request format. API response: ${text}`);
@@ -798,7 +791,6 @@ export class ClinicalTrialsService {
             throw validationError(await this.describeSortRejection(params.sort, text, ctx), {
               reason: 'sort_invalid',
               value: params.sort,
-              ...ctx.recoveryFor('sort_invalid'),
             });
           }
           // Essie parser errors share the `Error parsing query in <where>: …` prefix.
@@ -814,7 +806,7 @@ export class ClinicalTrialsService {
             if (areaMatch) {
               throw validationError(
                 `${text.trim()} '${areaMatch[1]}' is not a recognized AREA[]-compatible field. Call clinicaltrials_get_field_definitions to look up valid PascalCase piece names.`,
-                { reason: 'field_invalid', ...ctx.recoveryFor('field_invalid') },
+                { reason: 'field_invalid' },
               );
             }
             const enumMatch = text.match(
@@ -839,10 +831,7 @@ export class ClinicalTrialsService {
             }
             // ANTLR catch-all — see describeQueryParseError for why each shape
             // needs its own reading of the quoted token.
-            throw validationError(describeQueryParseError(text), {
-              reason: 'query_parse_error',
-              ...ctx.recoveryFor('query_parse_error'),
-            });
+            throw validationError(describeQueryParseError(text), { reason: 'query_parse_error' });
           }
           throw validationError(text || `Bad request: ${path}`);
         }
@@ -882,7 +871,6 @@ export class ClinicalTrialsService {
         path,
         lastError: String(lastError),
         reason: 'rate_limited',
-        ...ctx.recoveryFor('rate_limited'),
       });
     }
     throw serviceUnavailable('ClinicalTrials.gov API unavailable after retries', {
@@ -907,7 +895,7 @@ export function initClinicalTrialsService(): void {
 /** Get the initialized ClinicalTrials service instance. */
 export function getClinicalTrialsService(): ClinicalTrialsService {
   if (!_service)
-    throw new Error(
+    throw internalError(
       'ClinicalTrialsService not initialized — call initClinicalTrialsService() in setup()',
     );
   return _service;

@@ -157,10 +157,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
     const fields = toArray(input.fields);
     const blankParam = firstBlankListParam({ fields });
     if (blankParam) {
-      throw ctx.fail('blank_value', blankValueMessage(blankParam), {
-        param: blankParam,
-        ...ctx.recoveryFor('blank_value'),
-      });
+      throw ctx.fail('blank_value', blankValueMessage(blankParam), { param: blankParam });
     }
     const service = getClinicalTrialsService();
     const stats = await service.getFieldValues(fields, ctx);

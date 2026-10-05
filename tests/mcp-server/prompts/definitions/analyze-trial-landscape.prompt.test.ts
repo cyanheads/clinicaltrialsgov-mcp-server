@@ -3,6 +3,7 @@
  * @module tests/mcp-server/prompts/definitions/analyze-trial-landscape.prompt
  */
 
+import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { describe, expect, it } from 'vitest';
 import { analyzeTrialLandscape } from '@/mcp-server/prompts/definitions/analyze-trial-landscape.prompt.js';
 
@@ -117,6 +118,15 @@ describe('analyzeTrialLandscape', () => {
     it('throws for a whitespace-only topic the schema cannot catch (#99)', () => {
       // `.min(1)` passes for '   '; the trim check inside generate() closes it.
       expect(() => generate({ topic: '   ' })).toThrow(/topic/);
+    });
+
+    it('rejects a whitespace-only topic as a ValidationError carrying blank_value', () => {
+      expect(() => generate({ topic: '   ' })).toThrow(
+        expect.objectContaining({
+          code: JsonRpcErrorCode.ValidationError,
+          data: expect.objectContaining({ reason: 'blank_value', param: 'topic' }),
+        }),
+      );
     });
 
     it('renders a non-blank topic unchanged', () => {

@@ -227,10 +227,7 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
           : {},
     );
     if (blankParam) {
-      throw ctx.fail('blank_value', blankValueMessage(blankParam), {
-        param: blankParam,
-        ...ctx.recoveryFor('blank_value'),
-      });
+      throw ctx.fail('blank_value', blankValueMessage(blankParam), { param: blankParam });
     }
 
     switch (input.mode) {
@@ -239,7 +236,7 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
           throw ctx.fail(
             'mode_requires',
             'mode="search" requires `query`. Pass a keyword to search by.',
-            { param: 'query', mode: 'search', ...ctx.recoveryFor('mode_requires') },
+            { param: 'query', mode: 'search' },
           );
         }
         const { entries: matches, total } = await service.searchFieldDefinitions(
@@ -275,7 +272,7 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
           throw ctx.fail(
             'mode_requires',
             'mode="drill" requires `path`. Pass a dot-notation path such as "protocolSection.designModule".',
-            { param: 'path', mode: 'drill', ...ctx.recoveryFor('mode_requires') },
+            { param: 'path', mode: 'drill' },
           );
         }
         const tree = await service.getMetadata(input.includeIndexedOnly ?? false, ctx);
@@ -284,7 +281,6 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
           throw ctx.fail(
             'path_not_found',
             `Path '${input.path}' not found. Top-level sections: ${tree.map((n) => n.name).join(', ')}.`,
-            { ...ctx.recoveryFor('path_not_found') },
           );
         }
         const fields = flattenChildren(node, input.path);

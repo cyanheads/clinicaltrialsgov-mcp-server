@@ -1227,17 +1227,18 @@ describe('searchStudies', () => {
 
     it('carries the geo_invalid recovery hint on the rejection', async () => {
       // The declared contract's hint is the actionable half — a reason with no
-      // hint leaves the caller knowing only that something was wrong.
-      const ctx = createMockContext({ errors: searchStudies.errors });
-      await expect(
-        searchStudies.handler(
-          searchStudies.input!.parse({ geoFilter: 'distance(47.6,-122.9,50)' }),
-          ctx,
-        ),
-      ).rejects.toMatchObject({
-        data: {
-          reason: 'geo_invalid',
-          recovery: { hint: expect.stringContaining('`mi` or `km` suffix') },
+      // hint leaves the caller knowing only that something was wrong. The
+      // framework fills it from the contract, so it is asserted on the wire.
+      const result = await runToolContract(searchStudies, {
+        geoFilter: 'distance(47.6,-122.9,50)',
+      });
+      expect(result.isError).toBe(true);
+      expect(result.structuredContent).toMatchObject({
+        error: {
+          data: {
+            reason: 'geo_invalid',
+            recovery: { hint: expect.stringContaining('`mi` or `km` suffix') },
+          },
         },
       });
     });

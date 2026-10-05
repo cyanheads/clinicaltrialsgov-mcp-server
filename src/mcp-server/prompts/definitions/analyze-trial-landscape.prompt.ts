@@ -4,6 +4,7 @@
  */
 
 import { prompt, z } from '@cyanheads/mcp-ts-core';
+import { validationError } from '@cyanheads/mcp-ts-core/errors';
 
 export const analyzeTrialLandscape = prompt('analyze_trial_landscape', {
   description:
@@ -26,11 +27,12 @@ export const analyzeTrialLandscape = prompt('analyze_trial_landscape', {
   generate: (args) => {
     // `.min(1)` passes for a whitespace-only topic, which renders as an empty
     // heading and asks the model to analyze nothing. Prompts have no error
-    // contract — the framework's registration catch converts this throw into
-    // an McpError carrying the message.
+    // contract, so the reason rides in `data` the way the tools' blank_value
+    // contract carries it.
     if (args.topic.trim().length === 0) {
-      throw new Error(
+      throw validationError(
         "Prompt argument 'topic' was supplied with a blank value. Provide a disease, condition, or research area containing non-whitespace.",
+        { reason: 'blank_value', param: 'topic' },
       );
     }
 

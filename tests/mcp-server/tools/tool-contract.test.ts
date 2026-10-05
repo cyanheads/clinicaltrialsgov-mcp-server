@@ -10,7 +10,12 @@
  * @module tests/mcp-server/tools/tool-contract
  */
 
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import {
+  JsonRpcErrorCode,
+  notFound,
+  rateLimited,
+  validationError,
+} from '@cyanheads/mcp-ts-core/errors';
 import { runToolContract, toolContractSuite } from '@cyanheads/mcp-ts-core/testing/vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadStudyFixture } from '../../helpers/format-parity.js';
@@ -30,6 +35,7 @@ import { getStudy } from '@/mcp-server/tools/definitions/get-study.tool.js';
 import { getStudyCount } from '@/mcp-server/tools/definitions/get-study-count.tool.js';
 import { getStudyResults } from '@/mcp-server/tools/definitions/get-study-results.tool.js';
 import { searchStudies } from '@/mcp-server/tools/definitions/search-studies.tool.js';
+import { RECOVERY_HINTS } from '@/mcp-server/tools/utils/recovery-hints.js';
 import type { FieldNode } from '@/services/clinical-trials/types.js';
 
 /**
@@ -475,6 +481,100 @@ describe('blank_value recovery on the wire (#113)', () => {
       expect(error.data.param).toBe(name);
     },
   );
+});
+
+/**
+ * The service throws `data.reason` alone and never carries a hint: it serves
+ * several tools and a resource, each declaring its own contract. The framework
+ * fills `data.recovery` from the calling definition's `errors[]` entry, so the
+ * hint reaching the wire — structured and as the `Recovery:` line — is the one
+ * the tool declares.
+ */
+describe('service-thrown reasons carry the declaring tool hint on the wire', () => {
+  const cases = [
+    {
+      name: 'search_studies field_invalid',
+      reason: 'field_invalid' as const,
+      arrange: () =>
+        mockService.searchStudies.mockRejectedValue(
+          validationError("Invalid field name: 'Bogus'.", { reason: 'field_invalid' }),
+        ),
+      run: () => runToolContract(searchStudies, { conditionQuery: 'diabetes', fields: ['Bogus'] }),
+    },
+    {
+      name: 'search_studies ids_not_found',
+      reason: 'ids_not_found' as const,
+      arrange: () =>
+        mockService.searchStudies.mockRejectedValue(
+          notFound('Study ID(s) not found or rejected by API: NCT00000000.', {
+            reason: 'ids_not_found',
+          }),
+        ),
+      run: () => runToolContract(searchStudies, { nctIds: ['NCT00000000'] }),
+    },
+    {
+      name: 'search_studies sort_invalid',
+      reason: 'sort_invalid' as const,
+      arrange: () =>
+        mockService.searchStudies.mockRejectedValue(
+          validationError("Invalid value for `sort`: 'Bogus:desc'.", {
+            reason: 'sort_invalid',
+            value: 'Bogus:desc',
+          }),
+        ),
+      run: () => runToolContract(searchStudies, { conditionQuery: 'diabetes', sort: 'Bogus:desc' }),
+    },
+    {
+      name: 'get_study_count query_parse_error',
+      reason: 'query_parse_error' as const,
+      arrange: () =>
+        mockService.searchStudies.mockRejectedValue(
+          validationError("Query syntax error near '['.", { reason: 'query_parse_error' }),
+        ),
+      run: () => runToolContract(getStudyCount, { query: 'foo [bar' }),
+    },
+    {
+      name: 'get_study study_not_found',
+      reason: 'study_not_found' as const,
+      arrange: () =>
+        mockService.getStudy.mockRejectedValue(
+          notFound('Study NCT00000000 not found', { reason: 'study_not_found' }),
+        ),
+      run: () => runToolContract(getStudy, { nctId: 'NCT00000000' }),
+    },
+    {
+      name: 'get_field_values field_invalid',
+      reason: 'field_invalid' as const,
+      arrange: () =>
+        mockService.getFieldValues.mockRejectedValue(
+          validationError("Invalid field name: 'Bogus'.", { reason: 'field_invalid' }),
+        ),
+      run: () => runToolContract(getFieldValues, { fields: 'Bogus' }),
+    },
+    {
+      name: 'find_eligible rate_limited',
+      reason: 'rate_limited' as const,
+      arrange: () =>
+        mockService.searchStudies.mockRejectedValue(
+          rateLimited('Rate limited by ClinicalTrials.gov after 3 retries', {
+            reason: 'rate_limited',
+          }),
+        ),
+      run: () => runToolContract(findEligible, eligibleInput),
+    },
+  ];
+
+  it.each(cases)('$name', async ({ arrange, reason, run }) => {
+    arrange();
+    const result = await run();
+    const text = (result.content as { text: string }[])[0]!.text;
+    const error = (result.structuredContent as { error: { data: Record<string, unknown> } }).error;
+
+    expect(result.isError).toBe(true);
+    expect(error.data.reason).toBe(reason);
+    expect(error.data.recovery).toEqual({ hint: RECOVERY_HINTS[reason] });
+    expect(text).toContain(`Recovery: ${RECOVERY_HINTS[reason]}`);
+  });
 });
 
 /**

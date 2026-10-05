@@ -2,8 +2,8 @@
  * @fileoverview Shared recovery hint strings for error contracts surfaced
  * across multiple tools and resources. Centralizing keeps wire-payload
  * guidance consistent when the same failure reason fires from different
- * surfaces — the service throw site spreads `ctx.recoveryFor(reason)`,
- * which resolves whichever contract is attached to the active context.
+ * surfaces — the service throws only `data.reason`, and the framework fills
+ * `data.recovery` from whichever tool or resource contract declares it.
  * @module mcp-server/tools/utils/recovery-hints
  */
 

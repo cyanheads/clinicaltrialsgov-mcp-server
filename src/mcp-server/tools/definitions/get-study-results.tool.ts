@@ -1278,10 +1278,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     // no recovery hint.
     const blankParam = firstBlankListParam({ nctIds, sections: requestedSections });
     if (blankParam) {
-      throw ctx.fail('blank_value', blankValueMessage(blankParam), {
-        param: blankParam,
-        ...ctx.recoveryFor('blank_value'),
-      });
+      throw ctx.fail('blank_value', blankValueMessage(blankParam), { param: blankParam });
     }
     const sections: Section[] = requestedSections ?? [...VALID_SECTIONS];
 
@@ -1296,14 +1293,14 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
         throw ctx.fail(
           'offset_not_applicable',
           `Parameter '${param}' has no effect in summary mode, which returns a condensed projection of the whole '${section}' section rather than a bounded window of it.`,
-          { param, ...ctx.recoveryFor('offset_not_applicable') },
+          { param },
         );
       }
       if (!sections.includes(section)) {
         throw ctx.fail(
           'offset_not_applicable',
           `Parameter '${param}' bounds the '${section}' section, which this call's sections filter excludes.`,
-          { param, section, ...ctx.recoveryFor('offset_not_applicable') },
+          { param, section },
         );
       }
     }
@@ -1338,9 +1335,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       // Keyed on the service's typed `data.reason` — the tag it sets once its
       // retry budget is spent against a 429 — never on upstream message text.
       if (err instanceof McpError && err.data?.reason === 'rate_limited') {
-        throw ctx.fail('rate_limited', err.message, ctx.recoveryFor('rate_limited'), {
-          cause: err,
-        });
+        throw ctx.fail('rate_limited', err.message, undefined, { cause: err });
       }
       // A cancelled caller is the same shape of whole-request failure: the
       // fallback would walk every ID only to record the same cancellation

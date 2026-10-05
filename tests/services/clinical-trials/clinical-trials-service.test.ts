@@ -455,20 +455,11 @@ describe('ClinicalTrialsService', () => {
       );
     });
 
-    it('wraps bad AREA[] field name with field_invalid reason + recovery hint', async () => {
+    it('wraps bad AREA[] field name with the field_invalid reason', async () => {
       mockFetch.mockResolvedValue(
         textResponse('Error parsing query in advanced filter: Unknown area name: `NotARealField`'),
       );
-      const ctx = createMockContext({
-        errors: [
-          {
-            reason: 'field_invalid',
-            code: JsonRpcErrorCode.ValidationError,
-            when: 'A field name is not valid.',
-            recovery: 'Call clinicaltrials_get_field_definitions to look up the correct name.',
-          },
-        ],
-      });
+      const ctx = createMockContext();
       try {
         await service.searchStudies({ filterAdvanced: 'AREA[NotARealField]value' }, ctx);
         expect.fail('should have thrown');
@@ -479,9 +470,7 @@ describe('ClinicalTrialsService', () => {
         expect(msg).toContain('clinicaltrials_get_field_definitions');
         const data = (err as McpError).data as Record<string, unknown>;
         expect(data?.reason).toBe('field_invalid');
-        expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain(
-          'clinicaltrials_get_field_definitions',
-        );
+        expect(data?.recovery).toBeUndefined();
       }
     });
 
@@ -498,7 +487,7 @@ describe('ClinicalTrialsService', () => {
         ],
       });
 
-    it('wraps Essie free-text parser error with query_parse_error reason + recovery hint', async () => {
+    it('wraps Essie free-text parser error with the query_parse_error reason', async () => {
       // Combined shape (both a `no viable alternative` line and a `mismatched input`
       // line). `mismatched input` extraction takes precedence per the documented
       // order, so the offender is the reserved `[`; the grammar dump is stripped.
@@ -520,7 +509,7 @@ describe('ClinicalTrialsService', () => {
         expect(msg).not.toContain('StringLiteral');
         const data = (err as McpError).data as Record<string, unknown>;
         expect(data?.reason).toBe('query_parse_error');
-        expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain('reserved');
+        expect(data?.recovery).toBeUndefined();
       }
     });
 
@@ -1073,11 +1062,12 @@ describe('ClinicalTrialsService', () => {
   });
 
   describe('error data wire shape', () => {
-    // The service spreads `ctx.recoveryFor(reason)` from whatever contract is
-    // attached to the active context. These tests attach a synthetic contract
-    // covering every reason the service throws, so assertions can verify both
-    // `data.reason` (always set by the service) and `data.recovery.hint`
-    // (resolved from the contract via the framework's typed-fail wiring).
+    // The service sets `data.reason` and leaves `data.recovery` to the framework,
+    // which fills it from the tool or resource contract declaring that reason.
+    // These tests attach a synthetic contract covering every reason the service
+    // throws and assert the service itself still attaches no hint — a direct
+    // service call never reaches the fill. The hint on the wire is asserted
+    // through `runToolContract` in tool-contract.test.ts.
     const allReasons = [
       {
         reason: 'study_not_found' as const,
@@ -1128,7 +1118,7 @@ describe('ClinicalTrialsService', () => {
       },
     ];
 
-    it('attaches reason=study_not_found + recovery on 404 /studies/', async () => {
+    it('attaches reason=study_not_found, leaving recovery to the contract, on 404 /studies/', async () => {
       mockFetch.mockResolvedValue(jsonResponse(null, 404));
       const ctx = createMockContext({ errors: allReasons });
       try {
@@ -1138,9 +1128,7 @@ describe('ClinicalTrialsService', () => {
         expect(err).toBeInstanceOf(McpError);
         const data = (err as McpError).data as Record<string, unknown> | undefined;
         expect(data?.reason).toBe('study_not_found');
-        expect((data?.recovery as { hint?: string } | undefined)?.hint).toMatch(
-          /Verify the NCT ID/,
-        );
+        expect(data?.recovery).toBeUndefined();
       }
     });
 
@@ -1153,7 +1141,7 @@ describe('ClinicalTrialsService', () => {
       } catch (err) {
         const data = (err as McpError).data as Record<string, unknown> | undefined;
         expect(data?.reason).toBe('study_not_found');
-        expect((data?.recovery as { hint?: string } | undefined)?.hint).toBeTruthy();
+        expect(data?.recovery).toBeUndefined();
       }
     });
 
@@ -1169,9 +1157,7 @@ describe('ClinicalTrialsService', () => {
       } catch (err) {
         const data = (err as McpError).data as Record<string, unknown> | undefined;
         expect(data?.reason).toBe('ids_not_found');
-        expect((data?.recovery as { hint?: string } | undefined)?.hint).toMatch(
-          /Verify each NCT ID/,
-        );
+        expect(data?.recovery).toBeUndefined();
       }
     });
 
@@ -1186,9 +1172,7 @@ describe('ClinicalTrialsService', () => {
       } catch (err) {
         const data = (err as McpError).data as Record<string, unknown> | undefined;
         expect(data?.reason).toBe('field_invalid');
-        expect((data?.recovery as { hint?: string } | undefined)?.hint).toMatch(
-          /field-definitions/,
-        );
+        expect(data?.recovery).toBeUndefined();
       }
     });
 
@@ -1201,7 +1185,7 @@ describe('ClinicalTrialsService', () => {
       } catch (err) {
         const data = (err as McpError).data as Record<string, unknown> | undefined;
         expect(data?.reason).toBe('field_invalid');
-        expect((data?.recovery as { hint?: string } | undefined)?.hint).toBeTruthy();
+        expect(data?.recovery).toBeUndefined();
       }
     });
 
@@ -1262,10 +1246,11 @@ describe('ClinicalTrialsService', () => {
         expect(msg).toContain('EnrollmentCount:descending');
         expect(msg).toContain('FieldName:asc');
         expect(msg).toContain('FieldName:desc');
-        // sort was the one validation error arriving with no Recovery: line (#93).
+        // sort was the one validation error arriving with no Recovery: line (#93);
+        // the typed reason is what lets the contract's hint reach it.
         const data = (err as McpError).data as Record<string, unknown> | undefined;
         expect(data?.reason).toBe('sort_invalid');
-        expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain('FieldName:asc');
+        expect(data?.recovery).toBeUndefined();
       }
     });
 
@@ -1290,7 +1275,7 @@ describe('ClinicalTrialsService', () => {
         const data = (err as McpError).data as Record<string, unknown> | undefined;
         expect(data?.reason).toBe('sort_invalid');
         expect(data?.value).toBe('Bogus:desc');
-        expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain('FieldName:asc');
+        expect(data?.recovery).toBeUndefined();
       }
     });
 
@@ -1382,7 +1367,7 @@ describe('ClinicalTrialsService', () => {
         expect(msg).not.toContain('Invalid request format');
         const data = (err as McpError).data as Record<string, unknown> | undefined;
         expect(data?.reason).toBe('geo_invalid');
-        expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain('distance(');
+        expect(data?.recovery).toBeUndefined();
       }
     });
 
@@ -1449,22 +1434,20 @@ describe('ClinicalTrialsService', () => {
       } catch (err) {
         const data = (err as McpError).data as Record<string, unknown> | undefined;
         expect(data?.reason).toBe('rate_limited');
-        expect((data?.recovery as { hint?: string } | undefined)?.hint).toMatch(
-          /Wait about a minute/,
-        );
+        expect(data?.recovery).toBeUndefined();
       }
     }, 30_000);
 
     it('omits recovery.hint when no contract is attached (service stays contract-agnostic)', async () => {
       mockFetch.mockResolvedValue(jsonResponse(null, 404));
-      const ctx = createMockContext(); // no errors → ctx.recoveryFor returns {}
+      const ctx = createMockContext();
       try {
         await service.getStudy('NCT12345678', ctx);
         expect.fail('should have thrown');
       } catch (err) {
         const data = (err as McpError).data as Record<string, unknown> | undefined;
-        expect(data?.reason).toBe('study_not_found'); // reason still set
-        expect(data?.recovery).toBeUndefined(); // hint only when contract attached
+        expect(data?.reason).toBe('study_not_found');
+        expect(data?.recovery).toBeUndefined();
       }
     });
   });
@@ -1961,18 +1944,9 @@ describe('ClinicalTrialsService', () => {
       expect(result[0]?.multiValued).toBeUndefined();
     });
 
-    it('attaches reason=field_invalid and recovery hint on validation failure', async () => {
+    it('attaches reason=field_invalid on validation failure, leaving recovery to the contract', async () => {
       mockByRoute();
-      const ctx = createMockContext({
-        errors: [
-          {
-            reason: 'field_invalid',
-            code: JsonRpcErrorCode.ValidationError,
-            when: 'A field name is not valid.',
-            recovery: 'Call clinicaltrials_get_field_definitions to look up the correct name.',
-          },
-        ],
-      });
+      const ctx = createMockContext();
       try {
         await validatingService.searchStudies({ fields: ['Bogus'] }, ctx);
         expect.fail('should have thrown');
@@ -1980,9 +1954,7 @@ describe('ClinicalTrialsService', () => {
         const data = (err as McpError).data as Record<string, unknown>;
         expect(data?.reason).toBe('field_invalid');
         expect(Array.isArray(data?.invalid)).toBe(true);
-        expect((data?.recovery as { hint?: string } | undefined)?.hint).toContain(
-          'clinicaltrials_get_field_definitions',
-        );
+        expect(data?.recovery).toBeUndefined();
       }
     });
   });

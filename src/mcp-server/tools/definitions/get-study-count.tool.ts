@@ -191,10 +191,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
         advancedFilter: input.advancedFilter,
       }) ?? firstBlankListParam({ statusFilter, phaseFilter });
     if (blankParam) {
-      throw ctx.fail('blank_value', blankValueMessage(blankParam), {
-        param: blankParam,
-        ...ctx.recoveryFor('blank_value'),
-      });
+      throw ctx.fail('blank_value', blankValueMessage(blankParam), { param: blankParam });
     }
 
     const service = getClinicalTrialsService();

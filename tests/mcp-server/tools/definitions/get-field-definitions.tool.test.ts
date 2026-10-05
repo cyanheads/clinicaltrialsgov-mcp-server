@@ -3,8 +3,8 @@
  * @module tests/mcp-server/tools/definitions/get-field-definitions.tool
  */
 
-import { McpError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { runToolContract } from '@cyanheads/mcp-ts-core/testing/vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetService } = vi.hoisted(() => ({
@@ -202,22 +202,20 @@ describe('getFieldDefinitions', () => {
 
     it('surfaces the current mode-based recovery hint on invalid drill path (#87)', async () => {
       mockService.getMetadata.mockResolvedValue(sampleTree);
-      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
-      const input = getFieldDefinitions.input!.parse({ mode: 'drill', path: 'bad.path' });
+      const result = await runToolContract(getFieldDefinitions, {
+        mode: 'drill',
+        path: 'bad.path',
+      });
 
-      try {
-        await getFieldDefinitions.handler(input, ctx);
-        expect.fail('should have thrown');
-      } catch (err) {
-        expect(err).toBeInstanceOf(McpError);
-        const data = (err as McpError).data as Record<string, unknown>;
-        expect(data?.reason).toBe('path_not_found');
-        const hint = (data?.recovery as { hint?: string } | undefined)?.hint ?? '';
-        // No-args overview was removed in #48/#49 — the hint must name the mode-based
-        // shape, not the now-invalid "omit both arguments" call.
-        expect(hint).toContain('mode="overview"');
-        expect(hint).not.toContain('omit both arguments');
-      }
+      expect(result.isError).toBe(true);
+      const data = (result.structuredContent as { error: { data: Record<string, unknown> } }).error
+        .data;
+      expect(data.reason).toBe('path_not_found');
+      const hint = (data.recovery as { hint?: string } | undefined)?.hint ?? '';
+      // No-args overview was removed in #48/#49 — the hint must name the mode-based
+      // shape, not the now-invalid "omit both arguments" call.
+      expect(hint).toContain('mode="overview"');
+      expect(hint).not.toContain('omit both arguments');
     });
 
     it('navigates single-level path', async () => {
@@ -431,15 +429,19 @@ describe('getFieldDefinitions', () => {
   // and a whitespace-only required value answered with an empty result set
   // instead of naming the malformed input (#49).
   describe('mode-argument validation (#49)', () => {
+    /**
+     * Drives the call through the framework pipeline, which fills a declared
+     * reason's recovery hint — a direct `handler()` call never reaches the fill.
+     */
     const failure = async (args: Record<string, unknown>) => {
-      const ctx = createMockContext({ errors: getFieldDefinitions.errors });
-      try {
-        await getFieldDefinitions.handler(getFieldDefinitions.input!.parse(args), ctx);
-      } catch (err) {
-        expect(err).toBeInstanceOf(McpError);
-        return (err as McpError).data as Record<string, unknown>;
-      }
-      throw new Error(`Expected a rejection for ${JSON.stringify(args)}`);
+      // Cases build cross-mode argument sets by computed key, so the literal is
+      // untyped here; runToolContract parses it against the schema itself.
+      const result = await runToolContract(
+        getFieldDefinitions,
+        args as Parameters<typeof runToolContract<typeof getFieldDefinitions>>[1],
+      );
+      expect(result.isError).toBe(true);
+      return (result.structuredContent as { error: { data: Record<string, unknown> } }).error.data;
     };
 
     const hintOf = (data: Record<string, unknown>) =>

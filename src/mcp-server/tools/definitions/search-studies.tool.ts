@@ -566,10 +566,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       }) ??
       firstBlankListParam({ fields: input.fields, statusFilter, phaseFilter, nctIds: filterIds });
     if (blankParam) {
-      throw ctx.fail('blank_value', blankValueMessage(blankParam), {
-        param: blankParam,
-        ...ctx.recoveryFor('blank_value'),
-      });
+      throw ctx.fail('blank_value', blankValueMessage(blankParam), { param: blankParam });
     }
 
     // Validate the geo expression before spending a round trip on it.
@@ -584,7 +581,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     if (input.geoFilter) {
       const geoRejection = describeGeoFilterRejection(input.geoFilter);
       if (geoRejection) {
-        throw ctx.fail('geo_invalid', geoRejection, ctx.recoveryFor('geo_invalid'));
+        throw ctx.fail('geo_invalid', geoRejection);
       }
     }
 

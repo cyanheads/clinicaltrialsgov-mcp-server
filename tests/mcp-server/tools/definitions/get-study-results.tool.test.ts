@@ -10,6 +10,7 @@ import {
   requestCancelled,
 } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { runToolContract } from '@cyanheads/mcp-ts-core/testing/vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetService } = vi.hoisted(() => ({
@@ -25,6 +26,14 @@ import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 import { loadStudyFixture, missingLeaves } from '../../../helpers/format-parity.js';
 
 const SECTIONS = ['outcomes', 'adverseEvents', 'participantFlow', 'baseline', 'moreInfo'] as const;
+
+/** Read the recovery hint off a `runToolContract` error envelope. */
+function wireRecoveryHint(result: { structuredContent?: unknown }): string | undefined {
+  const error = (
+    result.structuredContent as { error?: { data?: { recovery?: { hint?: string } } } }
+  ).error;
+  return error?.data?.recovery?.hint;
+}
 
 function makeStudy(
   nctId: string,
@@ -1582,11 +1591,14 @@ describe('getStudyResults', () => {
         expect(mockService.getStudiesBatch).not.toHaveBeenCalled();
       });
 
-      it('carries the declared recovery hint', async () => {
-        const err = await reject({ summary: true, outcomeOffset: 2 });
-        expect((err as { data?: { recovery?: { hint?: string } } }).data?.recovery?.hint).toContain(
-          'summary: false',
-        );
+      it('carries the declared recovery hint on the wire', async () => {
+        const result = await runToolContract(getStudyResults, {
+          nctIds: 'NCT12345678',
+          summary: true,
+          outcomeOffset: 2,
+        });
+        expect(result.isError).toBe(true);
+        expect(wireRecoveryHint(result)).toContain('summary: false');
       });
 
       it('honors an offset whose section the sections filter includes', async () => {
@@ -1656,18 +1668,13 @@ describe('getStudyResults', () => {
       expect(mockService.getStudy).not.toHaveBeenCalled();
     });
 
-    it('carries the recovery hint from the declared contract', async () => {
+    it('carries the recovery hint from the declared contract on the wire', async () => {
       mockService.getStudiesBatch.mockRejectedValue(batchRateLimit());
 
-      const ctx = createMockContext({ errors: getStudyResults.errors });
-      const input = getStudyResults.input!.parse({ nctIds: 'NCT03722472' });
-      const err = await Promise.resolve(getStudyResults.handler(input, ctx)).catch(
-        (e: unknown) => e,
-      );
+      const result = await runToolContract(getStudyResults, { nctIds: 'NCT03722472' });
 
-      expect((err as { data?: { recovery?: { hint?: string } } }).data?.recovery?.hint).toContain(
-        'rate-limited',
-      );
+      expect(result.isError).toBe(true);
+      expect(wireRecoveryHint(result)).toContain('rate-limited');
     });
 
     it('still falls back per ID for a typed non-rate-limit batch rejection', async () => {

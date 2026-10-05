@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-2.9.10-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.0.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.0-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-2.9.10-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -59,64 +59,51 @@ Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltr
 
 ### `clinicaltrials_search_studies` <sub>tool</sub>
 
-- Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`; `statusFilter` (case- and separator-insensitive, registry display labels included: `"Active, not recruiting"` works) / `phaseFilter` enums, `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]` syntax), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix) for proximity search with nearest-site re-ranking
-- Returns a compact per-study index by default (`nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `leadSponsor`, `conditions`, `hasResults`, `startDate`, `primaryCompletionDate`, a bounded locations summary); pass `fields` (PascalCase leaves) for a full-fidelity projection — full records run ~70KB
-- `pageSize` 1–`CT_MAX_PAGE_SIZE` (default 10; the cap is 200 unless overridden), cursor pagination via `pageToken`, `sort` on up to 2 fields
-- Excludes the upstream "unknown" enrollment sentinel (`99999999`) by default — `includeUnknownEnrollment` to include it, or automatically lifted when `nctIds` is supplied
+- Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`, `statusFilter` / `phaseFilter` enums, `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]`), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix); `pageSize` 1–200 (default 10), `pageToken` cursor, `sort` on up to 2 fields
+- Returns a compact per-study index by default (`nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `hasResults`, …); `fields` (PascalCase leaves) selects a full-fidelity projection — full records run ~70KB
 - Typed errors: `blank_value`, `ids_not_found`, `field_invalid`, `enum_invalid`, `query_parse_error`, `geo_invalid`, `sort_invalid`, `rate_limited`
 
 ---
 
 ### `clinicaltrials_get_study_record` <sub>tool</sub>
 
-- Full protocol record by NCT ID — identification, status, sponsor, conditions, design, arms/interventions, outcomes, eligibility, contacts/locations
-- Optional `locationLimit` (≤500), `outcomeLimit` / `referenceLimit` (≤100), and `nearLocation` (`lat`, `lon`, `radiusMi` default 50) to bound and sort locations; upstream totals reported in `filtersApplied` only when a cap actually trims the list
-- `resultsSection` is replaced by compact `resultsSummary` counts — fetch full results via `clinicaltrials_get_study_results`
-- Typed errors: `study_not_found`, `rate_limited`
+- Full protocol record by `nctId`, with optional `locationLimit` (≤500), `outcomeLimit` / `referenceLimit` (≤100), and `nearLocation` (`lat`, `lon`, `radiusMi`) to bound and sort locations
+- `filtersApplied` reports upstream totals when a cap trims a list; `resultsSection` is replaced by `resultsSummary` counts. Typed errors: `study_not_found`, `rate_limited`
 
 ---
 
 ### `clinicaltrials_get_study_count` <sub>tool</sub>
 
-- Same query/filter surface as `clinicaltrials_search_studies` (free-text and field-specific queries, status/phase filters, `advancedFilter`) but returns only `totalCount` — no study data fetched
-- Excludes the unknown-enrollment sentinel by default (`includeUnknownEnrollment` to include it)
+- Same query and filter surface as `clinicaltrials_search_studies`, returning only `totalCount` — no study data fetched
 - Typed errors: `blank_value`, `field_invalid`, `enum_invalid`, `query_parse_error`, `rate_limited`
 
 ---
 
 ### `clinicaltrials_get_field_values` <sub>tool</sub>
 
-- One or more PascalCase field names (e.g. `OverallStatus`, `Phase`, `LeadSponsorClass`) — returns each field's type, unique-value count, and top values with study counts (capped at 250 by the API)
-- Numeric/date fields report `min` / `max` / `avg` / `formats` instead of top values; boolean fields report `trueCount` / `falseCount`
-- `multiValued` flags fields where a study can carry several values, so per-value study counts can sum above the study total
-- Typed errors: `blank_value`, `field_invalid`, `rate_limited`
+- One or more PascalCase `fields` (e.g. `OverallStatus`, `Phase`) — returns each field's type and top values with study counts (capped at 250 by the API), or `min` / `max` / `avg` for numeric and date fields and `trueCount` / `falseCount` for booleans
+- `multiValued` flags fields whose per-value counts can sum above the study total. Typed errors: `blank_value`, `field_invalid`, `rate_limited`
 
 ---
 
 ### `clinicaltrials_get_field_definitions` <sub>tool</sub>
 
-- Three modes: `search` (keyword, ranked matches, `limit` up to 100, default 20), `drill` (dot-notation `path` into a section), `overview` (top-level sections, no other args)
-- Resolves the canonical PascalCase field names accepted by `fields`, `advancedFilter`, `sort`, and `clinicaltrials_get_field_values`
+- `mode`: `search` (keyword `query`, `limit` ≤100, default 20), `drill` (dot-notation `path`), or `overview` — resolves the PascalCase names accepted by `fields`, `advancedFilter`, `sort`, and `clinicaltrials_get_field_values`
 - Typed errors: `blank_value`, `mode_mismatch`, `mode_requires`, `path_not_found`, `rate_limited`
 
 ---
 
 ### `clinicaltrials_get_study_results` <sub>tool</sub>
 
-- Up to 20 NCT IDs per call; only returns data for studies where `hasResults` is true — outcome measures, adverse events, participant flow, baseline characteristics, and results metadata
-- `summary` (default false) condenses a full result set — which can exceed 500KB per study — to a few KB; full mode supports `outcomeLimit` (≤100) and `adverseEventLimit` (≤500), resumable via `outcomeOffset` / `seriousEventOffset` / `otherEventOffset`
-- `sections` filters to `outcomes`, `adverseEvents`, `participantFlow`, `baseline`, `moreInfo`
-- A previous (alias) NCT ID resolves to its canonical study, named in `canonicalNctId`
-- Typed errors: `blank_value`, `offset_not_applicable`, `rate_limited`
+- Up to 20 `nctIds` per call; `sections` (`outcomes`, `adverseEvents`, `participantFlow`, `baseline`, `moreInfo`), `summary` to condense a result set that can exceed 500KB per study, and `outcomeLimit` (≤100) / `adverseEventLimit` (≤500) with resumable `outcomeOffset` / `seriousEventOffset` / `otherEventOffset`
+- Per-study `fetchErrors` / `studiesWithoutResults` instead of a whole-batch failure, and `canonicalNctId` when an alias ID resolves to another study. Typed errors: `blank_value`, `offset_not_applicable`, `rate_limited`
 
 ---
 
 ### `clinicaltrials_find_eligible` <sub>tool</sub>
 
-- Takes `age`, `sex` (`FEMALE` / `MALE` / `ALL`), `conditions[]`, `location` (`country` required, `state` / `city` optional), `healthyVolunteer`, `recruitingOnly` (default true), `maxResults` (≤50)
-- Re-ranks results so studies whose own condition list names a requested condition surface above tangential MeSH-umbrella matches from the upstream fuzzy search
-- Bounds each candidate's locations to the sites matching the requested location (capped by `locationLimit`, ≤500) instead of every registered site, adding one recruiting site when none of the matched ones is open — the one nearest the matched sites by published coordinates (with `distanceMi`), kept to the requested country when a site there recruits, or the first in match order when coordinates are missing
-- `funnel` reports match counts at each filter stage (condition → +location → +demographics) to show where the query narrowed to zero
+- `age`, `sex` (`FEMALE` / `MALE` / `ALL`), `conditions[]`, `location` (`country` required, `state` / `city` optional), `healthyVolunteer`, `recruitingOnly` (default true), `maxResults` (≤50), `locationLimit` (≤500)
+- Each candidate's locations are bounded to the sites matching the requested location, plus one recruiting site when none of those is open; `funnel` reports match counts per filter stage (condition → +location → +demographics)
 - Typed errors: `blank_value`, `rate_limited`
 
 ---
@@ -145,6 +132,7 @@ ClinicalTrials.gov-specific:
 - Auto-corrects field names passed to `fields`/`sort` — case/whitespace fixes and known legacy aliases (e.g. `RecruitmentStatus` → `OverallStatus`) — before validating, logging every correction
 - Detects upstream HTML error pages returned with a JSON content-type and retries rather than parsing them as data
 - Geographic proximity search and nearest-site re-ranking, with no geocoding dependency
+- Excludes ClinicalTrials.gov's "unknown" enrollment sentinel (`99999999`) from searches and counts by default — `includeUnknownEnrollment` brings it back, and an `nctIds` lookup never filters it
 
 Agent-friendly output:
 
@@ -269,6 +257,9 @@ All configuration is optional — the server works with defaults and no API keys
 | `MCP_LOG_LEVEL` | Log level (RFC 5424). | `info` |
 | `LOGS_DIR` | Directory for log files (Node.js only). | `<project-root>/logs` |
 | `OTEL_ENABLED` | Enable OpenTelemetry tracing. | `false` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP base URL; traces export to `/v1/traces`, metrics to `/v1/metrics`. Unset exports nothing. | — |
+| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Opt-in OTLP log export; the base endpoint never enables it. | — |
+| `LOG_TOOL_FAILURE_PAYLOADS` | Log each failed tool call's arguments and result, redacted by key name and capped at `LOG_TOOL_FAILURE_PAYLOAD_MAX_BYTES` (default `16384`). A secret inside a free-form value is not redacted. | `false` |
 
 See [`.env.example`](./.env.example) for the full list of optional overrides.
 

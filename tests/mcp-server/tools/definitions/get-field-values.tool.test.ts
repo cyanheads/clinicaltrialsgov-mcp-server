@@ -137,6 +137,50 @@ describe('getFieldValues', () => {
     it('declares the blank_value reason on the tool contract', () => {
       expect(getFieldValues.errors?.map((e) => e.reason)).toContain('blank_value');
     });
+
+    // ClinicalTrials.gov's own `fields` parameter is comma- or pipe-delimited
+    // and no piece name contains either delimiter (#152).
+    it.each([
+      ['Phase,StudyType'],
+      [['Phase|StudyType']],
+      [['Phase, StudyType']],
+      [['Phase', 'StudyType,']],
+    ])('splits the joined fields %j into separate names', async (fields) => {
+      mockService.getFieldValues.mockResolvedValue([]);
+      const ctx = createMockContext({ errors: getFieldValues.errors });
+      await getFieldValues.handler(getFieldValues.input!.parse({ fields }), ctx);
+      expect(mockService.getFieldValues).toHaveBeenCalledWith(['Phase', 'StudyType'], ctx);
+    });
+
+    it.each([[[',']], [['Phase', '']], [',']])(
+      'answers %j with blank_value, never a field named after the delimiter',
+      async (fields) => {
+        const ctx = createMockContext({ errors: getFieldValues.errors });
+        await expect(
+          getFieldValues.handler(getFieldValues.input!.parse({ fields }), ctx),
+        ).rejects.toMatchObject({ data: { reason: 'blank_value', param: 'fields' } });
+        expect(mockService.getFieldValues).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([
+      ['a joined string', 'Phase,StudyType,Phase', ['Phase', 'StudyType']],
+      ['a list', ['StudyType|Phase', 'Phase', 'StudyType'], ['StudyType', 'Phase']],
+      ['"Phase," x1000', 'Phase,'.repeat(1000), ['Phase']],
+    ])('requests each field of %s once, in first-seen order', async (_label, fields, deduped) => {
+      mockService.getFieldValues.mockResolvedValue([]);
+      const ctx = createMockContext({ errors: getFieldValues.errors });
+      await getFieldValues.handler(getFieldValues.input!.parse({ fields }), ctx);
+      expect(mockService.getFieldValues).toHaveBeenCalledWith(deduped, ctx);
+    });
+
+    it('answers a fields entry of only zero-width characters with blank_value', async () => {
+      const ctx = createMockContext({ errors: getFieldValues.errors });
+      await expect(
+        getFieldValues.handler(getFieldValues.input!.parse({ fields: ['Phase', '​'] }), ctx),
+      ).rejects.toMatchObject({ data: { reason: 'blank_value', param: 'fields' } });
+      expect(mockService.getFieldValues).not.toHaveBeenCalled();
+    });
   });
 
   describe('format', () => {

@@ -3,7 +3,7 @@
  * @module tests/mcp-server/tools/definitions/search-studies.tool
  */
 
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -756,6 +756,52 @@ describe('searchStudies', () => {
     });
   });
 
+  // The service classifies both upstream cursor rejections; the tool owns the
+  // contract that turns `data.reason` into a recovery hint on both channels.
+  describe('rejected pageToken (#148)', () => {
+    it('declares page_token_invalid as a non-retryable service-thrown validation error', () => {
+      const entry = searchStudies.errors?.find((e) => e.reason === 'page_token_invalid');
+      expect(entry).toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        thrownBy: 'service',
+      });
+      expect(entry).not.toHaveProperty('retryable', true);
+      expect(entry?.recovery).toMatch(/without pageToken/);
+      expect(entry?.recovery).toMatch(/nextPageToken/);
+    });
+
+    it.each([
+      ['malformed', 'ClinicalTrials.gov rejected pageToken as malformed.'],
+      [
+        'unresumable',
+        'ClinicalTrials.gov cannot resume pagination from this pageToken: it was issued before a data refresh, or it was altered after it was issued.',
+      ],
+    ])('carries the %s message and the declared hint on both channels', async (_, message) => {
+      mockService.searchStudies.mockRejectedValue(
+        validationError(message, { reason: 'page_token_invalid' }),
+      );
+
+      const result = await runToolContract(searchStudies, {
+        conditionQuery: 'ALS',
+        pageToken: 'invalidtoken',
+      });
+      const hint = searchStudies.errors?.find((e) => e.reason === 'page_token_invalid')?.recovery;
+      const error = (
+        result.structuredContent as {
+          error: { code: number; message: string; data: Record<string, unknown> };
+        }
+      ).error;
+      const text = (result.content as { text: string }[])[0]!.text;
+
+      expect(result.isError).toBe(true);
+      expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+      expect(error.message).toBe(message);
+      expect(error.data).toMatchObject({ reason: 'page_token_invalid', recovery: { hint } });
+      expect(text).toContain(message);
+      expect(text).toContain(`Recovery: ${hint}`);
+    });
+  });
+
   describe('blank supplied values (#99)', () => {
     const QUERY_PARAMS = [
       'query',
@@ -803,7 +849,7 @@ describe('searchStudies', () => {
     // expression for advancedFilter and sending a malformed value for
     // geoFilter and sort. pageToken fails both ways too (#122): '' restarts the
     // walk at page one under the guise of continuing it, and ' ' 400s upstream
-    // with a shape the service's 400 handler cannot classify.
+    // as a malformed token (page_token_invalid) instead of naming the blank value.
     const CONSTRAINT_PARAMS = ['advancedFilter', 'geoFilter', 'sort', 'pageToken'] as const;
 
     it.each(CONSTRAINT_PARAMS)(
@@ -2234,5 +2280,303 @@ describe('searchStudies', () => {
         expect(() => searchStudies.input!.parse({ nctIds: [nctIds] })).toThrow(/NCTxxxxxxxx/);
       },
     );
+  });
+
+  // phaseFilter is interpolated into AREA[Phase]<entry>, so an entry carrying
+  // OR / NOT / AREA[] used to reach upstream as an expression and widen the
+  // cohort past the phase constraint instead of failing.
+  describe('phaseFilter resolves to canonical phases or fails before any request (#144)', () => {
+    beforeEach(() => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+    });
+
+    it.each([
+      ['phase3', 'PHASE3'],
+      [' Phase3 ', 'PHASE3'],
+      ['Phase 3', 'PHASE3'],
+      ['phase-3', 'PHASE3'],
+      ['"PHASE3"', 'PHASE3'],
+      ["'PHASE3'", 'PHASE3'],
+      ['na', 'NA'],
+      ['Not Applicable', 'NA'],
+      ['early_phase1', 'EARLY_PHASE1'],
+      ['Early Phase 1', 'EARLY_PHASE1'],
+    ])('sends %j as AREA[Phase]%s', async (variant, canonical) => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(searchStudies.input!.parse({ phaseFilter: variant }), ctx);
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterAdvanced: `AREA[Phase]${canonical}` }),
+        ctx,
+      );
+    });
+
+    it.each(['PHASE2,PHASE3', 'PHASE2|PHASE3', 'phase 2 , Phase3', '["PHASE2","PHASE3"]'])(
+      'splits %j into the same OR group a two-entry list sends',
+      async (variant) => {
+        const ctx = createMockContext({ errors: searchStudies.errors });
+        await searchStudies.handler(searchStudies.input!.parse({ phaseFilter: variant }), ctx);
+        expect(mockService.searchStudies).toHaveBeenCalledWith(
+          expect.objectContaining({
+            filterAdvanced: '(AREA[Phase]PHASE2 OR AREA[Phase]PHASE3)',
+          }),
+          ctx,
+        );
+      },
+    );
+
+    it.each([
+      'PHASE3 OR AREA[StudyType]OBSERVATIONAL',
+      'PHASE2 OR PHASE3',
+      'NOT AREA[StudyType]INTERVENTIONAL',
+      'PHASE5',
+      '3',
+      'PHASE1/PHASE2',
+    ])('rejects %j with enum_invalid before any request', async (value) => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expect(
+        searchStudies.handler(searchStudies.input!.parse({ phaseFilter: value }), ctx),
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: {
+          reason: 'enum_invalid',
+          param: 'phaseFilter',
+          value,
+          validValues: ['NA', 'EARLY_PHASE1', 'PHASE1', 'PHASE2', 'PHASE3', 'PHASE4'],
+        },
+      });
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it('names the offending entry of a list, not the whole list', async () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expect(
+        searchStudies.handler(
+          searchStudies.input!.parse({
+            phaseFilter: ['PHASE3', 'NOT AREA[StudyType]INTERVENTIONAL'],
+          }),
+          ctx,
+        ),
+      ).rejects.toMatchObject({
+        data: { reason: 'enum_invalid', value: 'NOT AREA[StudyType]INTERVENTIONAL' },
+      });
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it('carries a recovery hint naming the six values, the list form, and advancedFilter', async () => {
+      const result = await runToolContract(
+        searchStudies,
+        { phaseFilter: 'PHASE3 OR AREA[StudyType]OBSERVATIONAL' },
+        { context: { errors: searchStudies.errors } },
+      );
+      expect(result.isError).toBe(true);
+      const error = (result.structuredContent as { error: { data: Record<string, unknown> } })
+        .error;
+      const hint = (error.data.recovery as { hint: string }).hint;
+      expect(hint).toContain('NA, EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4');
+      expect(hint).toContain('["PHASE2","PHASE3"]');
+      expect(hint).toContain('advancedFilter');
+      const text = (result.content as Array<{ text?: string }>).map((b) => b.text).join('\n');
+      expect(text).toContain("'PHASE3 OR AREA[StudyType]OBSERVATIONAL' is not a trial phase");
+      expect(text).toContain(`Recovery: ${hint}`);
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it.each([[','], [['PHASE3', ',']], [['PHASE3', ' ']]])(
+      'answers %j with blank_value, never enum_invalid',
+      async (phaseFilter) => {
+        const ctx = createMockContext({ errors: searchStudies.errors });
+        await expect(
+          searchStudies.handler(searchStudies.input!.parse({ phaseFilter }), ctx),
+        ).rejects.toMatchObject({ data: { reason: 'blank_value', param: 'phaseFilter' } });
+        expect(mockService.searchStudies).not.toHaveBeenCalled();
+      },
+    );
+
+    // Quotes are ignored when an entry is matched to a phase, so an entry of
+    // only quotes carries no content — as find_eligible judges it (#145).
+    it.each([['""'], ['" "'], ['​'], [['PHASE3', '""']]])(
+      'answers the content-less entry %j with blank_value, never enum_invalid',
+      async (phaseFilter) => {
+        const ctx = createMockContext({ errors: searchStudies.errors });
+        await expect(
+          searchStudies.handler(searchStudies.input!.parse({ phaseFilter }), ctx),
+        ).rejects.toMatchObject({ data: { reason: 'blank_value', param: 'phaseFilter' } });
+        expect(mockService.searchStudies).not.toHaveBeenCalled();
+      },
+    );
+
+    it('names the caller’s whole entry when a split fragment names no phase', async () => {
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await expect(
+        searchStudies.handler(
+          searchStudies.input!.parse({ phaseFilter: 'RANGE[PHASE1,PHASE3]' }),
+          ctx,
+        ),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("'RANGE[PHASE1,PHASE3]' is not a trial phase"),
+        data: { reason: 'enum_invalid', param: 'phaseFilter', value: 'RANGE[PHASE1,PHASE3]' },
+      });
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it('echoes the canonical values in searchCriteria, keeping the caller’s scalar/list shape', async () => {
+      const scalarCtx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(
+        searchStudies.input!.parse({ phaseFilter: 'phase 3' }),
+        scalarCtx,
+      );
+      expect(getEnrichment(scalarCtx).searchCriteria).toMatchObject({ phaseFilter: 'PHASE3' });
+
+      const listCtx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(
+        searchStudies.input!.parse({ phaseFilter: ['phase2', 'Phase 3'] }),
+        listCtx,
+      );
+      expect(getEnrichment(listCtx).searchCriteria).toMatchObject({
+        phaseFilter: ['PHASE2', 'PHASE3'],
+      });
+
+      // A scalar that splits into two phases is echoed as the list it ran as.
+      const joinedCtx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(
+        searchStudies.input!.parse({ phaseFilter: 'phase2|phase3' }),
+        joinedCtx,
+      );
+      expect(getEnrichment(joinedCtx).searchCriteria).toMatchObject({
+        phaseFilter: ['PHASE2', 'PHASE3'],
+      });
+    });
+
+    it('declares enum_invalid as handler-thrown as well as service-thrown', () => {
+      const entry = searchStudies.errors?.find((e) => e.reason === 'enum_invalid');
+      expect(entry).toBeDefined();
+      expect(entry).not.toHaveProperty('thrownBy');
+    });
+  });
+
+  // ClinicalTrials.gov's own `fields` parameter is comma- or pipe-delimited, so
+  // a caller carrying that convention sends one joined string; no field name
+  // contains either delimiter.
+  describe('comma- or pipe-joined fields (#152)', () => {
+    const studyRow = { protocolSection: { identificationModule: { nctId: 'NCT00000001' } } };
+
+    beforeEach(() => {
+      mockService.searchStudies.mockResolvedValue({ studies: [studyRow], totalCount: 1 });
+    });
+
+    it.each([
+      [['NCTId,BriefTitle'], ['NCTId', 'BriefTitle']],
+      [['NCTId|BriefTitle'], ['NCTId', 'BriefTitle']],
+      [['NCTId, BriefTitle'], ['NCTId', 'BriefTitle']],
+      [['NCTId,'], ['NCTId']],
+      ['NCTId,BriefTitle', ['NCTId', 'BriefTitle']],
+      ['NCTId', ['NCTId']],
+      ['["NCTId","BriefTitle"]', ['NCTId', 'BriefTitle']],
+    ])('runs %j as %j through the production argument path', async (fields, split) => {
+      const result = await runToolContract(searchStudies, { query: 'baxdrostat', fields });
+      expect(result.isError).toBeFalsy();
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ fields: split }),
+        expect.anything(),
+      );
+      expect(result.structuredContent).toMatchObject({ requestedFields: split });
+      const text = (result.content as Array<{ text?: string }>).map((b) => b.text).join('\n');
+      // The whole line, so a longer list rendered on content[] cannot satisfy it.
+      expect(text.split('\n')).toContain(`Requested fields: ${split.join(', ')}`);
+      // The explicit-fields projection: the upstream row passes through untrimmed.
+      expect((result.structuredContent as { studies: unknown[] }).studies).toEqual([studyRow]);
+    });
+
+    it.each([
+      ['a joined entry', ['NCTId,BriefTitle,NCTId'], ['NCTId', 'BriefTitle']],
+      ['a list', ['BriefTitle', 'NCTId|BriefTitle'], ['BriefTitle', 'NCTId']],
+      ['"NCTId," x1000', ['NCTId,'.repeat(1000)], ['NCTId']],
+    ])(
+      'sends and echoes %s once per name, in first-seen order',
+      async (_label, fields, deduped) => {
+        const result = await runToolContract(searchStudies, { query: 'baxdrostat', fields });
+        expect(result.isError).toBeFalsy();
+        expect(mockService.searchStudies).toHaveBeenCalledWith(
+          expect.objectContaining({ fields: deduped }),
+          expect.anything(),
+        );
+        expect(result.structuredContent).toMatchObject({ requestedFields: deduped });
+        const text = (result.content as Array<{ text?: string }>).map((b) => b.text).join('\n');
+        expect(text).toContain(`Requested fields: ${deduped.join(', ')}\n`);
+      },
+    );
+
+    it('answers a fields entry of only zero-width characters with blank_value', async () => {
+      const result = await runToolContract(
+        searchStudies,
+        { fields: ['NCTId', '​'] },
+        { context: { errors: searchStudies.errors } },
+      );
+      expect(result.isError).toBe(true);
+      expect(
+        (result.structuredContent as { error: { data: Record<string, unknown> } }).error.data,
+      ).toMatchObject({ reason: 'blank_value', param: 'fields' });
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it('treats fields: null as omitted — the default compact index', async () => {
+      const result = await runToolContract(searchStudies, { query: 'baxdrostat', fields: null });
+      expect(result.isError).toBeFalsy();
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ fields: undefined }),
+        expect.anything(),
+      );
+      expect(result.structuredContent).not.toHaveProperty('requestedFields');
+      expect((result.structuredContent as { studies: unknown[] }).studies).toEqual([
+        { nctId: 'NCT00000001' },
+      ]);
+    });
+
+    it('keeps the framework integer-to-string repair for an entry behind the preprocess', async () => {
+      // The framework repairs `[123]` to `["123"]` for a plain z.array(z.string());
+      // the preprocess wrapping `fields` must not cost that repair (mcp-ts-core#725).
+      const result = await runToolContract(searchStudies, { fields: [123] });
+      expect(result.isError).toBeFalsy();
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ fields: ['123'] }),
+        expect.anything(),
+      );
+    });
+
+    it('still rejects a boolean entry at the schema', async () => {
+      const result = await runToolContract(searchStudies, { fields: [true] });
+      expect(result.isError).toBe(true);
+      expect(
+        (result.structuredContent as { error: { data: { reason: string } } }).error.data.reason,
+      ).toBe('invalid_arguments');
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it.each([[[',']], [['NCTId', '']], [[]], ['']])(
+      'answers %j with blank_value before any request',
+      async (fields) => {
+        const result = await runToolContract(
+          searchStudies,
+          { fields },
+          { context: { errors: searchStudies.errors } },
+        );
+        expect(result.isError).toBe(true);
+        expect(
+          (result.structuredContent as { error: { data: Record<string, unknown> } }).error.data,
+        ).toMatchObject({ reason: 'blank_value', param: 'fields' });
+        expect(mockService.searchStudies).not.toHaveBeenCalled();
+      },
+    );
+
+    it('advertises fields as a plain string array', () => {
+      const props = (
+        searchStudies.input!.toJSONSchema({ io: 'input' }) as {
+          properties: Record<string, Record<string, unknown>>;
+        }
+      ).properties;
+      const { description, ...shape } = props.fields!;
+      expect(shape).toEqual({ type: 'array', items: { type: 'string' } });
+      expect(description).toContain('comma- or pipe-joined');
+    });
   });
 });

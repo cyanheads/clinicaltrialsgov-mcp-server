@@ -24,6 +24,8 @@ export const RECOVERY_HINTS = {
     'Build geoFilter as distance(lat,lon,radius) with a `mi` or `km` suffix on the radius, e.g. distance(47.6062,-122.3321,50mi) — a bare radius is rejected, since upstream would read it as meters. Keep latitude within [-90, 90], longitude within [-180, 180], and the radius above 0. Look up the city coordinates first.',
   sort_invalid:
     'Set sort to FieldName:asc or FieldName:desc, e.g. LastUpdatePostDate:desc — at most 2 fields, comma-separated. Call clinicaltrials_get_field_definitions to confirm the PascalCase field name.',
+  page_token_invalid:
+    'Re-run the same search criteria without pageToken to restart from the first page, then pass each nextPageToken back unchanged. Tokens expire when ClinicalTrials.gov refreshes its data, so continue a walk promptly rather than storing a token for later.',
   path_not_found:
     'Call clinicaltrials_get_field_definitions with mode="search" and query="phase" (or "enrollment") to find a path by concept, or mode="overview" for the top-level sections.',
   mode_mismatch:

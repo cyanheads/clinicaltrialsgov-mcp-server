@@ -7,10 +7,169 @@ import { describe, expect, it } from 'vitest';
 import {
   blankValueMessage,
   buildAdvancedFilter,
+  firstBlankListParam,
+  firstInvalidPhase,
+  invalidPhaseRejection,
+  normalizePhaseFilter,
   normalizeStatusFilter,
+  PHASE_VALUES,
+  queryTermContent,
   quoteQueryTerm,
+  splitListEntries,
   toArray,
 } from '@/mcp-server/tools/utils/query-helpers.js';
+
+describe('splitListEntries (#152)', () => {
+  it('returns undefined when the list is omitted', () => {
+    expect(splitListEntries(undefined)).toBeUndefined();
+  });
+
+  it.each([
+    [['NCTId,BriefTitle'], ['NCTId', 'BriefTitle']],
+    [['NCTId|BriefTitle'], ['NCTId', 'BriefTitle']],
+    [['NCTId, BriefTitle'], ['NCTId', 'BriefTitle']],
+    [[' NCTId | BriefTitle ,OverallStatus'], ['NCTId', 'BriefTitle', 'OverallStatus']],
+    [['NCTId,'], ['NCTId']],
+    [
+      ['NCTId', 'BriefTitle'],
+      ['NCTId', 'BriefTitle'],
+    ],
+    [
+      ['NCTId,BriefTitle', 'Phase'],
+      ['NCTId', 'BriefTitle', 'Phase'],
+    ],
+  ])('splits %j into %j', (input, output) => {
+    expect(splitListEntries(input)).toEqual(output);
+  });
+
+  it('keeps an entry that splits to nothing as a blank the blank-value check catches', () => {
+    expect(splitListEntries([','])).toEqual(['']);
+    expect(splitListEntries(['NCTId', ''])).toEqual(['NCTId', '']);
+    expect(splitListEntries(['NCTId', ' | '])).toEqual(['NCTId', '']);
+    expect(splitListEntries([])).toEqual([]);
+    for (const list of [[','], ['NCTId', ''], []]) {
+      expect(firstBlankListParam({ fields: splitListEntries(list) })).toBe('fields');
+    }
+  });
+
+  it('drops repeated names, keeping the first occurrence in order', () => {
+    expect(splitListEntries(['NCTId,BriefTitle,NCTId', 'BriefTitle|Phase'])).toEqual([
+      'NCTId',
+      'BriefTitle',
+      'Phase',
+    ]);
+    expect(splitListEntries(['NCTId,'.repeat(1000)])).toEqual(['NCTId']);
+  });
+
+  it('treats a piece of only invisible format characters as empty', () => {
+    expect(splitListEntries(['​'])).toEqual(['']);
+    expect(splitListEntries(['NCTId,​', '⁠ | ‍'])).toEqual(['NCTId', '']);
+    expect(firstBlankListParam({ fields: splitListEntries(['​']) })).toBe('fields');
+  });
+});
+
+describe('normalizePhaseFilter (#144)', () => {
+  it('returns undefined when the filter is omitted', () => {
+    expect(normalizePhaseFilter(undefined)).toBeUndefined();
+  });
+
+  it.each([
+    ['phase3', 'PHASE3'],
+    [' Phase3 ', 'PHASE3'],
+    ['Phase 3', 'PHASE3'],
+    ['phase-3', 'PHASE3'],
+    ['"PHASE3"', 'PHASE3'],
+    ["'PHASE3'", 'PHASE3'],
+    ['na', 'NA'],
+    ['Not Applicable', 'NA'],
+    ['not_applicable', 'NA'],
+    ['early_phase1', 'EARLY_PHASE1'],
+    ['Early Phase 1', 'EARLY_PHASE1'],
+    ['EARLY PHASE1', 'EARLY_PHASE1'],
+    ['phase\t4', 'PHASE4'],
+  ])('resolves %j to %s', (raw, canonical) => {
+    expect(normalizePhaseFilter(raw)).toEqual([canonical]);
+  });
+
+  it('leaves every canonical value unchanged', () => {
+    expect(normalizePhaseFilter([...PHASE_VALUES])).toEqual([...PHASE_VALUES]);
+  });
+
+  it('splits delimiter-joined and stringified lists before resolving', () => {
+    expect(normalizePhaseFilter('PHASE2,PHASE3')).toEqual(['PHASE2', 'PHASE3']);
+    expect(normalizePhaseFilter('phase 2 | Phase 3')).toEqual(['PHASE2', 'PHASE3']);
+    expect(normalizePhaseFilter('["phase1","Phase 2"]')).toEqual(['PHASE1', 'PHASE2']);
+    expect(normalizePhaseFilter(['Not Applicable', 'early phase 1,phase1'])).toEqual([
+      'NA',
+      'EARLY_PHASE1',
+      'PHASE1',
+    ]);
+  });
+
+  it('returns an entry naming no phase as written (trimmed), never as a different phase', () => {
+    expect(normalizePhaseFilter(' PHASE3 OR AREA[StudyType]OBSERVATIONAL ')).toEqual([
+      'PHASE3 OR AREA[StudyType]OBSERVATIONAL',
+    ]);
+    expect(normalizePhaseFilter(['PHASE5', '3', 'PHASE1/PHASE2', '(PHASE3)'])).toEqual([
+      'PHASE5',
+      '3',
+      'PHASE1/PHASE2',
+      '(PHASE3)',
+    ]);
+  });
+
+  it('reduces a blank entry, or one that splits to nothing, to an empty string', () => {
+    expect(normalizePhaseFilter(',')).toEqual(['']);
+    expect(normalizePhaseFilter(['PHASE3', ' '])).toEqual(['PHASE3', '']);
+    expect(normalizePhaseFilter([])).toEqual([]);
+  });
+
+  it('reduces an entry of only quotes, whitespace, and format characters to an empty string', () => {
+    for (const blank of ['""', '" "', "''", '​', '"​"', ' ⁠ , "" ']) {
+      expect(normalizePhaseFilter(blank)).toEqual(['']);
+    }
+    expect(normalizePhaseFilter(['PHASE3', '""'])).toEqual(['PHASE3', '']);
+    expect(normalizePhaseFilter('PHASE3,""')).toEqual(['PHASE3']);
+  });
+
+  it('returns the whole entry a non-phase piece came from, not the split fragment', () => {
+    expect(normalizePhaseFilter('RANGE[PHASE1,PHASE3]')).toEqual([
+      'RANGE[PHASE1,PHASE3]',
+      'RANGE[PHASE1,PHASE3]',
+    ]);
+    expect(normalizePhaseFilter(['PHASE2', ' phase3|PHASE5 '])).toEqual([
+      'PHASE2',
+      'PHASE3',
+      'phase3|PHASE5',
+    ]);
+    expect(firstInvalidPhase(normalizePhaseFilter('RANGE[PHASE1,PHASE3]'))).toBe(
+      'RANGE[PHASE1,PHASE3]',
+    );
+  });
+});
+
+describe('firstInvalidPhase (#144)', () => {
+  it('names the first entry that is not a canonical phase', () => {
+    expect(firstInvalidPhase(['PHASE3', 'PHASE2 OR PHASE3', 'PHASE5'])).toBe('PHASE2 OR PHASE3');
+  });
+
+  it('passes an omitted filter and an all-canonical list', () => {
+    expect(firstInvalidPhase(undefined)).toBeUndefined();
+    expect(firstInvalidPhase([...PHASE_VALUES])).toBeUndefined();
+  });
+});
+
+describe('invalidPhaseRejection (#144)', () => {
+  it('names the value, the six phases, the list form, and advancedFilter', () => {
+    const { message, hint } = invalidPhaseRejection('PHASE2 OR PHASE3');
+    expect(message).toBe(
+      "Invalid value for `phaseFilter`: 'PHASE2 OR PHASE3' is not a trial phase. Each phaseFilter entry must be one of NA, EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4 — search expressions are not accepted here.",
+    );
+    expect(hint).toBe(
+      'Use one of NA, EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4 per phaseFilter entry, and pass a list such as ["PHASE2","PHASE3"] to match any of several phases. Put every other criterion, including OR/NOT expressions, in advancedFilter.',
+    );
+  });
+});
 
 describe('normalizeStatusFilter (#140)', () => {
   it('returns undefined when the filter is omitted', () => {
@@ -235,6 +394,23 @@ describe('quoteQueryTerm (#118)', () => {
   });
 });
 
+describe('queryTermContent (#145)', () => {
+  it('is empty for a value of only quotes and whitespace', () => {
+    for (const term of ['', ' ', '""', '" "', ' "\t" ']) expect(queryTermContent(term)).toBe('');
+  });
+
+  it('is empty for a value of only invisible format characters, quotes, and whitespace', () => {
+    for (const term of ['​', '"​"', ' ⁠‍ ', '﻿​']) {
+      expect(queryTermContent(term)).toBe('');
+    }
+  });
+
+  it('keeps the inner text of a value with non-quote content', () => {
+    expect(queryTermContent('"ALS"')).toBe('ALS');
+    expect(queryTermContent(' East "Northport" City ')).toBe('East Northport City');
+  });
+});
+
 describe('blankValueMessage', () => {
   it('names the parameter and every blank shape it covers', () => {
     const msg = blankValueMessage('nctIds');
@@ -255,5 +431,11 @@ describe('blankValueMessage', () => {
 
   it('spells out the list-entry recovery, not just the scalar one (#113)', () => {
     expect(blankValueMessage('fields')).toContain('non-blank entry');
+  });
+
+  it('keeps the shared text byte-for-byte — tool-specific additions live in the tool (#145)', () => {
+    expect(blankValueMessage('nctIds')).toBe(
+      "Parameter 'nctIds' was supplied with a blank value — an empty or whitespace-only string, an empty list, or a list carrying a blank entry. Supply a value containing non-whitespace, or for a list at least one non-blank entry; omit the parameter entirely only if it is optional and you meant to leave it unset.",
+    );
   });
 });

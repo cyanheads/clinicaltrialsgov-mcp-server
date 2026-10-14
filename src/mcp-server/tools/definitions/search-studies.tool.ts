@@ -21,7 +21,13 @@ import {
   buildAdvancedFilter,
   firstBlankListParam,
   firstBlankParam,
+  firstInvalidPhase,
+  inCallerShape,
+  invalidPhaseRejection,
+  normalizePhaseFilter,
   normalizeStatusFilter,
+  PHASE_VALUES,
+  splitListEntries,
   toArray,
 } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
@@ -307,7 +313,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     {
       reason: 'blank_value',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A parameter was supplied with a blank, whitespace-only, or empty-list value.',
+      when: 'A parameter was supplied with a blank, whitespace-only, or empty-list value. A fields or phaseFilter entry of only invisible format characters (zero-width space) is blank, and so is a phaseFilter entry of only quotes.',
       recovery: RECOVERY_HINTS.blank_value,
     },
     {
@@ -327,9 +333,8 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     {
       reason: 'enum_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'statusFilter or phaseFilter contains a value ClinicalTrials.gov does not accept.',
+      when: 'A phaseFilter entry resolves to none of the six phase values, or statusFilter or an AREA[] expression carries a value ClinicalTrials.gov does not accept.',
       recovery: RECOVERY_HINTS.enum_invalid,
-      thrownBy: 'service',
     },
     {
       reason: 'query_parse_error',
@@ -349,6 +354,13 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       code: JsonRpcErrorCode.ValidationError,
       when: 'sort is not FieldName:asc / FieldName:desc, or names more than 2 fields.',
       recovery: RECOVERY_HINTS.sort_invalid,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'page_token_invalid',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'ClinicalTrials.gov rejected pageToken as malformed (not a token it issued), or as unresumable (issued before a data refresh, or altered after issue).',
+      recovery: RECOVERY_HINTS.page_token_invalid,
       thrownBy: 'service',
     },
     {
@@ -420,7 +432,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       ])
       .optional()
       .describe(
-        'Filter by trial phase. Omit to search all phases — an empty list is rejected, not treated as "no filter". Values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA.',
+        'Filter by trial phase. Omit to search all phases — an empty list is rejected, not treated as "no filter". Values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA. Case and spacing variants ("Phase 3", "early phase 1", "Not Applicable") are accepted, and a list or a comma- or pipe-joined string matches any of the phases. Each entry must name a phase — put search expressions (OR, NOT, AREA[…]) in advancedFilter.',
       ),
     advancedFilter: z
       .string()
@@ -443,11 +455,21 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .describe(
         'Filter to specific NCT IDs for batch lookups. Omit to search every study — an empty list is rejected, not treated as "no filter". Supplying this lifts the default unknown-enrollment exclusion, so an ID you name is never filtered out of its own lookup.',
       ),
+    /**
+     * A lone string is wrapped as a one-element list here, comma or not, so the
+     * handler can split `"NCTId,BriefTitle"`; the framework's own lone-string
+     * repair refuses a string holding a comma. A `[`-leading string is left for
+     * the framework's stringified-array repair. The advertised schema stays
+     * `type: array`.
+     */
     fields: z
-      .array(z.string())
+      .preprocess(
+        (v) => (typeof v === 'string' && !v.trim().startsWith('[') ? [v] : v),
+        z.array(z.string()),
+      )
       .optional()
       .describe(
-        `PascalCase leaf names to return; strongly recommended since full records are ~70KB. Omit for the compact index projection — an empty list is rejected, not treated as omission. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept.`,
+        `PascalCase leaf names to return; strongly recommended since full records are ~70KB. Omit for the compact index projection — an empty list is rejected, not treated as omission. A comma- or pipe-joined entry ("NCTId,BriefTitle") is split into separate names. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept.`,
       ),
     sort: z
       .string()
@@ -462,7 +484,12 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .max(maxPageSize)
       .default(10)
       .describe(`Results per page, 1–${maxPageSize}.`),
-    pageToken: z.string().optional().describe('Pagination cursor from a previous response.'),
+    pageToken: z
+      .string()
+      .optional()
+      .describe(
+        "Pagination cursor: a previous response's nextPageToken, passed back unchanged with the same criteria. Tokens expire when ClinicalTrials.gov refreshes its data.",
+      ),
     countTotal: z
       .boolean()
       .default(true)
@@ -495,7 +522,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .array(z.string())
       .optional()
       .describe(
-        'Echo of the explicit fields parameter — present only when the caller passed fields. Signals that studies carry the requested leaves at full fidelity (not the default compact index) and that the rendered truncation cap is lifted so all of them appear.',
+        'Echo of the explicit fields parameter, with comma- or pipe-joined entries split into separate names and repeated names listed once — present only when the caller passed fields. Signals that studies carry the requested leaves at full fidelity (not the default compact index) and that the rendered truncation cap is lifted so all of them appear.',
       ),
     pageExhausted: z
       .boolean()
@@ -546,9 +573,11 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     // rather than at the schema: a schema-only rejection runs before the
     // handler and surfaces as a bare -32602 with no reason and no recovery
     // hint, leaving the declared blank_value contract unreachable for exactly
-    // the input form it names.
+    // the input form it names. List entries are split on `,`/`|` before the
+    // check, so `[","]` is judged blank rather than as a field named ",".
+    const fields = splitListEntries(input.fields);
     const statusFilter = normalizeStatusFilter(input.statusFilter);
-    const phaseFilter = toArray(input.phaseFilter);
+    const phaseFilter = normalizePhaseFilter(input.phaseFilter);
     const filterIds = toArray(input.nctIds);
     const blankParam =
       firstBlankParam({
@@ -563,10 +592,23 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         geoFilter: input.geoFilter,
         sort: input.sort,
         pageToken: input.pageToken,
-      }) ??
-      firstBlankListParam({ fields: input.fields, statusFilter, phaseFilter, nctIds: filterIds });
+      }) ?? firstBlankListParam({ fields, statusFilter, phaseFilter, nctIds: filterIds });
     if (blankParam) {
       throw ctx.fail('blank_value', blankValueMessage(blankParam), { param: blankParam });
+    }
+
+    // Each phase entry is interpolated into AREA[Phase]<entry>, so one that is
+    // not a phase value would reach upstream as a search expression — and an
+    // OR / NOT / AREA[] clause there widens the cohort instead of failing.
+    const invalidPhase = firstInvalidPhase(phaseFilter);
+    if (invalidPhase !== undefined) {
+      const { message, hint } = invalidPhaseRejection(invalidPhase);
+      throw ctx.fail('enum_invalid', message, {
+        param: 'phaseFilter',
+        value: invalidPhase,
+        validValues: [...PHASE_VALUES],
+        recovery: { hint },
+      });
     }
 
     // Validate the geo expression before spending a round trip on it.
@@ -607,7 +649,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         filterGeo: input.geoFilter,
         filterIds,
         filterAdvanced: buildAdvancedFilter(phaseFilter, input.advancedFilter),
-        fields: input.fields,
+        fields,
         sort: input.sort,
         countTotal: input.countTotal,
         pageSize: input.pageSize,
@@ -641,13 +683,9 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     if (input.sponsorQuery) criteria.sponsorQuery = input.sponsorQuery;
     if (input.titleQuery) criteria.titleQuery = input.titleQuery;
     if (input.outcomeQuery) criteria.outcomeQuery = input.outcomeQuery;
-    // The canonical status values actually sent, in the caller's scalar/list shape.
-    if (statusFilter)
-      criteria.statusFilter =
-        Array.isArray(input.statusFilter) || statusFilter.length !== 1
-          ? statusFilter
-          : statusFilter[0];
-    if (input.phaseFilter) criteria.phaseFilter = input.phaseFilter;
+    // The canonical status and phase values actually sent, in the caller's scalar/list shape.
+    if (statusFilter) criteria.statusFilter = inCallerShape(input.statusFilter, statusFilter);
+    if (phaseFilter) criteria.phaseFilter = inCallerShape(input.phaseFilter, phaseFilter);
     if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
     if (input.geoFilter) criteria.geoFilter = input.geoFilter;
     if (input.nctIds) criteria.nctIds = input.nctIds;
@@ -719,7 +757,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     // explicit fields the caller opted into a projection — upstream already
     // trimmed each record to the requested leaves, so those flow through at full
     // fidelity and format() renders all of them.
-    const studies: Record<string, unknown>[] = input.fields?.length
+    const studies: Record<string, unknown>[] = fields?.length
       ? result.studies
       : (result.studies as RawStudyShape[]).map(projectStudyIndex);
 
@@ -741,7 +779,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       ...page,
       studies,
       ...(nextPageToken !== undefined && !exhausted ? { nextPageToken } : {}),
-      ...(input.fields?.length ? { requestedFields: input.fields } : {}),
+      ...(fields?.length ? { requestedFields: fields } : {}),
       ...(pageExhausted ? { pageExhausted } : {}),
     };
   },

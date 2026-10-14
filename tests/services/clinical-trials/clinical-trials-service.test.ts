@@ -776,6 +776,88 @@ describe('ClinicalTrialsService', () => {
       await expect(service.getStudy('NCT12345678', ctx)).rejects.toThrow(McpError);
     });
 
+    // ClinicalTrials.gov answers a rejected cursor with one of two 400 bodies,
+    // captured verbatim: a token it never issued (invented, truncated, edited)
+    // and one issued before a data refresh.
+    describe('rejected pageToken (#148)', () => {
+      const MALFORMED_BODY = 'Incorrect pageToken format';
+      const EXPIRED_BODY =
+        'The data have probably changed while you were paginating. Please, start over from the first page.';
+
+      it('classifies the malformed-token body as page_token_invalid', async () => {
+        mockFetch.mockResolvedValue(textResponse(MALFORMED_BODY));
+        const ctx = createMockContext();
+
+        const err = await service
+          .searchStudies({ queryCond: 'ALS', pageToken: 'invalidtoken' }, ctx)
+          .catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(McpError);
+        expect((err as McpError).code).toBe(JsonRpcErrorCode.ValidationError);
+        expect((err as McpError).data).toMatchObject({ reason: 'page_token_invalid' });
+        expect((err as McpError).message).toMatch(/malformed/i);
+        expect((err as McpError).message).not.toMatch(/expired/i);
+        // A 400 is terminal — the same token never succeeds on retry.
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it('classifies the data-changed body as page_token_invalid naming both causes', async () => {
+        mockFetch.mockResolvedValue(textResponse(EXPIRED_BODY));
+        const ctx = createMockContext();
+
+        const err = await service
+          .searchStudies(
+            {
+              filterIds: ['NCT03722472'],
+              pageSize: 5,
+              pageToken: 'ZVt07cGHkvI2wRk2CJf6_LLqwNCYItMod7KrgP4Znj6avPo1IQ',
+            },
+            ctx,
+          )
+          .catch((e: unknown) => e);
+
+        expect((err as McpError).code).toBe(JsonRpcErrorCode.ValidationError);
+        expect((err as McpError).data).toMatchObject({ reason: 'page_token_invalid' });
+        // Upstream sends this body for a token issued before a data refresh and
+        // also for a fresh token altered by one character, so the message names
+        // both causes rather than asserting expiry.
+        expect((err as McpError).message).toBe(
+          'ClinicalTrials.gov cannot resume pagination from this pageToken: it was issued before a data refresh, or it was altered after it was issued.',
+        );
+        expect((err as McpError).message).not.toMatch(/expired|malformed/i);
+      });
+
+      it.each([
+        ['malformed', MALFORMED_BODY],
+        ['expired', EXPIRED_BODY],
+      ])('leaves the %s body unclassified when no pageToken was sent', async (_, body) => {
+        mockFetch.mockResolvedValue(textResponse(body));
+        const ctx = createMockContext();
+
+        const err = await service.searchStudies({ queryCond: 'ALS' }, ctx).catch((e: unknown) => e);
+
+        // Unclassified: the generic validation error relaying the upstream body,
+        // with no reason for any contract to key a recovery hint on.
+        expect(err).toBeInstanceOf(McpError);
+        expect((err as McpError).code).toBe(JsonRpcErrorCode.ValidationError);
+        expect((err as McpError).message).toBe(body);
+        expect(
+          ((err as McpError).data as Record<string, unknown> | undefined)?.reason,
+        ).toBeUndefined();
+      });
+
+      it('keeps sort_invalid classification when the request also carried a pageToken', async () => {
+        mockFetch.mockResolvedValue(
+          textResponse('Item 1 in parameter `sort` has incorrect format'),
+        );
+        const ctx = createMockContext();
+
+        await expect(
+          service.searchStudies({ queryCond: 'ALS', sort: 'Bogus', pageToken: 'tok_page2' }, ctx),
+        ).rejects.toMatchObject({ data: { reason: 'sort_invalid', value: 'Bogus' } });
+      });
+    });
+
     it('throws RequestCancelled on request cancellation', async () => {
       const controller = new AbortController();
       controller.abort();
@@ -1208,7 +1290,11 @@ describe('ClinicalTrialsService', () => {
       }
     });
 
-    it('translates Essie enum error for phaseFilter to param-named message with valid values (#71)', async () => {
+    // phaseFilter entries are validated in the tool handlers before any request
+    // (#144), so this upstream rejection can only come from the caller's own
+    // AREA[Phase] expression in advancedFilter or a query parameter — naming
+    // phaseFilter would send the caller to a parameter they never set.
+    it('translates the Essie phase enum error to a message naming the AREA[Phase] expression (#71, #144)', async () => {
       mockFetch.mockResolvedValue(
         textResponse(
           'Error parsing query in advanced filter: Allowed values for enum field `protocolSection.designModule.phases` are `NA`, `EARLY_PHASE1`, `PHASE1`, `PHASE2`, `PHASE3`, `PHASE4`',
@@ -1222,15 +1308,44 @@ describe('ClinicalTrialsService', () => {
         expect(err).toBeInstanceOf(McpError);
         expect((err as McpError).code).toBe(JsonRpcErrorCode.ValidationError);
         const msg = (err as McpError).message;
-        expect(msg).toContain('phaseFilter');
-        expect(msg).toContain('EARLY_PHASE1');
-        expect(msg).toContain('PHASE4');
+        expect(msg).toBe(
+          'Invalid value in an `AREA[Phase]` expression. Valid values: NA, EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4.',
+        );
+        expect(msg).not.toContain('phaseFilter');
         const data = (err as McpError).data as Record<string, unknown> | undefined;
         expect(data?.reason).toBe('enum_invalid');
-        expect(data?.param).toBe('phaseFilter');
-        expect(Array.isArray(data?.validValues)).toBe(true);
-        expect(data?.validValues).toContain('NA');
+        expect(data).not.toHaveProperty('param');
+        expect(data?.validValues).toEqual([
+          'NA',
+          'EARLY_PHASE1',
+          'PHASE1',
+          'PHASE2',
+          'PHASE3',
+          'PHASE4',
+        ]);
+        expect((data?.recovery as { hint?: string } | undefined)?.hint).toBe(
+          'Use one of the valid values inside AREA[Phase]: NA, EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4.',
+        );
       }
+    });
+
+    it('names an enum field it has no AREA[] spelling for by its upstream path, with no param', async () => {
+      mockFetch.mockResolvedValue(
+        textResponse(
+          'Error parsing query in advanced filter: Allowed values for enum field `protocolSection.designModule.studyType` are `EXPANDED_ACCESS`, `INTERVENTIONAL`, `OBSERVATIONAL`',
+        ),
+      );
+      const ctx = createMockContext({ errors: allReasons });
+      const err = await service
+        .searchStudies({ filterAdvanced: 'AREA[StudyType]FOO' }, ctx)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(McpError);
+      expect((err as McpError).message).toBe(
+        'Invalid value in an AREA[] expression for enum field `protocolSection.designModule.studyType`. Valid values: EXPANDED_ACCESS, INTERVENTIONAL, OBSERVATIONAL.',
+      );
+      const data = (err as McpError).data as Record<string, unknown>;
+      expect(data.reason).toBe('enum_invalid');
+      expect(data).not.toHaveProperty('param');
     });
 
     it('translates sort "incorrect format" error to param-named message with format hint (#71)', async () => {

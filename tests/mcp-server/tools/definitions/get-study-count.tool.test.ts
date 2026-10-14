@@ -478,6 +478,124 @@ describe('getStudyCount', () => {
     });
   });
 
+  describe('phaseFilter resolves to canonical phases or fails before any request (#144)', () => {
+    beforeEach(() => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 99 });
+    });
+
+    it.each([
+      ['phase3', 'PHASE3'],
+      [' Phase3 ', 'PHASE3'],
+      ['Phase 3', 'PHASE3'],
+      ['phase-3', 'PHASE3'],
+      ['"PHASE3"', 'PHASE3'],
+      ['na', 'NA'],
+      ['Not Applicable', 'NA'],
+      ['early_phase1', 'EARLY_PHASE1'],
+      ['Early Phase 1', 'EARLY_PHASE1'],
+    ])('counts %j as AREA[Phase]%s', async (variant, canonical) => {
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      const result = await getStudyCount.handler(
+        getStudyCount.input!.parse({ phaseFilter: variant }),
+        ctx,
+      );
+      expect(result.totalCount).toBe(99);
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterAdvanced: `AREA[Phase]${canonical}` }),
+        ctx,
+      );
+    });
+
+    it.each(['PHASE2,PHASE3', 'PHASE2|PHASE3'])(
+      'counts %j the same as ["PHASE2","PHASE3"]',
+      async (variant) => {
+        const ctx = createMockContext({ errors: getStudyCount.errors });
+        await getStudyCount.handler(getStudyCount.input!.parse({ phaseFilter: variant }), ctx);
+        await getStudyCount.handler(
+          getStudyCount.input!.parse({ phaseFilter: ['PHASE2', 'PHASE3'] }),
+          ctx,
+        );
+        const sent = mockService.searchStudies.mock.calls.map((c) => c[0].filterAdvanced);
+        expect(sent).toEqual([
+          '(AREA[Phase]PHASE2 OR AREA[Phase]PHASE3)',
+          '(AREA[Phase]PHASE2 OR AREA[Phase]PHASE3)',
+        ]);
+        expect(getEnrichment(ctx).searchCriteria).toMatchObject({
+          phaseFilter: ['PHASE2', 'PHASE3'],
+        });
+      },
+    );
+
+    it.each([
+      'PHASE3 OR AREA[StudyType]OBSERVATIONAL',
+      'PHASE2 OR PHASE3',
+      'NOT AREA[StudyType]INTERVENTIONAL',
+      'PHASE5',
+      '3',
+      'PHASE1/PHASE2',
+    ])('rejects %j with enum_invalid before any request', async (value) => {
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      await expect(
+        getStudyCount.handler(getStudyCount.input!.parse({ phaseFilter: ['PHASE3', value] }), ctx),
+      ).rejects.toMatchObject({
+        code: JsonRpcErrorCode.ValidationError,
+        data: {
+          reason: 'enum_invalid',
+          param: 'phaseFilter',
+          value,
+          validValues: ['NA', 'EARLY_PHASE1', 'PHASE1', 'PHASE2', 'PHASE3', 'PHASE4'],
+          recovery: { hint: expect.stringContaining('advancedFilter') },
+        },
+      });
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it('answers "," with blank_value, never enum_invalid', async () => {
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      await expect(
+        getStudyCount.handler(getStudyCount.input!.parse({ phaseFilter: ',' }), ctx),
+      ).rejects.toMatchObject({ data: { reason: 'blank_value', param: 'phaseFilter' } });
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it.each([['""'], ['" "'], ['​'], [['PHASE3', '""']]])(
+      'answers the content-less entry %j with blank_value, never enum_invalid',
+      async (phaseFilter) => {
+        const ctx = createMockContext({ errors: getStudyCount.errors });
+        await expect(
+          getStudyCount.handler(getStudyCount.input!.parse({ phaseFilter }), ctx),
+        ).rejects.toMatchObject({ data: { reason: 'blank_value', param: 'phaseFilter' } });
+        expect(mockService.searchStudies).not.toHaveBeenCalled();
+      },
+    );
+
+    it('names the caller’s whole entry when a split fragment names no phase', async () => {
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      await expect(
+        getStudyCount.handler(
+          getStudyCount.input!.parse({ phaseFilter: ['PHASE2', 'PHASE3|PHASE5'] }),
+          ctx,
+        ),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining("'PHASE3|PHASE5' is not a trial phase"),
+        data: { reason: 'enum_invalid', param: 'phaseFilter', value: 'PHASE3|PHASE5' },
+      });
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it('echoes a scalar phase as the canonical scalar', async () => {
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      await getStudyCount.handler(getStudyCount.input!.parse({ phaseFilter: 'Phase 3' }), ctx);
+      expect(getEnrichment(ctx).searchCriteria).toMatchObject({ phaseFilter: 'PHASE3' });
+    });
+
+    it('declares enum_invalid as handler-thrown as well as service-thrown', () => {
+      const entry = getStudyCount.errors?.find((e) => e.reason === 'enum_invalid');
+      expect(entry).toBeDefined();
+      expect(entry).not.toHaveProperty('thrownBy');
+    });
+  });
+
   describe('format', () => {
     it('shows count for non-zero results', () => {
       const blocks = getStudyCount.format!({ totalCount: 42 });

@@ -11,8 +11,12 @@ import {
   buildAdvancedFilter,
   firstBlankListParam,
   firstBlankParam,
+  firstInvalidPhase,
+  inCallerShape,
+  invalidPhaseRejection,
+  normalizePhaseFilter,
   normalizeStatusFilter,
-  toArray,
+  PHASE_VALUES,
 } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
@@ -28,7 +32,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     {
       reason: 'blank_value',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A parameter was supplied with a blank, whitespace-only, or empty-list value.',
+      when: 'A parameter was supplied with a blank, whitespace-only, or empty-list value. A phaseFilter entry of only quotes or invisible format characters (zero-width space) is blank.',
       recovery: RECOVERY_HINTS.blank_value,
     },
     {
@@ -41,9 +45,8 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     {
       reason: 'enum_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'statusFilter or phaseFilter contains a value ClinicalTrials.gov does not accept.',
+      when: 'A phaseFilter entry resolves to none of the six phase values, or statusFilter or an AREA[] expression carries a value ClinicalTrials.gov does not accept.',
       recovery: RECOVERY_HINTS.enum_invalid,
-      thrownBy: 'service',
     },
     {
       reason: 'query_parse_error',
@@ -121,7 +124,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       ])
       .optional()
       .describe(
-        'Filter by trial phase. Omit to count all phases — an empty list is rejected, not treated as "no filter". Values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA.',
+        'Filter by trial phase. Omit to count all phases — an empty list is rejected, not treated as "no filter". Values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA. Case and spacing variants ("Phase 3", "early phase 1", "Not Applicable") are accepted, and a list or a comma- or pipe-joined string matches any of the phases. Each entry must name a phase — put search expressions (OR, NOT, AREA[…]) in advancedFilter.',
       ),
     advancedFilter: z
       .string()
@@ -178,7 +181,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     // schema-only rejection surfaces as a bare -32602 with no reason and no
     // recovery hint.
     const statusFilter = normalizeStatusFilter(input.statusFilter);
-    const phaseFilter = toArray(input.phaseFilter);
+    const phaseFilter = normalizePhaseFilter(input.phaseFilter);
     const blankParam =
       firstBlankParam({
         query: input.query,
@@ -192,6 +195,20 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       }) ?? firstBlankListParam({ statusFilter, phaseFilter });
     if (blankParam) {
       throw ctx.fail('blank_value', blankValueMessage(blankParam), { param: blankParam });
+    }
+
+    // Each phase entry is interpolated into AREA[Phase]<entry>, so one that is
+    // not a phase value would reach upstream as a search expression — and an
+    // OR / NOT / AREA[] clause there widens the count instead of failing.
+    const invalidPhase = firstInvalidPhase(phaseFilter);
+    if (invalidPhase !== undefined) {
+      const { message, hint } = invalidPhaseRejection(invalidPhase);
+      throw ctx.fail('enum_invalid', message, {
+        param: 'phaseFilter',
+        value: invalidPhase,
+        validValues: [...PHASE_VALUES],
+        recovery: { hint },
+      });
     }
 
     const service = getClinicalTrialsService();
@@ -223,13 +240,9 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     if (input.sponsorQuery) criteria.sponsorQuery = input.sponsorQuery;
     if (input.titleQuery) criteria.titleQuery = input.titleQuery;
     if (input.outcomeQuery) criteria.outcomeQuery = input.outcomeQuery;
-    // The canonical status values actually sent, in the caller's scalar/list shape.
-    if (statusFilter)
-      criteria.statusFilter =
-        Array.isArray(input.statusFilter) || statusFilter.length !== 1
-          ? statusFilter
-          : statusFilter[0];
-    if (input.phaseFilter) criteria.phaseFilter = input.phaseFilter;
+    // The canonical status and phase values actually sent, in the caller's scalar/list shape.
+    if (statusFilter) criteria.statusFilter = inCallerShape(input.statusFilter, statusFilter);
+    if (phaseFilter) criteria.phaseFilter = inCallerShape(input.phaseFilter, phaseFilter);
     if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
     // Flag the default unknown-enrollment exclusion (EnrollmentCount=99999999),
     // mirroring search_studies — otherwise a count silently differs from an

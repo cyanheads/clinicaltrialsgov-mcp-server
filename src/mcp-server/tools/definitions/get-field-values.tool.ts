@@ -6,7 +6,12 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
-import { blankValueMessage, firstBlankListParam, toArray } from '../utils/query-helpers.js';
+import {
+  blankValueMessage,
+  firstBlankListParam,
+  splitListEntries,
+  toArray,
+} from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
 export const getFieldValues = tool('clinicaltrials_get_field_values', {
@@ -48,7 +53,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
         z.array(z.string()).describe('Multiple PascalCase field names (at least one required).'),
       ])
       .describe(
-        `PascalCase field name(s) to get value statistics for — an empty list is rejected, not treated as "every field". Examples: OverallStatus, Phase, StudyType, Sex, LeadSponsorClass. Use clinicaltrials_get_field_definitions with a query to find more field names.`,
+        `PascalCase field name(s) to get value statistics for — an empty list is rejected, not treated as "every field". A comma- or pipe-joined string ("Phase,StudyType") is split into separate names. Examples: OverallStatus, Phase, StudyType, Sex, LeadSponsorClass. Use clinicaltrials_get_field_definitions with a query to find more field names.`,
       ),
   }),
 
@@ -153,8 +158,9 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
     // first and surfaces a bare -32602 with no reason and no recovery hint. The
     // reason is blank_value rather than field_invalid, whose hint sends the
     // caller off to browse the field tree — not the question a caller who
-    // supplied a blank is asking.
-    const fields = toArray(input.fields);
+    // supplied a blank is asking. Entries are split on `,`/`|` before the
+    // check, so `[","]` is judged blank rather than as a field named ",".
+    const fields = splitListEntries(toArray(input.fields));
     const blankParam = firstBlankListParam({ fields });
     if (blankParam) {
       throw ctx.fail('blank_value', blankValueMessage(blankParam), { param: blankParam });

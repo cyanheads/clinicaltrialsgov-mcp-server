@@ -39,11 +39,14 @@ const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MIN_INTERVAL_MS = 1000;
 /**
  * Maps the trailing segment of an Essie field path (lowercased) to the
- * corresponding tool param name. Used to translate "Allowed values for enum
- * field `…path…`" errors into human-readable param references.
+ * PascalCase piece a caller writes inside AREA[]. Used to translate "Allowed
+ * values for enum field `…path…`" errors into the AREA[Piece] expression the
+ * caller wrote. Never a tool param: phaseFilter is validated in the tool
+ * handlers before any request, so this rejection only answers an AREA[]
+ * expression in advancedFilter or a query parameter.
  */
-const ESSIE_ENUM_PARAM_MAP: Record<string, string> = {
-  phases: 'phaseFilter',
+const ESSIE_ENUM_AREA_PIECE: Record<string, string> = {
+  phases: 'Phase',
 };
 /**
  * ClinicalTrials.gov uses 99999999 as a sentinel for "unknown enrollment
@@ -731,6 +734,27 @@ export class ClinicalTrialsService {
               { reason: 'field_invalid' },
             );
           }
+          // A rejected cursor arrives as one of two bodies: `Incorrect pageToken
+          // format` for a token the registry never issued (invented, truncated,
+          // edited), and `The data have probably changed while you were
+          // paginating…` for one issued before a data refresh — and for a fresh
+          // token with a character altered, so that message names both causes.
+          // Gated on a sent token so the reason never attaches to a request
+          // that had none.
+          if (params.pageToken) {
+            if (/incorrect pageToken format/i.test(text)) {
+              throw validationError(
+                'ClinicalTrials.gov rejected pageToken as malformed: it is not a token the registry issued (an invented, truncated, or edited value fails this way).',
+                { reason: 'page_token_invalid' },
+              );
+            }
+            if (text.includes('changed while you were paginating')) {
+              throw validationError(
+                'ClinicalTrials.gov cannot resume pagination from this pageToken: it was issued before a data refresh, or it was altered after it was issued.',
+                { reason: 'page_token_invalid' },
+              );
+            }
+          }
           if (text.includes('incorrect format')) {
             if (path.startsWith('/studies/')) {
               const id = path.split('/').pop() ?? path;
@@ -797,7 +821,8 @@ export class ClinicalTrialsService {
           // Several shapes show up:
           //   1. `Unknown area name: \`X\`` — bad field in AREA[X]
           //   2. `Allowed values for enum field \`<path>\` are \`V1\`, \`V2\`, …` — invalid enum
-          //      value in an AREA[Phase] expression (phaseFilter routes through filter.advanced)
+          //      value in a caller's AREA[] expression (advancedFilter or a query parameter;
+          //      phaseFilter entries are validated in the tool handlers before any request)
           //   3. ANTLR syntax errors from a stray bracket, unbalanced parens, or an
           //      unterminated quote in a free-text field — several distinct shapes,
           //      each read by describeQueryParseError (the catch-all below).
@@ -809,25 +834,28 @@ export class ClinicalTrialsService {
                 { reason: 'field_invalid' },
               );
             }
-            const enumMatch = text.match(
-              /Allowed values for enum field\s+`[^`]*\.([^`.]+)`\s+are\s+(.+)/i,
-            );
+            const enumMatch = text.match(/Allowed values for enum field\s+`([^`]+)`\s+are\s+(.+)/i);
             if (enumMatch) {
-              const fieldSuffix = enumMatch[1]?.toLowerCase() ?? '';
+              const fieldPath = enumMatch[1] ?? '';
               const rawValues = enumMatch[2] ?? '';
               // Extract backtick-quoted values: `NA`, `EARLY_PHASE1`, …
               const validValues = [...rawValues.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
-              const toolParam = ESSIE_ENUM_PARAM_MAP[fieldSuffix];
-              const paramRef = toolParam ? `\`${toolParam}\`` : 'the filter';
+              const piece = ESSIE_ENUM_AREA_PIECE[fieldPath.split('.').pop()?.toLowerCase() ?? ''];
               const valuesStr = validValues.length > 0 ? validValues.join(', ') : rawValues.trim();
-              throw validationError(`Invalid value for ${paramRef}. Valid values: ${valuesStr}.`, {
-                reason: 'enum_invalid',
-                recovery: {
-                  hint: `Use one of the valid values: ${valuesStr}.`,
+              throw validationError(
+                piece
+                  ? `Invalid value in an \`AREA[${piece}]\` expression. Valid values: ${valuesStr}.`
+                  : `Invalid value in an AREA[] expression for enum field \`${fieldPath}\`. Valid values: ${valuesStr}.`,
+                {
+                  reason: 'enum_invalid',
+                  recovery: {
+                    hint: piece
+                      ? `Use one of the valid values inside AREA[${piece}]: ${valuesStr}.`
+                      : `Use one of the valid values: ${valuesStr}.`,
+                  },
+                  validValues,
                 },
-                ...(toolParam ? { param: toolParam } : {}),
-                validValues,
-              });
+              );
             }
             // ANTLR catch-all — see describeQueryParseError for why each shape
             // needs its own reading of the quoted token.

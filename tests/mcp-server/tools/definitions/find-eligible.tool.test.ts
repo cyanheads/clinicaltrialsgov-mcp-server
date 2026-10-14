@@ -4,7 +4,7 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetService } = vi.hoisted(() => ({
@@ -20,6 +20,10 @@ import {
   findEligible,
 } from '@/mcp-server/tools/definitions/find-eligible.tool.js';
 import { loadStudyFixture } from '../../../helpers/format-parity.js';
+
+/** The once-per-response caveat on the results path (#147), pinned verbatim. */
+const CANDIDATE_NOTICE =
+  'Candidates are matched on age, sex, location, recruitment status, and a fuzzy condition search only. Inclusion/exclusion criteria were not checked, and a candidate can exclude the requested condition. Review each with clinicaltrials_get_study_record (nctId) before treating it as a match.';
 
 const baseInput = {
   age: 30,
@@ -288,7 +292,7 @@ describe('findEligible', () => {
       expect(elig).not.toHaveProperty('maximumAge');
 
       const text = (findEligible.format!(result)[0] as { text: string }).text;
-      expect(text).toContain('Eligibility: Age: ≥18 Years');
+      expect(text).toContain('Demographic criteria: Age: ≥18 Years');
       expect(text).not.toMatch(/Age: 18 Years–/);
     });
 
@@ -429,7 +433,7 @@ describe('findEligible', () => {
       expect(enrichment.notice).toContain('just the country');
     });
 
-    it('omits notice enrichment when studies are found', async () => {
+    it('sets the candidate notice when studies are found (#147)', async () => {
       const study = { protocolSection: { identificationModule: { nctId: 'NCT12345678' } } };
       mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
 
@@ -437,7 +441,75 @@ describe('findEligible', () => {
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       const enrichment = getEnrichment(ctx);
-      expect(enrichment.notice).toBeUndefined();
+      expect(enrichment.notice).toBe(CANDIDATE_NOTICE);
+    });
+  });
+
+  // The tool matches demographics and a fuzzy condition search; it never reads
+  // inclusion/exclusion criteria, so a returned study can exclude the very
+  // condition requested. Results are candidates, not eligibility determinations.
+  describe('candidate framing (#147)', () => {
+    const studyWith = (nctId: string) => ({
+      protocolSection: {
+        identificationModule: { nctId, briefTitle: `Study ${nctId}` },
+        statusModule: { overallStatus: 'RECRUITING' },
+      },
+    });
+
+    const countOf = (text: string, needle: string) => text.split(needle).length - 1;
+
+    it.each([1, 3])('carries the notice once on both surfaces for %i studies', async (n) => {
+      const studies = Array.from({ length: n }, (_, i) => studyWith(`NCT0000000${i}`));
+      mockService.searchStudies.mockResolvedValue({ studies, totalCount: n });
+
+      const result = await runToolContract(findEligible, baseInput);
+      const structured = result.structuredContent as { notice?: string; studies: unknown[] };
+      const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+
+      expect(structured.studies).toHaveLength(n);
+      expect(structured.notice).toBe(CANDIDATE_NOTICE);
+      expect(countOf(text, CANDIDATE_NOTICE)).toBe(1);
+      expect(text).toContain(`> ${CANDIDATE_NOTICE}`);
+    });
+
+    it('keeps the stage-specific recovery notice, with no eligibility caveat, on zero results', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+
+      const result = await runToolContract(findEligible, baseInput);
+      const structured = result.structuredContent as { notice?: string };
+      const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+
+      expect(structured.notice).toMatch(/^No studies found for "Type 2 Diabetes"/);
+      expect(structured.notice).not.toContain('Inclusion/exclusion');
+      expect(text).not.toContain('Inclusion/exclusion');
+    });
+
+    it('never calls a result an eligible study on content[]', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: [studyWith('NCT00000001')],
+        totalCount: 7,
+      });
+      const result = await runToolContract(findEligible, baseInput);
+      const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+
+      expect(text).toContain('Found 7 candidate studies (showing 1)');
+      expect(text).not.toMatch(/eligible stud/i);
+    });
+
+    it('mentions eligibility in the description only to say the criteria were not checked', () => {
+      const description = findEligible.description;
+      expect(description).toContain('inclusion/exclusion criteria are not checked');
+      expect(description).toContain('clinicaltrials_get_study_record');
+      expect(description).not.toMatch(/eligible (recruiting )?(clinical )?trials/i);
+      expect(description).not.toMatch(/matching eligibility criteria/i);
+    });
+
+    it('says the same in the studies output description', () => {
+      const studiesDescription = findEligible.output.shape.studies.description ?? '';
+      expect(studiesDescription).toContain('Candidate studies');
+      expect(studiesDescription).toContain('inclusion/exclusion criteria are not checked');
+      expect(studiesDescription).toContain('clinicaltrials_get_study_record');
+      expect(studiesDescription).not.toMatch(/eligibility (and location )?fields/i);
     });
   });
 
@@ -628,6 +700,157 @@ describe('findEligible', () => {
     });
   });
 
+  // quoteQueryTerm strips every `"` while building the query, so a value made of
+  // quotes and whitespace reaches upstream empty or as a bare `" "` phrase: the
+  // filter drops, matches nothing, or breaks the parse. Blankness is judged on
+  // the value the builder emits.
+  describe('quote-only and whitespace-only values (#145)', () => {
+    const usInput = {
+      ...baseInput,
+      location: { country: 'United States' },
+    };
+
+    /** The queryLocn of every searchStudies call that sent one, in order. */
+    const sentLocations = () =>
+      mockService.searchStudies.mock.calls
+        .map((call) => (call[0] as { queryLocn?: string }).queryLocn)
+        .filter((locn) => locn !== undefined);
+
+    const run = async (overrides: Record<string, unknown>) => {
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await findEligible.handler(findEligible.input!.parse({ ...usInput, ...overrides }), ctx);
+      return ctx;
+    };
+
+    beforeEach(() => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+    });
+
+    it.each([[['""']], [['" "']], [['""', 'ALS']], [['Diabetes', '" "']]])(
+      'rejects conditions %j as blank_value before any upstream call',
+      async (conditions) => {
+        await expect(run({ conditions })).rejects.toMatchObject({
+          code: JsonRpcErrorCode.ValidationError,
+          data: { reason: 'blank_value', param: 'conditions' },
+        });
+        expect(mockService.searchStudies).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['""', '" "'])(
+      'rejects location.country %j as blank_value before any upstream call',
+      async (country) => {
+        await expect(run({ location: { country } })).rejects.toMatchObject({
+          code: JsonRpcErrorCode.ValidationError,
+          data: { reason: 'blank_value', param: 'location.country' },
+        });
+        expect(mockService.searchStudies).not.toHaveBeenCalled();
+      },
+    );
+
+    it('says that double-quote characters do not count as content', async () => {
+      const error = await run({ conditions: ['""'] }).catch((e: unknown) => e);
+      expect((error as Error).message).toContain(
+        `Double-quote (") characters are stripped before the query is built and do not count as content`,
+      );
+    });
+
+    // Unicode format characters (\p{Cf}: zero-width space, word joiner, BOM)
+    // are invisible and survive String.trim(): a value made of them reaches
+    // upstream as a term that answers a bare "Search error".
+    it.each([[['​']], [['ALS', '​']], [['"​"']], [['⁠‍']]])(
+      'rejects zero-width conditions %j as blank_value before any upstream call',
+      async (conditions) => {
+        await expect(run({ conditions })).rejects.toMatchObject({
+          code: JsonRpcErrorCode.ValidationError,
+          data: { reason: 'blank_value', param: 'conditions' },
+        });
+        expect(mockService.searchStudies).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each(['​', '﻿​', '"​"'])(
+      'rejects a zero-width location.country %j as blank_value before any upstream call',
+      async (country) => {
+        await expect(run({ location: { country } })).rejects.toMatchObject({
+          code: JsonRpcErrorCode.ValidationError,
+          data: { reason: 'blank_value', param: 'location.country' },
+        });
+        expect(mockService.searchStudies).not.toHaveBeenCalled();
+      },
+    );
+
+    it('says that invisible format characters do not count as content', async () => {
+      const error = await run({ conditions: ['​'] }).catch((e: unknown) => e);
+      expect((error as Error).message).toContain('zero-width');
+    });
+
+    it.each(['​', ' ⁠ '])(
+      'unsets a zero-width city of %j, sending exactly what an omitted city sends',
+      async (city) => {
+        const ctx = await run({ location: { country: 'United States', city } });
+        expect(sentLocations()).toEqual(['"United States"', '"United States"']);
+        const sc = getEnrichment(ctx).searchCriteria as Record<string, unknown>;
+        expect(sc.location).toBe('"United States"');
+      },
+    );
+
+    it.each([' ', '""', '" "'])(
+      'unsets a city of %j, sending exactly what an omitted city sends',
+      async (city) => {
+        const ctx = await run({ location: { country: 'United States', city } });
+        // Main search + location-stage funnel both carry the same string.
+        expect(sentLocations()).toEqual(['"United States"', '"United States"']);
+        const sc = getEnrichment(ctx).searchCriteria as Record<string, unknown>;
+        expect(sc.location).toBe('"United States"');
+      },
+    );
+
+    it('unsets a quote-only state between a city and a country', async () => {
+      const ctx = await run({
+        location: { city: 'Seattle', state: '""', country: 'United States' },
+      });
+      expect(sentLocations()).toEqual([
+        'Seattle AND "United States"',
+        'Seattle AND "United States"',
+      ]);
+      const sc = getEnrichment(ctx).searchCriteria as Record<string, unknown>;
+      expect(sc.location).toBe('Seattle AND "United States"');
+    });
+
+    it('gives an unset city the omitted-city notice, without city/state advice', async () => {
+      // condition matches, location stage empty: the branch that advises
+      // removing city/state only when one was actually applied.
+      mockService.searchStudies
+        .mockResolvedValueOnce({ studies: [], totalCount: 0 })
+        .mockResolvedValueOnce({ studies: [], totalCount: 40 })
+        .mockResolvedValueOnce({ studies: [], totalCount: 0 });
+      const ctx = await run({ location: { country: 'United States', city: '" "' } });
+      const notice = getEnrichment(ctx).notice as string;
+      expect(notice).toContain('40 studies match the condition');
+      expect(notice).not.toContain('Remove city/state');
+    });
+
+    it('keeps values with non-quote content on the #118 path', async () => {
+      await run({
+        conditions: ['"ALS"'],
+        location: { country: 'United States', city: 'East "Northport" City' },
+      });
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          queryCond: 'ALS',
+          queryLocn: '"East Northport City" AND "United States"',
+        }),
+        expect.anything(),
+      );
+    });
+
+    it('leaves an empty-string city unset, as before', async () => {
+      await run({ location: { country: 'United States', city: '' } });
+      expect(sentLocations()).toEqual(['"United States"', '"United States"']);
+    });
+  });
+
   describe('format', () => {
     it('renders study list with eligibility', () => {
       const blocks = findEligible.format!({
@@ -648,7 +871,11 @@ describe('findEligible', () => {
         totalCount: 1,
       });
       const text = (blocks[0] as { text: string }).text;
-      expect(text).toContain('Found 1 eligible studies');
+      expect(text).toContain('Found 1 candidate studies');
+      expect(text).toContain(
+        'Demographic criteria: Age: 18 Years–65 Years | Sex: ALL | Healthy Volunteers: No',
+      );
+      expect(text).not.toContain('Eligibility:');
       expect(text).toContain('NCT12345678');
       expect(text).toContain('RECRUITING');
       expect(text).toContain('18 Years');
@@ -835,7 +1062,7 @@ describe('findEligible', () => {
 
     it('shows no-match message for empty results', () => {
       const blocks = findEligible.format!({ studies: [], totalCount: 0 });
-      expect((blocks[0] as { text: string }).text).toContain('No eligible studies found');
+      expect((blocks[0] as { text: string }).text).toContain('No candidate studies found.');
     });
 
     it('shows total when more results exist', () => {
@@ -845,7 +1072,9 @@ describe('findEligible', () => {
         ],
         totalCount: 50,
       });
-      expect((blocks[0] as { text: string }).text).toContain('50 eligible studies (showing 1)');
+      expect((blocks[0] as { text: string }).text).toContain(
+        'Found 50 candidate studies (showing 1)',
+      );
     });
 
     it('renders sites in pre-sorted order without recruiting-priority override (regression for #37)', () => {
@@ -1985,10 +2214,144 @@ describe('findEligible', () => {
         expect(candidate.locationSummary?.nearestRecruitingSiteAdded).toBeUndefined();
       });
     });
+
+    // The query strips `"` from each location part, so a quoted part finds the
+    // same studies as the bare one. Sites must be scored against that same
+    // stripped value, or the quoted call bounds every study to a coarser tier.
+    describe('quoted location parts (#155)', () => {
+      const SEATTLE = { lat: 47.60621, lon: -122.33207 };
+      const cases = [
+        {
+          name: 'city',
+          bare: { country: 'United States', state: 'Washington', city: 'Seattle' },
+          quoted: { country: 'United States', state: 'Washington', city: '"Seattle"' },
+          sites: () => [
+            site('Seattle A', 'Seattle', 'Washington'),
+            site('Spokane', 'Spokane', 'Washington'),
+            site('Boston', 'Boston', 'Massachusetts'),
+          ],
+          expected: ['Seattle A'],
+        },
+        {
+          name: 'state',
+          bare: { country: 'United States', state: 'Washington', city: 'Seattle' },
+          quoted: { country: 'United States', state: '"Washington"', city: 'Seattle' },
+          sites: () => [
+            site('Spokane', 'Spokane', 'Washington'),
+            site('Boston', 'Boston', 'Massachusetts'),
+          ],
+          expected: ['Spokane'],
+        },
+        {
+          name: 'country',
+          bare: { country: 'United States' },
+          quoted: { country: '"United States"' },
+          sites: () => [
+            site('Boston', 'Boston', 'Massachusetts'),
+            site('Toronto', 'Toronto', 'Ontario', 'Canada'),
+          ],
+          expected: ['Boston'],
+        },
+        {
+          // The recruiting-site fallback keeps candidates in the requested
+          // country first; a quoted country must not send the patient to Canada.
+          name: 'country, at the recruiting-site fallback',
+          bare: { country: 'United States', state: 'Washington', city: 'Seattle' },
+          quoted: { country: '"United States"', state: 'Washington', city: 'Seattle' },
+          sites: () => [
+            site(
+              'Fred Hutch',
+              'Seattle',
+              'Washington',
+              'United States',
+              'NOT_YET_RECRUITING',
+              SEATTLE,
+            ),
+            site('BC Cancer', 'Vancouver', '', 'Canada', 'RECRUITING', {
+              lat: 49.24966,
+              lon: -123.11934,
+            }),
+            site('City of Hope', 'Duarte', 'California', 'United States', 'RECRUITING', {
+              lat: 34.13945,
+              lon: -117.97729,
+            }),
+          ],
+          expected: ['Fred Hutch', 'City of Hope'],
+        },
+      ];
+
+      it.each(cases)(
+        'a quoted $name returns the same per-study locations as the bare one',
+        async ({ bare, quoted, sites, expected }) => {
+          const bareCandidate = await runOne(studyWith('NCT1', sites()), { location: bare });
+          const quotedCandidate = await runOne(studyWith('NCT1', sites()), { location: quoted });
+
+          expect(facilities(bareCandidate)).toEqual(expected);
+          expect(quotedCandidate.protocolSection.contactsLocationsModule?.locations).toEqual(
+            bareCandidate.protocolSection.contactsLocationsModule?.locations,
+          );
+          expect(quotedCandidate.locationSummary).toEqual(bareCandidate.locationSummary);
+        },
+      );
+
+      it('sends the identical upstream location for the quoted and bare forms', async () => {
+        await runOne(studyWith('NCT1', []), {
+          location: { country: '"United States"', state: '"Washington"', city: '"Seattle"' },
+        });
+        expect(mockService.searchStudies).toHaveBeenCalledWith(
+          expect.objectContaining({ queryLocn: 'Seattle AND Washington AND "United States"' }),
+          expect.anything(),
+        );
+      });
+    });
+  });
+
+  // The condition query strips `"`, so a quoted condition finds the same
+  // studies as the bare one and must re-rank them the same way (#155 mechanism).
+  describe('quoted conditions keep their re-rank tier', () => {
+    const conditionStudy = (nctId: string, conditions: string[]) => ({
+      protocolSection: { identificationModule: { nctId }, conditionsModule: { conditions } },
+    });
+
+    const rankedIds = async (conditions: string[]) => {
+      vi.clearAllMocks();
+      mockGetService.mockReturnValue(mockService as never);
+      // Upstream relevance order puts the subtype (tier 2) ahead of the exact match.
+      mockService.searchStudies.mockResolvedValue({
+        studies: [
+          conditionStudy('NCT_SUBTYPE', ['Type 2 Diabetes Mellitus']),
+          conditionStudy('NCT_EXACT', ['Type 2 Diabetes']),
+        ],
+        totalCount: 2,
+      });
+      const ctx = createMockContext({ errors: findEligible.errors });
+      const result = await findEligible.handler(
+        findEligible.input!.parse({ ...baseInput, conditions }),
+        ctx,
+      );
+      return result.studies.map(
+        (s) =>
+          (s as { protocolSection: { identificationModule: { nctId: string } } }).protocolSection
+            .identificationModule.nctId,
+      );
+    };
+
+    it('ranks the exact match first for "\\"Type 2 Diabetes\\"" as for the bare condition', async () => {
+      const bare = await rankedIds(['Type 2 Diabetes']);
+      const quoted = await rankedIds(['"Type 2 Diabetes"']);
+      expect(bare).toEqual(['NCT_EXACT', 'NCT_SUBTYPE']);
+      expect(quoted).toEqual(bare);
+    });
   });
 });
 
 describe('conditionMatchScore (#79 lexical condition re-rank)', () => {
+  it('scores a quoted requested condition as its bare form', () => {
+    expect(conditionMatchScore(['ALS'], ['"ALS"'])).toBe(3);
+    expect(conditionMatchScore(['Type 2 Diabetes'], ['"Type 2 Diabetes"'])).toBe(3);
+    expect(conditionMatchScore(['Type 2 Diabetes'], [' "Type 2 Diabetes" '])).toBe(3);
+  });
+
   it('scores an exact match tier 3, including single-word requests', () => {
     expect(conditionMatchScore(['Type 2 Diabetes'], ['Type 2 Diabetes'])).toBe(3);
     expect(conditionMatchScore(['Hypertension'], ['Hypertension'])).toBe(3);

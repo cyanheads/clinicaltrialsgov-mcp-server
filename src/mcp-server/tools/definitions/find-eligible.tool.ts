@@ -1,5 +1,7 @@
 /**
- * @fileoverview Match patient demographics to eligible recruiting clinical trials.
+ * @fileoverview Match patient demographics to candidate recruiting clinical trials.
+ * Candidates are matched on demographics, location, recruitment status, and a
+ * fuzzy condition search; inclusion/exclusion criteria are never checked.
  * @module mcp-server/tools/definitions/find-eligible.tool
  */
 
@@ -13,9 +15,33 @@ import {
   blankValueMessage,
   firstBlankListParam,
   firstBlankParam,
+  queryTermContent,
   quoteQueryTerm,
 } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
+
+/**
+ * The results-path caveat, set once per response (#147). The tool never reads
+ * inclusion/exclusion criteria, so a returned study is a candidate to review,
+ * not an eligibility determination.
+ */
+const CANDIDATE_NOTICE =
+  'Candidates are matched on age, sex, location, recruitment status, and a fuzzy condition search only. Inclusion/exclusion criteria were not checked, and a candidate can exclude the requested condition. Review each with clinicaltrials_get_study_record (nctId) before treating it as a match.';
+
+/**
+ * Appended to the shared blank_value message: this tool's query builder strips
+ * `"` (#145), and invisible format characters carry no content.
+ */
+const QUOTES_ARE_NOT_CONTENT =
+  'Double-quote (") characters are stripped before the query is built and do not count as content, nor do invisible format characters such as zero-width spaces, so a value of only these and whitespace is blank too.';
+
+/**
+ * An optional location part, or undefined when it carries no content once `"`,
+ * format characters, and whitespace go.
+ */
+function optionalLocationPart(part: string | undefined): string | undefined {
+  return part !== undefined && queryTermContent(part) ? part : undefined;
+}
 
 interface UserLocation {
   city?: string | undefined;
@@ -232,7 +258,9 @@ function significantTokens(condition: string): Set<string> {
 export function conditionMatchScore(studyConditions: string[], requested: string[]): number {
   if (studyConditions.length === 0) return 0;
   const reqNorm = requested.map((c) => ({
-    text: c.toLowerCase().trim(),
+    // The text the condition query carries (quotes stripped), so a quoted
+    // condition ranks the studies it finds exactly as its bare form does.
+    text: queryTermContent(c).toLowerCase(),
     tokens: significantTokens(c),
     // Raw word count, before generic-token stripping: "Cardiovascular Disease"
     // is multi-word even though "disease" drops out, while "Hypertension" is a
@@ -308,7 +336,7 @@ const ELIGIBLE_FIELDS = [
 
 export const findEligible = tool('clinicaltrials_find_eligible', {
   description:
-    "Match patient demographics and conditions to eligible recruiting clinical trials. Provide age, sex, conditions, and location to find studies with matching eligibility criteria, contact information, and recruiting locations. Results are re-ranked so studies whose own condition matches a requested condition surface above tangential matches from ClinicalTrials.gov's fuzzy condition search. Each candidate returns only the sites matching the requested location (capped by locationLimit), not the study's full registered site list — a large trial can register hundreds of sites worldwide. When none of a candidate's matched sites is recruiting, one recruiting site is added so an enrollable site is never hidden behind a closer closed one: the one nearest the matched sites by their published coordinates, in the requested country whenever a site there recruits, carrying distanceMi, or the first in match order when coordinates are missing. Fetch a study's complete record with clinicaltrials_get_study_record.",
+    "Find candidate clinical trials for a patient profile. Provide age, sex, conditions, and location to get studies with their demographic limits, contact information, and recruiting locations. Candidates are matched on age, sex, location, recruitment status, and ClinicalTrials.gov's fuzzy condition search only — inclusion/exclusion criteria are not checked, and a candidate can exclude the requested condition, so review each one's criteria with clinicaltrials_get_study_record before treating it as a match. Results are re-ranked so studies whose own condition matches a requested condition surface above tangential matches from ClinicalTrials.gov's fuzzy condition search. Each candidate returns only the sites matching the requested location (capped by locationLimit), not the study's full registered site list — a large trial can register hundreds of sites worldwide. When none of a candidate's matched sites is recruiting, one recruiting site is added so an enrollable site is never hidden behind a closer closed one: the one nearest the matched sites by their published coordinates, in the requested country whenever a site there recruits, carrying distanceMi, or the first in match order when coordinates are missing. Fetch a study's complete record with clinicaltrials_get_study_record.",
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -319,7 +347,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     {
       reason: 'blank_value',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A parameter was supplied with a blank, whitespace-only, or empty-list value.',
+      when: 'A conditions entry or location.country was supplied blank — empty, whitespace-only, or made only of `"` characters, invisible format characters such as zero-width spaces, and whitespace, since `"` is stripped before the query is built — or conditions was an empty list.',
       recovery: RECOVERY_HINTS.blank_value,
     },
     {
@@ -377,7 +405,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     studies: z
       .array(z.record(z.string(), z.unknown()))
       .describe(
-        "Matching studies with eligibility and location fields. Each candidate's protocolSection.contactsLocationsModule.locations is BOUNDED to the sites matching the requested location (capped at locationLimit) plus, when none of those is recruiting, one added recruiting site — not the study's full registered site list. The added site is the one nearest any matched site by published coordinates, taken from the requested country whenever a site there recruits, and carries distanceMi (miles to that nearest matched site); when the matched or recruiting sites publish no coordinates it is the first in match order and carries no distanceMi. A candidate whose sites were bounded also carries a top-level locationSummary object — { totalLocations, matchedLocations, locationsTruncated, nearestRecruitingSiteAdded?, retrieveFullStudyWith } — absent when nothing was dropped; nearestRecruitingSiteAdded is present only when that extra site was added (the key keeps its name in the match-order fallback). Fetch a study's complete record and site list with clinicaltrials_get_study_record.",
+        "Candidate studies with their demographic limits (age, sex, healthy volunteers), contacts, and location fields — matched on age, sex, location, recruitment status, and the fuzzy condition search; inclusion/exclusion criteria are not checked and are not in these records, so review each candidate with clinicaltrials_get_study_record. Each candidate's protocolSection.contactsLocationsModule.locations is BOUNDED to the sites matching the requested location (capped at locationLimit) plus, when none of those is recruiting, one added recruiting site — not the study's full registered site list. The added site is the one nearest any matched site by published coordinates, taken from the requested country whenever a site there recruits, and carries distanceMi (miles to that nearest matched site); when the matched or recruiting sites publish no coordinates it is the first in match order and carries no distanceMi. A candidate whose sites were bounded also carries a top-level locationSummary object — { totalLocations, matchedLocations, locationsTruncated, nearestRecruitingSiteAdded?, retrieveFullStudyWith } — absent when nothing was dropped; nearestRecruitingSiteAdded is present only when that extra site was added (the key keeps its name in the match-order fallback). Fetch a study's complete record and site list with clinicaltrials_get_study_record.",
       ),
     totalCount: z.number().optional().describe('Total matching studies from the API.'),
   }),
@@ -437,7 +465,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       .string()
       .optional()
       .describe(
-        'Recovery guidance when no studies matched — identifies which filter stage collapsed and suggests how to broaden. Absent when results are returned.',
+        'When no studies matched, recovery guidance that identifies which filter stage collapsed and suggests how to broaden. When studies are returned, one caveat for the whole response: candidates were matched on demographics, location, recruitment status, and a fuzzy condition search, not on inclusion/exclusion criteria.',
       ),
   },
 
@@ -478,13 +506,33 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     // A blank condition or country is dropped before the upstream query is
     // built, so the call would answer with trials unrelated to anything the
     // caller asked for. Reject in the handler — a schema-only rejection
-    // surfaces as a bare -32602 with no reason and no recovery hint.
+    // surfaces as a bare -32602 with no reason and no recovery hint. Blankness
+    // is judged on what quoteQueryTerm emits: a value of only `"` and
+    // whitespace reaches upstream as no operand or a bare `" "` phrase (#145).
     const blankParam =
-      firstBlankListParam({ conditions: input.conditions }) ??
-      firstBlankParam({ 'location.country': input.location.country });
+      firstBlankListParam({ conditions: input.conditions.map(queryTermContent) }) ??
+      firstBlankParam({ 'location.country': queryTermContent(input.location.country) });
     if (blankParam) {
-      throw ctx.fail('blank_value', blankValueMessage(blankParam), { param: blankParam });
+      throw ctx.fail('blank_value', `${blankValueMessage(blankParam)} ${QUOTES_ARE_NOT_CONTENT}`, {
+        param: blankParam,
+      });
     }
+
+    // An optional city or state with no content is unset, as an empty string
+    // already was — never forwarded as `" "` or an empty AND operand (#145).
+    const location: UserLocation = {
+      country: input.location.country,
+      city: optionalLocationPart(input.location.city),
+      state: optionalLocationPart(input.location.state),
+    };
+    // Sites are scored, bounded, and admitted against the text the query
+    // carries, not the raw value: a quoted part finds a study through its bare
+    // form, so it must match that study's sites the same way (#155).
+    const siteMatchLocation: UserLocation = {
+      country: queryTermContent(location.country),
+      city: location.city && queryTermContent(location.city),
+      state: location.state && queryTermContent(location.state),
+    };
 
     const service = getClinicalTrialsService();
 
@@ -498,7 +546,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     // separator fails outright once components are quoted. One string feeds the
     // main search, the location-stage funnel count, and the searchCriteria
     // echo, so they cannot diverge.
-    const locationQuery = [input.location.city, input.location.state, input.location.country]
+    const locationQuery = [location.city, location.state, location.country]
       .filter((part): part is string => Boolean(part))
       .map(quoteQueryTerm)
       .join(' AND ');
@@ -627,9 +675,10 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       const upstream = locationsModule?.locations;
       if (!upstream?.length) return study;
       const sorted = [...upstream].sort(
-        (a, b) => locationMatchScore(b, input.location) - locationMatchScore(a, input.location),
+        (a, b) =>
+          locationMatchScore(b, siteMatchLocation) - locationMatchScore(a, siteMatchLocation),
       );
-      const { locations, summary } = boundLocations(sorted, input.location, input.locationLimit);
+      const { locations, summary } = boundLocations(sorted, siteMatchLocation, input.locationLimit);
       return {
         ...study,
         protocolSection: {
@@ -673,7 +722,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         noticeParts.push(
           `${conditionMatched} studies match the condition, but none are in the specified location. Try broadening the location: search with just the country, or use clinicaltrials_search_studies with geoFilter for radius-based matching.`,
         );
-        if (input.location.city || input.location.state)
+        if (location.city || location.state)
           noticeParts.push('Remove city/state to widen the location search to the full country.');
       } else if (locationMatched > 0 && demographicsMatched === 0) {
         noticeParts.push(
@@ -708,12 +757,16 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
           noticeParts.push(
             'Set recruitingOnly=false to include completed, active, and not-yet-recruiting studies.',
           );
-        if (input.location.city || input.location.state)
+        if (location.city || location.state)
           noticeParts.push(
             'Try searching with just the country to find studies in other cities/states.',
           );
       }
       ctx.enrich.notice(noticeParts.join(' '));
+    } else {
+      // Once per response, never per study: the caveat applies to every
+      // candidate equally and would otherwise scale with the result count (#147).
+      ctx.enrich.notice(CANDIDATE_NOTICE);
     }
 
     return {
@@ -727,12 +780,12 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     const count = result.studies.length;
 
     if (count === 0) {
-      lines.push('No eligible studies found.');
+      lines.push('No candidate studies found.');
     } else {
       lines.push(
         result.totalCount !== undefined && result.totalCount > count
-          ? `Found ${result.totalCount} eligible studies (showing ${count})`
-          : `Found ${count} eligible studies`,
+          ? `Found ${result.totalCount} candidate studies (showing ${count})`
+          : `Found ${count} candidate studies`,
       );
     }
 
@@ -771,7 +824,8 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         // 200-char content[] clip left content-only clients with a partial value (#91).
         if (summary) lines.push(`  Summary: ${summary}`);
 
-        // Eligibility criteria summary
+        // Demographic limits only — the free-text inclusion/exclusion criteria
+        // are never requested, so the label must not read as an eligibility check.
         const eligParts: string[] = [];
         if (elig.minimumAge && elig.maximumAge)
           eligParts.push(`Age: ${elig.minimumAge}–${elig.maximumAge}`);
@@ -780,7 +834,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         if (elig.sex) eligParts.push(`Sex: ${elig.sex}`);
         if (elig.healthyVolunteers != null)
           eligParts.push(`Healthy Volunteers: ${elig.healthyVolunteers ? 'Yes' : 'No'}`);
-        if (eligParts.length) lines.push(`  Eligibility: ${eligParts.join(' | ')}`);
+        if (eligParts.length) lines.push(`  Demographic criteria: ${eligParts.join(' | ')}`);
 
         // Disclose the bound the handler applied, so a content[]-only reader knows
         // the site list is the near-the-patient subset rather than the full one,

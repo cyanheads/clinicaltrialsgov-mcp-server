@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
 title: clinicaltrialsgov-mcp-server
-abstract: "Model Context Protocol (MCP) server for the ClinicalTrials.gov v2 API, providing study search and filtering, full study record retrieval, results extraction (outcomes, adverse events, participant flow, baselines), field discovery, and patient-to-trial eligibility matching."
+abstract: "Model Context Protocol (MCP) server for the ClinicalTrials.gov v2 API, providing study search and filtering, full study record retrieval, results extraction (outcomes, adverse events, participant flow, baselines), field discovery, and patient-to-trial candidate matching."
 type: software
 authors:
   - family-names: Hand

@@ -843,7 +843,10 @@ describe('getStudyResults', () => {
         ciNumSides: '2-Sided',
         nonInferiorityType: 'SUPERIORITY',
         groupIds: ['G1', 'G2'],
+        // Untitled groups resolve to their own id (#146).
+        groups: ['G1', 'G2'],
       });
+      expect(outcome.analysisCount).toBe(1);
       // Raw analyses array must not leak through summary mode.
       expect(outcome.analyses).toBeUndefined();
     });
@@ -1237,12 +1240,23 @@ describe('getStudyResults', () => {
       });
     });
 
-    it('leaves summary mode uncapped — it is already condensed', async () => {
-      const { entry } = await run({ outcomeLimit: 1, adverseEventLimit: 1, summary: true });
-      expect(entry.outcomes).toHaveLength(4);
+    it('windows summary outcomes but leaves summary adverse events unbounded (#149)', async () => {
+      const { entry, text } = await run({ outcomeLimit: 1, adverseEventLimit: 1, summary: true });
+      expect(entry.outcomes!.map((o) => o.title)).toEqual(['Outcome 1']);
+      // Still the summary projection, not the raw tree.
+      expect(entry.outcomes![0]).toHaveProperty('topStats');
+      expect(entry.outcomes![0]).not.toHaveProperty('classes');
+      // topEvents ranks the whole event list, so no event bound applies.
       expect(entry.adverseEvents!.seriousEventCount).toBe(3);
       expect(entry.adverseEvents!.otherEventCount).toBe(5);
-      expect(entry.filtersApplied).toBeUndefined();
+      expect(entry.adverseEvents!.topEvents as unknown[]).toHaveLength(8);
+      expect(entry.filtersApplied).toEqual({
+        totalOutcomes: 4,
+        outcomeLimit: 1,
+        nextOutcomeOffset: 1,
+      });
+      expect(text).toContain('1 of 4 outcome measures (next outcomeOffset 1)');
+      expect(text).not.toContain('adverse events (');
     });
 
     it('reports nothing for a study whose results sections are empty', async () => {
@@ -1524,6 +1538,138 @@ describe('getStudyResults', () => {
       expect(text).toContain('next outcomeOffset 4');
     });
 
+    describe('the Bounded: line states what came back and where to go next', () => {
+      /** Every `<returned> of <total> <noun>` count on a page's Bounded: lines. */
+      const boundedCounts = (text: string) =>
+        [
+          ...text.matchAll(
+            /(\d+) of (\d+) (outcome measures|serious adverse events|other adverse events)/g,
+          ),
+        ].map(([, returned, total, noun]) => ({
+          noun,
+          returned: Number(returned),
+          total: Number(total),
+        }));
+
+      const boundedLine = (text: string) => text.split('\n').find((l) => l.startsWith('_Bounded:'));
+
+      it.each([
+        { label: 'a limited window', extra: { outcomeLimit: 2, outcomeOffset: 2 }, returned: 2 },
+        { label: 'an offset-only final window', extra: { outcomeOffset: 5 }, returned: 2 },
+        {
+          label: 'a window landing exactly on the end',
+          extra: { outcomeOffset: 4, outcomeLimit: 3 },
+          returned: 3,
+        },
+        { label: 'an offset at the end', extra: { outcomeOffset: 7 }, returned: 0 },
+        { label: 'an offset past the end', extra: { outcomeOffset: 12 }, returned: 0 },
+      ])(
+        'counts the measures actually returned on $label, in both modes',
+        async ({ extra, returned }) => {
+          for (const summary of [false, true]) {
+            const { entry, text } = await run({ ...extra, summary });
+            expect(entry.outcomes).toHaveLength(returned);
+            expect(boundedCounts(text)).toEqual([{ noun: 'outcome measures', returned, total: 7 }]);
+          }
+        },
+      );
+
+      it('renders a final window byte-exact, without a next offset to re-run with', async () => {
+        const { text } = await run({ outcomeOffset: 5 });
+        expect(boundedLine(text)).toBe(
+          '_Bounded: returning 2 of 7 outcome measures (from outcomeOffset 5). Nothing remains past this window; re-run clinicaltrials_get_study_results with a lower outcomeOffset to reach the rows before it._',
+        );
+      });
+
+      it('never tells the caller to continue from a next offset past the end', async () => {
+        for (const summary of [false, true]) {
+          const { entry, text } = await run({ outcomeOffset: 12, summary });
+          expect(entry.filtersApplied?.nextOutcomeOffset).toBeUndefined();
+          expect(boundedLine(text)).toContain('0 of 7 outcome measures (from outcomeOffset 12)');
+          expect(boundedLine(text)).not.toContain('next offset');
+          expect(boundedLine(text)).not.toContain('raise');
+        }
+      });
+
+      it('counts event windows by what each list returned', async () => {
+        const { entry, text } = await run({ seriousEventOffset: 3, otherEventOffset: 7 });
+        expect(entry.adverseEvents!.seriousEvents as unknown[]).toHaveLength(2);
+        expect(entry.adverseEvents!.otherEvents as unknown[]).toHaveLength(2);
+        expect(boundedLine(text)).toBe(
+          '_Bounded: returning 2 of 5 serious adverse events (from seriousEventOffset 3); 2 of 9 other adverse events (from otherEventOffset 7). Nothing remains past this window; re-run clinicaltrials_get_study_results with a lower seriousEventOffset / otherEventOffset to reach the rows before it._',
+        );
+      });
+
+      it('counts an event list the shared limit did not cut by what it returned', async () => {
+        // adverseEventLimit 3 cuts the 9 other events but not the 5 serious ones
+        // starting at offset 3, which return their last 2.
+        const { entry, text } = await run({ adverseEventLimit: 3, seriousEventOffset: 3 });
+        expect(entry.adverseEvents!.seriousEvents as unknown[]).toHaveLength(2);
+        expect(boundedCounts(text)).toEqual([
+          { noun: 'serious adverse events', returned: 2, total: 5 },
+          { noun: 'other adverse events', returned: 3, total: 9 },
+        ]);
+      });
+
+      it('names only the bounds a summary page can use', async () => {
+        const { text } = await run({ summary: true, outcomeLimit: 2, outcomeOffset: 2 });
+        expect(boundedLine(text)).toBe(
+          '_Bounded: returning 2 of 7 outcome measures (from outcomeOffset 2; next outcomeOffset 4). Re-run clinicaltrials_get_study_results with the named next offset to continue, or raise outcomeLimit for a larger page._',
+        );
+      });
+
+      it('names every limit that cut a full-mode list', async () => {
+        const { text } = await run({ outcomeLimit: 2, adverseEventLimit: 2 });
+        expect(boundedLine(text)).toContain(
+          'with the named next offset to continue, or raise outcomeLimit / adverseEventLimit for a larger page._',
+        );
+      });
+
+      it('states each study’s own window in a multi-study call', async () => {
+        mockService.getStudiesBatch.mockResolvedValue([
+          resultsStudy(7, 5, 9),
+          makeStudy('NCT87654321', true, {
+            outcomeMeasuresModule: { outcomeMeasures: [outcomeMeasure(8), outcomeMeasure(9)] },
+          }),
+        ]);
+        const result = await getStudyResults.handler(
+          getStudyResults.input!.parse({
+            nctIds: ['NCT12345678', 'NCT87654321'],
+            sections: 'outcomes',
+            outcomeLimit: 2,
+            outcomeOffset: 2,
+          }),
+          createMockContext({ errors: getStudyResults.errors }),
+        );
+        const text = (getStudyResults.format!(result)[0] as { text: string }).text;
+        const lines = text.split('\n').filter((l) => l.startsWith('_Bounded:'));
+        expect(result.results[1]!.outcomes).toEqual([]);
+        expect(lines).toEqual([
+          '_Bounded: returning 2 of 7 outcome measures (from outcomeOffset 2; next outcomeOffset 4). Re-run clinicaltrials_get_study_results with the named next offset to continue, or raise outcomeLimit for a larger page._',
+          '_Bounded: returning 0 of 2 outcome measures (from outcomeOffset 2). Nothing remains past this window; re-run clinicaltrials_get_study_results with a lower outcomeOffset to reach the rows before it._',
+        ]);
+      });
+
+      it('matches the returned count on every page of a walk, in both modes', async () => {
+        for (const summary of [false, true]) {
+          for (let outcomeOffset = 0; outcomeOffset <= 8; outcomeOffset++) {
+            const { entry, text } = await run({ summary, outcomeLimit: 3, outcomeOffset });
+            const counts = boundedCounts(text);
+            if (entry.filtersApplied === undefined) {
+              expect(counts).toEqual([]);
+              continue;
+            }
+            expect(counts).toEqual([
+              { noun: 'outcome measures', returned: entry.outcomes!.length, total: 7 },
+            ]);
+            expect(boundedLine(text)!.includes('named next offset')).toBe(
+              entry.filtersApplied.nextOutcomeOffset !== undefined,
+            );
+          }
+        }
+      });
+    });
+
     it('keeps channel parity for an offset payload', async () => {
       const { result, text } = await run({
         outcomeLimit: 2,
@@ -1533,6 +1679,144 @@ describe('getStudyResults', () => {
         otherEventOffset: 2,
       });
       expect(missingLeaves(result, text)).toEqual([]);
+    });
+
+    describe('summary-mode outcome windows (#149)', () => {
+      /**
+       * A measure carrying every per-measure field #146 adds — class
+       * denominators, an analysis's description and compared groups, and an
+       * analysis count — so a windowed page has to keep each one whole.
+       */
+      const subgroupOutcome = (n: number) => ({
+        type: 'SECONDARY',
+        title: `Outcome ${n}`,
+        paramType: 'MEDIAN',
+        unitOfMeasure: 'Days',
+        denoms: [{ units: 'Participants', counts: [{ groupId: 'OG000', value: `${100 + n}` }] }],
+        groups: [
+          { id: 'OG000', title: `Arm ${n}A` },
+          { id: 'OG001', title: `Arm ${n}B` },
+        ],
+        classes: [
+          {
+            title: `Male ${n}`,
+            denoms: [{ units: 'Participants', counts: [{ groupId: 'OG000', value: `${50 + n}` }] }],
+            categories: [{ measurements: [{ groupId: 'OG000', value: `${n}.5` }] }],
+          },
+          {
+            title: `Female ${n}`,
+            categories: [{ measurements: [{ groupId: 'OG000', value: '1' }] }],
+          },
+        ],
+        analyses: [
+          {
+            groupIds: ['OG001', 'OG000'],
+            groupDescription: `Analysis for Male ${n}`,
+            paramValue: `1.${n}`,
+          },
+          { groupIds: ['OG000', 'OG001'], groupDescription: `Analysis for Female ${n}` },
+        ],
+      });
+
+      const subgroupStudy = (count: number) =>
+        makeStudy('NCT12345678', true, {
+          outcomeMeasuresModule: {
+            outcomeMeasures: Array.from({ length: count }, (_, i) => subgroupOutcome(i + 1)),
+          },
+        });
+
+      it('walks summary outcomes to their end, item for item equal to the unpaged summary, on both channels', async () => {
+        const study = subgroupStudy(7);
+        const unpaged = await run({ summary: true, sections: 'outcomes' }, study);
+        const walked = await walk(
+          study,
+          (outcomeOffset) => ({
+            summary: true,
+            sections: 'outcomes',
+            outcomeLimit: 2,
+            outcomeOffset,
+          }),
+          (entry) => entry.filtersApplied?.nextOutcomeOffset,
+          (entry) => entry.outcomes!,
+          BULLETS.outcome,
+        );
+
+        expect(walked.pages).toBe(4);
+        expect(walked.structured).toEqual(unpaged.entry.outcomes);
+        expect(walked.rendered).toEqual(renderedItems(unpaged.text, BULLETS.outcome));
+        expect(walked.rendered).toHaveLength(7);
+      });
+
+      it('carries each windowed measure’s whole projection, #146 fields included', async () => {
+        const { entry, text } = await run(
+          { summary: true, sections: 'outcomes', outcomeLimit: 1, outcomeOffset: 4 },
+          subgroupStudy(7),
+        );
+        expect(entry.outcomes).toHaveLength(1);
+        const outcome = entry.outcomes![0]!;
+        expect(outcome).toMatchObject({
+          title: 'Outcome 5',
+          analysisCount: 2,
+          denoms: [{ units: 'Participants', counts: [{ group: 'Arm 5A', value: '105' }] }],
+          topStatsFrom: {
+            classTitle: 'Male 5',
+            classDenoms: [{ units: 'Participants', counts: [{ group: 'Arm 5A', value: '55' }] }],
+          },
+          topAnalysis: {
+            groupDescription: 'Analysis for Male 5',
+            groupIds: ['OG001', 'OG000'],
+            groups: ['Arm 5B', 'Arm 5A'],
+          },
+        });
+        // Nothing on the page refers to a measure outside it.
+        expect(JSON.stringify(entry.outcomes)).not.toMatch(/Arm [1-46-7]|Male [1-46-7]/);
+        expect(text).toContain('Male 5 denominator (Participants): Arm 5A: 55');
+        expect(text).toContain('groups: OG001 (Arm 5B), OG000 (Arm 5A), Analysis for Male 5');
+        expect(missingLeaves(entry, text)).toEqual([]);
+      });
+
+      it('names no next offset when a summary window lands exactly on the end', async () => {
+        const { entry } = await run(
+          { summary: true, outcomeOffset: 4, outcomeLimit: 3 },
+          subgroupStudy(7),
+        );
+        expect(entry.outcomes!.map((o) => o.title)).toEqual([
+          'Outcome 5',
+          'Outcome 6',
+          'Outcome 7',
+        ]);
+        expect(entry.filtersApplied).toEqual({ totalOutcomes: 7, outcomeOffset: 4 });
+      });
+
+      it('returns an empty summary list with honest metadata for an offset at or past the end', async () => {
+        for (const outcomeOffset of [7, 12]) {
+          const { entry, result } = await run(
+            { summary: true, sections: 'outcomes', outcomeOffset },
+            subgroupStudy(7),
+          );
+          expect(entry.outcomes).toEqual([]);
+          expect(entry.filtersApplied).toEqual({ totalOutcomes: 7, outcomeOffset });
+          expect(result.truncated).toBe(true);
+        }
+      });
+
+      it('returns every summarized measure with no filtersApplied when no outcome bound is passed', async () => {
+        const { entry, result } = await run({ summary: true }, subgroupStudy(7));
+        expect(entry.outcomes).toHaveLength(7);
+        expect(entry.filtersApplied).toBeUndefined();
+        expect(result.truncated).toBeUndefined();
+      });
+
+      it('keeps channel parity for a windowed summary payload', async () => {
+        const { result, text } = await run(
+          { summary: true, outcomeLimit: 2, outcomeOffset: 2 },
+          resultsStudy(7, 5, 9),
+        );
+        expect(text).toContain(
+          '2 of 7 outcome measures (from outcomeOffset 2; next outcomeOffset 4)',
+        );
+        expect(missingLeaves(result, text)).toEqual([]);
+      });
     });
 
     it('rolls an offset-only trim into the batch truncated flag', async () => {
@@ -1568,7 +1852,6 @@ describe('getStudyResults', () => {
       };
 
       it.each([
-        { param: 'outcomeOffset', extra: { summary: true, outcomeOffset: 2 } },
         { param: 'seriousEventOffset', extra: { summary: true, seriousEventOffset: 2 } },
         { param: 'otherEventOffset', extra: { summary: true, otherEventOffset: 2 } },
       ])('rejects $param in summary mode', async ({ param, extra }) => {
@@ -1581,6 +1864,10 @@ describe('getStudyResults', () => {
 
       it.each([
         { param: 'outcomeOffset', extra: { sections: 'adverseEvents', outcomeOffset: 2 } },
+        {
+          param: 'outcomeOffset',
+          extra: { summary: true, sections: 'adverseEvents', outcomeOffset: 2 },
+        },
         { param: 'seriousEventOffset', extra: { sections: 'outcomes', seriousEventOffset: 2 } },
         { param: 'otherEventOffset', extra: { sections: 'outcomes', otherEventOffset: 2 } },
       ])('rejects $param when sections excludes the list it targets', async ({ param, extra }) => {
@@ -1595,15 +1882,27 @@ describe('getStudyResults', () => {
         const result = await runToolContract(getStudyResults, {
           nctIds: 'NCT12345678',
           summary: true,
-          outcomeOffset: 2,
+          seriousEventOffset: 2,
         });
         expect(result.isError).toBe(true);
         expect(wireRecoveryHint(result)).toContain('summary: false');
       });
 
+      it('no longer names outcomeOffset as summary-incompatible in the contract (#149)', () => {
+        const contract = getStudyResults.errors!.find((e) => e.reason === 'offset_not_applicable')!;
+        expect(contract.when).not.toContain('outcomeOffset');
+        expect(contract.recovery).toContain('for an event offset, summary: false');
+      });
+
       it('honors an offset whose section the sections filter includes', async () => {
         const { entry } = await run({ sections: 'outcomes', outcomeOffset: 5 });
         expect(entry.outcomes).toHaveLength(2);
+      });
+
+      it('honors outcomeOffset in summary mode (#149)', async () => {
+        const { entry } = await run({ summary: true, outcomeOffset: 5 });
+        expect(entry.outcomes!.map((o) => o.title)).toEqual(['Outcome 6', 'Outcome 7']);
+        expect(entry.filtersApplied).toEqual({ totalOutcomes: 7, outcomeOffset: 5 });
       });
     });
   });
@@ -2643,6 +2942,217 @@ describe('getStudyResults', () => {
     it('keeps reverse parity for a context-carrying summary', async () => {
       const { result, text } = await summarize(orrMeasure, ttrMeasure, timepointMeasure);
       expect(missingLeaves(result, text)).toEqual([]);
+    });
+
+    describe('subgroup denominators and analysis identity (#146)', () => {
+      /**
+       * NCT04280705's "Time to Recovery by Sex", widened to a third arm the
+       * analyses never compare: two titled classes, each with its own
+       * denominators, and one analysis per class whose only identity is its
+       * groupDescription.
+       */
+      const subgroupMeasure = {
+        type: 'PRIMARY',
+        title: 'Time to Recovery by Sex',
+        paramType: 'MEDIAN',
+        dispersionType: '95% Confidence Interval',
+        unitOfMeasure: 'Days',
+        reportingStatus: 'POSTED',
+        denoms: [
+          {
+            units: 'Participants',
+            counts: [
+              { groupId: 'OG000', value: '521' },
+              { groupId: 'OG001', value: '541' },
+              { groupId: 'OG002', value: '60' },
+            ],
+          },
+        ],
+        groups: [
+          { id: 'OG000', title: 'Placebo' },
+          { id: 'OG001', title: 'Remdesivir' },
+          { id: 'OG002', title: 'Open-label Remdesivir' },
+        ],
+        classes: [
+          {
+            title: 'Male',
+            denoms: [
+              {
+                units: 'Participants',
+                counts: [
+                  { groupId: 'OG000', value: '332' },
+                  { groupId: 'OG001', value: '352' },
+                  { groupId: 'OG002', value: '41' },
+                ],
+              },
+            ],
+            categories: [
+              {
+                measurements: [
+                  { groupId: 'OG000', value: '15.0', lowerLimit: '12.0', upperLimit: '19.0' },
+                  { groupId: 'OG001', value: '9.0', lowerLimit: '8.0', upperLimit: '12.0' },
+                  { groupId: 'OG002', value: '10.0', lowerLimit: '7.0', upperLimit: '13.0' },
+                ],
+              },
+            ],
+          },
+          {
+            title: 'Female',
+            denoms: [
+              {
+                units: 'Participants',
+                counts: [
+                  { groupId: 'OG000', value: '189' },
+                  { groupId: 'OG001', value: '189' },
+                  { groupId: 'OG002', value: '19' },
+                ],
+              },
+            ],
+            categories: [
+              {
+                measurements: [
+                  { groupId: 'OG000', value: '15.0' },
+                  { groupId: 'OG001', value: '10.0' },
+                  { groupId: 'OG002', value: '11.0' },
+                ],
+              },
+            ],
+          },
+        ],
+        analyses: [
+          {
+            groupIds: ['OG000', 'OG001'],
+            groupDescription: 'This analysis is for Male participants',
+            nonInferiorityType: 'SUPERIORITY',
+            paramType: 'Cox Proportional Hazard',
+            paramValue: '1.30',
+            ciPctValue: '95',
+            ciNumSides: 'TWO_SIDED',
+            ciLowerLimit: '1.09',
+            ciUpperLimit: '1.56',
+          },
+          {
+            groupIds: ['OG000', 'OG001'],
+            groupDescription: 'This analysis is for Female participants',
+            paramType: 'Cox Proportional Hazard',
+            paramValue: '1.31',
+          },
+        ],
+      };
+
+      it("carries the retained class's own denominators apart from the measure totals, on both channels", async () => {
+        const { outcome, text } = await summarize(subgroupMeasure);
+        expect((outcome.topStatsFrom as Record<string, unknown>).classDenoms).toEqual([
+          {
+            units: 'Participants',
+            counts: [
+              { group: 'Placebo', value: '332' },
+              { group: 'Remdesivir', value: '352' },
+              { group: 'Open-label Remdesivir', value: '41' },
+            ],
+          },
+        ]);
+        // Measure-level denominators keep their meaning — the whole measure.
+        expect(outcome.denoms).toEqual([
+          {
+            units: 'Participants',
+            counts: [
+              { group: 'Placebo', value: '521' },
+              { group: 'Remdesivir', value: '541' },
+              { group: 'Open-label Remdesivir', value: '60' },
+            ],
+          },
+        ]);
+        expect(text).toContain(
+          '  Male denominator (Participants): Placebo: 332, Remdesivir: 352, Open-label Remdesivir: 41',
+        );
+        expect(text).toContain(
+          '  Denominator (Participants): Placebo: 521, Remdesivir: 541, Open-label Remdesivir: 60',
+        );
+      });
+
+      it('emits no classDenoms when the retained class publishes none', async () => {
+        const { outcome, text } = await summarize(timepointMeasure);
+        expect(outcome.topStatsFrom).toBeDefined();
+        expect(outcome.topStatsFrom).not.toHaveProperty('classDenoms');
+        expect(text).not.toContain(' denominator (');
+      });
+
+      it("carries the retained analysis's groupDescription verbatim, on both channels", async () => {
+        const { outcome, text } = await summarize(subgroupMeasure);
+        expect(outcome.topAnalysis).toMatchObject({
+          groupDescription: 'This analysis is for Male participants',
+        });
+        expect(text).toContain('This analysis is for Male participants');
+      });
+
+      it('names the compared groups by title in groupIds order, keeping groupIds as the join key', async () => {
+        const { outcome, text } = await summarize(subgroupMeasure);
+        expect(outcome.topAnalysis).toMatchObject({
+          groupIds: ['OG000', 'OG001'],
+          groups: ['Placebo', 'Remdesivir'],
+        });
+        expect(text).toContain('groups: OG000 (Placebo), OG001 (Remdesivir)');
+      });
+
+      it('resolves an untitled or unlisted compared group to its id, in groupIds order', async () => {
+        const { outcome, text } = await summarize({
+          ...subgroupMeasure,
+          groups: [{ id: 'OG000', title: 'Placebo' }, { id: 'OG001' }],
+          analyses: [{ groupIds: ['OG002', 'OG001', 'OG000'], paramValue: '1.30' }],
+        });
+        expect((outcome.topAnalysis as Record<string, unknown>).groups).toEqual([
+          'OG002',
+          'OG001',
+          'Placebo',
+        ]);
+        expect(text).toContain('groups: OG002, OG001, OG000 (Placebo)');
+      });
+
+      it("counts the measure's analyses beside its group and class counts", async () => {
+        const { outcome, text } = await summarize(subgroupMeasure);
+        expect(outcome.analysisCount).toBe(2);
+        expect(text).toContain('3 groups, 2 classes, 2 analyses, reporting: POSTED');
+      });
+
+      it('counts a single analysis in the singular and omits the count without analyses', async () => {
+        const single = await summarize({
+          ...subgroupMeasure,
+          analyses: subgroupMeasure.analyses.slice(0, 1),
+        });
+        expect(single.outcome.analysisCount).toBe(1);
+        expect(single.text).toContain('2 classes, 1 analysis,');
+        const none = await summarize(orrMeasure);
+        expect(none.outcome).not.toHaveProperty('analysisCount');
+        expect(none.text).not.toMatch(/\d analys[ie]s/);
+      });
+
+      it('still lifts analyses[0] — nothing matches an analysis to a class', async () => {
+        const { outcome, text } = await summarize(subgroupMeasure);
+        expect(outcome.topAnalysis).toMatchObject({ paramValue: '1.30' });
+        expect(JSON.stringify(outcome)).not.toContain('Female participants');
+        expect(text).not.toContain('Female participants');
+      });
+
+      it('keeps reverse parity for a subgroup summary', async () => {
+        const { result, text } = await summarize(subgroupMeasure, orrMeasure, timepointMeasure);
+        expect(missingLeaves(result, text)).toEqual([]);
+      });
+
+      it('leaves full mode unchanged — no summary fields, every analysis rendered', async () => {
+        const { entry, text } = await runTool(
+          { sections: 'outcomes' },
+          makeStudy('NCT12345678', true, {
+            outcomeMeasuresModule: { outcomeMeasures: [subgroupMeasure] },
+          }),
+        );
+        expect(entry.outcomes).toEqual([subgroupMeasure]);
+        expect(text).toContain('This analysis is for Male participants');
+        expect(text).toContain('This analysis is for Female participants');
+        expect(text).toContain('groups: OG000, OG001,');
+        expect(text).not.toContain('analyses,');
+        expect(missingLeaves(entry, text)).toEqual([]);
+      });
     });
   });
 

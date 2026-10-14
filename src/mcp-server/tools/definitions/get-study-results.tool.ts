@@ -22,8 +22,9 @@ type Section = (typeof VALID_SECTIONS)[number];
 
 /**
  * Which section each offset bounds. An offset is only meaningful when the call
- * returns that section's list in full mode, so this is also the table the
- * handler validates against before fetching anything.
+ * returns that section's list as a window — outcomes in either mode, the
+ * adverse-event lists in full mode only — so this is also the table the handler
+ * validates against before fetching anything.
  */
 const OFFSET_SECTIONS = [
   ['outcomeOffset', 'outcomes'],
@@ -71,9 +72,14 @@ interface TopStat extends MeasurementFields {
   value: string;
 }
 
+/** Denominator rows condensed for summary mode — counts keyed by group title. */
+type CondensedDenoms = Array<{ counts: Array<{ group: string; value: string }>; units?: string }>;
+
 /** Which cell of the classes tree the summary kept, and what it stands in for. */
 interface TopStatsProvenance {
   categoryTitle?: string;
+  /** The shown class's own denominators — a subgroup's n, not the measure's. */
+  classDenoms?: CondensedDenoms;
   classTitle?: string;
   note?: string;
   omittedCategories?: number;
@@ -81,21 +87,34 @@ interface TopStatsProvenance {
 }
 
 /**
+ * A measure's group titles by id, each untitled group standing in as its own id.
+ * Summary mode publishes no roster, so every group reference it carries is
+ * resolved through this map instead.
+ */
+function groupTitles(groups: Array<Record<string, unknown>> | undefined): Map<string, string> {
+  return new Map((groups ?? []).map((g) => [g.id as string, (g.title ?? g.id) as string]));
+}
+
+/**
  * Label the projected cell and disclose the siblings it displaced. Upstream
  * titles a class or category exactly when more than one exists, so the title
  * that disambiguates a retained value is the one the projection would otherwise
- * discard. Returns undefined when the measure holds a single untitled cell —
- * nothing to name and nothing omitted.
+ * discard. The class's own denominators travel with its title: a subgroup's
+ * values are counted out of them, not out of the measure totals. Returns
+ * undefined when the measure holds a single untitled cell with no class
+ * denominators — nothing to name and nothing omitted.
  */
 function topStatsProvenance(
   firstClass: Record<string, unknown>,
   categories: Array<Record<string, unknown>>,
   classCount: number,
+  titles: Map<string, string>,
 ): TopStatsProvenance | undefined {
   const omittedClasses = classCount - 1;
   const omittedCategories = categories.length - 1;
   const classTitle = text(firstClass.title);
   const categoryTitle = text(categories[0]?.title);
+  const classDenoms = condenseDenoms(firstClass.denoms, titles);
   const dropped = [
     omittedClasses > 0 ? `${omittedClasses} of ${classCount} classes` : '',
     omittedCategories > 0
@@ -104,6 +123,7 @@ function topStatsProvenance(
   ].filter(Boolean);
   const from: TopStatsProvenance = {
     ...(classTitle ? { classTitle } : {}),
+    ...(classDenoms ? { classDenoms } : {}),
     ...(categoryTitle ? { categoryTitle } : {}),
     ...(omittedClasses > 0 ? { omittedClasses } : {}),
     ...(omittedCategories > 0 ? { omittedCategories } : {}),
@@ -130,22 +150,21 @@ function topStatsProvenance(
  */
 function extractTopStats(
   o: Record<string, unknown>,
+  titles: Map<string, string>,
 ): { from?: TopStatsProvenance; stats: TopStat[] } | undefined {
-  const groups = o.groups as Array<Record<string, unknown>> | undefined;
   const classes = o.classes as Array<Record<string, unknown>> | undefined;
-  if (!groups?.length || !classes?.length) return;
+  if (!titles.size || !classes?.length) return;
   const firstClass = classes[0] as Record<string, unknown>;
   const categories = firstClass.categories as Array<Record<string, unknown>> | undefined;
   if (!categories?.length) return;
   const measurements = categories[0]?.measurements as Array<Record<string, unknown>> | undefined;
   if (!measurements?.length) return;
-  const groupMap = new Map(groups.map((g) => [g.id as string, (g.title ?? g.id) as string]));
   const stats: TopStat[] = measurements
     .filter((m) => m.value != null)
     .map((m) => {
       const comment = text(m.comment);
       return {
-        group: groupMap.get(m.groupId as string) ?? (m.groupId as string),
+        group: titles.get(m.groupId as string) ?? (m.groupId as string),
         value: String(m.value),
         ...(m.spread != null ? { spread: String(m.spread) } : {}),
         ...(m.lowerLimit != null ? { lowerLimit: String(m.lowerLimit) } : {}),
@@ -154,22 +173,19 @@ function extractTopStats(
       };
     });
   if (!stats.length) return;
-  const from = topStatsProvenance(firstClass, categories, classes.length);
+  const from = topStatsProvenance(firstClass, categories, classes.length, titles);
   return { stats, ...(from ? { from } : {}) };
 }
 
 /**
- * Condense a measure's denominators — what each retained value is counted out
- * of. Keyed by group title rather than group id: summary mode carries no group
- * roster, so an id would reach the caller with nothing to resolve it against.
+ * Condense denominator rows — a measure's or one class's — to what each
+ * retained value is counted out of. Keyed by group title rather than group id:
+ * summary mode carries no group roster, so an id would reach the caller with
+ * nothing to resolve it against.
  */
-function condenseDenoms(
-  denoms: unknown,
-  groups: Array<Record<string, unknown>>,
-): Array<{ counts: Array<{ group: string; value: string }>; units?: string }> | undefined {
+function condenseDenoms(denoms: unknown, titles: Map<string, string>): CondensedDenoms | undefined {
   const rows = denoms as Array<Record<string, unknown>> | undefined;
   if (!rows?.length) return;
-  const titles = new Map(groups.map((g) => [g.id as string, (g.title ?? g.id) as string]));
   const condensed = rows
     .map((d) => {
       const units = text(d.units);
@@ -190,9 +206,16 @@ function condenseDenoms(
 /**
  * Extract topline statistical analysis from a raw outcome object. Returns the
  * first analysis (typically the primary one), keeping only present fields so
- * the summary stays compact.
+ * the summary stays compact. `groupDescription` is the analysis's only identity
+ * — upstream publishes no structured link from an analysis to a class — and
+ * `groups` names the compared arms by title in `groupIds` order, since summary
+ * mode carries no roster to resolve the ids against. `groupIds` stays as the
+ * join key into full mode.
  */
-function extractTopAnalysis(o: Record<string, unknown>): Record<string, unknown> | undefined {
+function extractTopAnalysis(
+  o: Record<string, unknown>,
+  titles: Map<string, string>,
+): Record<string, unknown> | undefined {
   const analyses = o.analyses as Array<Record<string, unknown>> | undefined;
   const a = analyses?.[0];
   if (!a) return;
@@ -208,20 +231,30 @@ function extractTopAnalysis(o: Record<string, unknown>): Record<string, unknown>
     'ciUpperLimit',
     'nonInferiorityType',
     'estimateComment',
+    'groupDescription',
     'groupIds',
   ] as const;
   const out: Record<string, unknown> = {};
   for (const k of keys) if (a[k] != null) out[k] = a[k];
+  if (Array.isArray(a.groupIds)) {
+    out.groups = (a.groupIds as string[]).map((id) => titles.get(id) ?? id);
+  }
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-/** Condense a full outcome measure to its essential metadata plus top-line per-group stats. */
+/**
+ * Condense a full outcome measure to its essential metadata plus top-line
+ * per-group stats. Every field is resolved per measure — no per-study roster —
+ * so a windowed page of summaries (#149) carries each one whole.
+ */
 function summarizeOutcome(o: Record<string, unknown>) {
   const groups = o.groups as Array<Record<string, unknown>> | undefined;
   const classes = o.classes as Array<Record<string, unknown>> | undefined;
-  const projection = extractTopStats(o);
-  const topAnalysis = extractTopAnalysis(o);
-  const denoms = condenseDenoms(o.denoms, groups ?? []);
+  const analyses = o.analyses as unknown[] | undefined;
+  const titles = groupTitles(groups);
+  const projection = extractTopStats(o, titles);
+  const topAnalysis = extractTopAnalysis(o, titles);
+  const denoms = condenseDenoms(o.denoms, titles);
   const dispersionType = text(o.dispersionType);
   return {
     type: o.type,
@@ -235,6 +268,8 @@ function summarizeOutcome(o: Record<string, unknown>) {
     reportingStatus: o.reportingStatus,
     groupCount: groups?.length,
     classCount: classes?.length,
+    // Says how many analyses topAnalysis stands in for — it is only analyses[0].
+    ...(analyses?.length ? { analysisCount: analyses.length } : {}),
     ...(denoms ? { denoms } : {}),
     ...(projection ? { topStats: projection.stats } : {}),
     ...(projection?.from ? { topStatsFrom: projection.from } : {}),
@@ -438,8 +473,9 @@ function windowList<T>(items: T[], { offset, limit }: ListBound): ListWindow<T> 
 }
 
 /**
- * Window a study's outcome measure list. The bound drops whole measures — every
- * surviving one keeps its complete groups/classes/measurements/analyses tree.
+ * Window a study's outcome measure list, in either mode. The bound drops whole
+ * measures — every surviving one keeps its complete groups/classes/measurements/
+ * analyses tree, or in summary mode its whole per-measure projection.
  */
 function capOutcomes(
   measures: Record<string, unknown>[],
@@ -548,7 +584,7 @@ function renderGroupRoster(obj: RO, indent: string, lines: string[], label = 'Gr
   lines.push(`${indent}${label}:`);
   for (const g of groups) {
     const head = [text(g.id), text(g.title)].filter(Boolean).join(': ');
-    lines.push(`${indent}- ${head || 'Group'}`);
+    lines.push(oneLine(`${indent}- ${head || 'Group'}`));
     const desc = text(g.description);
     if (desc) lines.push(`${indent}  ${desc}`);
     const rollup = [
@@ -560,7 +596,7 @@ function renderGroupRoster(obj: RO, indent: string, lines: string[], label = 'Gr
         : '',
       g.otherNumAffected != null ? `other ${g.otherNumAffected}/${g.otherNumAtRisk ?? '?'}` : '',
     ].filter(Boolean);
-    if (rollup.length) lines.push(`${indent}  ${rollup.join(' | ')}`);
+    if (rollup.length) lines.push(oneLine(`${indent}  ${rollup.join(' | ')}`));
   }
 }
 
@@ -568,9 +604,15 @@ function renderGroupRoster(obj: RO, indent: string, lines: string[], label = 'Gr
  * Render denominator rows — the units and the per-group counts they apply to.
  * Full-mode rows key on the upstream `groupId`; summary-mode rows arrive from
  * `condenseDenoms` already resolved to a `group` title, since that channel
- * publishes no roster to resolve an id against.
+ * publishes no roster to resolve an id against. `noun` sets a row apart from
+ * the measure-level `Denominator` line — a summary's shown class names itself.
  */
-function renderDenoms(denoms: unknown, indent: string, lines: string[]): void {
+function renderDenoms(
+  denoms: unknown,
+  indent: string,
+  lines: string[],
+  noun = 'Denominator',
+): void {
   for (const d of (denoms as Array<RO> | undefined) ?? []) {
     const counts = ((d.counts as Array<RO> | undefined) ?? [])
       .map((c) => {
@@ -579,8 +621,8 @@ function renderDenoms(denoms: unknown, indent: string, lines: string[]): void {
       })
       .join(', ');
     const units = text(d.units);
-    const label = units ? `Denominator (${units})` : 'Denominator';
-    lines.push(`${indent}${[label, counts].filter(Boolean).join(': ')}`);
+    const label = units ? `${noun} (${units})` : noun;
+    lines.push(oneLine(`${indent}${[label, counts].filter(Boolean).join(': ')}`));
   }
 }
 
@@ -613,21 +655,48 @@ function measurementCell(m: RO): string | undefined {
  */
 function renderClasses(classes: unknown, indent: string, lines: string[]): void {
   for (const cls of (classes as Array<RO> | undefined) ?? []) {
-    const clsTitle = text(cls.title);
+    const clsTitle = oneLine(text(cls.title));
     if (clsTitle) lines.push(`${indent}_${clsTitle}_`);
     renderDenoms(cls.denoms, `${indent}  `, lines);
     for (const cat of (cls.categories as Array<RO> | undefined) ?? []) {
-      const catTitle = text(cat.title);
+      const catTitle = oneLine(text(cat.title));
       const cells = ((cat.measurements as Array<RO> | undefined) ?? [])
         .map(measurementCell)
         .filter((v): v is string => Boolean(v));
       // Label the row even when upstream titles neither the class nor the
       // category, so a measurement row is never mistaken for a denominator row.
       const prefix = catTitle ?? clsTitle ?? 'Values';
-      if (cells.length > 0) lines.push(`${indent}  ${prefix}: ${cells.join(', ')}`);
+      if (cells.length > 0) lines.push(oneLine(`${indent}  ${prefix}: ${cells.join(', ')}`));
       else if (catTitle) lines.push(`${indent}  ${catTitle}`);
     }
   }
+}
+
+/**
+ * Flatten CR/LF in upstream text interpolated into a single line, so a line
+ * break in the value cannot start a new `content[]` line and forge structure.
+ * Applied to a value, or to a whole rendered row whose every part is meant to
+ * share one line. `structuredContent` keeps the value verbatim.
+ */
+function oneLine(value: string): string;
+function oneLine(value: string | undefined): string | undefined;
+function oneLine(value: string | undefined): string | undefined {
+  return value?.replace(/\s*[\r\n]+\s*/g, ' ');
+}
+
+/**
+ * Render an analysis's compared groups — each id paired with the title a
+ * summary resolved for it, in `groupIds` order. Full-mode analyses carry no
+ * titles; their ids resolve against the measure's roster.
+ */
+function analysisGroups(a: RO): string {
+  if (!Array.isArray(a.groupIds)) return '';
+  const titles = (Array.isArray(a.groups) ? a.groups : []) as unknown[];
+  const cells = (a.groupIds as string[]).map((id, i) => {
+    const title = oneLine(text(titles[i]));
+    return title && title !== id ? `${id} (${title})` : id;
+  });
+  return `groups: ${cells.join(', ')}`;
 }
 
 /** Render one analysis (summary or full) as a single-line bullet. */
@@ -659,42 +728,48 @@ function formatAnalysisLine(a: RO): string {
     ci,
     text(a.estimateComment),
     text(a.otherAnalysisDescription),
-    Array.isArray(a.groupIds) ? `groups: ${(a.groupIds as string[]).join(', ')}` : '',
-    text(a.groupDescription),
+    analysisGroups(a),
+    oneLine(text(a.groupDescription)),
   ].filter(Boolean);
-  return parts.length ? `  Analysis: ${parts.join(', ')}` : '';
+  return parts.length ? oneLine(`  Analysis: ${parts.join(', ')}`) : '';
 }
 
-/**
- * Render one bounded list's disclosure: how much of it came back, where the
- * window started, and where the next one starts. Every number `filtersApplied`
- * carries is named here — a continuation value the text channel never prints is
- * reachable in one channel and not the other, which is the parity defect the
- * bounds exist inside of, not beside.
- */
-function formatBound({
-  noun,
-  offsetParam,
-  total,
-  limit,
-  offset,
-  next,
-}: {
+/** One list's trim as `filtersApplied` records it, plus the params that page it. */
+interface BoundedList {
   limit?: number | undefined;
+  limitParam: string;
   next?: number | undefined;
   noun: string;
   offset?: number | undefined;
   offsetParam: string;
+  /** Upstream length — absent when the list was never trimmed. */
   total?: number | undefined;
-}): string {
-  // No upstream total means this list was never trimmed — nothing to disclose.
-  if (total == null) return '';
-  const head = limit != null ? `${limit} of ${total} ${noun}` : `${total} ${noun} upstream`;
+}
+
+/**
+ * Render one trimmed list's disclosure: how many items came back out of the
+ * upstream total, where the window started, and where the next one starts.
+ * Every number `filtersApplied` carries is named here — a continuation value the
+ * text channel never prints is reachable in one channel and not the other,
+ * which is the parity defect the bounds exist inside of, not beside.
+ *
+ * The returned count follows from `windowList`: a limit is echoed only when it
+ * cut the tail, so the window held exactly `limit` items; otherwise the window
+ * ran to the end and held what the offset left, none when it sat at or past it.
+ */
+function formatBound({ noun, offsetParam, total, limit, offset, next }: BoundedList): string {
+  const returned = limit ?? Math.max(0, (total ?? 0) - (offset ?? 0));
   const tail = [
     offset != null ? `from ${offsetParam} ${offset}` : '',
     next != null ? `next ${offsetParam} ${next}` : '',
   ].filter(Boolean);
+  const head = `${returned} of ${total} ${noun}`;
   return tail.length ? `${head} (${tail.join('; ')})` : head;
+}
+
+/** Join the distinct param names of some lists, in list order. */
+function paramNames(lists: BoundedList[], key: 'limitParam' | 'offsetParam'): string {
+  return [...new Set(lists.map((l) => l[key]))].join(' / ');
 }
 
 /**
@@ -705,39 +780,50 @@ function formatBound({
  * `adverseEventLimit` covers both event lists, so which list it actually cut is
  * read off that list's own `next` offset — items remain past a window only when
  * a limit cut the tail.
+ *
+ * The route names only the bounds that trimmed a list on this study, so a
+ * summary page — where the adverse-event bounds never apply — is pointed at the
+ * outcome bounds alone. A trimmed list with no next offset ran to its end, which
+ * leaves only the rows before its offset to reach.
  */
 function formatCaps(meta: ResultsFilterMeta, lines: string[]) {
   const aeLimit = meta.adverseEventLimit;
-  const parts = [
-    formatBound({
+  const lists: BoundedList[] = [
+    {
       noun: 'outcome measures',
+      limitParam: 'outcomeLimit',
       offsetParam: 'outcomeOffset',
       total: meta.totalOutcomes,
       limit: meta.outcomeLimit,
       offset: meta.outcomeOffset,
       next: meta.nextOutcomeOffset,
-    }),
-    formatBound({
+    },
+    {
       noun: 'serious adverse events',
+      limitParam: 'adverseEventLimit',
       offsetParam: 'seriousEventOffset',
       total: meta.totalSeriousEvents,
       limit: meta.nextSeriousEventOffset != null ? aeLimit : undefined,
       offset: meta.seriousEventOffset,
       next: meta.nextSeriousEventOffset,
-    }),
-    formatBound({
+    },
+    {
       noun: 'other adverse events',
+      limitParam: 'adverseEventLimit',
       offsetParam: 'otherEventOffset',
       total: meta.totalOtherEvents,
       limit: meta.nextOtherEventOffset != null ? aeLimit : undefined,
       offset: meta.otherEventOffset,
       next: meta.nextOtherEventOffset,
-    }),
-  ].filter(Boolean);
-  if (!parts.length) return;
-  lines.push(
-    `_Bounded: returning ${parts.join('; ')}. Re-run clinicaltrials_get_study_results with the named next offset to continue a list, raise outcomeLimit / adverseEventLimit, or narrow sections, to reach the omitted rows._`,
-  );
+    },
+  ];
+  const trimmed = lists.filter((l) => l.total != null);
+  if (!trimmed.length) return;
+  const continuing = trimmed.filter((l) => l.next != null);
+  const route = continuing.length
+    ? `Re-run clinicaltrials_get_study_results with the named next offset to continue, or raise ${paramNames(continuing, 'limitParam')} for a larger page.`
+    : `Nothing remains past this window; re-run clinicaltrials_get_study_results with a lower ${paramNames(trimmed, 'offsetParam')} to reach the rows before it.`;
+  lines.push(`_Bounded: returning ${trimmed.map(formatBound).join('; ')}. ${route}_`);
 }
 
 function formatOutcomes(outcomes: RO[], lines: string[]) {
@@ -751,6 +837,8 @@ function formatOutcomes(outcomes: RO[], lines: string[]) {
     const classCount =
       (o.classCount as number | undefined) ??
       (Array.isArray(o.classes) ? (o.classes as unknown[]).length : undefined);
+    // Summary mode only: full mode renders every analysis below instead.
+    const analysisCount = o.analysisCount as number | undefined;
     const meta = [
       text(o.type),
       text(o.paramType),
@@ -758,12 +846,18 @@ function formatOutcomes(outcomes: RO[], lines: string[]) {
       text(o.unitOfMeasure),
       groupCount != null ? groupsLabel(groupCount) : '',
       classCount != null ? `${classCount} classes` : '',
+      analysisCount != null
+        ? `${analysisCount} ${analysisCount === 1 ? 'analysis' : 'analyses'}`
+        : '',
       o.reportingStatus ? `reporting: ${o.reportingStatus as string}` : '',
     ]
       .filter(Boolean)
       .join(', ');
-    lines.push(`- **${title}**${meta ? ` (${meta})` : ''}${timeFrame ? ` [${timeFrame}]` : ''}`);
+    lines.push(
+      oneLine(`- **${title}**${meta ? ` (${meta})` : ''}${timeFrame ? ` [${timeFrame}]` : ''}`),
+    );
 
+    // Long-form prose keeps its own line and its paragraph breaks.
     const description = text(o.description);
     if (description) lines.push(`  ${description}`);
     const population = text(o.populationDescription);
@@ -776,7 +870,7 @@ function formatOutcomes(outcomes: RO[], lines: string[]) {
       denomUnits ? `Denominator units: ${denomUnits}` : '',
       anticipatedPosting ? `Anticipated posting: ${anticipatedPosting}` : '',
     ].filter(Boolean);
-    if (outcomeUnits.length) lines.push(`  ${outcomeUnits.join(' | ')}`);
+    if (outcomeUnits.length) lines.push(oneLine(`  ${outcomeUnits.join(' | ')}`));
 
     // The arm roster and measure-level denominators. Summary mode publishes no
     // roster, so the first call is a full-mode no-op there; denominators reach
@@ -785,13 +879,20 @@ function formatOutcomes(outcomes: RO[], lines: string[]) {
     renderDenoms(o.denoms, '  ', lines);
 
     // Summary mode: the one class/category cell the handler projected, labelled
-    // with the titles it came from and what it stands in for.
+    // with the titles it came from, the shown class's own denominators, and
+    // what it stands in for.
     const topStats = o.topStats as TopStat[] | undefined;
     if (topStats?.length) {
       const from = o.topStatsFrom as TopStatsProvenance | undefined;
+      renderDenoms(
+        from?.classDenoms,
+        '  ',
+        lines,
+        `${from?.classTitle ?? 'Shown class'} denominator`,
+      );
       const label = [from?.classTitle, from?.categoryTitle].filter(Boolean).join(' — ');
       const cells = topStats.map((s) => `${s.group}: ${cellValue(s)}`);
-      lines.push(`  ${label ? `${label}: ` : ''}${cells.join(' | ')}`);
+      lines.push(oneLine(`  ${label ? `${label}: ` : ''}${cells.join(' | ')}`));
       if (from?.note) lines.push(`  _${from.note}_`);
     }
 
@@ -815,13 +916,13 @@ function formatOutcomes(outcomes: RO[], lines: string[]) {
 
 function formatAdverseEvents(ae: RO, lines: string[]) {
   lines.push('\n### Adverse Events');
-  const timeFrame = text(ae.timeFrame);
+  const timeFrame = oneLine(text(ae.timeFrame));
   if (timeFrame) lines.push(`Assessment period: ${timeFrame}`);
   const description = text(ae.description);
   if (description) lines.push(description);
-  const threshold = text(ae.frequencyThreshold);
+  const threshold = oneLine(text(ae.frequencyThreshold));
   if (threshold) lines.push(`Frequency threshold: ${threshold}%`);
-  const mortality = text(ae.allCauseMortalityComment);
+  const mortality = oneLine(text(ae.allCauseMortalityComment));
   if (mortality) lines.push(`All-cause mortality: ${mortality}`);
 
   // Summary shape — counts, the id/title roster, and the ranked top-events view
@@ -846,7 +947,7 @@ function formatAdverseEvents(ae: RO, lines: string[]) {
         const cells = ((ev.byGroup as Array<RO> | undefined) ?? [])
           .map((s) => `${cellGroup(s.groupId)}: ${s.numAffected}/${s.numAtRisk}`)
           .join(' | ');
-        lines.push(`- ${ev.term}${sys} [${ev.kind}]${cells ? ` — ${cells}` : ''}`);
+        lines.push(oneLine(`- ${ev.term}${sys} [${ev.kind}]${cells ? ` — ${cells}` : ''}`));
       }
     }
     return;
@@ -872,7 +973,9 @@ function formatAdverseEvents(ae: RO, lines: string[]) {
         })
         .join(', ');
       lines.push(
-        `- ${ev.term}${meta.length ? ` _(${meta.join(' | ')})_` : ''}${statStr ? ` — ${statStr}` : ''}`,
+        oneLine(
+          `- ${ev.term}${meta.length ? ` _(${meta.join(' | ')})_` : ''}${statStr ? ` — ${statStr}` : ''}`,
+        ),
       );
       const notes = text(ev.notes);
       if (notes) lines.push(`  ${notes}`);
@@ -903,18 +1006,20 @@ function formatParticipantFlow(pf: RO, lines: string[]) {
   if (recruitment) lines.push(`Recruitment: ${recruitment}`);
   const preAssignment = text(pf.preAssignmentDetails);
   if (preAssignment) lines.push(`Pre-assignment: ${preAssignment}`);
-  const unitsAnalyzed = text(pf.typeUnitsAnalyzed);
+  const unitsAnalyzed = oneLine(text(pf.typeUnitsAnalyzed));
   if (unitsAnalyzed) lines.push(`Units analyzed: ${unitsAnalyzed}`);
   renderGroupRoster(pf, '', lines);
 
   for (const period of (pf.periods as Array<RO> | undefined) ?? []) {
-    const periodTitle = text(period.title);
+    const periodTitle = oneLine(text(period.title));
     if (periodTitle) lines.push(`\n**${periodTitle}**`);
     for (const ms of (period.milestones as Array<RO> | undefined) ?? []) {
       const achStr = countsByGroup(ms.achievements);
       const msComment = text(ms.comment);
       lines.push(
-        `- **${text(ms.type) ?? 'Milestone'}**: ${achStr}${msComment ? ` — ${msComment}` : ''}`,
+        oneLine(
+          `- **${text(ms.type) ?? 'Milestone'}**: ${achStr}${msComment ? ` — ${msComment}` : ''}`,
+        ),
       );
     }
 
@@ -922,7 +1027,9 @@ function formatParticipantFlow(pf: RO, lines: string[]) {
       const rStr = countsByGroup(d.reasons);
       const dComment = text(d.comment);
       lines.push(
-        `- Drop/Withdraw — ${text(d.type) ?? 'reason'}: ${rStr}${dComment ? ` — ${dComment}` : ''}`,
+        oneLine(
+          `- Drop/Withdraw — ${text(d.type) ?? 'reason'}: ${rStr}${dComment ? ` — ${dComment}` : ''}`,
+        ),
       );
     }
   }
@@ -941,7 +1048,9 @@ function formatBaseline(bl: RO, lines: string[]) {
     if (parts.length) lines.push(parts.join(' | '));
     for (const m of measures ?? []) {
       const meta = [text(m.paramType), text(m.unitOfMeasure)].filter(Boolean);
-      lines.push(`- ${text(m.title) ?? 'Measure'}${meta.length ? ` (${meta.join(', ')})` : ''}`);
+      lines.push(
+        oneLine(`- ${text(m.title) ?? 'Measure'}${meta.length ? ` (${meta.join(', ')})` : ''}`),
+      );
     }
     return;
   }
@@ -949,7 +1058,7 @@ function formatBaseline(bl: RO, lines: string[]) {
   // Full shape — population context, the arm roster, then every measure's tree.
   const population = text(bl.populationDescription);
   if (population) lines.push(`Population: ${population}`);
-  const unitsAnalyzed = text(bl.typeUnitsAnalyzed);
+  const unitsAnalyzed = oneLine(text(bl.typeUnitsAnalyzed));
   if (unitsAnalyzed) lines.push(`Units analyzed: ${unitsAnalyzed}`);
   renderGroupRoster(bl, '', lines);
   renderDenoms(bl.denoms, '', lines);
@@ -958,13 +1067,13 @@ function formatBaseline(bl: RO, lines: string[]) {
     const title = text(m.title) ?? 'Measure';
     const unit = text(m.unitOfMeasure);
     const desc = [text(m.paramType), text(m.dispersionType)].filter(Boolean).join(', ');
-    lines.push(`- **${title}**${unit ? ` (${unit})` : ''}${desc ? ` [${desc}]` : ''}`);
+    lines.push(oneLine(`- **${title}**${unit ? ` (${unit})` : ''}${desc ? ` [${desc}]` : ''}`));
     const mDescription = text(m.description);
     if (mDescription) lines.push(`  ${mDescription}`);
     const mPopulation = text(m.populationDescription);
     if (mPopulation) lines.push(`  Population: ${mPopulation}`);
     if (m.calculatePct != null) lines.push(`  Percentages: ${m.calculatePct ? 'yes' : 'no'}`);
-    const denomUnits = text(m.denomUnitsSelected);
+    const denomUnits = oneLine(text(m.denomUnitsSelected));
     if (denomUnits) lines.push(`  Denominator units: ${denomUnits}`);
     renderDenoms(m.denoms, '  ', lines);
     renderClasses(m.classes, '  ', lines);
@@ -990,18 +1099,18 @@ function formatMoreInfo(mi: RO, lines: string[]) {
         ? `PI is sponsor employee: ${agr.piSponsorEmployee ? 'yes' : 'no'}`
         : '',
     ].filter(Boolean);
-    if (parts.length) lines.push(`**Certain Agreement:** ${parts.join(' | ')}`);
+    if (parts.length) lines.push(oneLine(`**Certain Agreement:** ${parts.join(' | ')}`));
     if (agr.otherDetails) lines.push(`  ${agr.otherDetails as string}`);
   }
   if (poc) {
     const phone = poc.phoneExt ? `${poc.phone} ext. ${poc.phoneExt}` : poc.phone;
     const parts = [poc.title, poc.organization, poc.email, phone].filter(Boolean);
-    if (parts.length) lines.push(`**Point of Contact:** ${parts.join(' | ')}`);
+    if (parts.length) lines.push(oneLine(`**Point of Contact:** ${parts.join(' | ')}`));
   }
 }
 
 export const getStudyResults = tool('clinicaltrials_get_study_results', {
-  description: `Fetch clinical trial results data from ClinicalTrials.gov for completed studies — outcome measures with statistics, adverse events, participant flow, baseline characteristics, and results metadata (limitations & caveats, certain-agreement disclosure restrictions, results point of contact). Only available for studies where hasResults is true. Use clinicaltrials_search_studies first to find studies with results. A results-rich record can exceed 500KB per study in full mode — bound it with summary=true, narrower sections, or the outcomeLimit / adverseEventLimit caps. A bounded list is resumable: outcomeOffset / seriousEventOffset / otherEventOffset start the next window, and each study's filtersApplied reports what was trimmed and the next offset for every list left short. A previous (alias) NCT ID resolves to its canonical study, named in canonicalNctId.`,
+  description: `Fetch clinical trial results data from ClinicalTrials.gov for completed studies — outcome measures with statistics, adverse events, participant flow, baseline characteristics, and results metadata (limitations & caveats, certain-agreement disclosure restrictions, results point of contact). Only available for studies where hasResults is true. Use clinicaltrials_search_studies first to find studies with results. A results-rich record can exceed 500KB per study in full mode — bound it with summary=true, narrower sections, or the outcomeLimit / adverseEventLimit caps; outcomeLimit / outcomeOffset also page summarized outcomes. A bounded list is resumable: outcomeOffset / seriousEventOffset / otherEventOffset start the next window, and each study's filtersApplied reports what was trimmed and the next offset for every list left short. A previous (alias) NCT ID resolves to its canonical study, named in canonicalNctId.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -1018,9 +1127,9 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     {
       reason: 'offset_not_applicable',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'An offset was supplied for a list this call does not return — summary mode returns a condensed projection rather than a bounded window, or the sections filter excludes the offset’s own section.',
+      when: 'An offset was supplied for a list this call does not return as a window — an adverse-event offset in summary mode, which ranks the whole event list into topEvents, or any offset whose own section the sections filter excludes.',
       recovery:
-        'Drop the offset, or re-run with summary: false and the offset’s own section named in sections — outcomes for outcomeOffset, adverseEvents for seriousEventOffset and otherEventOffset.',
+        'Drop the offset, or re-run with the offset’s own section named in sections — outcomes for outcomeOffset, adverseEvents for seriousEventOffset and otherEventOffset — and, for an event offset, summary: false.',
     },
     {
       reason: 'rate_limited',
@@ -1030,6 +1139,9 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       retryable: true,
     },
   ],
+
+  // clinicaltrials_get_study_record's spelling of the same key.
+  inputAliases: { nctId: 'nctIds' },
 
   input: z.object({
     nctIds: z
@@ -1053,7 +1165,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       .boolean()
       .default(false)
       .describe(
-        'Return condensed summaries instead of full data. Full mode renders every row and field on both output channels, so a large results set can exceed 500KB per study; summary mode typically cuts that to a few KB, scaling with the measure count rather than to a fixed ceiling. An outcome summary keeps the title, type, timeframe, paramType, dispersionType, unit, group/class counts, per-group denominators, one statistical analysis, and a top-line projection of a single class/category cell — labelled with the class and category titles it came from and a count of the siblings it omits. The measurements outside that cell and the remaining analyses are dropped; re-run with summary=false to reach them. For a middle ground, keep full mode and cap the two lists that carry the bulk with outcomeLimit / adverseEventLimit.',
+        'Return condensed summaries instead of full data. Full mode renders every row and field on both output channels, so a large results set can exceed 500KB per study; summary mode typically cuts that to a few KB, scaling with the measure count rather than to a fixed ceiling. An outcome summary keeps the title, type, timeframe, paramType, dispersionType, unit, group/class/analysis counts, per-group denominators, a top-line projection of a single class/category cell — labelled with the class and category titles it came from, that class’s own denominators, and a count of the siblings it omits — and the first statistical analysis with its group description and compared groups named by title. The measurements outside that cell and the remaining analyses are dropped; re-run with summary=false to reach them. outcomeLimit / outcomeOffset page the summarized outcome list as they page full mode; the adverse-event bounds do not apply here, since topEvents ranks the whole event list. For a middle ground, keep full mode and cap the two lists that carry the bulk with outcomeLimit / adverseEventLimit.',
       ),
     outcomeLimit: z
       .number()
@@ -1062,7 +1174,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       .max(100)
       .optional()
       .describe(
-        'Optional cap on the number of outcome measures returned per study, taken in the order ClinicalTrials.gov publishes them. Omit for no cap (every measure). Applies to full mode only — summary mode is already condensed. Each surviving measure keeps its complete groups/classes/measurements/analyses tree. Upstream total preserved in filtersApplied.totalOutcomes only when the cap trims the list.',
+        'Optional cap on the number of outcome measures returned per study, taken in the order ClinicalTrials.gov publishes them. Omit for no cap (every measure). Applies in both modes: each surviving measure keeps its complete groups/classes/measurements/analyses tree in full mode, or its whole summary projection with summary: true. Upstream total preserved in filtersApplied.totalOutcomes only when the cap trims the list.',
       ),
     adverseEventLimit: z
       .number()
@@ -1079,7 +1191,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       .min(0)
       .optional()
       .describe(
-        'Optional index of the first outcome measure to return, in the order ClinicalTrials.gov publishes them. Omit or 0 to start at the first. Pair with outcomeLimit to page a long list: each response reports filtersApplied.nextOutcomeOffset for the study, and the list is exhausted when that field is absent. Applied to every study in the call. An offset at or past the end returns an empty list with filtersApplied.totalOutcomes stating the upstream length, not an error. Rejected with summary: true or when sections excludes outcomes.',
+        'Optional index of the first outcome measure to return, in the order ClinicalTrials.gov publishes them. Omit or 0 to start at the first. Pair with outcomeLimit to page a long list: each response reports filtersApplied.nextOutcomeOffset for the study, and the list is exhausted when that field is absent. Applied to every study in the call. An offset at or past the end returns an empty list with filtersApplied.totalOutcomes stating the upstream length, not an error. Works in summary mode too, paging the summarized measures. Rejected when sections excludes outcomes.',
       ),
     seriousEventOffset: z
       .number()
@@ -1121,7 +1233,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
               .array(z.record(z.string(), z.unknown()))
               .optional()
               .describe(
-                'Outcome measures with per-group statistics. Summary mode (compact): type, title, timeFrame, paramType, dispersionType, unitOfMeasure, group/class counts, denoms (per-group denominators keyed by group title), topStats (the per-group cells of one class/category — each carrying the upstream value verbatim, including an NA/NR sentinel, plus spread, lowerLimit/upperLimit, and the record’s own comment when present), topStatsFrom (classTitle / categoryTitle naming where that cell came from, with omittedClasses / omittedCategories counts and a note pointing at summary=false when siblings were dropped), and topAnalysis (statisticalMethod, pValue, paramType/Value, ciPctValue/Lower/Upper, nonInferiorityType, groupIds — lifted from analyses[0]) when present. Full mode (default): adds raw groups, classes, categories, measurements, and analyses arrays.',
+                'Outcome measures with per-group statistics. Summary mode (compact): type, title, timeFrame, paramType, dispersionType, unitOfMeasure, groupCount / classCount, analysisCount (how many analyses the measure carries, when it has any), denoms (the whole measure’s per-group denominators keyed by group title), topStats (the per-group cells of one class/category — each carrying the upstream value verbatim, including an NA/NR sentinel, plus spread, lowerLimit/upperLimit, and the record’s own comment when present), topStatsFrom (classTitle / categoryTitle naming where that cell came from, classDenoms — that class’s own denominators, shaped like denoms, when upstream publishes them — omittedClasses / omittedCategories counts, and a note pointing at summary=false when siblings were dropped), and topAnalysis (statisticalMethod, pValue, paramType/Value, ciPctValue/Lower/Upper, nonInferiorityType, groupDescription naming the subgroup or comparison, groupIds, and groups — the compared groups’ titles in groupIds order — lifted from analyses[0]) when present. Every summary field is resolved per measure. Full mode (default): adds raw groups, classes, categories, measurements, and analyses arrays.',
               ),
             adverseEvents: z
               .record(z.string(), z.unknown())
@@ -1227,7 +1339,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
               })
               .optional()
               .describe(
-                'What the outcomeLimit / adverseEventLimit caps and the outcomeOffset / seriousEventOffset / otherEventOffset offsets trimmed on this study, plus the next offset for each list left short. Present only when a bound actually reduced a list — a window that started at zero and reached the end trimmed nothing. Absent means the payload is the complete upstream set for the requested sections. Offsets apply uniformly to every study in the call, so continuation is reported per study: each exhausts its lists at a different index.',
+                'What the outcomeLimit / adverseEventLimit caps and the outcomeOffset / seriousEventOffset / otherEventOffset offsets trimmed on this study, plus the next offset for each list left short. In summary mode only the outcome bounds apply. Present only when a bound actually reduced a list — a window that started at zero and reached the end trimmed nothing. Absent means the payload is the complete upstream set for the requested sections. Offsets apply uniformly to every study in the call, so continuation is reported per study: each exhausts its lists at a different index.',
               ),
           })
           .describe('Extracted results for one study.'),
@@ -1283,16 +1395,18 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     const sections: Section[] = requestedSections ?? [...VALID_SECTIONS];
 
     // An offset the call cannot honor is answered, not swallowed. Summary mode
-    // condenses every measure rather than returning a window, and a section the
-    // caller filtered out has no list to start from — either way the caller
-    // asked to resume a list this call never bounds, and a silently ignored
-    // offset returns page one again while the caller believes they advanced.
+    // ranks the whole adverse-event list into topEvents rather than returning
+    // a window of it (outcome summaries are per measure, so they window like
+    // full mode), and a section the caller filtered out has no list to start
+    // from — either way the caller asked to resume a list this call never
+    // bounds, and a silently ignored offset returns page one again while the
+    // caller believes they advanced.
     for (const [param, section] of OFFSET_SECTIONS) {
       if (input[param] == null) continue;
-      if (input.summary) {
+      if (input.summary && section === 'adverseEvents') {
         throw ctx.fail(
           'offset_not_applicable',
-          `Parameter '${param}' has no effect in summary mode, which returns a condensed projection of the whole '${section}' section rather than a bounded window of it.`,
+          `Parameter '${param}' has no effect in summary mode, which ranks the whole '${section}' event list into topEvents rather than returning a bounded window of it.`,
           { param },
         );
       }
@@ -1413,14 +1527,14 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
         const data = rs[moduleKey];
         if (data) {
           if (section === 'outcomes') {
-            const measures = (data.outcomeMeasures as Record<string, unknown>[] | undefined) ?? [];
-            entry.outcomes = input.summary
-              ? measures.map(summarizeOutcome)
-              : capOutcomes(
-                  measures,
-                  { limit: input.outcomeLimit, offset: input.outcomeOffset },
-                  meta,
-                );
+            // Windowed in both modes: summarizeOutcome is strictly per measure,
+            // so a window of summaries equals the summaries of the window.
+            const measures = capOutcomes(
+              (data.outcomeMeasures as Record<string, unknown>[] | undefined) ?? [],
+              { limit: input.outcomeLimit, offset: input.outcomeOffset },
+              meta,
+            );
+            entry.outcomes = input.summary ? measures.map(summarizeOutcome) : measures;
           } else if (input.summary) {
             if (section === 'adverseEvents') entry.adverseEvents = summarizeAdverseEvents(data);
             else if (section === 'participantFlow')
@@ -1470,7 +1584,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       // The requested ID leads — it is what the caller asked for — with the
       // canonical ID named beside it when following an alias landed elsewhere.
       const id = r.canonicalNctId ? `${r.nctId} (canonical ${r.canonicalNctId})` : r.nctId;
-      lines.push(`## ${id}: ${r.title}`);
+      lines.push(`## ${id}: ${oneLine(r.title)}`);
       if (!r.hasResults) {
         lines.push('No results available.\n');
         continue;

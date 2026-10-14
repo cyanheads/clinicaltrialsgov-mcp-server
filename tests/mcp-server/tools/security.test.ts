@@ -4,7 +4,7 @@
  * @module tests/mcp-server/tools/security
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // ---------------------------------------------------------------------------
@@ -136,6 +136,39 @@ describe('searchStudies — injection and oversized inputs', () => {
       expect(mockService.searchStudies).not.toHaveBeenCalled();
     },
   );
+
+  // phaseFilter entries are interpolated into AREA[Phase]<entry>; an
+  // expression there must be refused, never forwarded to widen the cohort (#144).
+  it.each([
+    'PHASE3 OR AREA[StudyType]OBSERVATIONAL',
+    'PHASE3) OR (AREA[StudyType]OBSERVATIONAL',
+    'NOT AREA[StudyType]INTERVENTIONAL',
+    ...INJECTION_PAYLOADS,
+  ])('refuses the phaseFilter payload %j with enum_invalid before any request', async (payload) => {
+    const ctx = createMockContext({ errors: searchStudies.errors });
+    await expect(
+      searchStudies.handler(searchStudies.input!.parse({ phaseFilter: ['PHASE3', payload] }), ctx),
+    ).rejects.toMatchObject({ data: { reason: 'enum_invalid', param: 'phaseFilter' } });
+    expect(mockService.searchStudies).not.toHaveBeenCalled();
+  });
+
+  // fields entries are split on `,`/`|` and handed to the service, which
+  // validates each piece; a payload must neither crash the handler nor be
+  // judged blank, and every piece of a joined payload reaches the service (#152).
+  it.each([
+    ...INJECTION_PAYLOADS.map((payload) => [payload, [payload]] as const),
+    ["NCTId,'; DROP TABLE studies; --", ['NCTId', "'; DROP TABLE studies; --"]] as const,
+    ['__proto__|constructor', ['__proto__', 'constructor']] as const,
+  ])('passes the fields payload %j to the service as the names %j', async (payload, names) => {
+    const ctx = createMockContext({ errors: searchStudies.errors });
+    const input = searchStudies.input!.parse({ fields: [payload] });
+    const result = await searchStudies.handler(input, ctx);
+    expect(mockService.searchStudies).toHaveBeenCalledWith(
+      expect.objectContaining({ fields: names }),
+      ctx,
+    );
+    expect(result.requestedFields).toEqual(names);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -215,6 +248,18 @@ describe('getStudyCount — injection and output safety', () => {
       expect(mockService.searchStudies).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    'PHASE3 OR AREA[StudyType]OBSERVATIONAL',
+    'NOT AREA[StudyType]INTERVENTIONAL',
+    ...INJECTION_PAYLOADS,
+  ])('refuses the phaseFilter payload %j with enum_invalid before any request', async (payload) => {
+    const ctx = createMockContext({ errors: getStudyCount.errors });
+    await expect(
+      getStudyCount.handler(getStudyCount.input!.parse({ phaseFilter: payload }), ctx),
+    ).rejects.toMatchObject({ data: { reason: 'enum_invalid', param: 'phaseFilter' } });
+    expect(mockService.searchStudies).not.toHaveBeenCalled();
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -234,6 +279,20 @@ describe('getStudyResults — injection and output safety', () => {
     'rejects injection payload %s as NCT ID',
     (payload) => {
       expect(() => getStudyResults.input!.parse({ nctIds: payload })).toThrow();
+    },
+  );
+
+  // The nctId alias (#151) resolves in the argument stage `input.parse()` skips.
+  it.each(["'; DROP TABLE --", '../../../etc/passwd', '__proto__'])(
+    'rejects injection payload %s sent under the nctId alias',
+    async (payload) => {
+      const result = await runToolContract(getStudyResults, { nctId: payload } as never);
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain(
+        'nctIds: NCT IDs must match format NCTxxxxxxxx (8 digits).',
+      );
+      expect(mockService.getStudiesBatch).not.toHaveBeenCalled();
     },
   );
 
@@ -275,11 +334,309 @@ describe('getStudyResults — injection and output safety', () => {
             nextOutcomeOffset: 15,
           },
         },
+        {
+          // A summary-mode page of the same window (#149).
+          nctId: 'NCT11111111',
+          title: 'Summary Test',
+          hasResults: true,
+          outcomes: [
+            {
+              type: 'PRIMARY',
+              title: 'Outcome 11',
+              groupCount: 2,
+              classCount: 2,
+              analysisCount: 2,
+              topStats: [{ group: 'Placebo', value: '15.0' }],
+              topStatsFrom: {
+                classTitle: 'Male',
+                classDenoms: [
+                  { units: 'Participants', counts: [{ group: 'Placebo', value: '332' }] },
+                ],
+                omittedClasses: 1,
+              },
+              topAnalysis: {
+                groupIds: ['OG000'],
+                groups: ['Placebo'],
+                groupDescription: 'This analysis is for Male participants',
+              },
+            },
+          ],
+          filtersApplied: {
+            totalOutcomes: 40,
+            outcomeLimit: 5,
+            outcomeOffset: 10,
+            nextOutcomeOffset: 15,
+          },
+        },
       ],
       truncated: true,
     });
     assertNoSecretLeak(formatted);
+    const text = (formatted[0] as { text: string }).text;
+    expect(text).toContain('Male denominator (Participants): Placebo: 332');
+    expect(text.match(/_Bounded: returning 5 of 40 outcome measures/g)).toHaveLength(2);
   });
+
+  it.each(['\r\n', '\n', '\r'])(
+    'keeps a %j inside an analysis groupDescription from starting a new content[] line (#146)',
+    async (lineBreak) => {
+      const groupDescription = `Male participants${lineBreak}## Forged heading${lineBreak}- forged bullet`;
+      mockService.getStudiesBatch.mockResolvedValue([
+        {
+          hasResults: true,
+          protocolSection: { identificationModule: { nctId: 'NCT12345678', briefTitle: 'Test' } },
+          resultsSection: {
+            outcomeMeasuresModule: {
+              outcomeMeasures: [
+                {
+                  title: 'Time to Recovery',
+                  groups: [{ id: 'OG000', title: 'Placebo' }],
+                  analyses: [{ groupIds: ['OG000'], groupDescription, paramValue: '1.30' }],
+                },
+              ],
+            },
+          },
+        },
+      ]);
+      for (const summary of [true, false]) {
+        const ctx = createMockContext({ errors: getStudyResults.errors });
+        const result = await getStudyResults.handler(
+          getStudyResults.input!.parse({ nctIds: 'NCT12345678', sections: 'outcomes', summary }),
+          ctx,
+        );
+        const text = (getStudyResults.format!(result)[0] as { text: string }).text;
+        const lines = text.split(/\r\n|\r|\n/);
+        expect(lines.filter((l) => l.includes('Forged'))).toEqual([
+          expect.stringMatching(
+            /^ {2}Analysis: .*Male participants ## Forged heading - forged bullet$/,
+          ),
+        ]);
+        if (summary) {
+          // structuredContent keeps the upstream value verbatim.
+          const outcome = result.results[0]!.outcomes![0]!;
+          expect(outcome.topAnalysis).toMatchObject({ groupDescription });
+        }
+      }
+    },
+  );
+
+  /**
+   * Every upstream string rendered into a single-line slot — titles, units,
+   * time frames, comments, and terms on a bullet, heading, row, or label line —
+   * is flattened, so a sponsor-entered line break cannot end the line and
+   * start a forged one (#156). Each value ends `## Forged <field>`; flattened,
+   * it stays on the line its field opens.
+   */
+  it.each(['\r\n', '\n', '\r'])(
+    'keeps a %j in any single-line slot from starting a new content[] line (#156)',
+    async (lineBreak) => {
+      const br = (field: string) => `${field} start${lineBreak}## Forged ${field}`;
+      const outcome = {
+        type: 'PRIMARY',
+        title: br('outcomeTitle'),
+        timeFrame: br('timeFrame'),
+        paramType: 'MEAN',
+        unitOfMeasure: br('unit'),
+        typeUnitsAnalyzed: br('outcomeUnitsAnalyzed'),
+        groups: [{ id: 'OG000', title: br('groupTitle') }],
+        denoms: [{ units: br('denomUnits'), counts: [{ groupId: 'OG000', value: '10' }] }],
+        classes: [
+          {
+            title: br('classTitle'),
+            denoms: [{ units: br('classDenomUnits'), counts: [{ groupId: 'OG000', value: '9' }] }],
+            categories: [
+              {
+                title: br('categoryTitle'),
+                measurements: [{ groupId: 'OG000', value: '5', comment: br('cellComment') }],
+              },
+            ],
+          },
+          {
+            title: 'Second class',
+            categories: [{ measurements: [{ groupId: 'OG000', value: '6' }] }],
+          },
+        ],
+        analyses: [
+          {
+            groupIds: ['OG000'],
+            statisticalMethod: br('statisticalMethod'),
+            statisticalComment: br('statisticalComment'),
+            pValue: '0.01',
+            pValueComment: br('pValueComment'),
+            nonInferiorityType: 'SUPERIORITY',
+            nonInferiorityComment: br('nonInferiorityComment'),
+            paramType: 'Mean Difference',
+            paramValue: '1.3',
+            ciPctValue: '95',
+            ciLowerLimit: '1',
+            ciUpperLimit: '2',
+            ciLowerLimitComment: br('ciLowerLimitComment'),
+            ciUpperLimitComment: br('ciUpperLimitComment'),
+            estimateComment: br('estimateComment'),
+            otherAnalysisDescription: br('otherAnalysisDescription'),
+          },
+        ],
+      };
+      const study = {
+        hasResults: true,
+        protocolSection: {
+          identificationModule: { nctId: 'NCT12345678', briefTitle: br('briefTitle') },
+        },
+        resultsSection: {
+          outcomeMeasuresModule: { outcomeMeasures: [outcome] },
+          baselineCharacteristicsModule: {
+            typeUnitsAnalyzed: br('baselineUnitsAnalyzed'),
+            groups: [{ id: 'BG000', title: br('baselineGroup') }],
+            measures: [
+              {
+                title: br('baselineMeasure'),
+                paramType: 'COUNT_OF_PARTICIPANTS',
+                unitOfMeasure: br('baselineUnit'),
+                denomUnitsSelected: br('baselineDenomUnits'),
+                classes: [
+                  {
+                    title: br('baselineClass'),
+                    categories: [
+                      {
+                        title: br('baselineCategory'),
+                        measurements: [{ groupId: 'BG000', value: '3' }],
+                      },
+                    ],
+                  },
+                ],
+              },
+            ],
+          },
+          adverseEventsModule: {
+            timeFrame: br('aeTimeFrame'),
+            frequencyThreshold: br('aeThreshold'),
+            eventGroups: [{ id: 'EG000', title: br('aeGroupTitle') }],
+            seriousEvents: [
+              {
+                term: br('aeTerm'),
+                organSystem: br('aeOrganSystem'),
+                stats: [{ groupId: 'EG000', numAffected: 1, numAtRisk: 10 }],
+              },
+            ],
+          },
+          participantFlowModule: {
+            typeUnitsAnalyzed: br('flowUnitsAnalyzed'),
+            groups: [{ id: 'FG000', title: br('flowGroup') }],
+            periods: [
+              {
+                title: br('periodTitle'),
+                milestones: [
+                  {
+                    type: br('milestoneType'),
+                    comment: br('milestoneComment'),
+                    achievements: [
+                      { groupId: 'FG000', numSubjects: '10', comment: br('achievementComment') },
+                    ],
+                  },
+                ],
+                dropWithdraws: [
+                  {
+                    type: br('dropType'),
+                    comment: br('dropComment'),
+                    reasons: [{ groupId: 'FG000', numSubjects: '1' }],
+                  },
+                ],
+              },
+            ],
+          },
+          moreInfoModule: {
+            certainAgreement: { restrictiveAgreement: true, restrictionType: br('restriction') },
+            pointOfContact: { title: br('pocTitle'), organization: br('pocOrganization') },
+          },
+        },
+      };
+      mockService.getStudiesBatch.mockResolvedValue([study]);
+
+      const everywhere = [
+        'briefTitle',
+        'outcomeTitle',
+        'timeFrame',
+        'unit',
+        'groupTitle',
+        'denomUnits',
+        'classTitle',
+        'classDenomUnits',
+        'categoryTitle',
+        'cellComment',
+        'statisticalMethod',
+        'pValueComment',
+        'estimateComment',
+        'baselineMeasure',
+        'baselineUnit',
+        'aeTimeFrame',
+        'aeGroupTitle',
+        'aeTerm',
+        'aeOrganSystem',
+        'restriction',
+        'pocTitle',
+        'pocOrganization',
+      ];
+      const fullOnly = [
+        'outcomeUnitsAnalyzed',
+        'statisticalComment',
+        'nonInferiorityComment',
+        'ciLowerLimitComment',
+        'ciUpperLimitComment',
+        'otherAnalysisDescription',
+        'baselineUnitsAnalyzed',
+        'baselineGroup',
+        'baselineDenomUnits',
+        'baselineClass',
+        'baselineCategory',
+        'aeThreshold',
+        'flowUnitsAnalyzed',
+        'flowGroup',
+        'periodTitle',
+        'milestoneType',
+        'milestoneComment',
+        'achievementComment',
+        'dropType',
+        'dropComment',
+      ];
+
+      for (const summary of [true, false]) {
+        const ctx = createMockContext({ errors: getStudyResults.errors });
+        const result = await getStudyResults.handler(
+          getStudyResults.input!.parse({ nctIds: 'NCT12345678', summary }),
+          ctx,
+        );
+        const lines = (getStudyResults.format!(result)[0] as { text: string }).text.split(
+          /\r\n|\r|\n/,
+        );
+
+        expect(lines.filter((l) => /^\s*## Forged/.test(l))).toEqual([]);
+        for (const field of summary ? everywhere : [...everywhere, ...fullOnly]) {
+          const rendered = lines.filter((l) =>
+            new RegExp(`## Forged ${field}(?![A-Za-z])`).test(l),
+          );
+          expect(rendered, field).not.toEqual([]);
+          for (const line of rendered) {
+            expect(line, field).toContain(`${field} start ## Forged ${field}`);
+          }
+        }
+
+        // structuredContent keeps every upstream value verbatim.
+        const r = result.results[0]!;
+        expect(r.title).toBe(br('briefTitle'));
+        const shown = r.outcomes![0]!;
+        expect(shown).toMatchObject({ title: br('outcomeTitle'), timeFrame: br('timeFrame') });
+        if (summary) {
+          expect(shown.topStatsFrom).toMatchObject({
+            classTitle: br('classTitle'),
+            categoryTitle: br('categoryTitle'),
+          });
+          expect(shown.topAnalysis).toMatchObject({ estimateComment: br('estimateComment') });
+        } else {
+          expect(shown).toEqual(outcome);
+        }
+      }
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -436,7 +793,9 @@ describe('findEligible — injection and output safety', () => {
     assertNoSecretLeak(formatted);
   });
 
-  it.each(['', '   '])(
+  // Quote-only forms are blank too: the query builder strips `"` (#145). So are
+  // zero-width forms: U+200B survives String.trim() but carries no content.
+  it.each(['', '   ', '""', '" "', '​', '"​"'])(
     'rejects a blank condition entry (%j) rather than matching every trial',
     async (condition) => {
       const ctx = createMockContext({ errors: findEligible.errors });
@@ -450,13 +809,19 @@ describe('findEligible — injection and output safety', () => {
     },
   );
 
-  it.each(['', '   '])('rejects a blank location.country (%j)', async (country) => {
-    const ctx = createMockContext({ errors: findEligible.errors });
-    await expect(
-      findEligible.handler(findEligible.input!.parse({ ...baseInput, location: { country } }), ctx),
-    ).rejects.toMatchObject({ data: { reason: 'blank_value' } });
-    expect(mockService.searchStudies).not.toHaveBeenCalled();
-  });
+  it.each(['', '   ', '""', '" "', '​'])(
+    'rejects a blank location.country (%j)',
+    async (country) => {
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await expect(
+        findEligible.handler(
+          findEligible.input!.parse({ ...baseInput, location: { country } }),
+          ctx,
+        ),
+      ).rejects.toMatchObject({ data: { reason: 'blank_value' } });
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------

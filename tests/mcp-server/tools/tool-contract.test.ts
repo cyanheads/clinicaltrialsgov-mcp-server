@@ -525,6 +525,18 @@ describe('service-thrown reasons carry the declaring tool hint on the wire', () 
       run: () => runToolContract(searchStudies, { conditionQuery: 'diabetes', sort: 'Bogus:desc' }),
     },
     {
+      name: 'search_studies page_token_invalid',
+      reason: 'page_token_invalid' as const,
+      arrange: () =>
+        mockService.searchStudies.mockRejectedValue(
+          validationError('ClinicalTrials.gov rejected pageToken as malformed.', {
+            reason: 'page_token_invalid',
+          }),
+        ),
+      run: () =>
+        runToolContract(searchStudies, { conditionQuery: 'ALS', pageToken: 'invalidtoken' }),
+    },
+    {
       name: 'get_study_count query_parse_error',
       reason: 'query_parse_error' as const,
       arrange: () =>
@@ -646,5 +658,47 @@ describe('strict tool inputs', () => {
         path: ['nearLocation'],
       }),
     );
+  });
+});
+
+/**
+ * The advertised `required` list must name every root key the input schema
+ * refuses to go without. It is emitted from the declared input type, so a
+ * wrapper the emitter reads as optional — a union over `z.preprocess()`
+ * members — can drop a required key from `tools/list` while every call that
+ * omits it still fails -32602 (#154). Read through the Standard Schema hook
+ * the framework hands the SDK to advertise.
+ */
+describe('advertised required inputs (#154)', () => {
+  const advertisedRequired = (schema: { '~standard': unknown }) =>
+    (
+      schema['~standard'] as {
+        jsonSchema: { input(o: { target: 'draft-2020-12' }): { required?: string[] } };
+      }
+    ).jsonSchema.input({ target: 'draft-2020-12' }).required ?? [];
+
+  it.each([
+    searchStudies,
+    getStudy,
+    getStudyResults,
+    getFieldValues,
+    getFieldDefinitions,
+    getStudyCount,
+    findEligible,
+  ])('$name lists every key a call cannot omit', (definition) => {
+    const shape = definition.input.shape as Record<
+      string,
+      { safeParse(value: unknown): { success: boolean } }
+    >;
+    const requiredAtRuntime = Object.keys(shape).filter(
+      (key) => !shape[key]!.safeParse(undefined).success,
+    );
+
+    expect(advertisedRequired(definition.input)).toEqual(requiredAtRuntime);
+  });
+
+  it('get_study_results requires nctIds as get_study_record requires nctId', () => {
+    expect(advertisedRequired(getStudyResults.input)).toEqual(['nctIds']);
+    expect(advertisedRequired(getStudy.input)).toEqual(['nctId']);
   });
 });

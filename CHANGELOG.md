@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.10.0](changelog/2.10.x/2.10.0.md) — 2026-10-14 · ⚠️ Breaking
+
+Input normalization for phaseFilter and fields, typed page_token_invalid errors, find_eligible results framed as candidates, and get_study_results summaries that keep subgroup denominators, analysis identity, and outcome paging. Breaking: some phaseFilter and conditions inputs 2.9.11 accepted are now rejected.
+
 ## [2.9.11](changelog/2.9.x/2.9.11.md) — 2026-10-05
 
 Moves to mcp-ts-core 0.13.12: tool error results name their request ID, client-facing error data no longer carries stack traces or request context, and the Docker image installs dependencies on the build platform with musl bindings pruned.

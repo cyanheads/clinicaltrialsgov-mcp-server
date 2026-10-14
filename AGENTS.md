@@ -2,9 +2,9 @@
 
 **Server:** clinicaltrialsgov-mcp-server
 **Version:** 2.9.11
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.12`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.15`
 **Engines:** Bun ≥1.4.0, Node ≥24.0.0
-**MCP SDK:** `@modelcontextprotocol/server` ^2.2.0
+**MCP SDK:** `@modelcontextprotocol/server` ^2.3.1
 **Zod:** ^4.6.5
 
 > **Read the framework docs first:** `node_modules/@cyanheads/mcp-ts-core/CLAUDE.md` contains the full API reference — builders, Context, error codes, exports, patterns. This file covers server-specific conventions only.
@@ -286,7 +286,7 @@ src/
   mcp-server/
     tools/definitions/
       search-studies.tool.ts            # clinicaltrials_search_studies
-      get-study.tool.ts                 # clinicaltrials_get_study
+      get-study.tool.ts                 # clinicaltrials_get_study_record
       get-study-results.tool.ts         # clinicaltrials_get_study_results
       get-field-values.tool.ts          # clinicaltrials_get_field_values
       get-field-definitions.tool.ts     # clinicaltrials_get_field_definitions
@@ -359,6 +359,8 @@ Available skills:
 | `api-workers`            | Cloudflare Workers runtime                                                                 |
 | `techniques`             | Catalog of response/data-shaping techniques — overflow handling, payload shaping, retrieval patterns |
 | `orchestrations`         | Chain task skills into a gated multi-phase pipeline — build-out, QA-fix, update-ship — when you can spawn sub-agents |
+
+**Chaining skills into pipelines.** When the user wants a multi-phase effort — build this server out, QA-and-fix the surface, update-and-ship — *and you can spawn sub-agents*, `framework-skills/orchestrations/SKILL.md` sequences the task skills above into a gated pipeline with verification at each step. Read it to drive the run. Optional: skip it if you can't orchestrate sub-agents, and ignore it entirely if you were *spawned* as one — you've already been scoped to a single phase.
 
 When you complete a skill's checklist, check the boxes and add a completion timestamp at the end (e.g., `Completed: 2026-03-11`).
 

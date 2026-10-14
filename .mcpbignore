@@ -13,3 +13,10 @@
 /biome.json
 /tsconfig*.json
 /vitest.config.ts
+/tests/
+/src/
+/scripts/
+/.husky/
+/.github/
+/.vscode/
+/.codex/

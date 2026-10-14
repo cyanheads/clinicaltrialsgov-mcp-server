@@ -1,13 +1,13 @@
 <div align="center">
   <h1>clinicaltrialsgov-mcp-server</h1>
-  <p><b>Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to eligible trials via MCP. STDIO or Streamable HTTP.</b>
+  <p><b>Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to candidate trials via MCP. STDIO or Streamable HTTP.</b>
   <div>7 Tools • 1 Resource • 1 Prompt</div>
   </p>
 </div>
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-2.9.11-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.2.0-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.2-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-2.9.11-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -29,7 +29,7 @@
 
 ## Overview
 
-Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — the US National Library of Medicine's registry of 600K+ clinical trial studies. Search trials, fetch full study records and posted results, discover field names and valid values, and match patient demographics to eligible recruiting trials. Public, read-only, no authentication required. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — the US National Library of Medicine's registry of 600K+ clinical trial studies. Search trials, fetch full study records and posted results, discover field names and valid values, and match patient demographics to candidate recruiting trials. Public, read-only, no authentication required. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
 
 ### Tools
 
@@ -41,7 +41,7 @@ Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltr
 | `clinicaltrials_get_field_values` | Discover valid values for API fields, with per-value study counts |
 | `clinicaltrials_get_field_definitions` | Resolve valid field names — keyword search, path drill-down, or top-level overview |
 | `clinicaltrials_get_study_results` | Fetch posted results — outcomes, adverse events, participant flow, baseline — for completed studies |
-| `clinicaltrials_find_eligible` | Match patient demographics and conditions to eligible recruiting trials |
+| `clinicaltrials_find_eligible` | Match patient demographics and conditions to candidate recruiting trials, without checking inclusion/exclusion criteria |
 
 ### Resources
 
@@ -59,9 +59,9 @@ Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltr
 
 ### `clinicaltrials_search_studies` <sub>tool</sub>
 
-- Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`, `statusFilter` / `phaseFilter` enums, `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]`), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix); `pageSize` 1–200 (default 10), `pageToken` cursor, `sort` on up to 2 fields
+- Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`, `statusFilter` / `phaseFilter` enums (case and spacing variants accepted; a `phaseFilter` entry that names no phase, such as an `OR` expression, fails as `enum_invalid`), `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]`), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix); `pageSize` 1–200 (default 10), `pageToken` cursor, `sort` on up to 2 fields
 - Returns a compact per-study index by default (`nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `hasResults`, …); `fields` (PascalCase leaves) selects a full-fidelity projection — full records run ~70KB
-- Typed errors: `blank_value`, `ids_not_found`, `field_invalid`, `enum_invalid`, `query_parse_error`, `geo_invalid`, `sort_invalid`, `rate_limited`
+- Typed errors: `blank_value`, `ids_not_found`, `field_invalid`, `enum_invalid`, `query_parse_error`, `geo_invalid`, `sort_invalid`, `page_token_invalid`, `rate_limited`
 
 ---
 
@@ -104,6 +104,7 @@ Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltr
 
 - `age`, `sex` (`FEMALE` / `MALE` / `ALL`), `conditions[]`, `location` (`country` required, `state` / `city` optional), `healthyVolunteer`, `recruitingOnly` (default true), `maxResults` (≤50), `locationLimit` (≤500)
 - Each candidate's locations are bounded to the sites matching the requested location, plus one recruiting site when none of those is open; `funnel` reports match counts per filter stage (condition → +location → +demographics)
+- Candidates are matched on age, sex, location, recruitment status, and a fuzzy condition search; a `notice` on every non-empty response says inclusion/exclusion criteria were not checked and points to `clinicaltrials_get_study_record` for review
 - Typed errors: `blank_value`, `rate_limited`
 
 ---
@@ -129,7 +130,7 @@ ClinicalTrials.gov-specific:
 
 - Type-safe client for the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — public, no authentication or API keys required
 - Serialized request queue enforcing ClinicalTrials.gov's ~1 req/sec rate limit, with retry and exponential backoff on 429/5xx responses
-- Auto-corrects field names passed to `fields`/`sort` — case/whitespace fixes and known legacy aliases (e.g. `RecruitmentStatus` → `OverallStatus`) — before validating, logging every correction
+- Auto-corrects field names passed to `fields`/`sort` — case/whitespace fixes and known legacy aliases (e.g. `RecruitmentStatus` → `OverallStatus`) — before validating, logging every correction; a comma- or pipe-joined `fields` entry (`"NCTId,BriefTitle"`) is split into separate names first, each name kept once
 - Detects upstream HTML error pages returned with a JSON content-type and retries rather than parsing them as data
 - Geographic proximity search and nearest-site re-ranking, with no geocoding dependency
 - Excludes ClinicalTrials.gov's "unknown" enrollment sentinel (`99999999`) from searches and counts by default — `includeUnknownEnrollment` brings it back, and an `nctIds` lookup never filters it

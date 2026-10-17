@@ -29,7 +29,7 @@
 
 ## Overview
 
-Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — the US National Library of Medicine's registry of 600K+ clinical trial studies. Search trials, fetch full study records and posted results, discover field names and valid values, and match patient demographics to candidate recruiting trials. Public, read-only, no authentication required. Runs as a stdio process, a local Streamable HTTP server, or the public hosted endpoint above.
+Search 600K+ studies on [ClinicalTrials.gov](https://clinicaltrials.gov/), the US National Library of Medicine's trial registry. Fetch full study records and posted results, discover fields and valid values, and match a patient's profile to recruiting trials. No API key required.
 
 ### Tools
 
@@ -59,7 +59,7 @@ Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltr
 
 ### `clinicaltrials_search_studies` <sub>tool</sub>
 
-- Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`, `statusFilter` / `phaseFilter` enums (case and spacing variants accepted; a `phaseFilter` entry that names no phase, such as an `OR` expression, fails as `enum_invalid`), `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]`), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix); `pageSize` 1–200 (default 10), `pageToken` cursor, `sort` on up to 2 fields
+- Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`, `statusFilter` / `phaseFilter` enums (case and spacing variants accepted), `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]`), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix); `pageSize` 1–200 (default 10), `pageToken` cursor, `sort` on up to 2 fields
 - Returns a compact per-study index by default (`nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `hasResults`, …); `fields` (PascalCase leaves) selects a full-fidelity projection — full records run ~70KB
 - Typed errors: `blank_value`, `ids_not_found`, `field_invalid`, `enum_invalid`, `query_parse_error`, `geo_invalid`, `sort_invalid`, `page_token_invalid`, `rate_limited`
 
@@ -103,8 +103,7 @@ Clinical trial data from the [ClinicalTrials.gov REST API v2](https://clinicaltr
 ### `clinicaltrials_find_eligible` <sub>tool</sub>
 
 - `age`, `sex` (`FEMALE` / `MALE` / `ALL`), `conditions[]`, `location` (`country` required, `state` / `city` optional), `healthyVolunteer`, `recruitingOnly` (default true), `maxResults` (≤50), `locationLimit` (≤500)
-- Each candidate's locations are bounded to the sites matching the requested location, plus one recruiting site when none of those is open; `funnel` reports match counts per filter stage (condition → +location → +demographics)
-- Candidates are matched on age, sex, location, recruitment status, and a fuzzy condition search; a `notice` on every non-empty response says inclusion/exclusion criteria were not checked and points to `clinicaltrials_get_study_record` for review
+- Matches on age, sex, location, recruitment status, and a fuzzy condition search; `funnel` reports match counts per filter stage, and a `notice` says inclusion/exclusion criteria were not checked (use `clinicaltrials_get_study_record` to review them)
 - Typed errors: `blank_value`, `rate_limited`
 
 ---
@@ -129,18 +128,17 @@ Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): s
 ClinicalTrials.gov-specific:
 
 - Type-safe client for the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — public, no authentication or API keys required
-- Serialized request queue enforcing ClinicalTrials.gov's ~1 req/sec rate limit, with retry and exponential backoff on 429/5xx responses
-- Auto-corrects field names passed to `fields`/`sort` — case/whitespace fixes and known legacy aliases (e.g. `RecruitmentStatus` → `OverallStatus`) — before validating, logging every correction; a comma- or pipe-joined `fields` entry (`"NCTId,BriefTitle"`) is split into separate names first, each name kept once
-- Detects upstream HTML error pages returned with a JSON content-type and retries rather than parsing them as data
+- Serialized request queue enforcing ClinicalTrials.gov's ~1 req/sec rate limit, with retry and exponential backoff on 429/5xx responses and HTML error pages
+- Auto-corrects field names passed to `fields`/`sort` (case, whitespace, legacy aliases like `RecruitmentStatus` → `OverallStatus`) and logs each correction
 - Geographic proximity search and nearest-site re-ranking, with no geocoding dependency
-- Excludes ClinicalTrials.gov's "unknown" enrollment sentinel (`99999999`) from searches and counts by default — `includeUnknownEnrollment` brings it back, and an `nctIds` lookup never filters it
+- Excludes the "unknown" enrollment sentinel (`99999999`) from searches and counts by default; `includeUnknownEnrollment` brings it back
 
 Agent-friendly output:
 
-- Provenance — `clinicaltrials_search_studies` / `clinicaltrials_get_study_count` / `clinicaltrials_find_eligible` echo `searchCriteria` on every call, including `sentinelFilterActive` when the default unknown-enrollment exclusion applies, and `clinicaltrials_get_study_results` names `canonicalNctId` when a previous (alias) ID resolves to a different study
-- Graceful partial failure — `clinicaltrials_get_study_results` returns per-study `fetchErrors` / `studiesWithoutResults` rows instead of failing the whole batch when one ID is malformed or lacks results
-- Discriminated output — typed error `reason` codes per tool (`study_not_found`, `blank_value`, `offset_not_applicable`, …), and bounded lists (`filtersApplied`, `locationSummary`) carry a `next*Offset` only when more remains, so callers branch on presence instead of parsing text
-- Response shaping — `clinicaltrials_search_studies` and `clinicaltrials_find_eligible` return a compact per-study index or location-bounded set by default instead of the ~70KB full record, escalating to full fidelity only via `fields` or `clinicaltrials_get_study_record`
+- Provenance — search, count, and eligibility tools echo `searchCriteria`; `clinicaltrials_get_study_results` names `canonicalNctId` when an alias ID resolves to another study
+- Graceful partial failure — `clinicaltrials_get_study_results` returns per-study `fetchErrors` / `studiesWithoutResults` instead of failing the whole batch
+- Typed errors — each tool returns `reason` codes (`study_not_found`, `blank_value`, …), and bounded lists carry a `next*Offset` only when more remains
+- Response shaping — search and eligibility return a compact index by default instead of the ~70KB full record
 
 ## Getting started
 
@@ -258,8 +256,8 @@ All configuration is optional — the server works with defaults and no API keys
 | `MCP_LOG_LEVEL` | Log level (RFC 5424). | `info` |
 | `LOGS_DIR` | Directory for log files (Node.js only). | `<project-root>/logs` |
 | `OTEL_ENABLED` | Enable OpenTelemetry tracing. | `false` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP base URL; traces export to `/v1/traces`, metrics to `/v1/metrics`. Unset exports nothing. | — |
-| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | Opt-in OTLP log export; the base endpoint never enables it. | — |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP base URL for traces and metrics. | — |
+| `OTEL_EXPORTER_OTLP_LOGS_ENDPOINT` | OTLP endpoint for log export. | — |
 | `LOG_TOOL_FAILURE_PAYLOADS` | Log each failed tool call's arguments and result, redacted by key name and capped at `LOG_TOOL_FAILURE_PAYLOAD_MAX_BYTES` (default `16384`). A secret inside a free-form value is not redacted. | `false` |
 
 See [`.env.example`](./.env.example) for the full list of optional overrides.

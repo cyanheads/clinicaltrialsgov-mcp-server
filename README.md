@@ -7,7 +7,7 @@
 
 <div align="center">
 
-[![Version](https://img.shields.io/badge/Version-2.10.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.3-blueviolet.svg?style=flat-square)](https://bun.sh/)
+[![Version](https://img.shields.io/badge/Version-2.10.0-blue.svg?style=flat-square)](./CHANGELOG.md) [![License](https://img.shields.io/badge/License-Apache%202.0-orange.svg?style=flat-square)](./LICENSE) [![Docker](https://img.shields.io/badge/Docker-ghcr.io-2496ED?style=flat-square&logo=docker&logoColor=white)](https://github.com/users/cyanheads/packages/container/package/clinicaltrialsgov-mcp-server) [![MCP SDK](https://img.shields.io/badge/MCP%20SDK-^2.3.1-green.svg?style=flat-square)](https://modelcontextprotocol.io/) [![npm](https://img.shields.io/npm/v/clinicaltrialsgov-mcp-server?style=flat-square&logo=npm&logoColor=white)](https://www.npmjs.com/package/clinicaltrialsgov-mcp-server) [![TypeScript](https://img.shields.io/badge/TypeScript-^7.0.2-3178C6.svg?style=flat-square)](https://www.typescriptlang.org/) [![Bun](https://img.shields.io/badge/Bun-v1.4.4-blueviolet.svg?style=flat-square)](https://bun.sh/)
 
 </div>
 
@@ -59,7 +59,7 @@ Search 600K+ studies on [ClinicalTrials.gov](https://clinicaltrials.gov/), the U
 
 ### `clinicaltrials_search_studies` <sub>tool</sub>
 
-- Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`, `statusFilter` / `phaseFilter` enums (case and spacing variants accepted), `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]`), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix); `pageSize` 1–200 (default 10), `pageToken` cursor, `sort` on up to 2 fields
+- Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`, `statusFilter` / `phaseFilter` enums (case and spacing variants accepted), `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]`), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix); `pageSize` 1–1000 (default 10; above the server's per-page cap, 200 by default, a page is served at the cap with `truncated` / `shown` / `cap`), `pageToken` cursor, `sort` on up to 2 fields
 - Returns a compact per-study index by default (`nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `hasResults`, …); `fields` (PascalCase leaves) selects a full-fidelity projection — full records run ~70KB
 - Typed errors: `blank_value`, `ids_not_found`, `field_invalid`, `enum_invalid`, `query_parse_error`, `geo_invalid`, `sort_invalid`, `page_token_invalid`, `rate_limited`
 
@@ -67,7 +67,7 @@ Search 600K+ studies on [ClinicalTrials.gov](https://clinicaltrials.gov/), the U
 
 ### `clinicaltrials_get_study_record` <sub>tool</sub>
 
-- Full protocol record by `nctId`, with optional `locationLimit` (≤500), `outcomeLimit` / `referenceLimit` (≤100), and `nearLocation` (`lat`, `lon`, `radiusMi`) to bound and sort locations
+- Full protocol record by `nctId`, with optional `locationLimit`, `outcomeLimit` / `referenceLimit`, and `nearLocation` (`lat`, `lon`, `radiusMi`) to bound and sort locations — none has an upper bound; a value past the list returns all of it
 - `filtersApplied` reports upstream totals when a cap trims a list; `resultsSection` is replaced by `resultsSummary` counts. Typed errors: `study_not_found`, `rate_limited`
 
 ---
@@ -82,27 +82,28 @@ Search 600K+ studies on [ClinicalTrials.gov](https://clinicaltrials.gov/), the U
 ### `clinicaltrials_get_field_values` <sub>tool</sub>
 
 - One or more PascalCase `fields` (e.g. `OverallStatus`, `Phase`) — returns each field's type and top values with study counts (capped at 250 by the API), or `min` / `max` / `avg` for numeric and date fields and `trueCount` / `falseCount` for booleans
+- STRING fields add their `longest` value; past 2,000 characters it is a preview flagged `truncated`, with the full `length` and a notice naming the `clinicaltrials_search_studies` call that returns the whole text. Free-text fields the API does not count distinct values on carry `uniqueValuesCounted: false`, marking their `uniqueValuesCount` of 0 as no count
 - `multiValued` flags fields whose per-value counts can sum above the study total. Typed errors: `blank_value`, `field_invalid`, `rate_limited`
 
 ---
 
 ### `clinicaltrials_get_field_definitions` <sub>tool</sub>
 
-- `mode`: `search` (keyword `query`, `limit` ≤100, default 20), `drill` (dot-notation `path`), or `overview` — resolves the PascalCase names accepted by `fields`, `advancedFilter`, `sort`, and `clinicaltrials_get_field_values`
+- `mode`: `search` (keyword `query`, `limit` default 20, no upper bound), `drill` (dot-notation `path`), or `overview` — resolves the PascalCase names accepted by `fields`, `advancedFilter`, `sort`, and `clinicaltrials_get_field_values`
 - Typed errors: `blank_value`, `mode_mismatch`, `mode_requires`, `path_not_found`, `rate_limited`
 
 ---
 
 ### `clinicaltrials_get_study_results` <sub>tool</sub>
 
-- Up to 20 `nctIds` per call; `sections` (`outcomes`, `adverseEvents`, `participantFlow`, `baseline`, `moreInfo`), `summary` to condense a result set that can exceed 500KB per study, and `outcomeLimit` (≤100) / `adverseEventLimit` (≤500) with resumable `outcomeOffset` / `seriousEventOffset` / `otherEventOffset`
+- Up to 20 distinct `nctIds` fetched per call, with any further IDs (up to 500 entries) returned in `deferredNctIds`; `sections` (`outcomes`, `adverseEvents`, `participantFlow`, `baseline`, `moreInfo`), `summary` to condense a result set that can exceed 500KB per study, and `outcomeLimit` / `adverseEventLimit` with resumable `outcomeOffset` / `seriousEventOffset` / `otherEventOffset`
 - Per-study `fetchErrors` / `studiesWithoutResults` instead of a whole-batch failure, and `canonicalNctId` when an alias ID resolves to another study. Typed errors: `blank_value`, `offset_not_applicable`, `rate_limited`
 
 ---
 
 ### `clinicaltrials_find_eligible` <sub>tool</sub>
 
-- `age`, `sex` (`FEMALE` / `MALE` / `ALL`), `conditions[]`, `location` (`country` required, `state` / `city` optional), `healthyVolunteer`, `recruitingOnly` (default true), `maxResults` (≤50), `locationLimit` (≤500)
+- `age` (whole number 0–120) with optional `ageUnit` (`years` default, `months`, `weeks`, `days`) for infants and young children, `sex` (`FEMALE` / `MALE` / `ALL`), `conditions[]`, `location` (`country` required, `state` / `city` optional), `healthyVolunteer`, `recruitingOnly` (default true), `maxResults` (up to 1000; each call returns at most 50, disclosing the rest via `truncated` / `shown` / `cap` and a replayable `searchCriteria`), `locationLimit` (no upper bound; a value past the matched sites returns them all)
 - Matches on age, sex, location, recruitment status, and a fuzzy condition search; `funnel` reports match counts per filter stage, and a `notice` says inclusion/exclusion criteria were not checked (use `clinicaltrials_get_study_record` to review them)
 - Typed errors: `blank_value`, `rate_limited`
 
@@ -247,8 +248,8 @@ All configuration is optional — the server works with defaults and no API keys
 | Variable | Description | Default |
 |:---|:---|:---|
 | `CT_API_BASE_URL` | ClinicalTrials.gov API base URL. | `https://clinicaltrials.gov/api/v2` |
-| `CT_REQUEST_TIMEOUT_MS` | Per-request timeout in milliseconds. | `30000` |
-| `CT_MAX_PAGE_SIZE` | Maximum page size cap. | `200` |
+| `CT_REQUEST_TIMEOUT_MS` | Per-request timeout in milliseconds; a positive integer. | `30000` |
+| `CT_MAX_PAGE_SIZE` | Most studies one `clinicaltrials_search_studies` page returns; an integer ≥ 1, values above 1000 clamp to 1000. | `200` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for HTTP server. | `3010` |
 | `MCP_SESSION_MODE` | HTTP session mode: `stateless`, `stateful`, or `auto`. | `stateless` |

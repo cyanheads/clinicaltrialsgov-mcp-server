@@ -46,14 +46,14 @@
     },
     "CT_REQUEST_TIMEOUT_MS": {
       "title": "Request timeout (ms)",
-      "description": "Per-request timeout in milliseconds.",
+      "description": "Per-request timeout in milliseconds; a positive integer.",
       "type": "string",
       "required": false,
       "default": "30000"
     },
     "CT_MAX_PAGE_SIZE": {
       "title": "Maximum page size",
-      "description": "Maximum page size cap for API responses.",
+      "description": "Most studies one clinicaltrials_search_studies page returns; an integer of at least 1, values above 1000 clamp to 1000.",
       "type": "string",
       "required": false,
       "default": "200"

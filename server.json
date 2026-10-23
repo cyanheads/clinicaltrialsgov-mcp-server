@@ -30,14 +30,14 @@
         },
         {
           "name": "CT_REQUEST_TIMEOUT_MS",
-          "description": "Per-request timeout in milliseconds.",
+          "description": "Per-request timeout in milliseconds; a positive integer.",
           "format": "string",
           "isRequired": false,
           "default": "30000"
         },
         {
           "name": "CT_MAX_PAGE_SIZE",
-          "description": "Maximum page size cap.",
+          "description": "Most studies one clinicaltrials_search_studies page returns; an integer of at least 1, values above 1000 clamp to 1000.",
           "format": "string",
           "isRequired": false,
           "default": "200"
@@ -76,14 +76,14 @@
         },
         {
           "name": "CT_REQUEST_TIMEOUT_MS",
-          "description": "Per-request timeout in milliseconds.",
+          "description": "Per-request timeout in milliseconds; a positive integer.",
           "format": "string",
           "isRequired": false,
           "default": "30000"
         },
         {
           "name": "CT_MAX_PAGE_SIZE",
-          "description": "Maximum page size cap.",
+          "description": "Most studies one clinicaltrials_search_studies page returns; an integer of at least 1, values above 1000 clamp to 1000.",
           "format": "string",
           "isRequired": false,
           "default": "200"

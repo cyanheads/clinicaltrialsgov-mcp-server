@@ -180,6 +180,8 @@ export const analyzeTrialLandscape = prompt("analyze_trial_landscape", {
 import { z } from "@cyanheads/mcp-ts-core";
 import { parseEnvConfig } from "@cyanheads/mcp-ts-core/config";
 
+export const UPSTREAM_MAX_PAGE_SIZE = 1000;
+
 const ServerConfigSchema = z.object({
   apiBaseUrl: z
     .string()
@@ -187,9 +189,19 @@ const ServerConfigSchema = z.object({
     .describe("ClinicalTrials.gov API base URL"),
   requestTimeoutMs: z.coerce
     .number()
+    .int()
+    .positive()
     .default(30000)
     .describe("Per-request timeout in ms"),
-  maxPageSize: z.coerce.number().default(200).describe("Maximum page size cap"),
+  maxPageSize: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .transform((n) => Math.min(n, UPSTREAM_MAX_PAGE_SIZE))
+    .default(200)
+    .describe(
+      `Most studies one clinicaltrials_search_studies page returns; values above ${UPSTREAM_MAX_PAGE_SIZE} clamp to it`,
+    ),
 });
 
 let _config: z.infer<typeof ServerConfigSchema> | undefined;
@@ -204,6 +216,8 @@ export function getServerConfig() {
 ```
 
 `parseEnvConfig` maps Zod schema paths → env var names so validation errors name the actual variable (`CT_API_BASE_URL`) rather than the internal path (`apiBaseUrl`).
+
+Never call `getServerConfig()` at module scope. Tool definitions import before `createApp()` runs, so a module-scope call parses every `CT_*` variable there and a bad value escapes as an uncaught stack instead of the framework's startup configuration banner. Config is first parsed in `setup()` via `initClinicalTrialsService()`; a handler that needs a config value reads it from the service at request time (as `clinicaltrials_search_studies` reads `service.maxPageSize`), and a schema bound is a static constant.
 
 ### Session posture and shutdown
 
@@ -442,6 +456,7 @@ security: false                            # optional — true ONLY for a source
 bun publish --access public
 
 docker buildx build --platform linux/amd64,linux/arm64 \
+  --build-arg APP_VERSION=<version> \
   -t ghcr.io/cyanheads/clinicaltrialsgov-mcp-server:<version> \
   -t ghcr.io/cyanheads/clinicaltrialsgov-mcp-server:latest \
   --push .
@@ -469,8 +484,8 @@ import { getServerConfig } from "@/config/server-config.js";
 | Env Var                      | Required | Default                             | Description                              |
 | :--------------------------- | :------- | :---------------------------------- | :--------------------------------------- |
 | `CT_API_BASE_URL`            | No       | `https://clinicaltrials.gov/api/v2` | API base URL override                    |
-| `CT_REQUEST_TIMEOUT_MS`      | No       | `30000`                             | Per-request timeout in ms                |
-| `CT_MAX_PAGE_SIZE`           | No       | `200`                               | Maximum page size cap                    |
+| `CT_REQUEST_TIMEOUT_MS`      | No       | `30000`                             | Per-request timeout in ms; a positive integer |
+| `CT_MAX_PAGE_SIZE`           | No       | `200`                               | Most studies one `clinicaltrials_search_studies` page returns; an integer ≥ 1, values above 1000 clamp to 1000 |
 
 ---
 

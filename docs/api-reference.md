@@ -77,7 +77,7 @@ Each `query.*` parameter maps to a named **search area** -- a weighted set of fi
 | `fields`       | `string` (pipe/comma-delimited) | all        | Field/piece names to include in response (see Section 10)           |
 | `sort`         | `string` (pipe/comma-delimited) | relevance  | Sort fields with optional `:asc`/`:desc`. Max 2 sort fields.        |
 | `countTotal`   | `boolean`                       | `false`    | Include `totalCount` in response (first page only).                 |
-| `pageSize`     | `integer`                       | `10`       | Results per page. Range: 0--1000.                                   |
+| `pageSize`     | `integer`                       | `10`       | Results per page. Range: 0--1000; `0` returns the default page of 10, not an empty one. |
 | `pageToken`    | `string`                        | _(none)_   | Pagination cursor from `nextPageToken` of previous response.        |
 | `geoDecay`     | `string`                        | _(none)_   | Geographic decay scoring: `func:...,scale:...,offset:...,decay:...` |
 
@@ -264,7 +264,7 @@ Errors: `400`, `404`
 | Mechanism      | Detail                                                 |
 | :------------- | :----------------------------------------------------- |
 | Cursor-based   | Uses opaque `pageToken` / `nextPageToken` strings      |
-| Page size      | `pageSize` parameter, 0--1000, default 10              |
+| Page size      | `pageSize` parameter, 0--1000, default 10; `0` returns the default page |
 | Total count    | `countTotal=true` adds `totalCount` to first page only |
 | Last page      | `nextPageToken` is absent/null                         |
 | Token lifetime | Tied to data version; may expire on data refresh       |

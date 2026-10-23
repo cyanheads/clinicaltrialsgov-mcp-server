@@ -19,7 +19,7 @@ import { getStudyCount } from '@/mcp-server/tools/definitions/get-study-count.to
 import { searchStudies } from '@/mcp-server/tools/definitions/search-studies.tool.js';
 
 describe('getStudyCount', () => {
-  const mockService = { searchStudies: vi.fn() };
+  const mockService = { countStudies: vi.fn(), searchStudies: vi.fn() };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -28,7 +28,7 @@ describe('getStudyCount', () => {
 
   describe('handler', () => {
     it('returns total count from service', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 42 });
+      mockService.countStudies.mockResolvedValue(42);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       const input = getStudyCount.input!.parse({ conditionQuery: 'diabetes' });
       const result = await getStudyCount.handler(input, ctx);
@@ -36,27 +36,42 @@ describe('getStudyCount', () => {
       expect(result.totalCount).toBe(42);
     });
 
-    it('defaults totalCount to 0 when undefined', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [] });
+    it('returns a zero count as 0', async () => {
+      mockService.countStudies.mockResolvedValue(0);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       const result = await getStudyCount.handler(getStudyCount.input!.parse({}), ctx);
 
       expect(result.totalCount).toBe(0);
     });
 
-    it('calls service with pageSize 0 and countTotal true', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 10 });
+    it('routes the count through the service count path, never a study search (#160)', async () => {
+      // The count path owns countTotal, pageSize, and the NCTId projection; a
+      // study search with pageSize 0 fetched ten full studies per count.
+      mockService.countStudies.mockResolvedValue(10);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       await getStudyCount.handler(getStudyCount.input!.parse({ query: 'test' }), ctx);
 
-      expect(mockService.searchStudies).toHaveBeenCalledWith(
-        expect.objectContaining({ pageSize: 0, countTotal: true }),
+      expect(mockService.countStudies).toHaveBeenCalledTimes(1);
+      expect(mockService.countStudies).toHaveBeenCalledWith(
+        {
+          queryTerm: 'test',
+          queryCond: undefined,
+          queryIntr: undefined,
+          queryLocn: undefined,
+          querySpons: undefined,
+          queryTitles: undefined,
+          queryOutc: undefined,
+          filterOverallStatus: undefined,
+          filterAdvanced: undefined,
+          includeUnknownEnrollment: false,
+        },
         ctx,
       );
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
     });
 
     it('echoes populated criteria in enrichment', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 5 });
+      mockService.countStudies.mockResolvedValue(5);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       const input = getStudyCount.input!.parse({
         conditionQuery: 'cancer',
@@ -73,7 +88,7 @@ describe('getStudyCount', () => {
     });
 
     it('echoes all provided criteria in enrichment', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 1 });
+      mockService.countStudies.mockResolvedValue(1);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       const input = getStudyCount.input!.parse({
         query: 'test',
@@ -106,7 +121,7 @@ describe('getStudyCount', () => {
     });
 
     it('echoes sentinelFilterActive by default even with no query criteria (#78)', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 100 });
+      mockService.countStudies.mockResolvedValue(100);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       await getStudyCount.handler(getStudyCount.input!.parse({}), ctx);
 
@@ -115,7 +130,7 @@ describe('getStudyCount', () => {
     });
 
     it('omits sentinelFilterActive when includeUnknownEnrollment=true (#78)', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 100 });
+      mockService.countStudies.mockResolvedValue(100);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       await getStudyCount.handler(
         getStudyCount.input!.parse({ includeUnknownEnrollment: true }),
@@ -128,14 +143,14 @@ describe('getStudyCount', () => {
     });
 
     it('passes phase filter through buildAdvancedFilter', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      mockService.countStudies.mockResolvedValue(0);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       await getStudyCount.handler(
         getStudyCount.input!.parse({ phaseFilter: ['PHASE1', 'PHASE2'] }),
         ctx,
       );
 
-      expect(mockService.searchStudies).toHaveBeenCalledWith(
+      expect(mockService.countStudies).toHaveBeenCalledWith(
         expect.objectContaining({
           filterAdvanced: '(AREA[Phase]PHASE1 OR AREA[Phase]PHASE2)',
         }),
@@ -147,7 +162,7 @@ describe('getStudyCount', () => {
       // Ungrouped, Essie reads this as
       // `(PHASE3 AND INTERVENTIONAL) OR OBSERVATIONAL` and the count swells
       // with phase-less observational studies the caller never asked for.
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      mockService.countStudies.mockResolvedValue(0);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       await getStudyCount.handler(
         getStudyCount.input!.parse({
@@ -157,7 +172,7 @@ describe('getStudyCount', () => {
         ctx,
       );
 
-      expect(mockService.searchStudies).toHaveBeenCalledWith(
+      expect(mockService.countStudies).toHaveBeenCalledWith(
         expect.objectContaining({
           filterAdvanced:
             'AREA[Phase]PHASE3 AND (AREA[StudyType]INTERVENTIONAL OR AREA[StudyType]OBSERVATIONAL)',
@@ -167,7 +182,7 @@ describe('getStudyCount', () => {
     });
 
     it('groups a joined AND-only advancedFilter the same way (#117)', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      mockService.countStudies.mockResolvedValue(0);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       await getStudyCount.handler(
         getStudyCount.input!.parse({
@@ -177,7 +192,7 @@ describe('getStudyCount', () => {
         ctx,
       );
 
-      expect(mockService.searchStudies).toHaveBeenCalledWith(
+      expect(mockService.countStudies).toHaveBeenCalledWith(
         expect.objectContaining({
           filterAdvanced:
             '(AREA[Phase]PHASE1 OR AREA[Phase]PHASE2) AND (AREA[StudyType]INTERVENTIONAL)',
@@ -187,7 +202,7 @@ describe('getStudyCount', () => {
     });
 
     it('forwards locationQuery, titleQuery, outcomeQuery to service (#59)', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 3 });
+      mockService.countStudies.mockResolvedValue(3);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       await getStudyCount.handler(
         getStudyCount.input!.parse({
@@ -198,7 +213,7 @@ describe('getStudyCount', () => {
         ctx,
       );
 
-      expect(mockService.searchStudies).toHaveBeenCalledWith(
+      expect(mockService.countStudies).toHaveBeenCalledWith(
         expect.objectContaining({
           queryLocn: 'Boston',
           queryTitles: 'vaccine',
@@ -209,7 +224,7 @@ describe('getStudyCount', () => {
     });
 
     it('provides notice in enrichment when totalCount is 0', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      mockService.countStudies.mockResolvedValue(0);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       await getStudyCount.handler(getStudyCount.input!.parse({ conditionQuery: 'xyz' }), ctx);
 
@@ -219,7 +234,7 @@ describe('getStudyCount', () => {
     });
 
     it('omits notice enrichment when totalCount > 0', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 5 });
+      mockService.countStudies.mockResolvedValue(5);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       await getStudyCount.handler(getStudyCount.input!.parse({ conditionQuery: 'diabetes' }), ctx);
 
@@ -228,11 +243,11 @@ describe('getStudyCount', () => {
     });
 
     it('converts statusFilter string to array', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      mockService.countStudies.mockResolvedValue(0);
       const ctx = createMockContext({ errors: getStudyCount.errors });
       await getStudyCount.handler(getStudyCount.input!.parse({ statusFilter: 'RECRUITING' }), ctx);
 
-      expect(mockService.searchStudies).toHaveBeenCalledWith(
+      expect(mockService.countStudies).toHaveBeenCalledWith(
         expect.objectContaining({ filterOverallStatus: ['RECRUITING'] }),
         ctx,
       );
@@ -258,7 +273,7 @@ describe('getStudyCount', () => {
       });
 
     beforeEach(() => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      mockService.countStudies.mockResolvedValue(0);
     });
 
     it.each(QUERY_PARAMS)('rejects an empty %s instead of counting the whole registry', (param) => {
@@ -285,7 +300,7 @@ describe('getStudyCount', () => {
           getStudyCount.handler(getStudyCount.input!.parse({ advancedFilter }), ctx),
           'advancedFilter',
         );
-        expect(mockService.searchStudies).not.toHaveBeenCalled();
+        expect(mockService.countStudies).not.toHaveBeenCalled();
       },
     );
 
@@ -297,7 +312,7 @@ describe('getStudyCount', () => {
           ctx,
         ),
       ).resolves.toBeDefined();
-      expect(mockService.searchStudies).toHaveBeenCalledWith(
+      expect(mockService.countStudies).toHaveBeenCalledWith(
         expect.objectContaining({ filterAdvanced: 'AREA[StudyType]INTERVENTIONAL' }),
         ctx,
       );
@@ -309,7 +324,7 @@ describe('getStudyCount', () => {
         getStudyCount.handler(getStudyCount.input!.parse({ query: '' }), ctx),
         'query',
       );
-      expect(mockService.searchStudies).not.toHaveBeenCalled();
+      expect(mockService.countStudies).not.toHaveBeenCalled();
     });
 
     it.each(['statusFilter', 'phaseFilter'] as const)(
@@ -335,7 +350,7 @@ describe('getStudyCount', () => {
           getStudyCount.handler(getStudyCount.input!.parse({ [param]: [] }), ctx),
           param,
         );
-        expect(mockService.searchStudies).not.toHaveBeenCalled();
+        expect(mockService.countStudies).not.toHaveBeenCalled();
       },
     );
 
@@ -363,7 +378,7 @@ describe('getStudyCount', () => {
       await expect(
         getStudyCount.handler(getStudyCount.input!.parse({}), ctx),
       ).resolves.toBeDefined();
-      expect(mockService.searchStudies).toHaveBeenCalledWith(
+      expect(mockService.countStudies).toHaveBeenCalledWith(
         expect.objectContaining({
           queryTerm: undefined,
           filterOverallStatus: undefined,
@@ -385,7 +400,7 @@ describe('getStudyCount', () => {
           ctx,
         ),
       ).resolves.toBeDefined();
-      expect(mockService.searchStudies).toHaveBeenCalledWith(
+      expect(mockService.countStudies).toHaveBeenCalledWith(
         expect.objectContaining({
           queryTerm: 'diabetes',
           filterOverallStatus: ['RECRUITING'],
@@ -432,7 +447,7 @@ describe('getStudyCount', () => {
   // case-sensitively, so each entry is canonicalized in the handler.
   describe('statusFilter case and spacing variants (#140)', () => {
     beforeEach(() => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 7 });
+      mockService.countStudies.mockResolvedValue(7);
     });
 
     it.each([
@@ -446,7 +461,7 @@ describe('getStudyCount', () => {
     ])('counts %j as %s', async (variant, canonical) => {
       const ctx = createMockContext({ errors: getStudyCount.errors });
       await getStudyCount.handler(getStudyCount.input!.parse({ statusFilter: variant }), ctx);
-      expect(mockService.searchStudies).toHaveBeenCalledWith(
+      expect(mockService.countStudies).toHaveBeenCalledWith(
         expect.objectContaining({ filterOverallStatus: [canonical] }),
         ctx,
       );
@@ -459,7 +474,7 @@ describe('getStudyCount', () => {
         getStudyCount.input!.parse({ statusFilter: ['recruiting', 'Completed', 'WITHDRAWN'] }),
         ctx,
       );
-      expect(mockService.searchStudies).toHaveBeenCalledWith(
+      expect(mockService.countStudies).toHaveBeenCalledWith(
         expect.objectContaining({ filterOverallStatus: ['RECRUITING', 'COMPLETED', 'WITHDRAWN'] }),
         ctx,
       );
@@ -471,7 +486,7 @@ describe('getStudyCount', () => {
     it('forwards a value with no canonical match unchanged in meaning for upstream to reject', async () => {
       const ctx = createMockContext({ errors: getStudyCount.errors });
       await getStudyCount.handler(getStudyCount.input!.parse({ statusFilter: 'open' }), ctx);
-      expect(mockService.searchStudies).toHaveBeenCalledWith(
+      expect(mockService.countStudies).toHaveBeenCalledWith(
         expect.objectContaining({ filterOverallStatus: ['OPEN'] }),
         ctx,
       );
@@ -480,7 +495,7 @@ describe('getStudyCount', () => {
 
   describe('phaseFilter resolves to canonical phases or fails before any request (#144)', () => {
     beforeEach(() => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 99 });
+      mockService.countStudies.mockResolvedValue(99);
     });
 
     it.each([
@@ -500,7 +515,7 @@ describe('getStudyCount', () => {
         ctx,
       );
       expect(result.totalCount).toBe(99);
-      expect(mockService.searchStudies).toHaveBeenCalledWith(
+      expect(mockService.countStudies).toHaveBeenCalledWith(
         expect.objectContaining({ filterAdvanced: `AREA[Phase]${canonical}` }),
         ctx,
       );
@@ -515,7 +530,7 @@ describe('getStudyCount', () => {
           getStudyCount.input!.parse({ phaseFilter: ['PHASE2', 'PHASE3'] }),
           ctx,
         );
-        const sent = mockService.searchStudies.mock.calls.map((c) => c[0].filterAdvanced);
+        const sent = mockService.countStudies.mock.calls.map((c) => c[0].filterAdvanced);
         expect(sent).toEqual([
           '(AREA[Phase]PHASE2 OR AREA[Phase]PHASE3)',
           '(AREA[Phase]PHASE2 OR AREA[Phase]PHASE3)',
@@ -547,7 +562,7 @@ describe('getStudyCount', () => {
           recovery: { hint: expect.stringContaining('advancedFilter') },
         },
       });
-      expect(mockService.searchStudies).not.toHaveBeenCalled();
+      expect(mockService.countStudies).not.toHaveBeenCalled();
     });
 
     it('answers "," with blank_value, never enum_invalid', async () => {
@@ -555,7 +570,7 @@ describe('getStudyCount', () => {
       await expect(
         getStudyCount.handler(getStudyCount.input!.parse({ phaseFilter: ',' }), ctx),
       ).rejects.toMatchObject({ data: { reason: 'blank_value', param: 'phaseFilter' } });
-      expect(mockService.searchStudies).not.toHaveBeenCalled();
+      expect(mockService.countStudies).not.toHaveBeenCalled();
     });
 
     it.each([['""'], ['" "'], ['​'], [['PHASE3', '""']]])(
@@ -565,7 +580,7 @@ describe('getStudyCount', () => {
         await expect(
           getStudyCount.handler(getStudyCount.input!.parse({ phaseFilter }), ctx),
         ).rejects.toMatchObject({ data: { reason: 'blank_value', param: 'phaseFilter' } });
-        expect(mockService.searchStudies).not.toHaveBeenCalled();
+        expect(mockService.countStudies).not.toHaveBeenCalled();
       },
     );
 
@@ -580,7 +595,7 @@ describe('getStudyCount', () => {
         message: expect.stringContaining("'PHASE3|PHASE5' is not a trial phase"),
         data: { reason: 'enum_invalid', param: 'phaseFilter', value: 'PHASE3|PHASE5' },
       });
-      expect(mockService.searchStudies).not.toHaveBeenCalled();
+      expect(mockService.countStudies).not.toHaveBeenCalled();
     });
 
     it('echoes a scalar phase as the canonical scalar', async () => {

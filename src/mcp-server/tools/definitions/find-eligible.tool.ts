@@ -16,6 +16,7 @@ import {
   firstBlankListParam,
   firstBlankParam,
   queryTermContent,
+  quoteLocationPart,
   quoteQueryTerm,
 } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
@@ -36,6 +37,42 @@ const QUOTES_ARE_NOT_CONTENT =
   'Double-quote (") characters are stripped before the query is built and do not count as content, nor do invisible format characters such as zero-width spaces, so a value of only these and whitespace is blank too.';
 
 /**
+ * Most candidates one call fetches and returns. Every candidate's site list is
+ * scored and bounded and every one renders in full, so the cap holds the
+ * response down; `maxResults` above it is served at the cap and disclosed, with
+ * the searchCriteria replay reaching the rest (#153).
+ */
+const MAX_RESULTS_PER_CALL = 50;
+
+/**
+ * Units `age` can be given in. Each is sent upstream as written (`7 months`):
+ * ClinicalTrials.gov converts across units when it compares an age to a
+ * registered bound (`6 Months`), so nothing is converted here.
+ */
+const AGE_UNITS = ['years', 'months', 'weeks', 'days'] as const;
+type AgeUnit = (typeof AGE_UNITS)[number];
+
+/** Days in each age unit, for judging an age in years. */
+const DAYS_PER_AGE_UNIT: Record<AgeUnit, number> = {
+  years: 365.25,
+  months: 365.25 / 12,
+  weeks: 7,
+  days: 1,
+};
+
+/**
+ * Reads an `ageUnit` the way a caller writes it: case-insensitive, singular or
+ * plural, surrounding whitespace ignored. A blank is an omitted unit. Anything
+ * that is not a string passes through for the enum to reject.
+ */
+function normalizeAgeUnit(value: unknown): unknown {
+  if (typeof value !== 'string') return value;
+  const unit = value.trim().toLowerCase();
+  if (unit === '') return undefined;
+  return unit.endsWith('s') ? unit : `${unit}s`;
+}
+
+/**
  * An optional location part, or undefined when it carries no content once `"`,
  * format characters, and whitespace go.
  */
@@ -49,20 +86,66 @@ interface UserLocation {
   state?: string | undefined;
 }
 
+/** The location one study's sites are scored against. */
+interface SiteMatchLocation extends UserLocation {
+  /** Whether a site may earn city and state credit; see `countryGate`. */
+  inCountry: (site: StudyLocation) => boolean;
+}
+
 /** Case-insensitive equality of two place names, false when either is absent. */
 function samePlace(a?: string, b?: string): boolean {
   return a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
+}
+
+/** The distinct lowercased words of a place name, split on anything but letters and digits. */
+export function placeWords(name: string): Set<string> {
+  return new Set(
+    name
+      .toLowerCase()
+      .split(/[^\p{L}\p{N}]+/u)
+      .filter((w) => w.length > 0),
+  );
+}
+
+/**
+ * A test for whether a site's country carries every word of the requested
+ * country — `Korea` matches the registry's `South Korea`. Word containment
+ * rather than equality: the registry's spelling of a country rarely matches
+ * what a patient types. A site that publishes no country fails. Memoized per
+ * distinct site spelling, since one request scores every site of every
+ * candidate — thousands — across a few countries.
+ */
+function countryGate(requested: string): (site: StudyLocation) => boolean {
+  const wanted = placeWords(requested);
+  const seen = new Map<string, boolean>();
+  return ({ country }) => {
+    if (country === undefined) return false;
+    let hit = seen.get(country);
+    if (hit === undefined) {
+      const words = placeWords(country);
+      hit = wanted.size <= words.size && [...wanted].every((w) => words.has(w));
+      seen.set(country, hit);
+    }
+    return hit;
+  };
 }
 
 /**
  * How closely a site's geography matches the user's stated location. City
  * equality dominates, then state, then country, so the score doubles as a match
  * tier: every site sharing the study's best score matched at the same level.
+ *
+ * City and state points go only to sites that pass `user.inCountry`. A study
+ * qualifies on its whole site list, so the city it matched on can be a foreign
+ * namesake (London, UK for a London, Canada request); scored on equality alone,
+ * that site would outrank every in-country site and become the tier (#159).
  */
-function locationGeoScore(loc: StudyLocation, user: UserLocation): number {
+function locationGeoScore(loc: StudyLocation, user: SiteMatchLocation): number {
   let score = 0;
-  if (samePlace(loc.city, user.city)) score += 4;
-  if (samePlace(loc.state, user.state)) score += 2;
+  if (user.inCountry(loc)) {
+    if (samePlace(loc.city, user.city)) score += 4;
+    if (samePlace(loc.state, user.state)) score += 2;
+  }
   if (samePlace(loc.country, user.country)) score += 1;
   return score;
 }
@@ -84,7 +167,7 @@ function isRecruiting(loc: StudyLocation): boolean {
  * match. Geography dominates; recruiting status breaks ties between
  * geographically-equivalent sites.
  */
-function locationMatchScore(loc: StudyLocation, user: UserLocation): number {
+function locationMatchScore(loc: StudyLocation, user: SiteMatchLocation): number {
   return locationGeoScore(loc, user) + (isRecruiting(loc) ? 0.5 : 0);
 }
 
@@ -166,7 +249,7 @@ interface LocationSummary {
  */
 function boundLocations(
   sortedLocations: StudyLocation[],
-  user: UserLocation,
+  user: SiteMatchLocation,
   limit: number,
 ): { locations: LocationWithDistance[]; summary?: LocationSummary } {
   const total = sortedLocations.length;
@@ -361,7 +444,17 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
   ],
 
   input: z.object({
-    age: z.number().int().min(0).max(120).describe('Patient age in years.'),
+    age: z
+      .number()
+      .int()
+      .min(0)
+      .max(120)
+      .describe('Patient age as a whole number in ageUnit (years unless ageUnit says otherwise).'),
+    ageUnit: z
+      .preprocess(normalizeAgeUnit, z.enum(AGE_UNITS).optional())
+      .describe(
+        'Unit age is given in: years (default), months, weeks, or days; case and singular forms are accepted. Use a smaller unit for an infant or young child whose eligibility window is narrower than a year — age 7 with ageUnit "months" matches a study registered for 6 Months to 8 Months, which no whole number of years reaches. ClinicalTrials.gov compares ages across units, so the unit only sets how precisely age is stated.',
+      ),
     sex: z
       .enum(['FEMALE', 'MALE', 'ALL'])
       .describe(
@@ -370,7 +463,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     conditions: z
       .array(z.string())
       .describe(
-        'Medical conditions or diagnoses, e.g. ["Type 2 Diabetes", "Hypertension"]. Each entry is matched as a condition (multi-word entries match as a phrase); multiple entries are combined with OR, so studies for any listed condition qualify. Returned studies are re-ranked so those whose own condition list names a requested condition rank above tangential matches the upstream fuzzy search pulls in via the MeSH umbrella.',
+        'Medical conditions or diagnoses, e.g. ["Type 2 Diabetes", "Hypertension"]. Each entry is matched as a condition: an entry containing whitespace is quoted and matches as a phrase, and any other entry is sent as written, punctuation included (double quotes are stripped from every entry); multiple entries are combined with OR, so studies for any listed condition qualify. Returned studies are re-ranked so those whose own condition list names a requested condition rank above tangential matches the upstream fuzzy search pulls in via the MeSH umbrella.',
       ),
     location: z
       .object({
@@ -389,15 +482,22 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         'Whether the patient is a healthy volunteer. When true, only studies accepting healthy volunteers are queried.',
       ),
     recruitingOnly: z.boolean().default(true).describe('Only include actively recruiting studies.'),
-    maxResults: z.number().int().min(1).max(50).default(10).describe('Maximum results to return.'),
+    maxResults: z
+      .number()
+      .int()
+      .min(1)
+      .max(1000)
+      .default(10)
+      .describe(
+        `Maximum candidates to return, 1–1000. Each call returns at most ${MAX_RESULTS_PER_CALL}; a larger value returns ${MAX_RESULTS_PER_CALL}, reported in truncated/shown/cap when more studies match, and the searchCriteria replay through clinicaltrials_search_studies pages the rest.`,
+      ),
     locationLimit: z
       .number()
       .int()
       .min(1)
-      .max(500)
       .default(10)
       .describe(
-        "Cap on the sites returned per candidate. Each candidate keeps only the sites matching the requested location at the narrowest level that matched (city, else state, else country), capped at this many; the rest of the study's registered sites are omitted. The cap governs those matched sites — when none of them is recruiting, one recruiting site is added on top of it (the nearest to any matched site, measured before this cap, when coordinates allow — in the requested country whenever a site there recruits), so a candidate can carry one site more than this. Raise it to see more nearby sites, or fetch the complete site list with clinicaltrials_get_study_record. Each candidate reports totalLocations / matchedLocations / locationsTruncated / nearestRecruitingSiteAdded in locationSummary only when the bound actually dropped sites.",
+        "Cap on the sites returned per candidate. Each candidate keeps only the sites matching the requested location at the narrowest level that matched (city, else state, else country), capped at this many; the rest of the study's registered sites are omitted. The cap governs those matched sites — when none of them is recruiting, one recruiting site is added on top of it (the nearest to any matched site, measured before this cap, when coordinates allow — in the requested country whenever a site there recruits), so a candidate can carry one site more than this. Raise it to see more nearby sites — there is no upper bound, and a limit past the matched sites returns all of them — or fetch the complete site list with clinicaltrials_get_study_record. Each candidate reports totalLocations / matchedLocations / locationsTruncated / nearestRecruitingSiteAdded in locationSummary only when the bound actually dropped sites.",
       ),
   }),
 
@@ -418,9 +518,15 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         location: z
           .string()
           .describe(
-            'The exact queryLocn string sent upstream (city/state/country, multi-word components quoted, AND-joined). Pass as locationQuery to clinicaltrials_search_studies to reproduce the location filter beyond the maxResults cap.',
+            'The exact queryLocn string sent upstream: city/state/country AND-joined inside SEARCH[Location](…) so every part must match the same site, each part quoted unless it is a single run of letters and digits (Toronto stays bare; "United States", "Winston-Salem", and "L\'Aquila" are quoted), with any embedded double quote stripped. Pass as locationQuery to clinicaltrials_search_studies to reproduce the location filter beyond the maxResults cap.',
           ),
-        age: z.number().describe('Patient age.'),
+        age: z.number().describe('Patient age, in ageUnit when present, else in years.'),
+        ageUnit: z
+          .enum(AGE_UNITS)
+          .optional()
+          .describe(
+            'The unit age was given in. Present only for months, weeks, or days; absent means years.',
+          ),
         sex: z.string().describe('Patient sex.'),
         conditionQuery: z
           .string()
@@ -465,7 +571,27 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       .string()
       .optional()
       .describe(
-        'When no studies matched, recovery guidance that identifies which filter stage collapsed and suggests how to broaden. When studies are returned, one caveat for the whole response: candidates were matched on demographics, location, recruitment status, and a fuzzy condition search, not on inclusion/exclusion criteria.',
+        "When no studies matched, recovery guidance that identifies which filter stage collapsed and suggests how to broaden. When studies are returned, one caveat for the whole response: candidates were matched on demographics, location, recruitment status, and a fuzzy condition search, not on inclusion/exclusion criteria. When maxResults was above the tool's per-call cap and more studies match, a sentence follows stating the requested, served, and total counts and pointing at the searchCriteria replay.",
+      ),
+    truncated: z
+      .boolean()
+      .optional()
+      .describe(
+        "True when maxResults was above the tool's per-call cap and more studies match than were returned. Absent otherwise.",
+      ),
+    shown: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe('Candidates returned when truncated is true.'),
+    cap: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "The tool's per-call cap, served in place of the requested maxResults when truncated is true.",
       ),
   },
 
@@ -473,7 +599,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     searchCriteria: {
       render: (sc) => {
         const lines = [
-          `**Search:** conditions=[${sc.conditions.join(', ')}] | location=${sc.location} | age=${sc.age} | sex=${sc.sex}`,
+          `**Search:** conditions=[${sc.conditions.join(', ')}] | location=${sc.location} | age=${sc.age}${sc.ageUnit ? ` ${sc.ageUnit}` : ''} | sex=${sc.sex}`,
         ];
         // Echo the exact upstream query strings so a content[]-only caller can
         // reproduce the full match set (find_eligible returns only maxResults) by
@@ -507,8 +633,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     // built, so the call would answer with trials unrelated to anything the
     // caller asked for. Reject in the handler — a schema-only rejection
     // surfaces as a bare -32602 with no reason and no recovery hint. Blankness
-    // is judged on what quoteQueryTerm emits: a value of only `"` and
-    // whitespace reaches upstream as no operand or a bare `" "` phrase (#145).
+    // is judged on what quoteQueryTerm and quoteLocationPart emit: a value of
+    // only `"` and whitespace reaches upstream as no operand or a bare `" "`
+    // phrase (#145).
     const blankParam =
       firstBlankListParam({ conditions: input.conditions.map(queryTermContent) }) ??
       firstBlankParam({ 'location.country': queryTermContent(input.location.country) });
@@ -528,11 +655,19 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     // Sites are scored, bounded, and admitted against the text the query
     // carries, not the raw value: a quoted part finds a study through its bare
     // form, so it must match that study's sites the same way (#155).
-    const siteMatchLocation: UserLocation = {
-      country: queryTermContent(location.country),
+    const siteMatchCountry = queryTermContent(location.country);
+    const inRequestedCountry = countryGate(siteMatchCountry);
+    const gatedMatch: SiteMatchLocation = {
+      country: siteMatchCountry,
+      inCountry: inRequestedCountry,
       city: location.city && queryTermContent(location.city),
       state: location.state && queryTermContent(location.state),
     };
+    // A requested country the registry spells differently (Czech Republic for
+    // Czechia, UK, USA) still matches studies upstream through other site text.
+    // When none of a study's sites passes the gate, the gate would score every
+    // site 0 and keep the whole list, so that study is scored without it.
+    const ungatedMatch: SiteMatchLocation = { ...gatedMatch, inCountry: () => true };
 
     const service = getClinicalTrialsService();
 
@@ -543,13 +678,25 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     // tokens and scored zero against studies that list exactly that site, so
     // the tool reported no trials in a location that has them — and told the
     // patient to drop the location. Quoting alone is not enough: the comma
-    // separator fails outright once components are quoted. One string feeds the
-    // main search, the location-stage funnel count, and the searchCriteria
-    // echo, so they cannot diverge.
-    const locationQuery = [location.city, location.state, location.country]
+    // separator fails outright once components are quoted.
+    //
+    // SEARCH[Location](…) binds every part to the same site. A bare AND matches
+    // the parts across a study's whole site list, so London + Canada admitted a
+    // study whose London site is in the UK and whose Canadian site is in
+    // Toronto (#159). The parts stay bare search terms rather than
+    // AREA[LocationCity]-style field bindings, which drop genuine sites whose
+    // city field holds a borough (Harrow, state London). quoteLocationPart
+    // quotes every part that is not a single run of letters and digits: inside
+    // the wrapper a bare hyphenated part (Winston-Salem) under-matches, and a
+    // bare `(`, `)`, `[`, or `]` would close the wrapper early. One string feeds
+    // the main search, the location-stage funnel count, and the searchCriteria
+    // echo, so they cannot diverge; query.locn accepts it, so the echo replays
+    // as locationQuery.
+    const locationParts = [location.city, location.state, location.country]
       .filter((part): part is string => Boolean(part))
-      .map(quoteQueryTerm)
+      .map(quoteLocationPart)
       .join(' AND ');
+    const locationQuery = `SEARCH[Location](${locationParts})`;
 
     const statusFilter = input.recruitingOnly ? ['RECRUITING'] : undefined;
 
@@ -571,9 +718,11 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
      * the field, and an unstated healthy-volunteer policy is not an
      * affirmative yes.
      */
+    const ageUnit = input.ageUnit ?? 'years';
+    const ageTerm = `${input.age} ${ageUnit}`;
     const advancedParts: string[] = [
-      `(AREA[MinimumAge]RANGE[MIN, ${input.age} years] OR AREA[MinimumAge]MISSING)`,
-      `(AREA[MaximumAge]RANGE[${input.age} years, MAX] OR AREA[MaximumAge]MISSING)`,
+      `(AREA[MinimumAge]RANGE[MIN, ${ageTerm}] OR AREA[MinimumAge]MISSING)`,
+      `(AREA[MaximumAge]RANGE[${ageTerm}, MAX] OR AREA[MaximumAge]MISSING)`,
     ];
     if (input.sex !== 'ALL') {
       advancedParts.push(`(AREA[Sex]ALL OR AREA[Sex]${input.sex})`);
@@ -589,6 +738,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       conditions: input.conditions,
       location: locationQuery,
       age: input.age,
+      ageUnit,
       sex: input.sex,
     });
 
@@ -600,7 +750,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     // condition, 4 of those are in this location", which is what tells a caller
     // which constraint to relax, and getting it any other way costs two more
     // round-trips.
-    const [result, conditionStage, locationStage] = await Promise.all([
+    const [result, conditionMatched, locationMatched] = await Promise.all([
       service.searchStudies(
         {
           queryCond: conditionQuery,
@@ -608,7 +758,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
           filterOverallStatus: statusFilter,
           filterAdvanced: advancedFilter,
           fields: ELIGIBLE_FIELDS,
-          pageSize: input.maxResults,
+          pageSize: Math.min(input.maxResults, MAX_RESULTS_PER_CALL),
           countTotal: true,
           // Eligibility matches are about who can enroll, not about enrollment
           // count quality. Don't drop matches just because the sponsor didn't
@@ -617,23 +767,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         },
         ctx,
       ),
-      service.searchStudies(
-        {
-          queryCond: conditionQuery,
-          pageSize: 0,
-          countTotal: true,
-          includeUnknownEnrollment: true,
-        },
-        ctx,
-      ),
-      service.searchStudies(
-        {
-          queryCond: conditionQuery,
-          queryLocn: locationQuery,
-          pageSize: 0,
-          countTotal: true,
-          includeUnknownEnrollment: true,
-        },
+      service.countStudies({ queryCond: conditionQuery, includeUnknownEnrollment: true }, ctx),
+      service.countStudies(
+        { queryCond: conditionQuery, queryLocn: locationQuery, includeUnknownEnrollment: true },
         ctx,
       ),
     ]);
@@ -674,6 +810,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       const locationsModule = raw.protocolSection?.contactsLocationsModule;
       const upstream = locationsModule?.locations;
       if (!upstream?.length) return study;
+      const siteMatchLocation = upstream.some(inRequestedCountry) ? gatedMatch : ungatedMatch;
       const sorted = [...upstream].sort(
         (a, b) =>
           locationMatchScore(b, siteMatchLocation) - locationMatchScore(a, siteMatchLocation),
@@ -692,8 +829,6 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       };
     });
 
-    const conditionMatched = conditionStage.totalCount ?? 0;
-    const locationMatched = locationStage.totalCount ?? 0;
     const demographicsMatched = result.totalCount ?? 0;
 
     // Always enrich with search echo and funnel diagnostics. The searchCriteria
@@ -705,6 +840,8 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         conditions: input.conditions,
         location: locationQuery,
         age: input.age,
+        // Echoed only off the default, so a years call reads exactly as before.
+        ...(ageUnit !== 'years' ? { ageUnit } : {}),
         sex: input.sex,
         conditionQuery,
         ...(statusFilter ? { statusFilter } : {}),
@@ -717,6 +854,13 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       const noticeParts: string[] = [
         `No studies found for "${input.conditions.join(', ')}" matching the specified criteria.`,
       ];
+      // Judged in years whatever unit the age came in; a years age keeps its
+      // bare number in the note.
+      const ageYears = (input.age * DAYS_PER_AGE_UNIT[ageUnit]) / DAYS_PER_AGE_UNIT.years;
+      const extremeAgeNote =
+        ageYears <= 1 || ageYears >= 100
+          ? `Age ${ageUnit === 'years' ? input.age : ageTerm} is at the extreme of typical trial ranges. Few trials enroll this age group.`
+          : undefined;
 
       if (conditionMatched > 0 && locationMatched === 0) {
         noticeParts.push(
@@ -728,10 +872,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         noticeParts.push(
           `${locationMatched} studies match condition + location, but none pass the age/sex/status filters.`,
         );
-        if (input.age <= 1 || input.age >= 100)
-          noticeParts.push(
-            `Age ${input.age} is at the extreme of typical trial ranges. Few trials enroll this age group.`,
-          );
+        if (extremeAgeNote) noticeParts.push(extremeAgeNote);
         if (input.sex !== 'ALL')
           noticeParts.push('Try sex="ALL" to include studies not restricted by sex.');
         if (input.recruitingOnly)
@@ -743,10 +884,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
             'Many studies do not accept healthy volunteers. Set healthyVolunteer=false if the patient has a relevant condition.',
           );
       } else {
-        if (input.age <= 1 || input.age >= 100)
-          noticeParts.push(
-            `Age ${input.age} is at the extreme of typical trial ranges. Few trials enroll this age group.`,
-          );
+        if (extremeAgeNote) noticeParts.push(extremeAgeNote);
         if (input.sex !== 'ALL')
           noticeParts.push('Try sex="ALL" to include studies not restricted by sex.');
         if (input.healthyVolunteer)
@@ -766,7 +904,20 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     } else {
       // Once per response, never per study: the caveat applies to every
       // candidate equally and would otherwise scale with the result count (#147).
-      ctx.enrich.notice(CANDIDATE_NOTICE);
+      // The cap withheld candidates only when the caller asked past it and more
+      // studies match; its sentence follows the caveat in the one notice. An
+      // empty result lost nothing to the cap, so the no-match notice never
+      // carries it.
+      const shown = result.studies.length;
+      if (input.maxResults > MAX_RESULTS_PER_CALL && demographicsMatched > shown) {
+        ctx.enrich.truncated({
+          shown,
+          cap: MAX_RESULTS_PER_CALL,
+          guidance: `${CANDIDATE_NOTICE} Requested maxResults ${input.maxResults} is above this tool's per-call cap of ${MAX_RESULTS_PER_CALL}, so this response holds ${shown} of ${demographicsMatched} candidates. Replay searchCriteria through clinicaltrials_search_studies with includeUnknownEnrollment=true to page through the rest.`,
+        });
+      } else {
+        ctx.enrich.notice(CANDIDATE_NOTICE);
+      }
     }
 
     return {

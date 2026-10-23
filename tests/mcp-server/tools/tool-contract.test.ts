@@ -83,10 +83,12 @@ const metadata: FieldNode[] = [
 ];
 
 const mockService = {
+  countStudies: vi.fn(),
   getFieldValues: vi.fn(),
   getMetadata: vi.fn(),
   getStudiesBatch: vi.fn(),
   getStudy: vi.fn(),
+  maxPageSize: 200,
   searchFieldDefinitions: vi.fn(),
   searchStudies: vi.fn(),
 };
@@ -98,6 +100,7 @@ beforeEach(() => {
     studies: [recruitingStudy],
     totalCount: 1,
   });
+  mockService.countStudies.mockResolvedValue(1);
   mockService.getStudy.mockResolvedValue(completedStudy);
   mockService.getStudiesBatch.mockResolvedValue([completedStudy]);
   mockService.getMetadata.mockResolvedValue(metadata);
@@ -444,6 +447,75 @@ describe('get_field_values statistics variants survive the output schema (#119)'
 });
 
 /**
+ * #161 bounds `longest.value` in the handler and adds `longest.truncated` plus an
+ * enrichment `notice`; #165 flags `uniqueValuesCounted: false` beside the
+ * provider's `uniqueValuesCount: 0` for a field it does not count, and the 0
+ * must still survive. Both change what `structuredContent` carries, so they are
+ * proven through `output.parse()` and the enrichment merge.
+ */
+describe('get_field_values longest preview and uncounted fields on the wire (#161, #165)', () => {
+  const description = `START ${'d'.repeat(32_334)} END`;
+
+  const run = async () => {
+    mockService.getFieldValues.mockResolvedValue([
+      {
+        field: 'protocolSection.descriptionModule.detailedDescription',
+        piece: 'DetailedDescription',
+        type: 'STRING',
+        missingStudiesCount: 200_268,
+        uniqueValuesCount: 0,
+        longest: { value: description, length: 32_344, nctId: 'NCT06708767' },
+      },
+    ]);
+    return runToolContract(getFieldValues, { fields: 'DetailedDescription' });
+  };
+
+  it('delivers the preview, truncated flag, full length, uncounted flag, and notice in structuredContent', async () => {
+    const result = await run();
+    const structured = result.structuredContent as {
+      fieldStats: Record<string, unknown>[];
+      notice?: string;
+    };
+
+    expect(description).toHaveLength(32_344);
+    // The provider's 0 reaches structuredContent unchanged, flagged as no count.
+    expect(structured.fieldStats[0]!.uniqueValuesCount).toBe(0);
+    expect(structured.fieldStats[0]!.uniqueValuesCounted).toBe(false);
+    expect(structured.fieldStats[0]).toEqual({
+      field: 'protocolSection.descriptionModule.detailedDescription',
+      piece: 'DetailedDescription',
+      type: 'STRING',
+      missingStudiesCount: 200_268,
+      uniqueValuesCount: 0,
+      uniqueValuesCounted: false,
+      longest: {
+        value: description.slice(0, 2000),
+        length: 32_344,
+        nctId: 'NCT06708767',
+        truncated: true,
+      },
+    });
+    expect(structured.notice).toContain(
+      'clinicaltrials_search_studies with {"nctIds":["NCT06708767"],"fields":["DetailedDescription"]}',
+    );
+  });
+
+  it('renders the same preview, the uncounted header, and the notice into content[]', async () => {
+    const result = await run();
+    const structured = result.structuredContent as { notice: string };
+    const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+
+    expect(text).toContain('(STRING, distinct values not counted):');
+    expect(text).not.toContain('0 unique values');
+    expect(text).toContain(
+      `longest value (first 2000 of 32344 characters, in NCT06708767): "${description.slice(0, 2000)}"`,
+    );
+    expect(text).not.toContain(' END');
+    expect(text).toContain(structured.notice);
+  });
+});
+
+/**
  * The recovery hint is mirrored into `content[]` as a `Recovery:` line, so it is
  * the guidance a `content[]`-only client actually reads. #113: every parameter
  * below is required, and following an "omit it" lead would return the bare
@@ -540,7 +612,7 @@ describe('service-thrown reasons carry the declaring tool hint on the wire', () 
       name: 'get_study_count query_parse_error',
       reason: 'query_parse_error' as const,
       arrange: () =>
-        mockService.searchStudies.mockRejectedValue(
+        mockService.countStudies.mockRejectedValue(
           validationError("Query syntax error near '['.", { reason: 'query_parse_error' }),
         ),
       run: () => runToolContract(getStudyCount, { query: 'foo [bar' }),
@@ -568,6 +640,17 @@ describe('service-thrown reasons carry the declaring tool hint on the wire', () 
       reason: 'rate_limited' as const,
       arrange: () =>
         mockService.searchStudies.mockRejectedValue(
+          rateLimited('Rate limited by ClinicalTrials.gov after 3 retries', {
+            reason: 'rate_limited',
+          }),
+        ),
+      run: () => runToolContract(findEligible, eligibleInput),
+    },
+    {
+      name: 'find_eligible rate_limited from a funnel-stage count',
+      reason: 'rate_limited' as const,
+      arrange: () =>
+        mockService.countStudies.mockRejectedValue(
           rateLimited('Rate limited by ClinicalTrials.gov after 3 retries', {
             reason: 'rate_limited',
           }),

@@ -14,10 +14,12 @@ import {
   normalizeStatusFilter,
   PHASE_VALUES,
   queryTermContent,
+  quoteLocationPart,
   quoteQueryTerm,
   splitListEntries,
   toArray,
 } from '@/mcp-server/tools/utils/query-helpers.js';
+import { expectLinearGrowth, LINE_BREAK_SHAPES } from '../../../helpers/cpu-timing.js';
 
 describe('splitListEntries (#152)', () => {
   it('returns undefined when the list is omitted', () => {
@@ -391,6 +393,79 @@ describe('quoteQueryTerm (#118)', () => {
 
   it('quotes on any whitespace, not just a literal space', () => {
     expect(quoteQueryTerm('New\tYork')).toBe('"New\tYork"');
+  });
+
+  // Conditions go upstream through this helper, and only whitespace triggers
+  // quoting: a single-token condition carrying punctuation or query syntax is
+  // sent as written, so `COVID-19(SARS-CoV-2)` and `AREA[Condition]melanoma`
+  // keep the match sets they have always had.
+  it.each([
+    'COVID-19',
+    "Côte-d'Ivoire",
+    'COVID-19(SARS-CoV-2)',
+    'AREA[Condition]melanoma',
+    'a)OR(b',
+    'HER2(+)',
+  ])('leaves a single-token term with punctuation bare: %j', (term) => {
+    expect(quoteQueryTerm(term)).toBe(term);
+  });
+});
+
+describe('quoteLocationPart (#159)', () => {
+  it('quotes a multiword part', () => {
+    expect(quoteLocationPart('United States')).toBe('"United States"');
+    expect(quoteLocationPart('St. Louis')).toBe('"St. Louis"');
+    expect(quoteLocationPart('New\tYork')).toBe('"New\tYork"');
+  });
+
+  it('leaves a single run of letters and digits bare, in any script', () => {
+    expect(quoteLocationPart('Toronto')).toBe('Toronto');
+    expect(quoteLocationPart('Zürich')).toBe('Zürich');
+    expect(quoteLocationPart('東京')).toBe('東京');
+    expect(quoteLocationPart('District9')).toBe('District9');
+  });
+
+  // Inside SEARCH[Location](…) a bare hyphenated, apostrophized, or dotted part
+  // under-matches: `Winston-Salem` finds 4 cancer studies where its quoted
+  // form finds 202, each with a Winston-Salem, NC site.
+  it.each([
+    ['Winston-Salem', '"Winston-Salem"'],
+    ['Clermont-Ferrand', '"Clermont-Ferrand"'],
+    ["L'Aquila", '"L\'Aquila"'],
+    ['D.C.', '"D.C."'],
+    ['Saint-Étienne', '"Saint-Étienne"'],
+  ])('quotes a single-token part carrying punctuation: %j', (part, expected) => {
+    expect(quoteLocationPart(part)).toBe(expected);
+  });
+
+  // A bare `(`, `)`, `[`, or `]` is query syntax: a part like `a)OR(b` would
+  // close the SEARCH[Location](…) wrapper and regroup the expression around it.
+  it.each([
+    ['a)OR(b', '"a)OR(b"'],
+    ['(a', '"(a"'],
+    ['a)', '"a)"'],
+    ['AREA[LocationCountry]Canada', '"AREA[LocationCountry]Canada"'],
+    ['[x', '"[x"'],
+    ['x]', '"x]"'],
+  ])('quotes a part carrying a grouping character: %j', (part, expected) => {
+    expect(quoteLocationPart(part)).toBe(expected);
+  });
+
+  it('strips an embedded double quote before deciding, rather than escaping it', () => {
+    expect(quoteLocationPart('Sea"ttle')).toBe('Seattle');
+    expect(quoteLocationPart('"Winston-Salem"')).toBe('"Winston-Salem"');
+    expect(quoteLocationPart('East "Northport" City')).toBe('"East Northport City"');
+  });
+
+  describe('stays linear on caller-sized text', () => {
+    it.each([
+      ...LINE_BREAK_SHAPES,
+      ['letters only, scanned to the end', (n: number) => 'x'.repeat(n)],
+      ['repeated openers with no closer', (n: number) => '('.repeat(n)],
+      ['quotes throughout', (n: number) => '"x'.repeat(n / 2)],
+    ] as const)('%s', (_name, shape) => {
+      expectLinearGrowth(quoteLocationPart, shape);
+    });
   });
 });
 

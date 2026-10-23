@@ -212,7 +212,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     }
 
     const service = getClinicalTrialsService();
-    const result = await service.searchStudies(
+    const totalCount = await service.countStudies(
       {
         queryTerm: input.query,
         queryCond: input.conditionQuery,
@@ -223,13 +223,10 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
         queryOutc: input.outcomeQuery,
         filterOverallStatus: statusFilter,
         filterAdvanced: buildAdvancedFilter(phaseFilter, input.advancedFilter),
-        countTotal: true,
-        pageSize: 0,
         includeUnknownEnrollment: input.includeUnknownEnrollment,
       },
       ctx,
     );
-    const totalCount = result.totalCount ?? 0;
     ctx.log.info('Count completed', { totalCount });
 
     const criteria: Record<string, unknown> = {};

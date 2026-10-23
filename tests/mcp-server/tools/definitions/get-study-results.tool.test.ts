@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/get-study-results.tool
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import {
   JsonRpcErrorCode,
   notFound,
@@ -176,9 +177,59 @@ describe('getStudyResults', () => {
       expect(() => getStudyResults.input!.parse({ nctIds: ['NCT12345678', 'BAD'] })).toThrow();
     });
 
-    it('rejects more than 20 NCT IDs', () => {
-      const ids = Array.from({ length: 21 }, (_, i) => `NCT${String(i).padStart(8, '0')}`);
-      expect(() => getStudyResults.input!.parse({ nctIds: ids })).toThrow();
+    it('accepts up to 500 NCT ID entries and rejects 501 (#153)', () => {
+      const ids = (n: number) =>
+        Array.from({ length: n }, (_, i) => `NCT${String(i).padStart(8, '0')}`);
+      expect(getStudyResults.input!.parse({ nctIds: ids(21) }).nctIds).toHaveLength(21);
+      expect(getStudyResults.input!.parse({ nctIds: ids(500) }).nctIds).toHaveLength(500);
+      expect(() => getStudyResults.input!.parse({ nctIds: ids(501) })).toThrow();
+    });
+
+    it('counts the 500 ceiling in raw entries, duplicates included (#153)', () => {
+      // 21 distinct IDs padded with repeats to 501 entries: the ceiling is on
+      // what the caller sent, so this is rejected like 501 distinct IDs.
+      const distinct = Array.from({ length: 21 }, (_, i) => `NCT${String(i).padStart(8, '0')}`);
+      const padded = [...distinct, ...Array.from({ length: 480 }, () => distinct[0]!)];
+      expect(padded).toHaveLength(501);
+      expect(() => getStudyResults.input!.parse({ nctIds: padded })).toThrow();
+    });
+
+    it('advertises the 500-entry ceiling and no ceiling on the output-only limits (#153)', () => {
+      const props = (
+        z.toJSONSchema(getStudyResults.input!) as unknown as {
+          properties: Record<
+            string,
+            {
+              anyOf?: Array<{ type?: string; maxItems?: number }>;
+              maximum?: number;
+              minimum?: number;
+            }
+          >;
+        }
+      ).properties;
+      const arrayArm = props.nctIds?.anyOf?.find((arm) => arm.type === 'array');
+      expect(arrayArm?.maxItems).toBe(500);
+      // `.int()` alone serializes Zod's safe-integer bound; nothing tighter.
+      for (const key of ['outcomeLimit', 'adverseEventLimit']) {
+        expect(props[key]?.maximum ?? Number.MAX_SAFE_INTEGER).toBe(Number.MAX_SAFE_INTEGER);
+        expect(props[key]?.minimum).toBe(1);
+      }
+    });
+
+    it('accepts outcomeLimit and adverseEventLimit past their former ceilings (#153)', () => {
+      const input = getStudyResults.input!.parse({
+        nctIds: 'NCT12345678',
+        outcomeLimit: 101,
+        adverseEventLimit: 501,
+      });
+      expect(input).toMatchObject({ outcomeLimit: 101, adverseEventLimit: 501 });
+      expect(
+        getStudyResults.input!.parse({
+          nctIds: 'NCT12345678',
+          outcomeLimit: 1_000_000,
+          adverseEventLimit: 1_000_000,
+        }),
+      ).toMatchObject({ outcomeLimit: 1_000_000, adverseEventLimit: 1_000_000 });
     });
 
     it('accepts valid sections enum', () => {
@@ -1224,6 +1275,49 @@ describe('getStudyResults', () => {
       expect(entry.filtersApplied).toBeUndefined();
     });
 
+    it.each([
+      { mode: 'full', summary: false },
+      { mode: 'summary', summary: true },
+    ])(
+      'a limit past a long list returns it whole, reported as untrimmed on both surfaces in $mode mode (#153)',
+      async ({ summary }) => {
+        // Past the former ceilings (100 measures, 500 events per list).
+        mockService.getStudiesBatch.mockResolvedValue([resultsStudy(150, 600, 600)]);
+        const unbounded = await runToolContract(getStudyResults, {
+          nctIds: 'NCT12345678',
+          summary,
+        });
+        const bounded = await runToolContract(getStudyResults, {
+          nctIds: 'NCT12345678',
+          summary,
+          outcomeLimit: 10_000,
+          ...(summary ? {} : { adverseEventLimit: 10_000 }),
+        });
+
+        expect(bounded.isError).toBeFalsy();
+        expect(bounded.structuredContent).toEqual(unbounded.structuredContent);
+        expect(bounded.content).toEqual(unbounded.content);
+        const sc = bounded.structuredContent as {
+          results: Array<{
+            filtersApplied?: unknown;
+            outcomes: unknown[];
+            adverseEvents: Record<string, unknown>;
+          }>;
+          truncated?: boolean;
+        };
+        const [entry] = sc.results;
+        expect(entry!.outcomes).toHaveLength(150);
+        if (summary) expect(entry!.adverseEvents.otherEventCount).toBe(600);
+        else expect(entry!.adverseEvents.otherEvents).toHaveLength(600);
+        expect(entry!.filtersApplied).toBeUndefined();
+        expect(sc.truncated).toBeUndefined();
+        const text = (bounded.content as { text: string }[]).map((b) => b.text).join('\n');
+        expect(text).toContain('### Outcomes (150 measures)');
+        expect(text).toContain('Outcome 150');
+        expect(text).not.toContain('Truncated:');
+      },
+    );
+
     it('applies both caps together', async () => {
       const { entry } = await run({ outcomeLimit: 1, adverseEventLimit: 1 });
       expect(entry.outcomes).toHaveLength(1);
@@ -1907,6 +2001,214 @@ describe('getStudyResults', () => {
     });
   });
 
+  describe('nctIds workload cap (#153)', () => {
+    const ids = (n: number, start = 0) =>
+      Array.from({ length: n }, (_, i) => `NCT${String(start + i).padStart(8, '0')}`);
+
+    /** Upstream answers every requested ID with a results-less record. */
+    const answerEvery = () =>
+      mockService.getStudiesBatch.mockImplementation((requested: string[]) =>
+        Promise.resolve(requested.map((id) => makeStudy(id, false))),
+      );
+
+    const textOf = (result: { content?: unknown }) =>
+      (result.content as { text: string }[]).map((b) => b.text).join('\n');
+
+    type Wire = {
+      deferredNctIds?: string[];
+      fetchErrors?: Array<{ nctId: string }>;
+      results: Array<{ nctId: string }>;
+    };
+
+    // Characterization: calls the cap leaves alone keep today's output.
+    it.each([
+      { shape: '20 distinct IDs', raw: ids(20), distinct: ids(20) },
+      {
+        shape: '18 distinct IDs plus 2 repeats',
+        raw: [...ids(9), 'NCT00000000', ...ids(9, 9), ids(1, 5)[0]!.toLowerCase()],
+        distinct: ids(18),
+      },
+    ])('processes $shape with no deferral', async ({ raw, distinct }) => {
+      answerEvery();
+      const result = await runToolContract(getStudyResults, { nctIds: raw });
+      const sc = result.structuredContent as Wire;
+      expect(sc.results.map((r) => r.nctId)).toEqual(distinct);
+      expect(sc).not.toHaveProperty('deferredNctIds');
+      expect(mockService.getStudiesBatch).toHaveBeenCalledWith(distinct, expect.anything());
+      expect(textOf(result)).not.toContain('Deferred');
+    });
+
+    it('processes the first 20 of 25 distinct IDs and defers the rest on both surfaces', async () => {
+      answerEvery();
+      const result = await runToolContract(getStudyResults, { nctIds: ids(25) });
+      expect(result.isError).toBeFalsy();
+      const sc = result.structuredContent as Wire;
+      expect(sc.results.map((r) => r.nctId)).toEqual(ids(20));
+      expect(sc.deferredNctIds).toEqual(ids(5, 20));
+      expect(sc.fetchErrors).toBeUndefined();
+      expect(mockService.getStudiesBatch).toHaveBeenCalledTimes(1);
+      expect(mockService.getStudiesBatch).toHaveBeenCalledWith(ids(20), expect.anything());
+      // The deferral leads content[], before any study renders.
+      const line = `Deferred: 5 of 25 distinct NCT IDs are past the per-call cap of 20 and were not fetched. Pass them in a follow-up call: ${ids(5, 20).join(', ')}\n`;
+      expect(textOf(result).slice(0, line.length)).toBe(line);
+    });
+
+    it('defers exactly one ID at 21 distinct', async () => {
+      answerEvery();
+      const result = await runToolContract(getStudyResults, { nctIds: ids(21) });
+      const sc = result.structuredContent as Wire;
+      expect(sc.results).toHaveLength(20);
+      expect(sc.deferredNctIds).toEqual(['NCT00000020']);
+      expect(textOf(result)).toContain(
+        'Deferred: 1 of 21 distinct NCT IDs is past the per-call cap of 20 and was not fetched. Pass it in a follow-up call: NCT00000020',
+      );
+    });
+
+    it('serves 500 distinct IDs: 20 fetched, 480 deferred in order', async () => {
+      answerEvery();
+      const result = await runToolContract(getStudyResults, { nctIds: ids(500), summary: true });
+      const sc = result.structuredContent as Wire;
+      expect(sc.results.map((r) => r.nctId)).toEqual(ids(20));
+      expect(sc.deferredNctIds).toEqual(ids(480, 20));
+      expect(textOf(result)).toContain(
+        `Deferred: 480 of 500 distinct NCT IDs are past the per-call cap of 20 and were not fetched. Pass them in a follow-up call: ${ids(480, 20).join(', ')}\n`,
+      );
+    });
+
+    it('applies the cap after deduplication, case variants included', async () => {
+      answerEvery();
+      const distinct = ids(22);
+      // 30 entries, 22 distinct: repeats of already-seen IDs (one lowercased)
+      // are interleaved before the 21st distinct ID appears.
+      const raw = [
+        ...distinct.slice(0, 15),
+        distinct[2]!,
+        distinct[3]!.toLowerCase(),
+        ...distinct.slice(15, 20),
+        distinct[0]!,
+        distinct[1]!,
+        distinct[20]!,
+        distinct[4]!,
+        ` ${distinct[21]!.toLowerCase()} `,
+        distinct[20]!,
+        distinct[19]!,
+        distinct[18]!,
+      ];
+      expect(raw).toHaveLength(30);
+      const result = await runToolContract(getStudyResults, { nctIds: raw });
+      const sc = result.structuredContent as Wire;
+      expect(sc.results.map((r) => r.nctId)).toEqual(distinct.slice(0, 20));
+      // Normalized, deduplicated, first-occurrence order; nothing processed repeats here.
+      expect(sc.deferredNctIds).toEqual(distinct.slice(20));
+    });
+
+    it.each([
+      { path: 'the nctId alias', args: (list: string[]) => ({ nctId: list }) },
+      {
+        path: 'a JSON-stringified array',
+        args: (list: string[]) => ({ nctIds: JSON.stringify(list) }),
+      },
+      {
+        path: 'the nctId alias carrying a JSON-stringified array',
+        args: (list: string[]) => ({ nctId: JSON.stringify(list) }),
+      },
+    ])('reaches the cap through $path', async ({ args }) => {
+      answerEvery();
+      const result = await runToolContract(getStudyResults, args(ids(23)) as never);
+      expect(result.isError).toBeFalsy();
+      const sc = result.structuredContent as Wire;
+      expect(sc.results.map((r) => r.nctId)).toEqual(ids(20));
+      expect(sc.deferredNctIds).toEqual(ids(3, 20));
+    });
+
+    type Rejection = { error: { code: number; message: string; data?: { reason?: string } } };
+
+    /**
+     * The framework undoes a stringified list only when the repaired call then
+     * validates; otherwise it reports the call as sent. Every shape over the
+     * ceiling must still name the ceiling, never the single-ID format error.
+     */
+    it.each([
+      { path: 'the nctId alias', args: (list: string[]) => ({ nctId: list }) },
+      {
+        path: 'a JSON-stringified array',
+        args: (list: string[]) => ({ nctIds: JSON.stringify(list) }),
+      },
+      {
+        path: 'the nctId alias carrying a JSON-stringified array',
+        args: (list: string[]) => ({ nctId: JSON.stringify(list) }),
+      },
+      {
+        path: 'a JSON-stringified array of 21 distinct IDs padded with repeats',
+        args: (list: string[]) => ({
+          nctIds: JSON.stringify([...list.slice(0, 21), ...list.slice(21).map(() => list[0]!)]),
+        }),
+      },
+    ])('rejects 501 entries through $path as the plain array is rejected', async ({ args }) => {
+      const plain = (await runToolContract(getStudyResults, { nctIds: ids(501) }))
+        .structuredContent as Rejection;
+      const result = await runToolContract(getStudyResults, args(ids(501)) as never);
+      const { error } = result.structuredContent as Rejection;
+
+      expect(result.isError).toBe(true);
+      expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+      expect(error.data?.reason).toBe('invalid_arguments');
+      expect(error.message).toBe(plain.error.message);
+      expect(error.message).toContain(
+        'nctIds: Too big: expected at most 500 entries, repeats included (received 501).',
+      );
+      expect(error.message).not.toContain('NCTxxxxxxxx');
+      expect(mockService.getStudiesBatch).not.toHaveBeenCalled();
+    });
+
+    it('serves a JSON-stringified array of exactly 500 entries', async () => {
+      answerEvery();
+      const result = await runToolContract(getStudyResults, {
+        nctIds: JSON.stringify(ids(500)),
+        summary: true,
+      } as never);
+      const sc = result.structuredContent as Wire;
+      expect(result.isError).toBeFalsy();
+      expect(sc.results.map((r) => r.nctId)).toEqual(ids(20));
+      expect(sc.deferredNctIds).toEqual(ids(480, 20));
+    });
+
+    it('never reports a deferred ID as not found, even when upstream answers only some', async () => {
+      // Upstream knows only the first ID; the 19 other processed IDs read as
+      // not found, the 5 deferred ones were never asked about.
+      mockService.getStudiesBatch.mockResolvedValue([makeStudy('NCT00000000', false)]);
+      const result = await runToolContract(getStudyResults, { nctIds: ids(25) });
+      const sc = result.structuredContent as Wire;
+      expect(sc.fetchErrors?.map((e) => e.nctId)).toEqual(ids(19, 1));
+      expect(sc.deferredNctIds).toEqual(ids(5, 20));
+    });
+
+    it('walks only the processed IDs on the per-ID fallback path', async () => {
+      mockService.getStudiesBatch.mockRejectedValue(new Error('Bad request'));
+      mockService.getStudy.mockImplementation((id: string) =>
+        Promise.resolve(makeStudy(id, false)),
+      );
+      const result = await runToolContract(getStudyResults, { nctIds: ids(24) });
+      const sc = result.structuredContent as Wire;
+      expect(mockService.getStudy).toHaveBeenCalledTimes(20);
+      expect(mockService.getStudy.mock.calls.map((c) => c[0])).toEqual(ids(20));
+      expect(sc.results).toHaveLength(20);
+      expect(sc.deferredNctIds).toEqual(ids(4, 20));
+    });
+
+    it('keeps channel parity for a deferral', async () => {
+      answerEvery();
+      const ctx = createMockContext({ errors: getStudyResults.errors });
+      const result = await getStudyResults.handler(
+        getStudyResults.input!.parse({ nctIds: ids(22) }),
+        ctx,
+      );
+      const text = (getStudyResults.format!(result)[0] as { text: string }).text;
+      expect(result.deferredNctIds).toEqual(ids(2, 20));
+      expect(missingLeaves(result, text)).toEqual([]);
+    });
+  });
+
   describe('error contract', () => {
     it('declares only reasons a handler path can throw (#101)', () => {
       // study_not_found is unreachable here: every missing study lands in
@@ -2054,8 +2356,8 @@ describe('getStudyResults', () => {
       expect(mockService.getStudiesBatch).not.toHaveBeenCalled();
     });
 
-    it('still caps nctIds at 20 in the schema', () => {
-      const ids = Array.from({ length: 21 }, (_, i) => `NCT${String(i).padStart(8, '0')}`);
+    it('still bounds nctIds at its 500-entry ceiling in the schema (#153)', () => {
+      const ids = Array.from({ length: 501 }, (_, i) => `NCT${String(i).padStart(8, '0')}`);
       expect(() => getStudyResults.input!.parse({ nctIds: ids })).toThrow();
     });
 

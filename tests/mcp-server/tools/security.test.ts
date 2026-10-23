@@ -82,7 +82,7 @@ const OVERSIZED_INPUTS = {
 // ---------------------------------------------------------------------------
 
 describe('searchStudies — injection and oversized inputs', () => {
-  const mockService = { searchStudies: vi.fn() };
+  const mockService = { searchStudies: vi.fn(), maxPageSize: 200 };
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -123,6 +123,21 @@ describe('searchStudies — injection and oversized inputs', () => {
     });
     const ctx = createMockContext({ errors: searchStudies.errors });
     const result = await searchStudies.handler(searchStudies.input!.parse({}), ctx);
+    assertNoSecretLeak(result);
+  });
+
+  it('per-page cap disclosure names numbers, never the env var (#153)', async () => {
+    mockService.searchStudies.mockResolvedValue({
+      studies: Array.from({ length: 200 }, () => ({ nctId: 'NCT12345678' })),
+      totalCount: 900,
+      nextPageToken: 'tok_page2',
+    });
+    const result = await runToolContract(searchStudies, { query: 'cancer', pageSize: 999 });
+    expect(result.structuredContent).toMatchObject({ truncated: true, cap: 200 });
+    // The disclosure exists and states the cap as a number, so the leak check below has text to scan.
+    expect((result.structuredContent as { notice?: string }).notice).toContain(
+      'per-page cap of 200',
+    );
     assertNoSecretLeak(result);
   });
 
@@ -209,12 +224,12 @@ describe('getStudy — injection and output safety', () => {
 // ---------------------------------------------------------------------------
 
 describe('getStudyCount — injection and output safety', () => {
-  const mockService = { searchStudies: vi.fn() };
+  const mockService = { countStudies: vi.fn() };
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetService.mockReturnValue(mockService as never);
-    mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 42 });
+    mockService.countStudies.mockResolvedValue(42);
   });
 
   it.each(INJECTION_PAYLOADS)(
@@ -245,7 +260,7 @@ describe('getStudyCount — injection and output safety', () => {
       await expect(
         getStudyCount.handler(getStudyCount.input!.parse({ conditionQuery }), ctx),
       ).rejects.toMatchObject({ data: { reason: 'blank_value' } });
-      expect(mockService.searchStudies).not.toHaveBeenCalled();
+      expect(mockService.countStudies).not.toHaveBeenCalled();
     },
   );
 
@@ -258,7 +273,7 @@ describe('getStudyCount — injection and output safety', () => {
     await expect(
       getStudyCount.handler(getStudyCount.input!.parse({ phaseFilter: payload }), ctx),
     ).rejects.toMatchObject({ data: { reason: 'enum_invalid', param: 'phaseFilter' } });
-    expect(mockService.searchStudies).not.toHaveBeenCalled();
+    expect(mockService.countStudies).not.toHaveBeenCalled();
   });
 });
 
@@ -303,9 +318,20 @@ describe('getStudyResults — injection and output safety', () => {
     assertNoSecretLeak(formatted);
   });
 
-  it('rejects array exceeding 20 NCT IDs', () => {
-    const ids = Array.from({ length: 25 }, (_, i) => `NCT${String(i).padStart(8, '0')}`);
+  it('rejects an array past the 500-entry ceiling before fetching (#153)', async () => {
+    const ids = Array.from({ length: 501 }, (_, i) => `NCT${String(i).padStart(8, '0')}`);
     expect(() => getStudyResults.input!.parse({ nctIds: ids })).toThrow();
+    const result = await runToolContract(getStudyResults, { nctIds: ids });
+    expect(result.isError).toBe(true);
+    expect(mockService.getStudiesBatch).not.toHaveBeenCalled();
+  });
+
+  it('per-call cap disclosure names numbers, never an env var (#153)', async () => {
+    const ids = Array.from({ length: 25 }, (_, i) => `NCT${String(i).padStart(8, '0')}`);
+    const result = await runToolContract(getStudyResults, { nctIds: ids });
+    expect(result.structuredContent).toMatchObject({ deferredNctIds: ids.slice(20) });
+    expect(JSON.stringify(result.content)).toContain('per-call cap of 20');
+    assertNoSecretLeak(result);
   });
 
   it.each(['outcomeOffset', 'seriousEventOffset', 'otherEventOffset'])(
@@ -725,12 +751,13 @@ describe('getFieldDefinitions — path traversal and injection', () => {
 // ---------------------------------------------------------------------------
 
 describe('findEligible — injection and output safety', () => {
-  const mockService = { searchStudies: vi.fn() };
+  const mockService = { countStudies: vi.fn(), searchStudies: vi.fn() };
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetService.mockReturnValue(mockService as never);
     mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+    mockService.countStudies.mockResolvedValue(0);
   });
 
   const baseInput = {
@@ -769,8 +796,24 @@ describe('findEligible — injection and output safety', () => {
     expect(() => findEligible.input!.parse({ ...baseInput, sex: 'UNKNOWN' as never })).toThrow();
   });
 
-  it('rejects maxResults above 50', () => {
-    expect(() => findEligible.input!.parse({ ...baseInput, maxResults: 51 })).toThrow();
+  it('rejects maxResults above its hard ceiling of 1000', () => {
+    expect(() => findEligible.input!.parse({ ...baseInput, maxResults: 1001 })).toThrow();
+  });
+
+  it('names numbers, never an env var, in the maxResults cap disclosure', async () => {
+    mockService.searchStudies.mockResolvedValue({
+      studies: Array.from({ length: 50 }, (_, i) => ({
+        protocolSection: { identificationModule: { nctId: `NCT${String(i).padStart(8, '0')}` } },
+      })),
+      totalCount: 312,
+    });
+    const result = await runToolContract(findEligible, { ...baseInput, maxResults: 1000 });
+    expect(result.structuredContent).toMatchObject({ truncated: true, cap: 50 });
+    // The disclosure exists and states the cap as a number, so the leak check below has text to scan.
+    expect((result.structuredContent as { notice?: string }).notice).toContain(
+      'per-call cap of 50',
+    );
+    assertNoSecretLeak(result);
   });
 
   it('location city injection payload does not crash handler', async () => {

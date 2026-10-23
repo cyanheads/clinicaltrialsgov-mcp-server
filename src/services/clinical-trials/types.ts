@@ -30,6 +30,12 @@ export interface SearchParams {
   sort?: string | undefined;
 }
 
+/** Parameters for a count-only request: the query and filters, with no paging, sort, or projection. */
+export type CountParams = Omit<
+  SearchParams,
+  'countTotal' | 'fields' | 'pageSize' | 'pageToken' | 'sort'
+>;
+
 /** A study record from the API. Shape depends on fields selection. */
 export type Study = Record<string, unknown>;
 

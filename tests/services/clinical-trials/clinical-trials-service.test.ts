@@ -205,14 +205,18 @@ describe('ClinicalTrialsService', () => {
       expect(calledUrl.searchParams.get('filter.advanced')).toBe('AREA[StudyType]INTERVENTIONAL');
     });
 
-    it('caps pageSize at maxPageSize', async () => {
+    it('exposes the configured page cap without applying it to the request (#153)', async () => {
+      // The cap belongs to a caller's own page request, which the search tool
+      // applies; an internal fetch sized by its own input (the eligibility
+      // candidate fetch) sends its pageSize unchanged.
       mockFetch.mockResolvedValue(jsonResponse({ studies: [] }));
       const ctx = createMockContext();
 
       await service.searchStudies({ pageSize: 999 }, ctx);
 
+      expect(service.maxPageSize).toBe(100);
       const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
-      expect(calledUrl.searchParams.get('pageSize')).toBe('100');
+      expect(calledUrl.searchParams.get('pageSize')).toBe('999');
     });
 
     it('sets format=json by default', async () => {
@@ -234,6 +238,114 @@ describe('ClinicalTrialsService', () => {
       const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.searchParams.has('query.term')).toBe(false);
       expect(calledUrl.searchParams.has('filter.overallStatus')).toBe(false);
+    });
+  });
+
+  describe('countStudies (#160)', () => {
+    // Upstream treats pageSize=0 as its default page — ten full studies — so a
+    // count asks for one study projected to its ID: the total rides the same
+    // response either way.
+    it('requests one NCTId-only study with countTotal and returns the total', async () => {
+      mockFetch.mockResolvedValue(
+        jsonResponse({ totalCount: 12_014, studies: [{ protocolSection: {} }] }),
+      );
+      const ctx = createMockContext();
+
+      const total = await service.countStudies({ queryCond: 'Type 2 Diabetes' }, ctx);
+
+      expect(total).toBe(12_014);
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
+      expect(calledUrl.pathname).toBe('/v2/studies');
+      expect(calledUrl.searchParams.get('countTotal')).toBe('true');
+      expect(calledUrl.searchParams.get('pageSize')).toBe('1');
+      expect(calledUrl.searchParams.get('fields')).toBe('NCTId');
+      expect(calledUrl.searchParams.get('query.cond')).toBe('Type 2 Diabetes');
+    });
+
+    it("forwards the caller's query, filters, and the default unknown-enrollment exclusion", async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ totalCount: 7, studies: [] }));
+      const ctx = createMockContext();
+
+      await service.countStudies(
+        {
+          queryTerm: 'general',
+          queryLocn: 'SEARCH[Location](Seattle AND "United States")',
+          filterOverallStatus: ['RECRUITING'],
+          filterAdvanced: 'AREA[Phase]PHASE3',
+        },
+        ctx,
+      );
+
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
+      expect(calledUrl.searchParams.get('query.term')).toBe('general');
+      expect(calledUrl.searchParams.get('query.locn')).toBe(
+        'SEARCH[Location](Seattle AND "United States")',
+      );
+      expect(calledUrl.searchParams.get('filter.overallStatus')).toBe('RECRUITING');
+      expect(calledUrl.searchParams.get('filter.advanced')).toBe(
+        '(AREA[Phase]PHASE3) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])',
+      );
+    });
+
+    it('drops the unknown-enrollment exclusion when includeUnknownEnrollment is set', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ totalCount: 99, studies: [] }));
+      const ctx = createMockContext();
+
+      await service.countStudies({ queryCond: 'asthma', includeUnknownEnrollment: true }, ctx);
+
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
+      expect(calledUrl.searchParams.has('filter.advanced')).toBe(false);
+    });
+
+    it('returns 0 for a zero-match query', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ totalCount: 0, studies: [] }));
+      const ctx = createMockContext();
+
+      await expect(service.countStudies({ queryCond: 'zzqxnomatch' }, ctx)).resolves.toBe(0);
+    });
+
+    it('defaults to 0 when upstream omits totalCount', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [] }));
+      const ctx = createMockContext();
+
+      await expect(service.countStudies({}, ctx)).resolves.toBe(0);
+    });
+
+    it('makes exactly one upstream request on a fresh field-validating service', async () => {
+      // The fixed NCTId projection never goes through local field validation,
+      // which would otherwise fetch /studies/metadata on the server's first count.
+      const fresh = new ClinicalTrialsService(testConfig, {
+        ...fastOptions,
+        validateFieldsLocally: true,
+      });
+      mockFetch.mockResolvedValue(jsonResponse({ totalCount: 3, studies: [] }));
+      const ctx = createMockContext();
+
+      await fresh.countStudies({ queryCond: 'asthma' }, ctx);
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(new URL(mockFetch.mock.calls[0]![0] as string).pathname).toBe('/v2/studies');
+    });
+
+    it('surfaces an upstream parse error with the same reason as a search', async () => {
+      mockFetch.mockResolvedValue(
+        textResponse("Error parsing query in query.term: extraneous input ']' expecting <EOF>"),
+      );
+      const ctx = createMockContext();
+
+      const err = await service.countStudies({ queryTerm: 'foo ]' }, ctx).catch((e) => e);
+      expect(err).toBeInstanceOf(McpError);
+      expect((err as McpError).data?.reason).toBe('query_parse_error');
+    });
+
+    it('surfaces exhausted 429 retries as rate_limited', async () => {
+      // Zero retries: the retry loop itself is covered under error handling.
+      const noRetry = new ClinicalTrialsService(testConfig, { ...fastOptions, maxRetries: 0 });
+      mockFetch.mockResolvedValue(jsonResponse(null, 429));
+      const ctx = createMockContext();
+
+      const err = await noRetry.countStudies({ queryCond: 'asthma' }, ctx).catch((e) => e);
+      expect((err as McpError).data?.reason).toBe('rate_limited');
     });
   });
 
@@ -293,6 +405,19 @@ describe('ClinicalTrialsService', () => {
       const ctx = createMockContext();
 
       await service.getStudiesBatch(['NCT12345678', 'NCT87654321'], ctx);
+
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
+      expect(calledUrl.searchParams.get('pageSize')).toBe('2');
+    });
+
+    it('sizes the batch page to the ID count even past the page cap (#153)', async () => {
+      // A page clamped below the ID count dropped every study past the cap, and
+      // the results tool reported the missing ones as "Study not found".
+      const smallCap = new ClinicalTrialsService({ ...testConfig, maxPageSize: 1 }, fastOptions);
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [] }));
+      const ctx = createMockContext();
+
+      await smallCap.getStudiesBatch(['NCT12345678', 'NCT87654321'], ctx);
 
       const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.searchParams.get('pageSize')).toBe('2');

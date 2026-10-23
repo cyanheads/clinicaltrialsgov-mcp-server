@@ -20,10 +20,11 @@ import { haversineMi } from '@/mcp-server/tools/utils/geo-helpers.js';
 import { missingLeaves } from '../../../helpers/format-parity.js';
 
 describe('searchStudies', () => {
-  const mockService = { searchStudies: vi.fn() };
+  const mockService = { searchStudies: vi.fn(), maxPageSize: 200 };
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockService.maxPageSize = 200;
     mockGetService.mockReturnValue(mockService as never);
   });
 
@@ -42,8 +43,13 @@ describe('searchStudies', () => {
       expect(() => searchStudies.input!.parse({ pageSize: 0 })).toThrow();
     });
 
-    it('rejects pageSize above maxPageSize', () => {
-      expect(() => searchStudies.input!.parse({ pageSize: 999 })).toThrow();
+    it("accepts pageSize up to ClinicalTrials.gov's page maximum of 1000 (#153)", () => {
+      expect(searchStudies.input!.parse({ pageSize: 999 }).pageSize).toBe(999);
+      expect(searchStudies.input!.parse({ pageSize: 1000 }).pageSize).toBe(1000);
+    });
+
+    it('rejects pageSize above 1000 (#153)', () => {
+      expect(() => searchStudies.input!.parse({ pageSize: 1001 })).toThrow();
     });
 
     it('accepts valid pageSize', () => {
@@ -584,6 +590,148 @@ describe('searchStudies', () => {
       const result = await searchStudies.handler(searchStudies.input!.parse({}), ctx);
       expect(result.nextPageToken).toBeUndefined();
       expect(Object.hasOwn(result, 'nextPageToken')).toBe(false);
+    });
+  });
+
+  // pageSize between the server's per-page cap and the upstream maximum is
+  // served at the cap and disclosed, rather than rejected.
+  describe('per-page cap (#153, #157)', () => {
+    const page = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        protocolSection: {
+          identificationModule: { nctId: `NCT${String(i + 1).padStart(8, '0')}` },
+        },
+      }));
+    const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+      (result.content as { text: string }[]).map((b) => b.text).join('\n');
+
+    it('requests the cap and discloses the cut on both surfaces when studies remain', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: page(200),
+        totalCount: 4321,
+        nextPageToken: 'tok_page2',
+      });
+
+      const result = await runToolContract(searchStudies, { query: 'cancer', pageSize: 500 });
+
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({ pageSize: 200 });
+      expect(result.isError).toBeFalsy();
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(sc).toMatchObject({
+        truncated: true,
+        shown: 200,
+        cap: 200,
+        nextPageToken: 'tok_page2',
+      });
+      expect((sc.studies as unknown[]).length).toBe(200);
+      const notice = sc.notice as string;
+      expect(notice).toBe(
+        "Requested pageSize 500 is above this server's per-page cap of 200, so this page holds 200 studies. Pass nextPageToken to continue.",
+      );
+      const text = textOf(result);
+      expect(text).toContain(notice);
+      expect(text).toContain('nextPageToken: tok_page2');
+      expect(`${JSON.stringify(sc)}\n${text}`).not.toMatch(/CT_[A-Z_]+/);
+    });
+
+    it('applies the cap the service reports, not a schema bound', async () => {
+      mockService.maxPageSize = 1;
+      mockService.searchStudies.mockResolvedValue({
+        studies: page(1),
+        totalCount: 7,
+        nextPageToken: 'tok_page2',
+      });
+
+      const result = await runToolContract(searchStudies, { query: 'cancer' });
+
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({ pageSize: 1 });
+      expect(result.structuredContent).toMatchObject({ truncated: true, shown: 1, cap: 1 });
+      expect((result.structuredContent as { notice: string }).notice).toBe(
+        "Requested pageSize 10 is above this server's per-page cap of 1, so this page holds 1 study. Pass nextPageToken to continue.",
+      );
+    });
+
+    it('discloses the cut on a continuation page that still has a cursor', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: page(200),
+        nextPageToken: 'tok_page3',
+      });
+
+      const result = await runToolContract(searchStudies, {
+        query: 'cancer',
+        pageSize: 1000,
+        pageToken: 'tok_page2',
+      });
+
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({
+        pageSize: 200,
+        pageToken: 'tok_page2',
+      });
+      expect(result.structuredContent).toMatchObject({ truncated: true, shown: 200, cap: 200 });
+    });
+
+    it('adds nothing when the match set ends on this page', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: page(30), totalCount: 30 });
+
+      const result = await runToolContract(searchStudies, { query: 'rare', pageSize: 500 });
+
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({ pageSize: 200 });
+      expect(result.isError).toBeFalsy();
+      expect(sc).not.toHaveProperty('truncated');
+      expect(sc).not.toHaveProperty('shown');
+      expect(sc).not.toHaveProperty('cap');
+      expect(sc).not.toHaveProperty('notice');
+      expect(sc).not.toHaveProperty('nextPageToken');
+    });
+
+    it('adds nothing when the upstream cursor is dropped as exhausted', async () => {
+      // A full page with a cursor that totalCount proves leads nowhere.
+      mockService.searchStudies.mockResolvedValue({
+        studies: page(200),
+        totalCount: 200,
+        nextPageToken: 'tok_empty_next',
+      });
+
+      const result = await runToolContract(searchStudies, { query: 'x', pageSize: 500 });
+
+      expect(result.isError).toBeFalsy();
+      expect((result.structuredContent as { studies: unknown[] }).studies).toHaveLength(200);
+      expect(result.structuredContent).not.toHaveProperty('truncated');
+      expect(result.structuredContent).not.toHaveProperty('nextPageToken');
+    });
+
+    it('keeps the no-match notice and adds no cap fields on an empty result', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+
+      const result = await runToolContract(searchStudies, { query: 'zzzz', pageSize: 500 });
+
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(sc).not.toHaveProperty('truncated');
+      expect(sc.notice).toBe('Try broader or alternative search terms.');
+    });
+
+    it('leaves a request at or under the cap untouched', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: page(200),
+        totalCount: 4321,
+        nextPageToken: 'tok_page2',
+      });
+
+      const result = await runToolContract(searchStudies, { query: 'cancer', pageSize: 200 });
+
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({ pageSize: 200 });
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(sc).not.toHaveProperty('truncated');
+      expect(sc).not.toHaveProperty('notice');
+      expect(sc.nextPageToken).toBe('tok_page2');
+    });
+
+    it('rejects pageSize 1001 before reaching the service', async () => {
+      const result = await runToolContract(searchStudies, { query: 'cancer', pageSize: 1001 });
+
+      expect(result.isError).toBe(true);
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
     });
   });
 

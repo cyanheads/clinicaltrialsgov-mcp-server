@@ -21,6 +21,27 @@ const VALID_SECTIONS = [
 type Section = (typeof VALID_SECTIONS)[number];
 
 /**
+ * Distinct NCT IDs one call fetches. A full-mode results record can exceed
+ * 500KB, so the batch is the workload; IDs past it are served back unfetched
+ * in `deferredNctIds` rather than rejected.
+ */
+const NCT_IDS_PER_CALL = 20;
+
+/**
+ * Hard ceiling on `nctIds` entries, repeats included — counted on what the
+ * caller sent, so the schema advertises it and rejects absurd input before
+ * any deduplication runs.
+ *
+ * Enforced by a root-level check rather than `.max()` on the array arm, which
+ * carries it only as advertised `maxItems`. The framework undoes a stringified
+ * list only when the repaired call validates, and an issue at `nctIds` refuses
+ * that repair, so the caller would be told about the call as sent — a string
+ * failing the single-ID format. Raised at the root, the issue leaves the
+ * repair standing and every input shape reports the same ceiling rejection.
+ */
+const NCT_ID_ENTRY_CEILING = 500;
+
+/**
  * Which section each offset bounds. An offset is only meaningful when the call
  * returns that section's list as a window — outcomes in either mode, the
  * adverse-event lists in full mode only — so this is also the table the handler
@@ -1110,7 +1131,7 @@ function formatMoreInfo(mi: RO, lines: string[]) {
 }
 
 export const getStudyResults = tool('clinicaltrials_get_study_results', {
-  description: `Fetch clinical trial results data from ClinicalTrials.gov for completed studies — outcome measures with statistics, adverse events, participant flow, baseline characteristics, and results metadata (limitations & caveats, certain-agreement disclosure restrictions, results point of contact). Only available for studies where hasResults is true. Use clinicaltrials_search_studies first to find studies with results. A results-rich record can exceed 500KB per study in full mode — bound it with summary=true, narrower sections, or the outcomeLimit / adverseEventLimit caps; outcomeLimit / outcomeOffset also page summarized outcomes. A bounded list is resumable: outcomeOffset / seriousEventOffset / otherEventOffset start the next window, and each study's filtersApplied reports what was trimmed and the next offset for every list left short. A previous (alias) NCT ID resolves to its canonical study, named in canonicalNctId.`,
+  description: `Fetch clinical trial results data from ClinicalTrials.gov for completed studies — outcome measures with statistics, adverse events, participant flow, baseline characteristics, and results metadata (limitations & caveats, certain-agreement disclosure restrictions, results point of contact). Only available for studies where hasResults is true. Use clinicaltrials_search_studies first to find studies with results. Each call fetches up to ${NCT_IDS_PER_CALL} distinct NCT IDs and returns any further IDs in deferredNctIds for a follow-up call. A results-rich record can exceed 500KB per study in full mode — bound it with summary=true, narrower sections, or the outcomeLimit / adverseEventLimit caps; outcomeLimit / outcomeOffset also page summarized outcomes. A bounded list is resumable: outcomeOffset / seriousEventOffset / otherEventOffset start the next window, and each study's filtersApplied reports what was trimmed and the next offset for every list left short. A previous (alias) NCT ID resolves to its canonical study, named in canonicalNctId.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -1143,73 +1164,91 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
   // clinicaltrials_get_study_record's spelling of the same key.
   inputAliases: { nctId: 'nctIds' },
 
-  input: z.object({
-    nctIds: z
-      .union([
-        nctIdSchema.describe('A single NCT ID.'),
-        z.array(nctIdSchema).max(20).describe('Multiple NCT IDs (max 20).'),
-      ])
-      .describe(
-        'One or more NCT IDs (max 20) — an empty list is rejected, and a repeated ID collapses to one results entry in first-occurrence order. E.g., "NCT12345678" or ["NCT12345678", "NCT87654321"]. Use summary=true for large batches to avoid large payloads.',
-      ),
-    sections: z
-      .union([
-        z.enum(VALID_SECTIONS).describe('A single section name.'),
-        z.array(z.enum(VALID_SECTIONS)).describe('Multiple section names.'),
-      ])
-      .optional()
-      .describe(
-        `Filter which sections to return. Values: outcomes, adverseEvents, participantFlow, baseline, moreInfo. Omit for all sections — an empty list is rejected, not treated as omission.`,
-      ),
-    summary: z
-      .boolean()
-      .default(false)
-      .describe(
-        'Return condensed summaries instead of full data. Full mode renders every row and field on both output channels, so a large results set can exceed 500KB per study; summary mode typically cuts that to a few KB, scaling with the measure count rather than to a fixed ceiling. An outcome summary keeps the title, type, timeframe, paramType, dispersionType, unit, group/class/analysis counts, per-group denominators, a top-line projection of a single class/category cell — labelled with the class and category titles it came from, that class’s own denominators, and a count of the siblings it omits — and the first statistical analysis with its group description and compared groups named by title. The measurements outside that cell and the remaining analyses are dropped; re-run with summary=false to reach them. outcomeLimit / outcomeOffset page the summarized outcome list as they page full mode; the adverse-event bounds do not apply here, since topEvents ranks the whole event list. For a middle ground, keep full mode and cap the two lists that carry the bulk with outcomeLimit / adverseEventLimit.',
-      ),
-    outcomeLimit: z
-      .number()
-      .int()
-      .min(1)
-      .max(100)
-      .optional()
-      .describe(
-        'Optional cap on the number of outcome measures returned per study, taken in the order ClinicalTrials.gov publishes them. Omit for no cap (every measure). Applies in both modes: each surviving measure keeps its complete groups/classes/measurements/analyses tree in full mode, or its whole summary projection with summary: true. Upstream total preserved in filtersApplied.totalOutcomes only when the cap trims the list.',
-      ),
-    adverseEventLimit: z
-      .number()
-      .int()
-      .min(1)
-      .max(500)
-      .optional()
-      .describe(
-        'Optional cap on the number of serious and other adverse events returned per study, applied to each list separately in upstream order. Omit for no cap (every event). Applies to full mode only — summary mode already ranks the top 20 by the most participants affected in any one event group. Event groups are never capped. Upstream totals preserved in filtersApplied.totalSeriousEvents / totalOtherEvents only when the cap trims a list.',
-      ),
-    outcomeOffset: z
-      .number()
-      .int()
-      .min(0)
-      .optional()
-      .describe(
-        'Optional index of the first outcome measure to return, in the order ClinicalTrials.gov publishes them. Omit or 0 to start at the first. Pair with outcomeLimit to page a long list: each response reports filtersApplied.nextOutcomeOffset for the study, and the list is exhausted when that field is absent. Applied to every study in the call. An offset at or past the end returns an empty list with filtersApplied.totalOutcomes stating the upstream length, not an error. Works in summary mode too, paging the summarized measures. Rejected when sections excludes outcomes.',
-      ),
-    seriousEventOffset: z
-      .number()
-      .int()
-      .min(0)
-      .optional()
-      .describe(
-        'Optional index of the first serious adverse event to return, in upstream order. Omit or 0 to start at the first. Pages independently of otherEventOffset — the two lists have uncorrelated lengths — and pairs with adverseEventLimit, which bounds each list separately. Continue from filtersApplied.nextSeriousEventOffset until that field is absent. Applied to every study in the call. Rejected with summary: true or when sections excludes adverseEvents.',
-      ),
-    otherEventOffset: z
-      .number()
-      .int()
-      .min(0)
-      .optional()
-      .describe(
-        'Optional index of the first other (non-serious) adverse event to return, in upstream order. Omit or 0 to start at the first. Pages independently of seriousEventOffset and pairs with adverseEventLimit. Continue from filtersApplied.nextOtherEventOffset until that field is absent. Applied to every study in the call. Rejected with summary: true or when sections excludes adverseEvents.',
-      ),
-  }),
+  input: z
+    .object({
+      nctIds: z
+        .union([
+          nctIdSchema.describe('A single NCT ID.'),
+          z
+            .array(nctIdSchema)
+            .meta({ maxItems: NCT_ID_ENTRY_CEILING })
+            .describe(
+              `Multiple NCT IDs, at most ${NCT_ID_ENTRY_CEILING} entries counting repeats.`,
+            ),
+        ])
+        .describe(
+          `One or more NCT IDs — an empty list is rejected, and a repeated ID collapses to one results entry in first-occurrence order. A call fetches the first ${NCT_IDS_PER_CALL} distinct IDs; any further distinct IDs come back unfetched in deferredNctIds, in first-occurrence order, for a follow-up call. A list over ${NCT_ID_ENTRY_CEILING} entries, repeats included, is rejected. E.g., "NCT12345678" or ["NCT12345678", "NCT87654321"]. Use summary=true for large batches to avoid large payloads.`,
+        ),
+      sections: z
+        .union([
+          z.enum(VALID_SECTIONS).describe('A single section name.'),
+          z.array(z.enum(VALID_SECTIONS)).describe('Multiple section names.'),
+        ])
+        .optional()
+        .describe(
+          `Filter which sections to return. Values: outcomes, adverseEvents, participantFlow, baseline, moreInfo. Omit for all sections — an empty list is rejected, not treated as omission.`,
+        ),
+      summary: z
+        .boolean()
+        .default(false)
+        .describe(
+          'Return condensed summaries instead of full data. Full mode renders every row and field on both output channels, so a large results set can exceed 500KB per study; summary mode typically cuts that to a few KB, scaling with the measure count rather than to a fixed ceiling. An outcome summary keeps the title, type, timeframe, paramType, dispersionType, unit, group/class/analysis counts, per-group denominators, a top-line projection of a single class/category cell — labelled with the class and category titles it came from, that class’s own denominators, and a count of the siblings it omits — and the first statistical analysis with its group description and compared groups named by title. The measurements outside that cell and the remaining analyses are dropped; re-run with summary=false to reach them. outcomeLimit / outcomeOffset page the summarized outcome list as they page full mode; the adverse-event bounds do not apply here, since topEvents ranks the whole event list. For a middle ground, keep full mode and cap the two lists that carry the bulk with outcomeLimit / adverseEventLimit.',
+        ),
+      outcomeLimit: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe(
+          'Optional cap on the number of outcome measures returned per study, taken in the order ClinicalTrials.gov publishes them. Omit for no cap (every measure); a limit at or past the list length returns the whole list. Applies in both modes: each surviving measure keeps its complete groups/classes/measurements/analyses tree in full mode, or its whole summary projection with summary: true. Upstream total preserved in filtersApplied.totalOutcomes only when the cap trims the list.',
+        ),
+      adverseEventLimit: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe(
+          'Optional cap on the number of serious and other adverse events returned per study, applied to each list separately in upstream order. Omit for no cap (every event); a limit at or past a list’s length returns that whole list. Applies to full mode only — summary mode already ranks the top 20 by the most participants affected in any one event group. Event groups are never capped. Upstream totals preserved in filtersApplied.totalSeriousEvents / totalOtherEvents only when the cap trims a list.',
+        ),
+      outcomeOffset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          'Optional index of the first outcome measure to return, in the order ClinicalTrials.gov publishes them. Omit or 0 to start at the first. Pair with outcomeLimit to page a long list: each response reports filtersApplied.nextOutcomeOffset for the study, and the list is exhausted when that field is absent. Applied to every study in the call. An offset at or past the end returns an empty list with filtersApplied.totalOutcomes stating the upstream length, not an error. Works in summary mode too, paging the summarized measures. Rejected when sections excludes outcomes.',
+        ),
+      seriousEventOffset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          'Optional index of the first serious adverse event to return, in upstream order. Omit or 0 to start at the first. Pages independently of otherEventOffset — the two lists have uncorrelated lengths — and pairs with adverseEventLimit, which bounds each list separately. Continue from filtersApplied.nextSeriousEventOffset until that field is absent. Applied to every study in the call. Rejected with summary: true or when sections excludes adverseEvents.',
+        ),
+      otherEventOffset: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          'Optional index of the first other (non-serious) adverse event to return, in upstream order. Omit or 0 to start at the first. Pages independently of seriousEventOffset and pairs with adverseEventLimit. Continue from filtersApplied.nextOtherEventOffset until that field is absent. Applied to every study in the call. Rejected with summary: true or when sections excludes adverseEvents.',
+        ),
+    })
+    // The nctIds ceiling, at the root so a repaired stringified list reports it (see NCT_ID_ENTRY_CEILING).
+    .check((ctx) => {
+      const { nctIds } = ctx.value;
+      if (!Array.isArray(nctIds) || nctIds.length <= NCT_ID_ENTRY_CEILING) return;
+      ctx.issues.push({
+        code: 'too_big',
+        origin: 'array',
+        maximum: NCT_ID_ENTRY_CEILING,
+        inclusive: true,
+        input: nctIds,
+        path: [],
+        message: `nctIds: Too big: expected at most ${NCT_ID_ENTRY_CEILING} entries, repeats included (received ${nctIds.length}). Each call fetches the first ${NCT_IDS_PER_CALL} distinct IDs; send a longer list across several calls.`,
+      });
+    }),
 
   output: z.object({
     results: z
@@ -1360,6 +1399,12 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       )
       .optional()
       .describe('Studies that could not be fetched.'),
+    deferredNctIds: z
+      .array(z.string())
+      .optional()
+      .describe(
+        `Requested NCT IDs past the per-call cap of ${NCT_IDS_PER_CALL} distinct IDs, normalized and deduplicated, in first-occurrence order. Not fetched — pass them as nctIds in a follow-up call. Absent when every requested ID was processed.`,
+      ),
     truncated: z
       .boolean()
       .optional()
@@ -1374,7 +1419,11 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     // entries spent the caller's payload on a copy. An alias and its own
     // canonical ID stay distinct here — they are different requested IDs, and
     // each gets its own entry even though upstream returns one record.
-    const nctIds = [...new Set(toArray(input.nctIds))];
+    const distinctIds = [...new Set(toArray(input.nctIds))];
+    // The per-call cap counts distinct IDs, so it applies after the dedupe; the
+    // rest are named back, unfetched, rather than rejected.
+    const nctIds = distinctIds.slice(0, NCT_IDS_PER_CALL);
+    const deferredNctIds = distinctIds.slice(NCT_IDS_PER_CALL);
     const requestedSections = input.sections
       ? Array.isArray(input.sections)
         ? input.sections
@@ -1566,6 +1615,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       resultCount: results.length,
       withoutResults: studiesWithoutResults.length,
       errors: fetchErrors.length,
+      deferred: deferredNctIds.length,
       truncated,
     });
 
@@ -1573,12 +1623,24 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       results,
       ...(studiesWithoutResults.length > 0 ? { studiesWithoutResults } : {}),
       ...(fetchErrors.length > 0 ? { fetchErrors } : {}),
+      ...(deferredNctIds.length > 0 ? { deferredNctIds } : {}),
       ...(truncated ? { truncated } : {}),
     };
   },
 
   format: (result) => {
     const lines: string[] = [];
+
+    // Leads the output: a reader of a long batch learns up front that part of
+    // the request was not processed, before any study renders. A deferral
+    // means the cap was filled, so the distinct total is cap + deferred.
+    if (result.deferredNctIds?.length) {
+      const deferred = result.deferredNctIds;
+      const one = deferred.length === 1;
+      lines.push(
+        `Deferred: ${deferred.length} of ${NCT_IDS_PER_CALL + deferred.length} distinct NCT IDs ${one ? 'is' : 'are'} past the per-call cap of ${NCT_IDS_PER_CALL} and ${one ? 'was' : 'were'} not fetched. Pass ${one ? 'it' : 'them'} in a follow-up call: ${deferred.join(', ')}\n`,
+      );
+    }
 
     for (const r of result.results) {
       // The requested ID leads — it is what the caller asked for — with the

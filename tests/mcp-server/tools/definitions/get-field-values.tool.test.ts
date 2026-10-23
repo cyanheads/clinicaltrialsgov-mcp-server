@@ -4,7 +4,8 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import MarkdownIt from 'markdown-it';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { missingLeaves } from '../../../helpers/format-parity.js';
 
@@ -65,7 +66,7 @@ describe('getFieldValues', () => {
       const input = getFieldValues.input!.parse({ fields: 'OverallStatus' });
       const result = await getFieldValues.handler(input, ctx);
 
-      expect(result.fieldStats).toBe(stats);
+      expect(result.fieldStats).toEqual(stats);
       expect(mockService.getFieldValues).toHaveBeenCalledWith(['OverallStatus'], ctx);
     });
 
@@ -636,6 +637,491 @@ describe('getFieldValues', () => {
     it('carries every structured leaf into content[] (format parity)', () => {
       const text = (getFieldValues.format!(mixed as never)[0] as { text: string }).text;
       expect(missingLeaves(mixed, text)).toEqual([]);
+    });
+  });
+
+  /** Run stats through the handler, then render the handler's result. */
+  const present = async (stats: Record<string, unknown>[]) => {
+    mockService.getFieldValues.mockResolvedValue(stats);
+    const ctx = createMockContext({ errors: getFieldValues.errors });
+    const input = getFieldValues.input!.parse({ fields: stats.map((s) => s.piece as string) });
+    const result = await getFieldValues.handler(input, ctx);
+    const text = (getFieldValues.format!(result)[0] as { text: string }).text;
+    return { result, text, enrichment: getEnrichment(ctx) };
+  };
+
+  /** A STRING stat carrying `value` as its longest recorded value. */
+  const withLongest = (
+    piece: string,
+    value: string,
+    nctId: string,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    field: `protocolSection.someModule.${piece}`,
+    piece,
+    type: 'STRING',
+    missingStudiesCount: 1077,
+    uniqueValuesCount: 0,
+    longest: { value, length: value.length, nctId },
+    ...extra,
+  });
+
+  /**
+   * A longest value is a whole recorded value — 32,344 characters for
+   * DetailedDescription — so the handler bounds it before either surface reads
+   * it, and a notice names the call that returns the full text (#161).
+   */
+  describe('longest value preview (#161)', () => {
+    const description = `START ${'d'.repeat(32_000)} ${'e'.repeat(333)} END`;
+    const criteria = `Inclusion: ${'c'.repeat(20_192)}`;
+
+    it('cuts a value over 2,000 characters to a prefix flagged truncated, keeping length and nctId', async () => {
+      const { result } = await present([
+        withLongest('DetailedDescription', description, 'NCT06708767'),
+      ]);
+      const longest = result.fieldStats[0]!.longest!;
+
+      expect(description).toHaveLength(32_344);
+      expect(longest.value).toHaveLength(2000);
+      expect(description.startsWith(longest.value)).toBe(true);
+      expect(longest).toEqual({
+        value: description.slice(0, 2000),
+        length: 32_344,
+        nctId: 'NCT06708767',
+        truncated: true,
+      });
+    });
+
+    it.each([
+      ['an 11-character value', 11, false],
+      ['a value of exactly 2,000 characters', 2000, false],
+      ['a value of 2,001 characters', 2001, true],
+    ])('previews %s only past the bound', async (_label, size, cut) => {
+      const value = 'v'.repeat(size);
+      const { result } = await present([withLongest('TargetDuration', value, 'NCT05910151')]);
+      const longest = result.fieldStats[0]!.longest!;
+
+      expect(longest.length).toBe(size);
+      expect(longest.value).toHaveLength(cut ? 2000 : size);
+      expect('truncated' in longest).toBe(cut);
+    });
+
+    it('never splits a surrogate pair at the cut', async () => {
+      /**
+       * The emoji's high surrogate is the 2,000th code unit: a plain 2,000-unit
+       * cut would end the preview on half a character.
+       */
+      const straddling = `${'a'.repeat(1999)}😀${'b'.repeat(500)}`;
+      // Here the pair ends exactly at the bound and survives whole.
+      const ending = `${'a'.repeat(1998)}😀${'b'.repeat(500)}`;
+      const { result } = await present([
+        withLongest('BriefSummary', straddling, 'NCT00000001'),
+        withLongest('OfficialTitle', ending, 'NCT00000002'),
+      ]);
+      const [first, second] = result.fieldStats.map((s) => s.longest!);
+
+      expect(first!.value).toBe('a'.repeat(1999));
+      expect(first!.length).toBe(straddling.length);
+      expect(first!.truncated).toBe(true);
+      expect(second!.value).toBe(`${'a'.repeat(1998)}😀`);
+      expect(second!.value).toHaveLength(2000);
+      for (const { value } of [first!, second!]) expect(value).not.toMatch(/[\uD800-\uDBFF]$/);
+    });
+
+    it('names the exact search_studies arguments for each truncated field in a notice', async () => {
+      const { enrichment } = await present([
+        withLongest('DetailedDescription', description, 'NCT06708767'),
+        withLongest('EligibilityCriteria', criteria, 'NCT07217301'),
+        withLongest('PrimaryOutcomeDescription', 'p'.repeat(1108), 'NCT06956534'),
+      ]);
+      // The whole PrimaryOutcomeDescription is not previewed, so it has no retrieval line.
+      expect(enrichment.notice).toBe(
+        'longest.value is a preview of at most the first 2000 characters where longest.truncated is true; longest.length is the full length. Full text — DetailedDescription: clinicaltrials_search_studies with {"nctIds":["NCT06708767"],"fields":["DetailedDescription"]}; EligibilityCriteria: clinicaltrials_search_studies with {"nctIds":["NCT07217301"],"fields":["EligibilityCriteria"]}.',
+      );
+    });
+
+    it('adds no notice when nothing was truncated', async () => {
+      const { enrichment } = await present([
+        withLongest('TargetDuration', '2250 Months', 'NCT05910151', { uniqueValuesCount: 241 }),
+      ]);
+      expect(enrichment.notice).toBeUndefined();
+    });
+
+    it('leaves every other statistic of a previewed field untouched', async () => {
+      const topValues = [{ value: 'A citation', studiesCount: 12 }];
+      const { result } = await present([
+        withLongest('ReferenceCitation', 'r'.repeat(32_179), 'NCT07664540', {
+          uniqueValuesCount: 512_345,
+          multiValued: true,
+          missingStudiesCount: 300_000,
+          topValues,
+        }),
+      ]);
+      const stat = result.fieldStats[0]!;
+
+      expect(stat.uniqueValuesCount).toBe(512_345);
+      expect(stat.multiValued).toBe(true);
+      expect(stat.missingStudiesCount).toBe(300_000);
+      expect(stat.topValues).toEqual(topValues);
+    });
+
+    it('states the bound and the full length on the preview line', async () => {
+      const { text } = await present([
+        withLongest('DetailedDescription', description, 'NCT06708767'),
+      ]);
+
+      expect(text).toContain(
+        `  longest value (first 2000 of 32344 characters, in NCT06708767): "${description.slice(0, 2000)}"`,
+      );
+      expect(text).not.toContain(' END');
+    });
+
+    it('carries the same preview on both surfaces (format parity)', async () => {
+      const { result, text } = await present([
+        withLongest('DetailedDescription', description, 'NCT06708767'),
+        withLongest('EligibilityCriteria', `Inclusion:\n- age 18+\r\n${criteria}`, 'NCT07217301'),
+      ]);
+      expect(missingLeaves(result, text)).toEqual([]);
+    });
+  });
+
+  /**
+   * A value with line breaks interpolated as one quoted line would start new
+   * lines of the field listing — a heading, a list item, a forged field header.
+   */
+  describe('multi-line longest value (#161)', () => {
+    const multiLine = [
+      'Inclusion Criteria:',
+      '',
+      '# Not a heading',
+      '- not a list item',
+      '1. nor this',
+      '**Phase** — protocolSection.designModule.phases (ENUM, 9 unique values):',
+      '  PHASE9: 1 studies\r',
+      'a ```` run of four backticks',
+      '~~~',
+    ].join('\n');
+
+    it('renders the value as one fenced block that keeps every line break', async () => {
+      const { text } = await present([
+        withLongest('EligibilityCriteria', multiLine, 'NCT07217301'),
+      ]);
+      const fence = '`````';
+
+      expect(text).toContain(
+        `  longest value (${multiLine.length} characters, in NCT07217301):\n${fence}\n${multiLine}\n${fence}`,
+      );
+      // The fence outruns every backtick run in the value, so no line closes it early.
+      expect(text.split(fence)).toHaveLength(3);
+      expect(text).not.toContain(`longest value: "Inclusion`);
+    });
+
+    it('fences a value whose only line break is a carriage return', async () => {
+      const value = 'first line\rsecond line';
+      const { text } = await present([withLongest('BriefSummary', value, 'NCT00000003')]);
+      expect(text).toContain(`\n\`\`\`\n${value}\n\`\`\``);
+    });
+
+    it('fences a truncated preview and states the bound', async () => {
+      const value = `${multiLine}\n${'x'.repeat(5000)}`;
+      const { result, text } = await present([
+        withLongest('EligibilityCriteria', value, 'NCT07217301'),
+      ]);
+      const preview = result.fieldStats[0]!.longest!.value;
+
+      expect(text).toContain(
+        `  longest value (first 2000 of ${value.length} characters, in NCT07217301):\n\`\`\`\`\`\n${preview}\n\`\`\`\`\``,
+      );
+    });
+
+    it('keeps structuredContent verbatim', async () => {
+      const { result } = await present([
+        withLongest('EligibilityCriteria', multiLine, 'NCT07217301'),
+      ]);
+      expect(result.fieldStats[0]!.longest!.value).toBe(multiLine);
+    });
+  });
+
+  const commonmark = new MarkdownIt('commonmark');
+
+  type InlineToken = { type: string; content: string; children: InlineToken[] | null };
+
+  /** The text a reader sees, each line break as `\n`. */
+  const seen = (children: InlineToken[]): string =>
+    children
+      .map((c) =>
+        c.type === 'softbreak' || c.type === 'hardbreak'
+          ? '\n'
+          : c.children?.length
+            ? seen(c.children)
+            : c.type === 'text' || c.type === 'code_inline'
+              ? c.content
+              : '',
+      )
+      .join('');
+
+  /** content[] as a CommonMark reader gets it. */
+  const read = (text: string) => {
+    const tokens = commonmark.parse(text, {});
+    const inline = tokens.filter((t) => t.type === 'inline');
+    const children = inline.flatMap((t) => (t.children ?? []) as InlineToken[]);
+    return {
+      blocks: [
+        ...new Set(
+          tokens.filter((t) => t.nesting !== -1 && t.type !== 'inline').map((t) => t.type),
+        ),
+      ].sort(),
+      lines: inline.flatMap((t) => seen((t.children ?? []) as InlineToken[]).split('\n')),
+      fences: tokens.filter((t) => t.type === 'fence').map((t) => t.content),
+      // The field header's **piece** is the only markup the listing writes itself.
+      markup: children
+        .map((c) => c.type)
+        .filter((type) => !['text', 'softbreak', 'strong_open', 'strong_close'].includes(type)),
+    };
+  };
+
+  /**
+   * A single-line longest value sits inside quotes on its preview line, where an
+   * email in angle brackets would render as an autolink and an emphasis run or
+   * backticks as markup. The reader must see the value exactly.
+   */
+  describe('single-line longest value renders inertly in content[]', () => {
+    const cases = [
+      {
+        label: 'an email in angle brackets',
+        value: 'Contact <zzPDL_MED_Sarcoma_Clinical_Trials@mskcc.org> for enrollment questions',
+      },
+      { label: 'an emphasis run', value: 'Dose of *high* exposure in ng*hr/mL (_AUC_)' },
+      { label: 'backticks', value: 'Uses the `ALT` marker and one stray ` tick' },
+      { label: 'a link and an entity', value: '[site](https://example.org) &amp; partners' },
+      { label: 'a trailing backslash', value: 'Path C:\\trials\\' },
+    ];
+
+    it.each(cases)('shows $label exactly, with no markup', async ({ value }) => {
+      const { text } = await present([withLongest('BriefTitle', value, 'NCT00000001')]);
+      const { lines, markup } = read(text);
+      expect(markup).toEqual([]);
+      expect(lines).toContain(
+        `longest value: "${value}" (${value.length} characters, in NCT00000001)`,
+      );
+    });
+
+    it('shows a truncated preview with markup exactly', async () => {
+      const value = `*bold* and \`code\` ${'x'.repeat(2500)}`;
+      const { result, text } = await present([withLongest('BriefSummary', value, 'NCT00000002')]);
+      const preview = result.fieldStats[0]!.longest!.value;
+      const { lines, markup } = read(text);
+      expect(markup).toEqual([]);
+      expect(lines).toContain(
+        `longest value (first 2000 of ${value.length} characters, in NCT00000002): "${preview}"`,
+      );
+    });
+
+    it('leaves a value with nothing to escape byte-identical', async () => {
+      const value = 'cdrh_docs at <=18 years, 5 * 3 & [18F]FDG';
+      const { text } = await present([withLongest('BriefTitle', value, 'NCT00000003')]);
+      expect(text).toContain(`  longest value: "${value}" (${value.length} characters`);
+    });
+
+    it('keeps the value verbatim in structuredContent', async () => {
+      const { result } = await present([withLongest('BriefTitle', cases[0]!.value, 'NCT1')]);
+      expect(result.fieldStats[0]!.longest!.value).toBe(cases[0]!.value);
+    });
+  });
+
+  /**
+   * Each topValues entry starts a content[] line, so a value such as
+   * "# fallopian tubes" or ">=65 years" would render as a heading or a
+   * blockquote. Proven by parsing content[] with a CommonMark parser: the reader
+   * must see every value exactly, inside plain paragraphs.
+   */
+  describe('topValues render inertly in content[]', () => {
+    /** Values that would otherwise open a block or inline construct. */
+    const structural = [
+      '# fallopian tubes',
+      '###### six hashes',
+      '+ 33',
+      '- dash item',
+      '* star item',
+      '>=65 years',
+      '> quoted',
+      '1. Publication',
+      '1) Paren',
+      '===',
+      '---',
+      '***',
+      '~~~ tilde fence',
+      '``` backtick fence',
+      '<div>block html</div>',
+      'nanogram*hour per milliliter (ng*hr/mL)',
+      '*opens here',
+      'closes here*',
+      '_opens here',
+      'closes here_',
+      'one `tick',
+      'another tick` here',
+      '[label](https://example.org)',
+      'AT&amp;T',
+      'trailing backslash\\',
+    ];
+    /** Values that render as written — nothing in them is escaped. */
+    const plain = [
+      '#no-space',
+      '<=18 years',
+      '< 65 years',
+      'cdrh_docs',
+      'SMPH\\MEDICINE\\HEM-ONC',
+      '5 * 3',
+      'Johnson & Johnson',
+      '1.5 mg',
+      '[18F]FDG',
+      'CT-case | nodule',
+    ];
+    /** Values a single line cannot carry exactly: line breaks, leading whitespace. */
+    const blockValues = [
+      'first line\n# second line',
+      'heading\r\n===',
+      'setext\r---',
+      '  leading spaces',
+      'fence inside\n````',
+    ];
+    // Each block value is followed by a line that would open a list or heading
+    // where a fresh paragraph starts — which it does, right after a fence.
+    const ordered = [
+      blockValues[0]!,
+      '2. after a fence',
+      blockValues[1]!,
+      '- after a fence',
+      blockValues[2]!,
+      '3) after a fence',
+      blockValues[3]!,
+      '## after a fence',
+      blockValues[4]!,
+      ...structural,
+      ...plain,
+    ];
+    const topValues = ordered.map((value, i) => ({ value, studiesCount: i + 1 }));
+    const countOf = (value: string) => ordered.indexOf(value) + 1;
+    const stat = {
+      field: 'protocolSection.someModule.Keyword',
+      piece: 'Keyword',
+      type: 'STRING',
+      uniqueValuesCount: topValues.length,
+      topValues,
+    };
+
+    it('renders every topValues entry inside plain paragraphs, with no markup of its own', async () => {
+      const { text } = await present([stat]);
+      const { blocks, markup } = read(text);
+      expect(blocks).toEqual(['fence', 'paragraph_open']);
+      expect(markup).toEqual([]);
+    });
+
+    it.each([
+      ...structural,
+      ...plain,
+      '2. after a fence',
+      '- after a fence',
+      '3) after a fence',
+      '## after a fence',
+    ])('shows %j to the reader exactly, once', async (value) => {
+      const { text } = await present([stat]);
+      const line = `${value}: ${countOf(value)} studies`;
+      expect(read(text).lines.filter((l) => l === line)).toHaveLength(1);
+    });
+
+    it.each(blockValues)('shows %j exactly in its own fenced block', async (value) => {
+      const { text } = await present([stat]);
+      const { lines, fences } = read(text);
+      // CommonMark reads CR, LF, and CRLF alike as line endings.
+      expect(fences).toContain(`${value.replace(/\r\n?/g, '\n')}\n`);
+      expect(lines).toContain(`value (${countOf(value)} studies):`);
+    });
+
+    it.each(plain)('writes %j with no escape characters', async (value) => {
+      const { text } = await present([stat]);
+      expect(text.split('\n')).toContain(`  ${value}: ${countOf(value)} studies`);
+    });
+
+    it('keeps every value verbatim in structuredContent', async () => {
+      const { result } = await present([stat]);
+      expect(result.fieldStats[0]!.topValues).toEqual(topValues);
+    });
+  });
+
+  /**
+   * The provider reports uniqueValuesCount: 0 for free-text fields it does not
+   * count distinct values on — DetailedDescription is filled in ~400k studies.
+   * A recorded longest value proves values exist, so the 0 is flagged
+   * uniqueValuesCounted: false and passed through; a field with no values at
+   * all reports no longest and gets no flag (#165).
+   */
+  describe('uncounted distinct values (#165)', () => {
+    it('flags a free-text field as uncounted on both surfaces, keeping the provider 0', async () => {
+      const { result, text } = await present([
+        withLongest('DetailedDescription', 'Some description.', 'NCT06708767', {
+          missingStudiesCount: 200_268,
+        }),
+      ]);
+      const stat = result.fieldStats[0]!;
+
+      expect(stat.uniqueValuesCount).toBe(0);
+      expect(stat.uniqueValuesCounted).toBe(false);
+      expect(text).toContain(
+        '**DetailedDescription** — protocolSection.someModule.DetailedDescription (STRING, distinct values not counted):',
+      );
+      expect(text).not.toContain('0 unique values');
+    });
+
+    it('renders the uncounted header from the flag', () => {
+      const text = (
+        getFieldValues.format!({
+          fieldStats: [
+            {
+              field: 'protocolSection.descriptionModule.detailedDescription',
+              piece: 'DetailedDescription',
+              type: 'STRING',
+              missingStudiesCount: 200_268,
+              uniqueValuesCount: 0,
+              uniqueValuesCounted: false,
+              longest: { value: 'Some description.', length: 17, nctId: 'NCT06708767' },
+            },
+          ],
+        })[0] as { text: string }
+      ).text;
+
+      expect(text).toContain('(STRING, distinct values not counted):');
+      expect(text).not.toContain('0 unique values');
+    });
+
+    it('keeps a true zero — no values recorded anywhere — as 0 unique values', async () => {
+      const { result, text } = await present([
+        {
+          field: 'derivedSection.conditionBrowseModule.leaves.name',
+          piece: 'ConditionBrowseLeafName',
+          type: 'STRING',
+          missingStudiesCount: 608_228,
+          uniqueValuesCount: 0,
+        },
+      ]);
+
+      expect(result.fieldStats[0]!.uniqueValuesCount).toBe(0);
+      expect('uniqueValuesCounted' in result.fieldStats[0]!).toBe(false);
+      expect(text).toContain('(STRING, 0 unique values):');
+      expect(text).toContain('No recorded values for this field.');
+    });
+
+    it('keeps a counted STRING field with a longest value as counted', async () => {
+      const { result, text } = await present([
+        withLongest('ViolationEventDescription', 'Late report.', 'NCT00000004', {
+          uniqueValuesCount: 5,
+          topValues: [{ value: 'Late report.', studiesCount: 2 }],
+        }),
+      ]);
+
+      expect(result.fieldStats[0]!.uniqueValuesCount).toBe(5);
+      expect('uniqueValuesCounted' in result.fieldStats[0]!).toBe(false);
+      expect(text).toContain('(STRING, 5 unique values):');
     });
   });
 });

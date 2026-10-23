@@ -5,7 +5,7 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { getServerConfig } from '@/config/server-config.js';
+import { UPSTREAM_MAX_PAGE_SIZE } from '@/config/server-config.js';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
@@ -31,8 +31,6 @@ import {
   toArray,
 } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
-
-const { maxPageSize } = getServerConfig();
 
 /**
  * Dot-notation prefixes already rendered by the search formatter, named at the
@@ -481,9 +479,11 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .number()
       .int()
       .min(1)
-      .max(maxPageSize)
+      .max(UPSTREAM_MAX_PAGE_SIZE)
       .default(10)
-      .describe(`Results per page, 1–${maxPageSize}.`),
+      .describe(
+        `Results per page, 1–${UPSTREAM_MAX_PAGE_SIZE}. A value above this server's per-page cap (200 unless the operator changed it) returns a page at the cap, reported in truncated/shown/cap with nextPageToken to continue.`,
+      ),
     pageToken: z
       .string()
       .optional()
@@ -544,7 +544,27 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        'Recovery guidance when no studies matched — echoes the constraint and suggests how to broaden, and names nctIds as part of the unmatched criteria when an ID list was supplied. Absent on pages with results, and on an exhausted continuation page, where the cohort already matched and there is nothing to broaden.',
+        "Recovery guidance when no studies matched — echoes the constraint and suggests how to broaden, and names nctIds as part of the unmatched criteria when an ID list was supplied. On a page cut to the server's per-page cap, states the requested and served page sizes and points at nextPageToken. Absent on other pages with results, and on an exhausted continuation page, where the cohort already matched and there is nothing to broaden.",
+      ),
+    truncated: z
+      .boolean()
+      .optional()
+      .describe(
+        "True when pageSize was above the server's per-page cap and this page filled to the cap with a nextPageToken. Without a total to check against (countTotal: false, or a continuation page), that next page can be empty. Absent otherwise.",
+      ),
+    shown: z
+      .number()
+      .int()
+      .nonnegative()
+      .optional()
+      .describe('Studies on this page when truncated is true.'),
+    cap: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "The server's per-page cap, served in place of the requested pageSize when truncated is true.",
       ),
   },
 
@@ -636,6 +656,9 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     const includeUnknownEnrollment = input.includeUnknownEnrollment || Boolean(filterIds?.length);
 
     const service = getClinicalTrialsService();
+    // The per-call page cap applies to this caller-facing page only; the
+    // schema ceiling is ClinicalTrials.gov's own page maximum.
+    const pageCap = service.maxPageSize;
     const result = await service.searchStudies(
       {
         queryTerm: input.query,
@@ -652,7 +675,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         fields,
         sort: input.sort,
         countTotal: input.countTotal,
-        pageSize: input.pageSize,
+        pageSize: Math.min(input.pageSize, pageCap),
         pageToken: input.pageToken,
         includeUnknownEnrollment,
       },
@@ -774,11 +797,25 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       input.pageToken === undefined &&
       result.totalCount !== undefined &&
       result.studies.length >= result.totalCount;
+    const servedToken = nextPageToken !== undefined && !exhausted ? nextPageToken : undefined;
+
+    // The cap withheld studies only when the caller asked past it and a next
+    // page remains; a page the match set ran out on lost nothing to the cap.
+    // A capped page holds at least one study, so this notice and the no-match
+    // notice above never both fire.
+    if (input.pageSize > pageCap && servedToken !== undefined) {
+      const shown = result.studies.length;
+      ctx.enrich.truncated({
+        shown,
+        cap: pageCap,
+        guidance: `Requested pageSize ${input.pageSize} is above this server's per-page cap of ${pageCap}, so this page holds ${shown} ${shown === 1 ? 'study' : 'studies'}. Pass nextPageToken to continue.`,
+      });
+    }
 
     return {
       ...page,
       studies,
-      ...(nextPageToken !== undefined && !exhausted ? { nextPageToken } : {}),
+      ...(servedToken !== undefined ? { nextPageToken: servedToken } : {}),
       ...(fields?.length ? { requestedFields: fields } : {}),
       ...(pageExhausted ? { pageExhausted } : {}),
     };

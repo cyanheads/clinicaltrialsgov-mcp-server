@@ -241,11 +241,27 @@ export function quoteQueryTerm(term: string): string {
 }
 
 /**
- * What a term contributes to the query `quoteQueryTerm` builds: its text with
- * every `"` and every invisible format character stripped, trimmed. Empty means
- * the term carries no content — it reaches upstream as no operand at all, as a
- * bare `" "` phrase, or as a zero-width term upstream answers with a bare
- * `Search error` — so judge blankness on this, not on the raw value.
+ * Render one location part (city, state, or country) as an operand inside
+ * `SEARCH[Location](…)`: bare when it is a single run of letters and digits,
+ * quoted otherwise. Inside the wrapper a bare part carrying punctuation
+ * under-matches — `Winston-Salem` finds a small fraction of the studies its
+ * quoted form finds, every one of which lists a Winston-Salem site — and a bare
+ * `(`, `)`, `[`, or `]` is query syntax that would close the wrapper and
+ * regroup the expression around the rest of the part. An embedded `"` is
+ * stripped, as in `quoteQueryTerm`.
+ */
+export function quoteLocationPart(part: string): string {
+  const sanitized = part.replaceAll('"', '');
+  return /[^\p{L}\p{N}]/u.test(sanitized) ? `"${sanitized}"` : sanitized;
+}
+
+/**
+ * What a term contributes to the query `quoteQueryTerm` or `quoteLocationPart`
+ * builds: its text with every `"` and every invisible format character
+ * stripped, trimmed. Empty means the term carries no content — it reaches
+ * upstream as no operand at all, as a bare `" "` phrase, or as a zero-width
+ * term upstream answers with a bare `Search error` — so judge blankness on
+ * this, not on the raw value.
  */
 export function queryTermContent(term: string): string {
   return visibleText(term.replaceAll('"', ''));

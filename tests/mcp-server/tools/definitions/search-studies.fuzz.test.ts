@@ -15,7 +15,7 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
 import { searchStudies } from '@/mcp-server/tools/definitions/search-studies.tool.js';
 
 describe('searchStudies fuzz', () => {
-  const mockService = { searchStudies: vi.fn() };
+  const mockService = { searchStudies: vi.fn(), maxPageSize: 200 };
 
   beforeEach(() => {
     vi.clearAllMocks();

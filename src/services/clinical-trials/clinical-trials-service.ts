@@ -25,6 +25,7 @@ import {
 } from './field-search.js';
 import { geoFilterShapeMessage } from './geo-filter-message.js';
 import type {
+  CountParams,
   FieldNode,
   FieldValueStats,
   PagedStudiesResponse,
@@ -189,9 +190,17 @@ export interface ClinicalTrialsServiceOptions {
 }
 
 export class ClinicalTrialsService {
+  /**
+   * The per-call page cap (`CT_MAX_PAGE_SIZE`, 1–1000) for a caller's own page
+   * request — `clinicaltrials_search_studies` serves at most this many studies
+   * per page and discloses the cut. Every `searchStudies` call sends the
+   * `pageSize` it is given unchanged, so internal fetches sized by their own
+   * input (the results ID batch, the eligibility candidate fetch) never lose
+   * studies to it.
+   */
+  readonly maxPageSize: number;
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
-  private readonly maxPageSize: number;
   private readonly maxRetries: number;
   private readonly baseBackoffMs: number;
   private readonly maxBackoffMs: number;
@@ -234,6 +243,25 @@ export class ClinicalTrialsService {
     const q = this.buildSearchQuery(params);
     ctx.log.debug('searchStudies', { paramKeys: Object.keys(q) });
     return this.fetchJson<PagedStudiesResponse>('/studies', q, ctx);
+  }
+
+  /**
+   * Count the studies matching a query and filters. Upstream answers
+   * `pageSize=0` with its default page of ten full studies, so the count asks
+   * for one study projected to `NCTId` — the total rides the same response.
+   * The fixed projection skips local field validation, which would otherwise
+   * fetch `/studies/metadata` on a fresh server's first count.
+   */
+  async countStudies(params: CountParams, ctx: Context): Promise<number> {
+    const q = this.buildSearchQuery({
+      ...params,
+      countTotal: true,
+      pageSize: 1,
+      fields: ['NCTId'],
+    });
+    ctx.log.debug('countStudies', { paramKeys: Object.keys(q) });
+    const { totalCount } = await this.fetchJson<PagedStudiesResponse>('/studies', q, ctx);
+    return totalCount ?? 0;
   }
 
   /** Fetch a single study by NCT ID. */
@@ -605,8 +633,7 @@ export class ClinicalTrialsService {
     if (params.fields?.length) q.fields = params.fields.join('|');
     if (params.sort) q.sort = params.sort;
     if (params.countTotal !== undefined) q.countTotal = String(params.countTotal);
-    if (params.pageSize !== undefined)
-      q.pageSize = String(Math.min(params.pageSize, this.maxPageSize));
+    if (params.pageSize !== undefined) q.pageSize = String(params.pageSize);
     if (params.pageToken) q.pageToken = params.pageToken;
     return q;
   }

@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.10.1](changelog/2.10.x/2.10.1.md) — 2026-10-23
+
+Workload-cap parameters serve what fits instead of rejecting: search_studies pageSize up to 1000, find_eligible maxResults up to 1000, get_study_results nctIds up to 500. find_eligible matches a location's parts at one site and accepts subyear ages; counts fetch one ID instead of ten studies.
+
 ## [2.10.0](changelog/2.10.x/2.10.0.md) — 2026-10-14 · ⚠️ Breaking
 
 Input normalization for phaseFilter and fields, typed page_token_invalid errors, find_eligible results framed as candidates, and get_study_results summaries that keep subgroup denominators, analysis identity, and outcome paging. Breaking: some phaseFilter and conditions inputs 2.9.11 accepted are now rejected.

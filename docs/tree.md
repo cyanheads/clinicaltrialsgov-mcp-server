@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-10-14 15:21:35
+Generated on: 2026-10-23 05:54:13
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -192,6 +192,7 @@ clinicaltrialsgov-mcp-server/
 │   │   ├── nct06323538.json
 │   │   └── nct07062965.json
 │   ├── helpers/
+│   │   ├── cpu-timing.ts
 │   │   └── format-parity.ts
 │   ├── mcp-server/
 │   │   ├── prompts/

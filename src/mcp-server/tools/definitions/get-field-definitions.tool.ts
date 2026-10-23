@@ -127,9 +127,10 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
       .number()
       .int()
       .min(1)
-      .max(100)
       .default(20)
-      .describe('search mode only. Maximum results to return. Default: 20.'),
+      .describe(
+        'search mode only. Maximum results to return. Default: 20. A value at or past the match count returns every match.',
+      ),
     includeIndexedOnly: z
       .boolean()
       .optional()

@@ -3,6 +3,7 @@
  * @module tests/mcp-server/tools/definitions/get-field-definitions.tool
  */
 
+import { z } from '@cyanheads/mcp-ts-core';
 import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
 import { runToolContract } from '@cyanheads/mcp-ts-core/testing/vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -115,6 +116,30 @@ describe('getFieldDefinitions', () => {
     it('defaults limit to 20 in search mode', () => {
       const input = getFieldDefinitions.input!.parse({ mode: 'search', query: 'sponsor' });
       expect(input.limit).toBe(20);
+    });
+
+    // An output-only ceiling: the whole index is scored either way, so a larger
+    // limit only means "return every match" (#153).
+    it('accepts a limit past the size of the data model (#153)', () => {
+      for (const limit of [101, 1000, 100_000]) {
+        expect(getFieldDefinitions.input!.parse({ mode: 'search', query: 'x', limit }).limit).toBe(
+          limit,
+        );
+      }
+    });
+
+    it('keeps the minimum of 1 and advertises no maximum (#153)', () => {
+      expect(() =>
+        getFieldDefinitions.input!.parse({ mode: 'search', query: 'x', limit: 0 }),
+      ).toThrow();
+      const limit = (
+        z.toJSONSchema(getFieldDefinitions.input!) as unknown as {
+          properties: { limit: { maximum?: number; minimum?: number } };
+        }
+      ).properties.limit;
+      // `.int()` alone serializes Zod's safe-integer bound; nothing tighter.
+      expect(limit.maximum ?? Number.MAX_SAFE_INTEGER).toBe(Number.MAX_SAFE_INTEGER);
+      expect(limit.minimum).toBe(1);
     });
   });
 
@@ -364,6 +389,35 @@ describe('getFieldDefinitions', () => {
       const enrichment = getEnrichment(ctx);
       expect(enrichment.truncated).toBeUndefined();
       expect(enrichment.notice).toBeUndefined();
+    });
+
+    it('returns every match, untruncated, for a limit past the match count (#153)', async () => {
+      const entries = Array.from({ length: 448 }, (_, i) => ({
+        name: `f${i}`,
+        piece: `F${i}`,
+        path: `x.f${i}`,
+        type: 'STRING',
+      }));
+      mockService.searchFieldDefinitions.mockResolvedValue({ entries, total: 448 });
+
+      const result = await runToolContract(getFieldDefinitions, {
+        mode: 'search',
+        query: 'module',
+        limit: 1000,
+      });
+
+      expect(mockService.searchFieldDefinitions).toHaveBeenCalledWith(
+        'module',
+        1000,
+        expect.anything(),
+      );
+      expect(result.isError).toBeFalsy();
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(sc.totalFields).toBe(448);
+      expect(sc.totalMatches).toBe(448);
+      expect(sc).not.toHaveProperty('truncated');
+      const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+      expect(text).toContain('F447');
     });
 
     it('flags truncated only when the match set exceeds the cap (#77)', async () => {

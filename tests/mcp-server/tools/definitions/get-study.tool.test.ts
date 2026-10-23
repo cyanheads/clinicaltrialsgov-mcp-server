@@ -3,7 +3,8 @@
  * @module tests/mcp-server/tools/definitions/get-study.tool
  */
 
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { z } from '@cyanheads/mcp-ts-core';
+import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetService } = vi.hoisted(() => ({
@@ -54,6 +55,49 @@ describe('getStudy', () => {
 
     it('rejects missing nctId', () => {
       expect(() => getStudy.input!.parse({})).toThrow();
+    });
+
+    // Output-only ceilings: the record bounds them, so a larger value means "no limit" (#153).
+    it('accepts list limits and a radius past any former ceiling (#153)', () => {
+      const input = getStudy.input!.parse({
+        nctId: 'NCT12345678',
+        locationLimit: 100_000,
+        outcomeLimit: 5000,
+        referenceLimit: 5000,
+        nearLocation: { lat: 47.6, lon: -122.3, radiusMi: 25_000 },
+      });
+      expect(input).toMatchObject({
+        locationLimit: 100_000,
+        outcomeLimit: 5000,
+        referenceLimit: 5000,
+        nearLocation: { radiusMi: 25_000 },
+      });
+    });
+
+    it.each([
+      { locationLimit: 0 },
+      { outcomeLimit: 0 },
+      { referenceLimit: 0 },
+      { locationLimit: 1.5 },
+      { nearLocation: { lat: 47.6, lon: -122.3, radiusMi: 0.5 } },
+    ])('keeps the minimum: rejects %j', (bad) => {
+      expect(() => getStudy.input!.parse({ nctId: 'NCT12345678', ...bad })).toThrow();
+    });
+
+    it('advertises no maximum on the output-only limits (#153)', () => {
+      type Bounds = { maximum?: number; minimum?: number };
+      const props = (
+        z.toJSONSchema(getStudy.input!) as unknown as {
+          properties: Record<string, Bounds & { properties?: Record<string, Bounds> }>;
+        }
+      ).properties;
+      // `.int()` alone serializes Zod's safe-integer bound; nothing tighter.
+      for (const key of ['locationLimit', 'outcomeLimit', 'referenceLimit']) {
+        expect(props[key]?.maximum ?? Number.MAX_SAFE_INTEGER).toBe(Number.MAX_SAFE_INTEGER);
+        expect(props[key]?.minimum).toBe(1);
+      }
+      expect(props.nearLocation?.properties?.radiusMi).not.toHaveProperty('maximum');
+      expect(props.nearLocation?.properties?.radiusMi?.minimum).toBe(1);
     });
   });
 
@@ -528,6 +572,86 @@ describe('getStudy', () => {
 
       const text = (getStudy.format!(result)[0] as { text: string }).text;
       expect(text).not.toContain('Filters applied:');
+    });
+
+    it('limits past a long list return it whole, reported as untrimmed on both surfaces (#153)', async () => {
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({
+          contactsLocationsModule: {
+            locations: Array.from({ length: 600 }, (_, i) => ({ facility: `Site ${i}` })),
+          },
+          outcomesModule: {
+            secondaryOutcomes: Array.from({ length: 150 }, (_, i) => ({ measure: `S${i}` })),
+          },
+          referencesModule: {
+            references: Array.from({ length: 150 }, (_, i) => ({ citation: `Ref ${i}.` })),
+          },
+        }),
+      );
+
+      const result = await runToolContract(getStudy, {
+        nctId: 'NCT12345678',
+        locationLimit: 10_000,
+        outcomeLimit: 10_000,
+        referenceLimit: 10_000,
+      });
+
+      expect(result.isError).toBeFalsy();
+      const sc = result.structuredContent as {
+        filtersApplied: Record<string, unknown>;
+        study: { protocolSection: Record<string, Record<string, unknown[]>> };
+      };
+      expect(sc.filtersApplied).toEqual({});
+      expect(sc.study.protocolSection.contactsLocationsModule?.locations).toHaveLength(600);
+      expect(sc.study.protocolSection.outcomesModule?.secondaryOutcomes).toHaveLength(150);
+      expect(sc.study.protocolSection.referencesModule?.references).toHaveLength(150);
+      const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+      expect(text).toContain('## Locations (600 total)');
+      expect(text).toContain('Site 599');
+      expect(text).toContain('S149');
+      expect(text).toContain('Ref 149.');
+      expect(text).not.toContain('Filters applied:');
+    });
+
+    it('a radius past the farthest site returns what any covering radius returns (#153)', async () => {
+      // Every site sits within ~250 mi of Seattle, so 300 mi already covers them all.
+      const sites = [
+        { facility: 'Seattle Med', geoPoint: { lat: 47.6062, lon: -122.3321 } },
+        { facility: 'Portland Clinic', geoPoint: { lat: 45.5152, lon: -122.6784 } },
+        { facility: 'Spokane Center', geoPoint: { lat: 47.6588, lon: -117.426 } },
+        { facility: 'No Coords' },
+      ];
+      mockService.getStudy.mockResolvedValue(
+        buildStudy({ contactsLocationsModule: { locations: sites } }),
+      );
+      const center = { lat: 47.6062, lon: -122.3321 };
+      const run = (radiusMi: number) =>
+        runToolContract(getStudy, { nctId: 'NCT12345678', nearLocation: { ...center, radiusMi } });
+
+      const covering = await run(300);
+      const huge = await run(1_000_000);
+
+      const strip = (r: Awaited<ReturnType<typeof run>>) => {
+        const sc = structuredClone(r.structuredContent) as {
+          filtersApplied: { nearLocation?: { radiusMi?: number } };
+        };
+        delete sc.filtersApplied.nearLocation?.radiusMi;
+        return sc;
+      };
+      expect(huge.isError).toBeFalsy();
+      expect(strip(huge)).toEqual(strip(covering));
+      const locs = (
+        huge.structuredContent as {
+          study: {
+            protocolSection: { contactsLocationsModule: { locations: { facility: string }[] } };
+          };
+        }
+      ).study.protocolSection.contactsLocationsModule.locations;
+      expect(locs.map((l) => l.facility)).toEqual([
+        'Seattle Med',
+        'Portland Clinic',
+        'Spokane Center',
+      ]);
     });
 
     it('reports outcomeLimit only for the list it actually trims (#80)', async () => {

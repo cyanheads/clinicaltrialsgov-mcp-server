@@ -134,34 +134,37 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       .number()
       .int()
       .min(1)
-      .max(500)
       .optional()
       .describe(
-        'Optional cap on the number of locations returned. Omit for no cap (full upstream list). Pairs naturally with nearLocation for narrowing a large multi-site trial. Original total preserved in filtersApplied.totalLocations only when the cap trims the list.',
+        'Optional cap on the number of locations returned. Omit for no cap (full upstream list); a value at or past the list length also returns every location. Pairs naturally with nearLocation for narrowing a large multi-site trial. Original total preserved in filtersApplied.totalLocations only when the cap trims the list.',
       ),
     outcomeLimit: z
       .number()
       .int()
       .min(1)
-      .max(100)
       .optional()
       .describe(
-        'Optional cap on the number of secondary and other outcomes returned. Omit for no cap (full upstream lists). Primary outcomes are never capped. Original totals preserved in filtersApplied.totalSecondaryOutcomes / totalOtherOutcomes only when the cap trims a list.',
+        'Optional cap on the number of secondary and other outcomes returned. Omit for no cap (full upstream lists); a value at or past a list length also returns that whole list. Primary outcomes are never capped. Original totals preserved in filtersApplied.totalSecondaryOutcomes / totalOtherOutcomes only when the cap trims a list.',
       ),
     referenceLimit: z
       .number()
       .int()
       .min(1)
-      .max(100)
       .optional()
       .describe(
-        'Optional cap on the number of references returned. Omit for no cap (full upstream list). Original total preserved in filtersApplied.totalReferences only when the cap trims the list. seeAlsoLinks are never capped.',
+        'Optional cap on the number of references returned. Omit for no cap (full upstream list); a value at or past the list length also returns every reference. Original total preserved in filtersApplied.totalReferences only when the cap trims the list. seeAlsoLinks are never capped.',
       ),
     nearLocation: z
       .object({
         lat: z.number().min(-90).max(90).describe('Latitude in decimal degrees.'),
         lon: z.number().min(-180).max(180).describe('Longitude in decimal degrees.'),
-        radiusMi: z.number().min(1).max(500).default(50).describe('Radius in miles. Default 50.'),
+        radiusMi: z
+          .number()
+          .min(1)
+          .default(50)
+          .describe(
+            'Radius in miles, at least 1. Default 50. A radius past the farthest site keeps every site with published coordinates.',
+          ),
       })
       .strict()
       .optional()

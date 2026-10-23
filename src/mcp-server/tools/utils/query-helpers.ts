@@ -255,9 +255,7 @@ export function quoteQueryTerm(term: string): string {
  */
 export function quoteLocationPart(part: string): string {
   const sanitized = part.replaceAll('"', '');
-  return /[^\p{L}\p{N}]/u.test(sanitized)
-    ? `"${sanitized.replaceAll('\\', '\\\\')}"`
-    : sanitized;
+  return /[^\p{L}\p{N}]/u.test(sanitized) ? `"${sanitized.replaceAll('\\', '\\\\')}"` : sanitized;
 }
 
 /**

@@ -457,6 +457,18 @@ describe('quoteLocationPart (#159)', () => {
     expect(quoteLocationPart('East "Northport" City')).toBe('"East Northport City"');
   });
 
+  // A backslash escapes the quote after it, so `a\` would leave its phrase open
+  // and let a later part's `)` regroup the expression outside the wrapper.
+  // Upstream reads a doubled backslash inside a phrase as a literal backslash.
+  it('doubles a backslash so it cannot escape the closing quote', () => {
+    expect(quoteLocationPart('a\\')).toBe('"a\\\\"');
+    expect(quoteLocationPart('x\\"y')).toBe('"x\\\\y"');
+    const parts = ['a\\', ') OR (Seattle\\', 'United States'].map(quoteLocationPart);
+    expect(`SEARCH[Location](${parts.join(' AND ')})`).toBe(
+      'SEARCH[Location]("a\\\\" AND ") OR (Seattle\\\\" AND "United States")',
+    );
+  });
+
   describe('stays linear on caller-sized text', () => {
     it.each([
       ...LINE_BREAK_SHAPES,

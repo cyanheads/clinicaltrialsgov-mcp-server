@@ -248,11 +248,16 @@ export function quoteQueryTerm(term: string): string {
  * quoted form finds, every one of which lists a Winston-Salem site — and a bare
  * `(`, `)`, `[`, or `]` is query syntax that would close the wrapper and
  * regroup the expression around the rest of the part. An embedded `"` is
- * stripped, as in `quoteQueryTerm`.
+ * stripped, as in `quoteQueryTerm`. A backslash is doubled: a single one
+ * escapes the closing quote, leaving the phrase open so a later part's `)`
+ * regroups the expression, while upstream reads a doubled one inside a phrase
+ * as a literal backslash.
  */
 export function quoteLocationPart(part: string): string {
   const sanitized = part.replaceAll('"', '');
-  return /[^\p{L}\p{N}]/u.test(sanitized) ? `"${sanitized}"` : sanitized;
+  return /[^\p{L}\p{N}]/u.test(sanitized)
+    ? `"${sanitized.replaceAll('\\', '\\\\')}"`
+    : sanitized;
 }
 
 /**

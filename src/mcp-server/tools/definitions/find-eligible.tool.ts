@@ -518,7 +518,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         location: z
           .string()
           .describe(
-            'The exact queryLocn string sent upstream: city/state/country AND-joined inside SEARCH[Location](…) so every part must match the same site, each part quoted unless it is a single run of letters and digits (Toronto stays bare; "United States", "Winston-Salem", and "L\'Aquila" are quoted), with any embedded double quote stripped. Pass as locationQuery to clinicaltrials_search_studies to reproduce the location filter beyond the maxResults cap.',
+            'The exact queryLocn string sent upstream: city/state/country AND-joined inside SEARCH[Location](…) so every part must match the same site, each part quoted unless it is a single run of letters and digits (Toronto stays bare; "United States", "Winston-Salem", and "L\'Aquila" are quoted), with any embedded double quote stripped and any backslash in a quoted part doubled. Pass as locationQuery to clinicaltrials_search_studies to reproduce the location filter beyond the maxResults cap.',
           ),
         age: z.number().describe('Patient age, in ageUnit when present, else in years.'),
         ageUnit: z

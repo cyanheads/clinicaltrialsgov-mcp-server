@@ -13,6 +13,7 @@
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerConfig } from '@/config/server-config.js';
+import { readMarkdown } from '../../helpers/commonmark.js';
 
 const { mockGetService } = vi.hoisted(() => ({ mockGetService: vi.fn() }));
 
@@ -68,6 +69,9 @@ const fetchedUrls = () => mockFetch.mock.calls.map((c) => new URL(String(c[0])))
 
 const text = (result: { content: unknown }) =>
   (result.content as Array<{ type: string; text?: string }>).map((b) => b.text ?? '').join('\n');
+
+/** content[] as a CommonMark reader sees it — error and hint text arrive Markdown-encoded. */
+const seenText = (result: { content: unknown }) => readMarkdown(text(result));
 
 beforeEach(() => {
   mockFetch.mockReset();
@@ -128,7 +132,7 @@ describe('statusFilter reaches upstream canonicalized', () => {
       expect(error.data.reason).toBe('enum_invalid');
       expect(error.data.param).toBe('statusFilter');
       expect(error.data.value).toBe('PENDING_REVIEW');
-      expect(text(result)).toContain(
+      expect(seenText(result)).toContain(
         'Recovery: Call clinicaltrials_get_field_values with fields=["OverallStatus"] to see valid values.',
       );
       expect(fetchedUrls()).toHaveLength(1);
@@ -268,8 +272,8 @@ describe('phaseFilter reaches upstream as canonical AREA[Phase] values (#144)', 
     const error = (result.structuredContent as { error: { data: Record<string, unknown> } }).error;
     expect(error.data.reason).toBe('enum_invalid');
     expect(error.data).not.toHaveProperty('param');
-    expect(text(result)).toContain('Invalid value in an `AREA[Phase]` expression.');
-    expect(text(result)).not.toContain('phaseFilter');
+    expect(seenText(result)).toContain('Invalid value in an `AREA[Phase]` expression.');
+    expect(seenText(result)).not.toContain('phaseFilter');
   });
 });
 

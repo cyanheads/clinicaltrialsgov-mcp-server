@@ -18,6 +18,7 @@ import {
 } from '@cyanheads/mcp-ts-core/errors';
 import { runToolContract, toolContractSuite } from '@cyanheads/mcp-ts-core/testing/vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readMarkdown } from '../../helpers/commonmark.js';
 import { loadStudyFixture } from '../../helpers/format-parity.js';
 
 const { mockGetService } = vi.hoisted(() => ({
@@ -662,7 +663,7 @@ describe('service-thrown reasons carry the declaring tool hint on the wire', () 
   it.each(cases)('$name', async ({ arrange, reason, run }) => {
     arrange();
     const result = await run();
-    const text = (result.content as { text: string }[])[0]!.text;
+    const text = readMarkdown((result.content as { text: string }[])[0]!.text);
     const error = (result.structuredContent as { error: { data: Record<string, unknown> } }).error;
 
     expect(result.isError).toBe(true);

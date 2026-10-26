@@ -17,6 +17,7 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
 
 import { searchStudies } from '@/mcp-server/tools/definitions/search-studies.tool.js';
 import { haversineMi } from '@/mcp-server/tools/utils/geo-helpers.js';
+import { readMarkdown } from '../../../helpers/commonmark.js';
 import { missingLeaves } from '../../../helpers/format-parity.js';
 
 describe('searchStudies', () => {
@@ -2523,7 +2524,9 @@ describe('searchStudies', () => {
       expect(hint).toContain('NA, EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4');
       expect(hint).toContain('["PHASE2","PHASE3"]');
       expect(hint).toContain('advancedFilter');
-      const text = (result.content as Array<{ text?: string }>).map((b) => b.text).join('\n');
+      const text = readMarkdown(
+        (result.content as Array<{ text?: string }>).map((b) => b.text).join('\n'),
+      );
       expect(text).toContain("'PHASE3 OR AREA[StudyType]OBSERVATIONAL' is not a trial phase");
       expect(text).toContain(`Recovery: ${hint}`);
       expect(mockService.searchStudies).not.toHaveBeenCalled();

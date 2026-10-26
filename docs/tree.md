@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-10-23 05:54:13
+Generated on: 2026-10-26 03:14:24
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -50,6 +50,8 @@ clinicaltrialsgov-mcp-server/
 │   ├── add-resource/
 │   │   └── SKILL.md
 │   ├── add-service/
+│   │   └── SKILL.md
+│   ├── add-skill/
 │   │   └── SKILL.md
 │   ├── add-test/
 │   │   └── SKILL.md
@@ -192,6 +194,7 @@ clinicaltrialsgov-mcp-server/
 │   │   ├── nct06323538.json
 │   │   └── nct07062965.json
 │   ├── helpers/
+│   │   ├── commonmark.ts
 │   │   ├── cpu-timing.ts
 │   │   └── format-parity.ts
 │   ├── mcp-server/
@@ -242,7 +245,9 @@ clinicaltrialsgov-mcp-server/
 ├── Dockerfile
 ├── LICENSE
 ├── manifest.json
+├── mcp.json
 ├── package.json
+├── plugin.json
 ├── README.md
 ├── server.json
 ├── tsconfig.build.json

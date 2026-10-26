@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.10.2](changelog/2.10.x/2.10.2.md) — 2026-10-25
+
+mcp-ts-core 0.13.18: error text in content[] is Markdown-escaped so it renders as written, an out-of-range framework config value fails startup naming the variable, and the .mcpb bundle leaves out source, tests, docs, and the framework's build-only files. Adds the Agent Plugins root plugin.json and mcp.json.
+
 ## [2.10.1](changelog/2.10.x/2.10.1.md) — 2026-10-23
 
 Workload-cap parameters serve what fits instead of rejecting: search_studies pageSize up to 1000, find_eligible maxResults up to 1000, get_study_results nctIds up to 500. find_eligible matches a location's parts at one site and accepts subyear ages; counts fetch one ID instead of ten studies.

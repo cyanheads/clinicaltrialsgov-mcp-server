@@ -22,8 +22,9 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
   getClinicalTrialsService: mockGetService,
 }));
 
-import { getStudyResults } from '@/mcp-server/tools/definitions/get-study-results.tool.js';
+import { getStudyResults, oneLine } from '@/mcp-server/tools/definitions/get-study-results.tool.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
+import { expectLinearGrowth, LINE_BREAK_SHAPES } from '../../../helpers/cpu-timing.js';
 import { loadStudyFixture, missingLeaves } from '../../../helpers/format-parity.js';
 
 const SECTIONS = ['outcomes', 'adverseEvents', 'participantFlow', 'baseline', 'moreInfo'] as const;
@@ -3780,6 +3781,77 @@ describe('getStudyResults', () => {
           );
         },
       );
+    });
+  });
+});
+
+describe('oneLine (#168)', () => {
+  /** The fold `oneLine` applied before #168 — the oracle its output must equal. */
+  const previousFold = (value: string) => value.replace(/\s*[\r\n]+\s*/g, ' ');
+
+  it('folds each whitespace run holding a CR or LF into one space and keeps every other run', () => {
+    expect(oneLine('a\r\nb')).toBe('a b');
+    expect(oneLine('a \t\r\n \u00a0b')).toBe('a b');
+    expect(oneLine('a\rb\nc')).toBe('a b c');
+    expect(oneLine('\n\nlead and trail\r\n')).toBe(' lead and trail ');
+    expect(oneLine('a \u2028\nb')).toBe('a b');
+    expect(oneLine('a \t\u00a0b')).toBe('a \t\u00a0b');
+    expect(oneLine('a\u2028b')).toBe('a\u2028b');
+    expect(oneLine('')).toBe('');
+    expect(oneLine(undefined)).toBeUndefined();
+  });
+
+  it('matches the previous fold on seeded random whitespace-heavy text', () => {
+    const pieces = [' ', '\t', '\r', '\n', '\r\n', '\u00a0', '\u2028', 'a', 'b'];
+    // mulberry32 — a fixed seed replays the same strings on every run.
+    let seed = 168;
+    const random = () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const generated = Array.from({ length: 2000 }, () =>
+      Array.from(
+        { length: Math.floor(random() * 40) },
+        () => pieces[Math.floor(random() * pieces.length)],
+      ).join(''),
+    );
+
+    let compared = 0;
+    let folded = 0;
+    let kept = 0;
+    for (const value of generated) {
+      const expected = previousFold(value);
+      expect(oneLine(value), JSON.stringify(value)).toBe(expected);
+      compared++;
+      if (expected !== value) folded++;
+      if (/[^\S\r\n]{2}/.test(expected)) kept++;
+    }
+    expect(compared).toBe(generated.length);
+    // The corpus reaches both sides: runs that fold and break-free runs that stay.
+    expect(folded).toBeGreaterThan(0);
+    expect(kept).toBeGreaterThan(0);
+  });
+
+  describe('stays linear on long upstream text', () => {
+    /** Each line-break shape's folded form, so every size proves the whole input was read. */
+    const foldedLineBreakShape: Record<string, (input: string) => string> = {
+      'one long line ending in a break': (input) => input.replace('\n', ' '),
+      'breaks throughout': () => ' ',
+    };
+
+    it.each([
+      ...LINE_BREAK_SHAPES.map(
+        ([name, shape]) => [name, shape, foldedLineBreakShape[name]!] as const,
+      ),
+      ['padded value', (n: number) => `${' \t'.repeat(n / 2)}x`, (input: string) => input] as const,
+    ])('%s', (_name, shape, folded) => {
+      expectLinearGrowth(oneLine, (n) => {
+        const input = shape(n);
+        expect(oneLine(input)).toBe(folded(input));
+        return input;
+      });
     });
   });
 });

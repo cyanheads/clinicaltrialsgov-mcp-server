@@ -695,14 +695,18 @@ function renderClasses(classes: unknown, indent: string, lines: string[]): void 
 
 /**
  * Flatten CR/LF in upstream text interpolated into a single line, so a line
- * break in the value cannot start a new `content[]` line and forge structure.
- * Applied to a value, or to a whole rendered row whose every part is meant to
- * share one line. `structuredContent` keeps the value verbatim.
+ * break in the value cannot start a new `content[]` line and forge structure:
+ * each whitespace run holding a CR or LF becomes one space, and every other
+ * run is kept as is. Runs in time linear in the input. Applied to a value, or
+ * to a whole rendered row whose every part is meant to share one line.
+ * `structuredContent` keeps the value verbatim.
  */
-function oneLine(value: string): string;
-function oneLine(value: string | undefined): string | undefined;
-function oneLine(value: string | undefined): string | undefined {
-  return value?.replace(/\s*[\r\n]+\s*/g, ' ');
+export function oneLine(value: string): string;
+export function oneLine(value: string | undefined): string | undefined;
+export function oneLine(value: string | undefined): string | undefined {
+  // A lone whitespace character needs folding only when it is a break, so the
+  // single spaces between words never reach the callback.
+  return value?.replace(/\s{2,}|[\r\n]/g, (run) => (/[\r\n]/.test(run) ? ' ' : run));
 }
 
 /**

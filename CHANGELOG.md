@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.11.0](changelog/2.11.x/2.11.0.md) — 2026-11-03
+
+Publishes the clinicaltrialsgov-guide skill. search_studies fits an nctIds list too long for one request and returns the rest in deferredNctIds. Over-long requests fail as request_too_long. find_eligible binds state and country to the site and matches accented place names. Mis-cased AREA[] names are corrected. The .mcpb bundle starts again.
+
 ## [2.10.2](changelog/2.10.x/2.10.2.md) — 2026-10-25
 
 mcp-ts-core 0.13.18: error text in content[] is Markdown-escaped so it renders as written, an out-of-range framework config value fails startup naming the variable, and the .mcpb bundle leaves out source, tests, docs, and the framework's build-only files. Adds the Agent Plugins root plugin.json and mcp.json.

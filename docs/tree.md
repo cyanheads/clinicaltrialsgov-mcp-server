@@ -1,6 +1,6 @@
 # clinicaltrialsgov-mcp-server - Directory Structure
 
-Generated on: 2026-10-26 03:14:24
+Generated on: 2026-11-03 08:27:39
 
 ```text
 clinicaltrialsgov-mcp-server/
@@ -28,6 +28,7 @@ clinicaltrialsgov-mcp-server/
 │   ├── 2.0.x/
 │   ├── 2.1.x/
 │   ├── 2.10.x/
+│   ├── 2.11.x/
 │   ├── 2.2.x/
 │   ├── 2.3.x/
 │   ├── 2.4.x/
@@ -149,6 +150,9 @@ clinicaltrialsgov-mcp-server/
 │   ├── prune-musl-packages.ts
 │   ├── release-github.ts
 │   └── tree.ts
+├── skills/
+│   └── clinicaltrialsgov-guide/
+│       └── SKILL.md
 ├── src/
 │   ├── config/
 │   │   └── server-config.ts
@@ -194,9 +198,11 @@ clinicaltrialsgov-mcp-server/
 │   │   ├── nct06323538.json
 │   │   └── nct07062965.json
 │   ├── helpers/
+│   │   ├── area-metadata.ts
 │   │   ├── commonmark.ts
 │   │   ├── cpu-timing.ts
-│   │   └── format-parity.ts
+│   │   ├── format-parity.ts
+│   │   └── nct-ids.ts
 │   ├── mcp-server/
 │   │   ├── prompts/
 │   │   │   └── definitions/
@@ -224,6 +230,8 @@ clinicaltrialsgov-mcp-server/
 │   │       ├── input-normalization.test.ts
 │   │       ├── security.test.ts
 │   │       └── tool-contract.test.ts
+│   ├── scripts/
+│   │   └── packaging-selectors.test.ts
 │   └── services/
 │       └── clinical-trials/
 │           ├── clinical-trials-service.test.ts

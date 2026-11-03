@@ -1,7 +1,7 @@
 <div align="center">
   <h1>clinicaltrialsgov-mcp-server</h1>
   <p><b>Search ClinicalTrials.gov trials, retrieve study details and results, and match patients to candidate trials via MCP. STDIO or Streamable HTTP.</b>
-  <div>7 Tools • 1 Resource • 1 Prompt</div>
+  <div>7 Tools • 1 Resource • 1 Prompt • 1 Skill</div>
   </p>
 </div>
 
@@ -55,13 +55,22 @@ Search 600K+ studies on [ClinicalTrials.gov](https://clinicaltrials.gov/), the U
 |:---|:---|
 | `analyze_trial_landscape` | Guides a data-driven clinical trial landscape analysis using the count and search tools |
 
+### Skills
+
+| Skill | Description |
+|:---|:---|
+| [`clinicaltrialsgov-guide`](./skills/clinicaltrialsgov-guide/SKILL.md) | Gates and query syntax the tool descriptions don't carry: study versus site recruiting status, overlapping phase counts, `RANGE` and `MISSING` with partial dates and open-ended age limits, the status vocabulary, and reading posted results |
+
+Plugin installs load it from `skills/`; MCP clients that support the Skills extension read it as `skill://clinicaltrialsgov-guide/SKILL.md`. It also ships in the npm package and Docker image.
+
 ## Capability reference
 
 ### `clinicaltrials_search_studies` <sub>tool</sub>
 
 - Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`, `statusFilter` / `phaseFilter` enums (case and spacing variants accepted), `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]`), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix); `pageSize` 1–1000 (default 10; above the server's per-page cap, 200 by default, a page is served at the cap with `truncated` / `shown` / `cap`), `pageToken` cursor, `sort` on up to 2 fields
 - Returns a compact per-study index by default (`nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `hasResults`, …); `fields` (PascalCase leaves) selects a full-fidelity projection — full records run ~70KB
-- Typed errors: `blank_value`, `ids_not_found`, `field_invalid`, `enum_invalid`, `query_parse_error`, `geo_invalid`, `sort_invalid`, `page_token_invalid`, `rate_limited`
+- `nctIds` (up to 1000 entries, repeats collapsed) is served up to what fits one ClinicalTrials.gov request beside the other parameters — about 560 IDs on their own — with the rest returned unqueried in `deferredNctIds`, the same on every page of a walk
+- Typed errors: `blank_value`, `ids_not_found`, `field_invalid`, `enum_invalid`, `query_parse_error`, `geo_invalid`, `sort_invalid`, `page_token_invalid`, `request_too_long`, `rate_limited`
 
 ---
 
@@ -75,7 +84,7 @@ Search 600K+ studies on [ClinicalTrials.gov](https://clinicaltrials.gov/), the U
 ### `clinicaltrials_get_study_count` <sub>tool</sub>
 
 - Same query and filter surface as `clinicaltrials_search_studies`, returning only `totalCount` — no study data fetched
-- Typed errors: `blank_value`, `field_invalid`, `enum_invalid`, `query_parse_error`, `rate_limited`
+- Typed errors: `blank_value`, `field_invalid`, `enum_invalid`, `query_parse_error`, `request_too_long`, `rate_limited`
 
 ---
 
@@ -83,7 +92,7 @@ Search 600K+ studies on [ClinicalTrials.gov](https://clinicaltrials.gov/), the U
 
 - One or more PascalCase `fields` (e.g. `OverallStatus`, `Phase`) — returns each field's type and top values with study counts (capped at 250 by the API), or `min` / `max` / `avg` for numeric and date fields and `trueCount` / `falseCount` for booleans
 - STRING fields add their `longest` value; past 2,000 characters it is a preview flagged `truncated`, with the full `length` and a notice naming the `clinicaltrials_search_studies` call that returns the whole text. Free-text fields the API does not count distinct values on carry `uniqueValuesCounted: false`, marking their `uniqueValuesCount` of 0 as no count
-- `multiValued` flags fields whose per-value counts can sum above the study total. Typed errors: `blank_value`, `field_invalid`, `rate_limited`
+- `multiValued` flags fields whose per-value counts can sum above the study total. Typed errors: `blank_value`, `field_invalid`, `request_too_long`, `rate_limited`
 
 ---
 
@@ -105,7 +114,7 @@ Search 600K+ studies on [ClinicalTrials.gov](https://clinicaltrials.gov/), the U
 
 - `age` (whole number 0–120) with optional `ageUnit` (`years` default, `months`, `weeks`, `days`) for infants and young children, `sex` (`FEMALE` / `MALE` / `ALL`), `conditions[]`, `location` (`country` required, `state` / `city` optional), `healthyVolunteer`, `recruitingOnly` (default true), `maxResults` (up to 1000; each call returns at most 50, disclosing the rest via `truncated` / `shown` / `cap` and a replayable `searchCriteria`), `locationLimit` (no upper bound; a value past the matched sites returns them all)
 - Matches on age, sex, location, recruitment status, and a fuzzy condition search; `funnel` reports match counts per filter stage, and a `notice` says inclusion/exclusion criteria were not checked (use `clinicaltrials_get_study_record` to review them)
-- Typed errors: `blank_value`, `rate_limited`
+- Typed errors: `blank_value`, `field_invalid`, `query_parse_error`, `request_too_long`, `rate_limited`
 
 ---
 
@@ -130,7 +139,7 @@ ClinicalTrials.gov-specific:
 
 - Type-safe client for the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — public, no authentication or API keys required
 - Serialized request queue enforcing ClinicalTrials.gov's ~1 req/sec rate limit, with retry and exponential backoff on 429/5xx responses and HTML error pages
-- Auto-corrects field names passed to `fields`/`sort` (case, whitespace, legacy aliases like `RecruitmentStatus` → `OverallStatus`) and logs each correction
+- Auto-corrects field names passed to `fields`/`sort` (case, whitespace, legacy aliases like `RecruitmentStatus` → `OverallStatus`) and the case of `AREA[…]` field names in `advancedFilter` and the query parameters (`AREA[overallstatus]` → `AREA[OverallStatus]`), and logs each correction
 - Geographic proximity search and nearest-site re-ranking, with no geocoding dependency
 - Excludes the "unknown" enrollment sentinel (`99999999`) from searches and counts by default; `includeUnknownEnrollment` brings it back
 
@@ -300,12 +309,13 @@ The Dockerfile defaults to HTTP transport, stateless session mode, and logs to `
 
 | Directory | Purpose |
 |:---|:---|
-| `src/index.ts` | `createApp()` entry point — registers tools/resources/prompts and inits the ClinicalTrials.gov service. |
+| `src/index.ts` | `createApp()` entry point — registers tools/resources/prompts/skills and inits the ClinicalTrials.gov service. |
 | `src/config` | Server-specific environment variable parsing and validation with Zod. |
 | `src/mcp-server/tools` | Tool definitions (`*.tool.ts`). |
 | `src/mcp-server/resources` | Resource definitions (`*.resource.ts`). |
 | `src/mcp-server/prompts` | Prompt definitions (`*.prompt.ts`). |
 | `src/services/clinical-trials` | ClinicalTrials.gov REST API v2 client — retry, rate limiting, field search, types. |
+| `skills/` | The published `clinicaltrialsgov-guide` skill for agents calling the tools. |
 | `tests/` | Unit and integration tests. |
 
 ## Development guide

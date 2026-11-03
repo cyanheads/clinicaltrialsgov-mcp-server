@@ -58,7 +58,7 @@ Each `query.*` parameter maps to a named **search area** -- a weighted set of fi
 | :------------------------- | :------------------------------ | :---------------------------------------------------------------------------------------- |
 | `filter.overallStatus`     | `string` (pipe/comma-delimited) | Filter by study status. Values from `Status` enum, matched case-sensitively: `RECRUITING` succeeds, `recruiting` / `Recruiting` / `active not recruiting` return 400 `Invalid value in parameter \`overallStatus\``, as does whitespace around a value or delimiter. |
 | `filter.geo`               | `string`                        | Geographic filter. Syntax: `distance(lat,lon,dist)` where dist is e.g. `50mi` or `100km`. |
-| `filter.ids`               | `string` (pipe/comma-delimited) | Filter by NCT IDs. Pattern: `NCT\d+`, case-insensitive (`nct03722472` matches, as does `/studies/nct03722472`). |
+| `filter.ids`               | `string` (pipe/comma-delimited) | Filter by NCT IDs. Pattern: `NCT\d+`, case-insensitive (`nct03722472` matches, as does `/studies/nct03722472`). Each pipe-joined ID costs 14 bytes (`%7C` encoded) of the request-target limit: a path plus query string over 8,177 bytes is answered with HTTP 414 (measured 2026-11-02), and there is no POST search, so a long list is split across requests. |
 | `filter.advanced`          | `string`                        | Advanced Essie expression using `AREA[]` syntax.                                          |
 | `filter.synonyms`          | `string` (pipe/comma-delimited) | Synonym pairs: `area:synonym_id`.                                                         |
 | `postFilter.overallStatus` | same as filter.\*               | Equivalent post-filter versions of all filter params.                                     |
@@ -139,7 +139,7 @@ Returns the complete study data model as a field tree.
 
 | Parameter             | Type      | Default | Description                 |
 | :-------------------- | :-------- | :------ | :-------------------------- |
-| `includeIndexedOnly`  | `boolean` | `false` | Only return indexed fields  |
+| `includeIndexedOnly`  | `boolean` | `false` | Also include index-only fields |
 | `includeHistoricOnly` | `boolean` | `false` | Only return historic fields |
 
 ### Response Schema (`FieldNodeList`)

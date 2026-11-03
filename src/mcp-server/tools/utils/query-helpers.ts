@@ -83,8 +83,8 @@ function visibleText(value: string): string {
  * becomes `["NCTId"]`. No field name or phase value contains either delimiter,
  * so the split is one-to-one. A piece of only format characters counts as
  * empty. A repeated piece is dropped after its first occurrence: it changes
- * nothing but the URL length, and a long enough repeat earns an unclassified
- * HTTP 414 upstream. An entry that splits to nothing (`""`, `" "`, `","`)
+ * nothing but the URL length, and a long enough repeat runs the request past
+ * the length upstream accepts. An entry that splits to nothing (`""`, `" "`, `","`)
  * becomes `''` rather than vanishing, so `firstBlankListParam` still rejects it
  * instead of the list silently shrinking — or, for `[","]`, emptying and
  * dropping the parameter from the request.
@@ -241,30 +241,40 @@ export function quoteQueryTerm(term: string): string {
 }
 
 /**
- * Render one location part (city, state, or country) as an operand inside
+ * Render a location search term (the city) as an operand inside
  * `SEARCH[Location](…)`: bare when it is a single run of letters and digits,
- * quoted otherwise. Inside the wrapper a bare part carrying punctuation
- * under-matches — `Winston-Salem` finds a small fraction of the studies its
- * quoted form finds, every one of which lists a Winston-Salem site — and a bare
- * `(`, `)`, `[`, or `]` is query syntax that would close the wrapper and
- * regroup the expression around the rest of the part. An embedded `"` is
- * stripped, as in `quoteQueryTerm`. A backslash is doubled: a single one
- * escapes the closing quote, leaving the phrase open so a later part's `)`
- * regroups the expression, while upstream reads a doubled one inside a phrase
- * as a literal backslash.
+ * otherwise quoted as `quoteLocationLiteral` quotes it. Inside the wrapper a
+ * bare part carrying punctuation under-matches — `Winston-Salem` finds a small
+ * fraction of the studies its quoted form finds, every one of which lists a
+ * Winston-Salem site — and a bare `(`, `)`, `[`, or `]` is query syntax that
+ * would close the wrapper and regroup the expression around the rest of the
+ * part. An embedded `"` is stripped before deciding.
  */
 export function quoteLocationPart(part: string): string {
   const sanitized = part.replaceAll('"', '');
-  return /[^\p{L}\p{N}]/u.test(sanitized) ? `"${sanitized.replaceAll('\\', '\\\\')}"` : sanitized;
+  return /[^\p{L}\p{N}]/u.test(sanitized) ? quoteLocationLiteral(sanitized) : sanitized;
 }
 
 /**
- * What a term contributes to the query `quoteQueryTerm` or `quoteLocationPart`
- * builds: its text with every `"` and every invisible format character
- * stripped, trimmed. Empty means the term carries no content — it reaches
- * upstream as no operand at all, as a bare `" "` phrase, or as a zero-width
- * term upstream answers with a bare `Search error` — so judge blankness on
- * this, not on the raw value.
+ * Render a location value as one quoted literal, the form an
+ * `AREA[LocationState]` or `AREA[LocationCountry]` operand always takes: left
+ * bare there, a single word is read as syntax — `Missing` as the `MISSING`
+ * operator. An embedded `"` is stripped, as in `quoteQueryTerm`. A backslash is
+ * doubled: a single one escapes the closing quote, leaving the phrase open so a
+ * later part's `)` regroups the expression, while upstream reads a doubled one
+ * inside a phrase as a literal backslash.
+ */
+export function quoteLocationLiteral(value: string): string {
+  return `"${value.replaceAll('"', '').replaceAll('\\', '\\\\')}"`;
+}
+
+/**
+ * What a term contributes to the query `quoteQueryTerm`, `quoteLocationPart`,
+ * or `quoteLocationLiteral` builds: its text with every `"` and every invisible
+ * format character stripped, trimmed. Empty means the term carries no content —
+ * it reaches upstream as no operand at all, as a bare `" "` phrase, or as a
+ * zero-width term upstream answers with a bare `Search error` — so judge
+ * blankness on this, not on the raw value.
  */
 export function queryTermContent(term: string): string {
   return visibleText(term.replaceAll('"', ''));

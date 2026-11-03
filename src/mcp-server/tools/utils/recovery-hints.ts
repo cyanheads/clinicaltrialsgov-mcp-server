@@ -32,6 +32,8 @@ export const RECOVERY_HINTS = {
     'Each mode reads its own arguments: "search" takes query (and limit), "drill" takes path (and includeIndexedOnly), "overview" takes none. Drop the argument the selected mode does not read, or re-issue the call under the mode that reads it.',
   mode_requires:
     'mode="search" needs `query` (a keyword such as "enrollment"); mode="drill" needs `path` (a dot-notation path such as "protocolSection.designModule"). Pass the argument the selected mode reads, or use mode="overview" to list the top-level sections first.',
+  request_too_long:
+    'Shorten the longest inputs — a free-text query, advancedFilter, or a long fields or conditions list — or split a long list across several calls with fewer entries each, so the request URL fits within the length ClinicalTrials.gov accepts.',
   rate_limited:
     'ClinicalTrials.gov rate-limited the request after several retries; wait about a minute before trying again.',
 } as const;

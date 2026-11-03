@@ -17,13 +17,64 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
 
 import { getStudyCount } from '@/mcp-server/tools/definitions/get-study-count.tool.js';
 import { searchStudies } from '@/mcp-server/tools/definitions/search-studies.tool.js';
+import { areaIndex } from '../../../helpers/area-metadata.js';
 
 describe('getStudyCount', () => {
-  const mockService = { countStudies: vi.fn(), searchStudies: vi.fn() };
+  const mockService = { countStudies: vi.fn(), getAreaIndex: vi.fn(), searchStudies: vi.fn() };
 
   beforeEach(() => {
     vi.clearAllMocks();
+    // No AREA index unless a test supplies one: AREA[] names pass through as written.
+    mockService.getAreaIndex.mockResolvedValue(undefined);
     mockGetService.mockReturnValue(mockService as never);
+  });
+
+  // Upstream matches AREA[] names case-sensitively; the handler corrects them
+  // before the count and echoes the corrected text (#170).
+  describe('AREA[] field-name correction (#170)', () => {
+    it('counts and echoes every expression in its corrected spelling', async () => {
+      mockService.countStudies.mockResolvedValue(64566);
+      mockService.getAreaIndex.mockResolvedValue(areaIndex());
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      await getStudyCount.handler(
+        getStudyCount.input!.parse({
+          sponsorQuery: 'AREA[sponsor]Pfizer',
+          advancedFilter: 'AREA[overallstatus]RECRUITING',
+          phaseFilter: 'PHASE3',
+        }),
+        ctx,
+      );
+
+      expect(mockService.countStudies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          querySpons: 'AREA[LeadSponsorName]Pfizer',
+          filterAdvanced: 'AREA[Phase]PHASE3 AND (AREA[OverallStatus]RECRUITING)',
+        }),
+        ctx,
+      );
+      expect(getEnrichment(ctx).searchCriteria).toMatchObject({
+        sponsorQuery: 'AREA[LeadSponsorName]Pfizer',
+        advancedFilter: 'AREA[OverallStatus]RECRUITING',
+      });
+    });
+
+    it('never asks for the AREA index when no expression names an AREA[] field', async () => {
+      mockService.countStudies.mockResolvedValue(1);
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      await getStudyCount.handler(
+        getStudyCount.input!.parse({ conditionQuery: 'asthma', phaseFilter: 'PHASE3' }),
+        ctx,
+      );
+      expect(mockService.getAreaIndex).not.toHaveBeenCalled();
+    });
+
+    it('describes the correction on advancedFilter and the AREA[] failure on field_invalid', () => {
+      const shape = getStudyCount.input!.shape as Record<string, { description?: string }>;
+      expect(shape.advancedFilter?.description).toContain('only by case (AREA[overallstatus])');
+      expect(getStudyCount.errors?.find((e) => e.reason === 'field_invalid')?.when).toContain(
+        'LeadSponsorName',
+      );
+    });
   });
 
   describe('handler', () => {

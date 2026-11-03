@@ -825,6 +825,35 @@ describe('findEligible — injection and output safety', () => {
     await expect(findEligible.handler(input, ctx)).resolves.toBeDefined();
   });
 
+  // state and country are bound as quoted AREA[…] literals inside
+  // SEARCH[Location](…) (#164): no payload may close its phrase, the state arm,
+  // or the wrapper and regroup the query around the rest of it.
+  it.each([
+    ...INJECTION_PAYLOADS,
+    'a)OR(b',
+    ') OR AREA[OverallStatus]COMPLETED OR (',
+    'MISSING',
+    'x\\',
+    '") OR ("',
+  ])(
+    'location state and country payload %j stays one literal inside the wrapper',
+    async (payload) => {
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await findEligible.handler(
+        findEligible.input!.parse({
+          ...baseInput,
+          location: { city: 'London', state: payload, country: payload },
+        }),
+        ctx,
+      );
+      const { queryLocn } = mockService.searchStudies.mock.calls[0]![0] as { queryLocn: string };
+      // Quoted phrases emptied, reading `\` as an escape the way upstream does.
+      expect(queryLocn.replace(/"(?:[^"\\]|\\.)*"/g, '""')).toBe(
+        'SEARCH[Location](London AND (AREA[LocationState]"" OR AREA[LocationState]MISSING) AND AREA[LocationCountry]"")',
+      );
+    },
+  );
+
   it('output does not contain env var names', async () => {
     const ctx = createMockContext({ errors: findEligible.errors });
     const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);

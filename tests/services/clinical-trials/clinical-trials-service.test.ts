@@ -10,8 +10,12 @@ import type { ServerConfig } from '@/config/server-config.js';
 import {
   ClinicalTrialsService,
   getClinicalTrialsService,
+  parseAreaRejection,
 } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { FieldNode } from '@/services/clinical-trials/types.js';
+import { AREA_METADATA, STRUCT_PIECES } from '../../helpers/area-metadata.js';
+import { expectLinearGrowth, LINE_BREAK_SHAPES } from '../../helpers/cpu-timing.js';
+import { nctIds as ids } from '../../helpers/nct-ids.js';
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);
@@ -437,6 +441,261 @@ describe('ClinicalTrialsService', () => {
       // Without it a record fetched under a previous (alias) ID comes back keyed
       // only by its canonical ID, with nothing tying it to the request (#127).
       expect(fields).toContain('NCTIdAlias');
+    });
+
+    it('sends a full 20-ID results batch in a 393-byte request target, nowhere near the limit (#163)', async () => {
+      // `/v2/studies` (11) + `?format=json` (12) + `&filter.ids=` (12) + 20 IDs
+      // at 11 bytes with 19 `%7C` separators (277) + `&fields=` and five
+      // pieces joined by `%7C` (69) + `&pageSize=20` (12) = 393 of 8,177.
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [] }));
+      const ctx = createMockContext();
+      const batch = ids(20);
+
+      await service.getStudiesBatch(batch, ctx);
+
+      const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
+      expect(calledUrl.pathname.length + calledUrl.search.length).toBe(393);
+      expect(calledUrl.searchParams.get('filter.ids')?.split('|')).toEqual(batch);
+    });
+  });
+
+  /**
+   * ClinicalTrials.gov answers a request target (path plus query string) past
+   * 8,177 bytes with HTTP 414, whichever parameter carries the bytes. An ID
+   * list is fitted to what is left; every other over-long request maps to the
+   * typed request_too_long reason.
+   */
+  describe('request length (#163)', () => {
+    const sentUrl = (call = 0) => new URL(mockFetch.mock.calls[call]![0] as string);
+    const sentIds = (call = 0) => sentUrl(call).searchParams.get('filter.ids')?.split('|');
+    /** The request target as the upstream front end counts it. */
+    const targetBytes = (url: URL) => url.pathname.length + url.search.length;
+
+    /**
+     * `/v2/studies` (11) + `?format=json` (12) + `&query.term=` (12) + the pad
+     * + `&filter.ids=` (12) + 11 bytes per ID and 3 (`%7C`) between IDs comes
+     * to 44 + pad + 14 × IDs, and 256 of the 8,177 bytes stay reserved for the
+     * paging parameters. So n IDs fit while pad + 14n ≤ 7877.
+     */
+    const fitted = (pad: number, count: number) => ({
+      queryTerm: 'a'.repeat(pad),
+      filterIds: ids(count),
+      includeUnknownEnrollment: true,
+    });
+    /** A second instance, so a test's second request never waits out the first one's throttle slot. */
+    const another = () => new ClinicalTrialsService(testConfig, fastOptions);
+
+    it('sends the leading IDs that fit to the byte and returns the rest in order', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [], totalCount: 0 }));
+      const result = await service.searchStudies(fitted(7737, 15), createMockContext());
+
+      expect(sentIds()).toEqual(ids(10));
+      expect(result.deferredIds).toEqual(ids(5, 10));
+    });
+
+    it('fits one ID fewer once the other parameters grow by a byte', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [], totalCount: 0 }));
+      const result = await service.searchStudies(fitted(7738, 15), createMockContext());
+
+      expect(sentIds()).toEqual(ids(9));
+      expect(result.deferredIds).toEqual(ids(6, 9));
+    });
+
+    it('fits 563 of 1,000 IDs when nothing else is set, and defers nothing for 500', async () => {
+      // 32 + 14n + 256 ≤ 8177 → n ≤ 563.
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [] }));
+      const thousand = await service.searchStudies(
+        { filterIds: ids(1000), includeUnknownEnrollment: true },
+        createMockContext(),
+      );
+      const fiveHundred = await another().searchStudies(
+        { filterIds: ids(500), includeUnknownEnrollment: true },
+        createMockContext(),
+      );
+
+      expect(sentIds(0)).toEqual(ids(563));
+      expect(thousand.deferredIds).toEqual(ids(437, 563));
+      expect(sentIds(1)).toEqual(ids(500));
+      expect(fiveHundred).not.toHaveProperty('deferredIds');
+    });
+
+    it('fits the same IDs on every page of a walk, whatever the paging parameters carry', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [], totalCount: 0 }));
+      const ctx = createMockContext();
+      await service.searchStudies({ ...fitted(7737, 15), pageSize: 10, countTotal: true }, ctx);
+      // The widest paging parameters the reserve covers: a 214-character token
+      // beside pageSize=1000 and countTotal=false lands exactly on 8,177.
+      const last = await another().searchStudies(
+        { ...fitted(7737, 15), pageSize: 1000, countTotal: false, pageToken: 't'.repeat(214) },
+        ctx,
+      );
+
+      expect(sentIds(1)).toEqual(sentIds(0));
+      expect(last.deferredIds).toEqual(ids(5, 10));
+      expect(targetBytes(sentUrl(1))).toBe(8177);
+    });
+
+    it('fits on the fields as given, so field normalization never moves the fit between pages', async () => {
+      /**
+       * Normalization strips 17 bytes from these fields — ten leading spaces
+       * (each encoded `+`) and two legacy labels renamed to the shorter
+       * OverallStatus — room for an eleventh ID were the fit measured after it.
+       * A page whose metadata lookup succeeds sends the normalized names, one
+       * whose lookup fails sends them as given, and both must query the same
+       * IDs: with the fields as given, pad + 14n ≤ 7815 fits 10.
+       */
+      const metadata: FieldNode[] = [
+        {
+          name: 'protocolSection',
+          children: [
+            {
+              name: 'identificationModule',
+              children: [{ name: 'nctId', piece: 'NCTId', type: 'STRING' }],
+            },
+            {
+              name: 'statusModule',
+              children: [{ name: 'overallStatus', piece: 'OverallStatus', type: 'ENUM' }],
+            },
+          ],
+        },
+      ];
+      mockFetch.mockImplementation((url: URL) =>
+        Promise.resolve(
+          String(url).includes('/studies/metadata')
+            ? jsonResponse(metadata)
+            : jsonResponse({ studies: [] }),
+        ),
+      );
+      const params = {
+        ...fitted(7675, 15),
+        fields: ['          NCTId', 'recruitmentstatus', 'recruitingstatus'],
+      };
+
+      // The metadata fetch takes the normalizing instance's first throttle
+      // slot; fake timers stand in for the one-second wait before the search.
+      vi.useFakeTimers();
+      try {
+        const normalizing = new ClinicalTrialsService(testConfig, {
+          ...fastOptions,
+          validateFieldsLocally: true,
+        });
+        const pending = normalizing.searchStudies(params, createMockContext());
+        await vi.advanceTimersByTimeAsync(1000);
+        await pending;
+      } finally {
+        vi.useRealTimers();
+      }
+      await service.searchStudies(params, createMockContext());
+
+      const searches = mockFetch.mock.calls
+        .map((c) => new URL(String(c[0])))
+        .filter((u) => !u.pathname.endsWith('/metadata'));
+      expect(searches.map((u) => u.searchParams.get('fields'))).toEqual([
+        'NCTId|OverallStatus|OverallStatus',
+        '          NCTId|recruitmentstatus|recruitingstatus',
+      ]);
+      expect(searches[0]?.searchParams.get('filter.ids')?.split('|')).toEqual(ids(10));
+      expect(searches[1]?.searchParams.get('filter.ids')?.split('|')).toEqual(ids(10));
+    });
+
+    it('sends the first ID alone when the criteria leave no room for the paging reserve but the request fits', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [], totalCount: 0 }));
+
+      // One byte past the reserve's room for an ID, far inside the limit itself.
+      const result = await service.searchStudies(fitted(7864, 3), createMockContext());
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(sentIds()).toEqual(ids(1));
+      expect(targetBytes(sentUrl())).toBe(7922);
+      expect(result.deferredIds).toEqual(ids(2, 1));
+    });
+
+    it('keeps that one-ID fit on every page and fails request_too_long when a token runs the page past the limit', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [], totalCount: 0 }));
+      const ctx = createMockContext();
+
+      // 8,058 bytes with one ID: a 100-character token still fits, a 200-character one does not.
+      const short = await service.searchStudies(
+        { ...fitted(8000, 3), pageToken: 't'.repeat(100) },
+        ctx,
+      );
+      expect(sentIds()).toEqual(ids(1));
+      expect(short.deferredIds).toEqual(ids(2, 1));
+
+      const err = await another()
+        .searchStudies({ ...fitted(8000, 3), pageToken: 't'.repeat(200) }, ctx)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(McpError);
+      expect((err as McpError).data).toMatchObject({
+        reason: 'request_too_long',
+        requestBytes: 8269,
+        maxRequestBytes: 8177,
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it('fails request_too_long before any request when not even one ID fits the whole request', async () => {
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [], totalCount: 0 }));
+      const ctx = createMockContext();
+
+      const err = await service.searchStudies(fitted(8120, 3), ctx).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(McpError);
+      expect((err as McpError).code).toBe(JsonRpcErrorCode.ValidationError);
+      expect((err as McpError).data).toMatchObject({
+        reason: 'request_too_long',
+        requestBytes: 8178,
+        maxRequestBytes: 8177,
+      });
+      expect((err as McpError).message).toContain('None of the 3 NCT IDs');
+      expect(mockFetch).not.toHaveBeenCalled();
+
+      // A byte shorter, the first ID fits and the request goes out.
+      const result = await another().searchStudies(fitted(8119, 3), ctx);
+      expect(sentIds()).toEqual(ids(1));
+      expect(targetBytes(sentUrl())).toBe(8177);
+      expect(result.deferredIds).toEqual(ids(2, 1));
+    });
+
+    const NGINX_414 =
+      '<html>\r\n<head><title>414 Request-URI Too Large</title></head>\r\n<body>\r\n<center><h1>414 Request-URI Too Large</h1></center>\r\n<hr><center>nginx/1.26.2</center>\r\n</body>\r\n</html>\r\n';
+
+    it('maps an upstream 414 to request_too_long carrying the request size, never the upstream body', async () => {
+      mockFetch.mockResolvedValue(textResponse(NGINX_414, 414));
+      const ctx = createMockContext();
+
+      const err = await service
+        .searchStudies({ queryTerm: 'a'.repeat(9000), includeUnknownEnrollment: true }, ctx)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(McpError);
+      expect((err as McpError).code).toBe(JsonRpcErrorCode.ValidationError);
+      // `/v2/studies` (11) + `?format=json` (12) + `&query.term=` (12) + 9,000.
+      expect((err as McpError).data).toEqual({
+        reason: 'request_too_long',
+        requestBytes: 9035,
+        maxRequestBytes: 8177,
+      });
+      expect((err as McpError).message).toContain('9035 bytes');
+      expect((err as McpError).message).not.toContain('nginx');
+      // A 414 is final: the same URL would fail the same way.
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    it.each([
+      [
+        'countStudies',
+        (s: ClinicalTrialsService) => s.countStudies({ queryTerm: 'a' }, createMockContext()),
+      ],
+      [
+        'getFieldValues',
+        (s: ClinicalTrialsService) => s.getFieldValues(['Phase'], createMockContext()),
+      ],
+    ] as const)('%s surfaces an upstream 414 as request_too_long', async (_name, call) => {
+      mockFetch.mockResolvedValue(textResponse(NGINX_414, 414));
+      const err = await call(service).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(McpError);
+      expect(((err as McpError).data as Record<string, unknown>).reason).toBe('request_too_long');
     });
   });
 
@@ -2196,6 +2455,320 @@ describe('ClinicalTrialsService', () => {
         expect(Array.isArray(data?.invalid)).toBe(true);
         expect(data?.recovery).toBeUndefined();
       }
+    });
+  });
+
+  describe('AREA[] field names (#170)', () => {
+    const parseError = (detail: string, where = 'advanced filter') =>
+      textResponse(`Error parsing query in ${where}: ${detail}`);
+
+    /** Answer /studies/metadata with `metadata` and every other request with `primary`. */
+    const route = (primary: unknown, metadata: unknown = jsonResponse(AREA_METADATA)) =>
+      mockFetch.mockImplementation((url: string | URL) =>
+        Promise.resolve(String(url).includes('/studies/metadata') ? metadata : primary),
+      );
+    const metadataRequests = () =>
+      mockFetch.mock.calls.filter((c) => String(c[0]).includes('/studies/metadata')).length;
+
+    /** The error `call` rejects with. */
+    const rejection = async (call: () => Promise<unknown>): Promise<McpError> => {
+      try {
+        await call();
+      } catch (err) {
+        return err as McpError;
+      }
+      throw new Error('expected a rejection');
+    };
+
+    /** Run `call` with fake timers standing in for the throttle's one-second gaps. */
+    async function throttled<T>(call: () => Promise<T>): Promise<T> {
+      vi.useFakeTimers();
+      try {
+        const outcome = call().then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        await vi.advanceTimersByTimeAsync(10_000);
+        const settled = await outcome;
+        if ('error' in settled) throw settled.error;
+        return settled.value;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    let validating: ClinicalTrialsService;
+    beforeEach(() => {
+      validating = new ClinicalTrialsService(testConfig, {
+        ...fastOptions,
+        validateFieldsLocally: true,
+      });
+    });
+
+    describe('rejections upstream returns', () => {
+      it('suggests the nearest searchable pieces for an unknown name', async () => {
+        route(parseError('Unknown area name: `SponsorName`'));
+        const err = await throttled(() =>
+          rejection(() =>
+            validating.countStudies(
+              { filterAdvanced: 'AREA[SponsorName]Pfizer' },
+              createMockContext(),
+            ),
+          ),
+        );
+
+        expect(err.message).toBe(
+          "Error parsing query in advanced filter: Unknown area name: `SponsorName` 'SponsorName' is not a recognized AREA[]-compatible field. 'SponsorName' — did you mean 'LeadSponsorName', 'CollaboratorName', 'InterventionName'? Call clinicaltrials_get_field_definitions to look up valid PascalCase piece names.",
+        );
+        expect(err.data).toEqual({
+          reason: 'field_invalid',
+          invalid: ['SponsorName'],
+          suggestions: { SponsorName: ['LeadSponsorName', 'CollaboratorName', 'InterventionName'] },
+        });
+      });
+
+      it('answers a STRUCT piece refusal as field_invalid with its leaves, not as a syntax error', async () => {
+        route(parseError('This type of query is not allowed for LeadSponsor'));
+        const err = await throttled(() =>
+          rejection(() =>
+            validating.searchStudies(
+              { filterAdvanced: 'AREA[LeadSponsor]Pfizer' },
+              createMockContext(),
+            ),
+          ),
+        );
+
+        expect(err.message).toBe(
+          "Error parsing query in advanced filter: This type of query is not allowed for LeadSponsor. 'LeadSponsor' cannot be searched by value with AREA[]. 'LeadSponsor' — did you mean 'LeadSponsorName', 'LeadSponsorClass', 'AgreementPISponsorEmployee'? Call clinicaltrials_get_field_definitions to look up valid PascalCase piece names.",
+        );
+        expect(err.data).toEqual({
+          reason: 'field_invalid',
+          invalid: ['LeadSponsor'],
+          suggestions: {
+            LeadSponsor: ['LeadSponsorName', 'LeadSponsorClass', 'AgreementPISponsorEmployee'],
+          },
+        });
+      });
+
+      it('keeps the parameter upstream names for a rejection in a query parameter', async () => {
+        route(parseError('Unknown area name: `Status`', 'Conditions or disease'));
+        const err = await throttled(() =>
+          rejection(() =>
+            validating.countStudies({ queryCond: 'AREA[Status]RECRUITING' }, createMockContext()),
+          ),
+        );
+
+        expect(err.message).toContain('Error parsing query in Conditions or disease:');
+        expect(err.message).toContain("'Status' — did you mean 'OverallStatus', 'LocationStatus'?");
+        expect(err.data).toMatchObject({ reason: 'field_invalid', invalid: ['Status'] });
+      });
+
+      it('keeps today’s message for a name no searchable piece resembles', async () => {
+        route(parseError('Unknown area name: `NotARealField`'));
+        const err = await throttled(() =>
+          rejection(() =>
+            validating.countStudies(
+              { filterAdvanced: 'AREA[NotARealField]x' },
+              createMockContext(),
+            ),
+          ),
+        );
+
+        expect(err.message).toBe(
+          "Error parsing query in advanced filter: Unknown area name: `NotARealField` 'NotARealField' is not a recognized AREA[]-compatible field. Call clinicaltrials_get_field_definitions to look up valid PascalCase piece names.",
+        );
+        expect(err.data).toEqual({ reason: 'field_invalid', invalid: ['NotARealField'] });
+      });
+
+      it('never suggests a STRUCT piece upstream would refuse in turn', async () => {
+        const names = ['LeadSponsor', 'Collaborator', 'Intervention', 'SponsorCollaboratorsModule'];
+        route(parseError('placeholder'));
+        const suggested = await throttled(async () => {
+          const out: string[] = [];
+          for (const name of names) {
+            for (const detail of [
+              `Unknown area name: \`${name}\``,
+              `This type of query is not allowed for ${name}`,
+            ]) {
+              route(parseError(detail));
+              const err = await rejection(() =>
+                validating.countStudies({ filterAdvanced: `AREA[${name}]x` }, createMockContext()),
+              );
+              expect(err.data).toMatchObject({ reason: 'field_invalid', invalid: [name] });
+              const { suggestions } = err.data as { suggestions?: Record<string, string[]> };
+              out.push(...(suggestions?.[name] ?? []));
+            }
+          }
+          return out;
+        });
+
+        expect(suggested.length).toBeGreaterThan(0);
+        expect(suggested.filter((piece) => STRUCT_PIECES.has(piece))).toEqual([]);
+      });
+
+      it('suggests nothing, and fetches no metadata, with local validation disabled', async () => {
+        route(parseError('This type of query is not allowed for LeadSponsor'));
+        const err = await rejection(() =>
+          service.countStudies({ filterAdvanced: 'AREA[LeadSponsor]Pfizer' }, createMockContext()),
+        );
+
+        expect(err.data).toEqual({ reason: 'field_invalid', invalid: ['LeadSponsor'] });
+        expect(err.message).not.toContain('did you mean');
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it('still answers field_invalid when the metadata lookup fails on the error path', async () => {
+        route(parseError('Unknown area name: `SponsorName`'), jsonResponse(null, 404));
+        const ctx = createMockContext();
+        const err = await throttled(() =>
+          rejection(() => validating.countStudies({ filterAdvanced: 'AREA[SponsorName]x' }, ctx)),
+        );
+
+        expect(err.data).toEqual({ reason: 'field_invalid', invalid: ['SponsorName'] });
+        expect(metadataRequests()).toBe(1);
+        expect(
+          (ctx.log as unknown as { calls: Array<{ level: string; msg: string }> }).calls,
+        ).toContainEqual(
+          expect.objectContaining({
+            level: 'warning',
+            msg: 'AREA[] field-name lookup skipped — metadata unavailable',
+          }),
+        );
+      });
+
+      it('lets the caller’s cancellation through rather than reporting a field_invalid', async () => {
+        const controller = new AbortController();
+        mockFetch.mockImplementation(() => {
+          controller.abort();
+          return Promise.resolve(parseError('Unknown area name: `SponsorName`'));
+        });
+        const err = await rejection(() =>
+          validating.countStudies(
+            { filterAdvanced: 'AREA[SponsorName]x' },
+            createMockContext({ signal: controller.signal }),
+          ),
+        );
+
+        expect(err.code).toBe(JsonRpcErrorCode.RequestCancelled);
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('getAreaIndex', () => {
+      it('resolves the AREA index, sharing one metadata request with field validation', async () => {
+        route(jsonResponse({ studies: [] }));
+        const ctx = createMockContext();
+        const index = await throttled(async () => {
+          const area = await validating.getAreaIndex(ctx);
+          await validating.searchStudies({ fields: ['NCTId'] }, ctx);
+          return area;
+        });
+
+        expect(index?.names.has('OVERALL-STATUS')).toBe(true);
+        expect(index?.fold.get('overallstatus')).toBe('OverallStatus');
+        expect(metadataRequests()).toBe(1);
+      });
+
+      it('is undefined, with no request, when local validation is disabled', async () => {
+        await expect(service.getAreaIndex(createMockContext())).resolves.toBeUndefined();
+        expect(mockFetch).not.toHaveBeenCalled();
+      });
+
+      it('is undefined when metadata cannot be fetched, and retries on the next call', async () => {
+        route(jsonResponse({ studies: [] }), jsonResponse(null, 404));
+        await expect(validating.getAreaIndex(createMockContext())).resolves.toBeUndefined();
+
+        route(jsonResponse({ studies: [] }));
+        const index = await throttled(() => validating.getAreaIndex(createMockContext()));
+        expect(index?.names.has('LeadSponsorName')).toBe(true);
+        expect(metadataRequests()).toBe(2);
+      });
+
+      it('rethrows the caller’s cancellation instead of passing it off as no index', async () => {
+        route(jsonResponse({ studies: [] }));
+        const controller = new AbortController();
+        controller.abort();
+        const err = await rejection(() =>
+          validating.getAreaIndex(createMockContext({ signal: controller.signal })),
+        );
+
+        expect(err.code).toBe(JsonRpcErrorCode.RequestCancelled);
+        expect(mockFetch).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('parseAreaRejection', () => {
+      it.each([
+        [
+          'Error parsing query in advanced filter: Unknown area name: `Sponsor`',
+          'unknown',
+          'Sponsor',
+        ],
+        [
+          'Error parsing query in Other terms: Unknown area name: `overall-status`',
+          'unknown',
+          'overall-status',
+        ],
+        [
+          'Error parsing query in advanced filter: This type of query is not allowed for DesignInfo',
+          'unsearchable',
+          'DesignInfo',
+        ],
+      ] as const)('reads %j', (text, kind, name) => {
+        expect(parseAreaRejection(text)).toEqual({ kind, name });
+      });
+
+      it.each([
+        'Error parsing query in advanced filter: RANGE is not supported for text field protocolSection.identificationModule.briefTitle',
+        'Error parsing query in advanced filter: Allowed values for enum field `protocolSection.designModule.phases` are `NA`, `PHASE1`',
+        "Error parsing query in Other terms: mismatched input '[' expecting {<EOF>, '('}",
+        'Error parsing query in advanced filter: Unknown area name: ``',
+        '',
+      ])('reads no AREA[] name in %j', (text) => {
+        expect(parseAreaRejection(text)).toBeUndefined();
+      });
+
+      describe('stays linear on caller-sized text', () => {
+        it.each([
+          ...LINE_BREAK_SHAPES.map(([name, shape]) => [name, shape, undefined] as const),
+          [
+            'an opening backtick never closed',
+            (n: number) => `Unknown area name: \`${'x'.repeat(n)}`,
+            undefined,
+          ],
+          [
+            'a whitespace run after the colon',
+            (n: number) => `Unknown area name:${' '.repeat(n)}x`,
+            undefined,
+          ],
+          [
+            'repeated prefixes with no name',
+            (n: number) => 'Unknown area name: '.repeat(n / 19),
+            undefined,
+          ],
+          // Each refusal's `for ` runs into the next one's `This`.
+          [
+            'overlapping refusal prefixes',
+            (n: number) => 'This type of query is not allowed for '.repeat(n / 38),
+            'This',
+          ],
+        ] as const)('%s', (_name, shape, name) => {
+          expectLinearGrowth((input) => {
+            if (parseAreaRejection(input)?.name !== name) throw new Error('unexpected name');
+          }, shape);
+        });
+
+        it('a name as long as the request allows', () => {
+          expectLinearGrowth(
+            (input) => {
+              if (parseAreaRejection(input)?.name.length !== input.length - 38) {
+                throw new Error('name cut short');
+              }
+            },
+            (n) => `This type of query is not allowed for ${'X'.repeat(n)}`,
+          );
+        });
+      });
     });
   });
 

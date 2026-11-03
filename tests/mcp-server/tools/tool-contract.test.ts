@@ -85,6 +85,7 @@ const metadata: FieldNode[] = [
 
 const mockService = {
   countStudies: vi.fn(),
+  getAreaIndex: vi.fn(),
   getFieldValues: vi.fn(),
   getMetadata: vi.fn(),
   getStudiesBatch: vi.fn(),
@@ -97,6 +98,7 @@ const mockService = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockGetService.mockReturnValue(mockService as never);
+  mockService.getAreaIndex.mockResolvedValue(undefined);
   mockService.searchStudies.mockResolvedValue({
     studies: [recruitingStudy],
     totalCount: 1,
@@ -165,6 +167,30 @@ toolContractSuite(searchStudies, {
       reason: 'blank_value',
     },
   ],
+});
+
+describe('search_studies deferredNctIds survives the output schema (#163)', () => {
+  it('carries the IDs the request had no room for beside the studies it returned', async () => {
+    mockService.searchStudies.mockResolvedValue({
+      studies: [recruitingStudy],
+      totalCount: 1,
+      deferredIds: ['NCT00000002', 'NCT00000003'],
+    });
+    const result = await runToolContract(searchStudies, {
+      nctIds: ['NCT06323538', 'NCT00000002', 'NCT00000003'],
+    });
+    const structured = result.structuredContent as {
+      deferredNctIds?: string[];
+      searchCriteria: { nctIds: string[] };
+    };
+
+    expect(result.isError).toBeFalsy();
+    expect(structured.deferredNctIds).toEqual(['NCT00000002', 'NCT00000003']);
+    expect(structured.searchCriteria.nctIds).toEqual(['NCT06323538']);
+    expect(readMarkdown((result.content as { text: string }[])[0]!.text)).toContain(
+      'follow-up call with the same criteria: NCT00000002, NCT00000003',
+    );
+  });
 });
 
 toolContractSuite(getStudy, {
@@ -564,6 +590,12 @@ describe('blank_value recovery on the wire (#113)', () => {
  * the tool declares.
  */
 describe('service-thrown reasons carry the declaring tool hint on the wire', () => {
+  /** The upstream 414 as the service raises it (#163): sizes only, no upstream body. */
+  const tooLong = () =>
+    validationError(
+      'ClinicalTrials.gov rejected the request as too long (HTTP 414): its URL path and query string come to 9134 bytes, and the registry accepts at most 8177.',
+      { reason: 'request_too_long', requestBytes: 9134, maxRequestBytes: 8177 },
+    );
   const cases = [
     {
       name: 'search_studies field_invalid',
@@ -608,6 +640,18 @@ describe('service-thrown reasons carry the declaring tool hint on the wire', () 
         ),
       run: () =>
         runToolContract(searchStudies, { conditionQuery: 'ALS', pageToken: 'invalidtoken' }),
+    },
+    {
+      name: 'get_study_count field_invalid from an AREA[] name',
+      reason: 'field_invalid' as const,
+      arrange: () =>
+        mockService.countStudies.mockRejectedValue(
+          validationError(
+            "Error parsing query in advanced filter: This type of query is not allowed for LeadSponsor. 'LeadSponsor' — did you mean 'LeadSponsorName'?",
+            { reason: 'field_invalid', invalid: ['LeadSponsor'] },
+          ),
+        ),
+      run: () => runToolContract(getStudyCount, { advancedFilter: 'AREA[LeadSponsor]Pfizer' }),
     },
     {
       name: 'get_study_count query_parse_error',
@@ -657,6 +701,53 @@ describe('service-thrown reasons carry the declaring tool hint on the wire', () 
           }),
         ),
       run: () => runToolContract(findEligible, eligibleInput),
+    },
+    {
+      name: 'search_studies request_too_long',
+      reason: 'request_too_long' as const,
+      arrange: () => mockService.searchStudies.mockRejectedValue(tooLong()),
+      run: () => runToolContract(searchStudies, { query: 'a'.repeat(9099) }),
+    },
+    {
+      name: 'get_study_count request_too_long',
+      reason: 'request_too_long' as const,
+      arrange: () => mockService.countStudies.mockRejectedValue(tooLong()),
+      run: () => runToolContract(getStudyCount, { query: 'a'.repeat(9099) }),
+    },
+    {
+      name: 'get_field_values request_too_long',
+      reason: 'request_too_long' as const,
+      arrange: () => mockService.getFieldValues.mockRejectedValue(tooLong()),
+      run: () => runToolContract(getFieldValues, { fields: 'OverallStatus' }),
+    },
+    {
+      name: 'find_eligible request_too_long',
+      reason: 'request_too_long' as const,
+      arrange: () => mockService.searchStudies.mockRejectedValue(tooLong()),
+      run: () => runToolContract(findEligible, eligibleInput),
+    },
+    {
+      name: 'find_eligible field_invalid from an AREA[] name in a condition',
+      reason: 'field_invalid' as const,
+      arrange: () =>
+        mockService.countStudies.mockRejectedValue(
+          validationError(
+            'Error parsing query in Conditions or disease: Unknown area name: `FooBar`',
+            { reason: 'field_invalid', invalid: ['FooBar'] },
+          ),
+        ),
+      run: () => runToolContract(findEligible, { ...eligibleInput, conditions: ['AREA[FooBar]x'] }),
+    },
+    {
+      name: 'find_eligible query_parse_error from a condition',
+      reason: 'query_parse_error' as const,
+      arrange: () =>
+        mockService.countStudies.mockRejectedValue(
+          validationError("Query syntax error: missing ')' at '<EOF>'", {
+            reason: 'query_parse_error',
+          }),
+        ),
+      run: () => runToolContract(findEligible, { ...eligibleInput, conditions: ['(diabetes'] }),
     },
   ];
 

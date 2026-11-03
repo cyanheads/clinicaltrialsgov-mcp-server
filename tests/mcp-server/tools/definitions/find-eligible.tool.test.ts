@@ -35,6 +35,10 @@ const baseInput = {
   location: { country: 'United States', state: 'Washington', city: 'Seattle' },
 };
 
+/** The queryLocn `baseInput.location` builds (#164). */
+const BASE_LOCATION_QUERY =
+  'SEARCH[Location](Seattle AND (AREA[LocationState]"Washington" OR AREA[LocationState]MISSING) AND AREA[LocationCountry]"United States")';
+
 describe('findEligible', () => {
   const mockService = { countStudies: vi.fn(), searchStudies: vi.fn() };
 
@@ -181,7 +185,7 @@ describe('findEligible', () => {
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
         expect.objectContaining({
-          queryLocn: 'SEARCH[Location](Seattle AND Washington AND "United States")',
+          queryLocn: BASE_LOCATION_QUERY,
         }),
         ctx,
       );
@@ -199,7 +203,9 @@ describe('findEligible', () => {
       );
 
       expect(mockService.searchStudies).toHaveBeenCalledWith(
-        expect.objectContaining({ queryLocn: 'SEARCH[Location]("United States")' }),
+        expect.objectContaining({
+          queryLocn: 'SEARCH[Location](AREA[LocationCountry]"United States")',
+        }),
         ctx,
       );
     });
@@ -384,7 +390,7 @@ describe('findEligible', () => {
       // caller can reproduce the full match set via clinicaltrials_search_studies.
       expect(enrichment.searchCriteria).toEqual({
         conditions: ['Type 2 Diabetes'],
-        location: 'SEARCH[Location](Seattle AND Washington AND "United States")',
+        location: BASE_LOCATION_QUERY,
         age: 30,
         sex: 'ALL',
         conditionQuery: '"Type 2 Diabetes"',
@@ -508,7 +514,7 @@ describe('findEligible', () => {
       expect(sc).not.toHaveProperty('ageUnit');
       expect(sc.advancedFilter).toBe(yearsFilter);
       expect(textOf(result)).toContain(
-        '**Search:** conditions=[Type 2 Diabetes] | location=SEARCH[Location](Seattle AND Washington AND "United States") | age=30 | sex=ALL',
+        `**Search:** conditions=[Type 2 Diabetes] | location=${BASE_LOCATION_QUERY} | age=30 | sex=ALL`,
       );
     });
 
@@ -907,7 +913,9 @@ describe('findEligible', () => {
         ),
       ).resolves.toBeDefined();
       expect(mockService.searchStudies).toHaveBeenCalledWith(
-        expect.objectContaining({ queryLocn: 'SEARCH[Location]("United States")' }),
+        expect.objectContaining({
+          queryLocn: 'SEARCH[Location](AREA[LocationCountry]"United States")',
+        }),
         ctx,
       );
     });
@@ -941,7 +949,7 @@ describe('findEligible', () => {
         city: 'East Northport',
       });
       expect(locationArgs()).toContain(
-        'SEARCH[Location]("East Northport" AND "New York" AND "United States")',
+        'SEARCH[Location]("East Northport" AND (AREA[LocationState]"New York" OR AREA[LocationState]MISSING) AND AREA[LocationCountry]"United States")',
       );
     });
 
@@ -957,7 +965,9 @@ describe('findEligible', () => {
       // Main search + location-stage funnel; the condition-only stage sends none.
       expect(supplied).toHaveLength(2);
       expect(new Set(supplied)).toEqual(
-        new Set(['SEARCH[Location]("East Northport" AND "New York" AND "United States")']),
+        new Set([
+          'SEARCH[Location]("East Northport" AND (AREA[LocationState]"New York" OR AREA[LocationState]MISSING) AND AREA[LocationCountry]"United States")',
+        ]),
       );
     });
 
@@ -969,23 +979,25 @@ describe('findEligible', () => {
       });
       const sc = getEnrichment(ctx).searchCriteria as Record<string, unknown>;
       expect(sc.location).toBe(
-        'SEARCH[Location]("East Northport" AND "New York" AND "United States")',
+        'SEARCH[Location]("East Northport" AND (AREA[LocationState]"New York" OR AREA[LocationState]MISSING) AND AREA[LocationCountry]"United States")',
       );
     });
 
-    it('leaves an all-single-word location unquoted, AND-joined', async () => {
+    it('leaves a single-word city bare, AND-joined', async () => {
       await runWithLocation({ country: 'Canada', state: 'Ontario', city: 'Toronto' });
-      expect(locationArgs()).toContain('SEARCH[Location](Toronto AND Ontario AND Canada)');
+      expect(locationArgs()).toContain(
+        'SEARCH[Location](Toronto AND (AREA[LocationState]"Ontario" OR AREA[LocationState]MISSING) AND AREA[LocationCountry]"Canada")',
+      );
     });
 
     it('quotes a lone multiword country', async () => {
       await runWithLocation({ country: 'United States' });
-      expect(locationArgs()).toContain('SEARCH[Location]("United States")');
+      expect(locationArgs()).toContain('SEARCH[Location](AREA[LocationCountry]"United States")');
     });
 
-    it('leaves a lone single-word country bare', async () => {
+    it('quotes a lone single-word country too (#164)', async () => {
       await runWithLocation({ country: 'Canada' });
-      expect(locationArgs()).toContain('SEARCH[Location](Canada)');
+      expect(locationArgs()).toContain('SEARCH[Location](AREA[LocationCountry]"Canada")');
     });
 
     it('strips an embedded double quote instead of letting it split the phrase', async () => {
@@ -997,7 +1009,7 @@ describe('findEligible', () => {
         city: 'East "Northport" City',
       });
       expect(locationArgs()).toContain(
-        'SEARCH[Location]("East Northport City" AND "New York" AND "United States")',
+        'SEARCH[Location]("East Northport City" AND (AREA[LocationState]"New York" OR AREA[LocationState]MISSING) AND AREA[LocationCountry]"United States")',
       );
     });
 
@@ -1037,7 +1049,7 @@ describe('findEligible', () => {
 
     it('wraps the AND-joined parts in SEARCH[Location](…) on the search, the stage count, and the echo', async () => {
       const ctx = await run({ city: 'London', country: 'Canada' });
-      const expected = 'SEARCH[Location](London AND Canada)';
+      const expected = 'SEARCH[Location](London AND AREA[LocationCountry]"Canada")';
       expect(mainLocn()).toBe(expected);
       expect(stageLocns()).toEqual([undefined, expected]);
       expect((getEnrichment(ctx).searchCriteria as { location: string }).location).toBe(expected);
@@ -1050,29 +1062,34 @@ describe('findEligible', () => {
         location: { city: 'London', country: 'United Kingdom' },
       });
       const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
-      expect(text).toContain('location=SEARCH[Location](London AND "United Kingdom")');
-      expect(text).toContain('locationQuery=SEARCH[Location](London AND "United Kingdom")');
-      expect(result.structuredContent).toMatchObject({
-        searchCriteria: { location: 'SEARCH[Location](London AND "United Kingdom")' },
-      });
+      const expected = 'SEARCH[Location](London AND AREA[LocationCountry]"United Kingdom")';
+      expect(text).toContain(`location=${expected}`);
+      expect(text).toContain(`locationQuery=${expected}`);
+      expect(result.structuredContent).toMatchObject({ searchCriteria: { location: expected } });
     });
 
     it('wraps a lone country too', async () => {
       await run({ country: 'United States' });
-      expect(mainLocn()).toBe('SEARCH[Location]("United States")');
+      expect(mainLocn()).toBe('SEARCH[Location](AREA[LocationCountry]"United States")');
     });
 
     // Bare inside the wrapper, a hyphenated part under-matches: 4 cancer studies
     // for Winston-Salem, NC against 202 with the part quoted.
     it.each([
-      [{ city: 'Winston-Salem', state: 'North Carolina' }, '"Winston-Salem" AND "North Carolina"'],
+      [
+        { city: 'Winston-Salem', state: 'North Carolina' },
+        '"Winston-Salem" AND (AREA[LocationState]"North Carolina" OR AREA[LocationState]MISSING)',
+      ],
       [{ city: "L'Aquila" }, '"L\'Aquila"'],
-      [{ city: 'St.Louis', state: 'MO' }, '"St.Louis" AND MO'],
+      [
+        { city: 'St.Louis', state: 'MO' },
+        '"St.Louis" AND (AREA[LocationState]"MO" OR AREA[LocationState]MISSING)',
+      ],
     ])(
       'quotes a single-token part carrying punctuation (%j) inside the wrapper',
       async (parts, quoted) => {
         await run({ ...parts, country: 'United States' });
-        const expected = `SEARCH[Location](${quoted} AND "United States")`;
+        const expected = `SEARCH[Location](${quoted} AND AREA[LocationCountry]"United States")`;
         expect(mainLocn()).toBe(expected);
         expect(stageLocns()[1]).toBe(expected);
       },
@@ -1088,17 +1105,159 @@ describe('findEligible', () => {
       'quotes a part containing a grouping character (%j) so it cannot close the wrapper',
       async (city, quoted) => {
         await run({ city, country: 'Canada' });
-        expect(mainLocn()).toBe(`SEARCH[Location](${quoted} AND Canada)`);
-        expect(stageLocns()[1]).toBe(`SEARCH[Location](${quoted} AND Canada)`);
+        const expected = `SEARCH[Location](${quoted} AND AREA[LocationCountry]"Canada")`;
+        expect(mainLocn()).toBe(expected);
+        expect(stageLocns()[1]).toBe(expected);
       },
     );
 
     it('keeps the grouping-character part inside the wrapper as one balanced phrase', async () => {
       await run({ city: 'a)OR(b', state: '[x', country: 'Canada' });
       const locn = mainLocn();
-      // Outside quoted phrases, the only parentheses left are the wrapper's own.
+      // Outside quoted phrases, the only parentheses left are the wrapper's and
+      // the state arm's own.
       const unquoted = locn.replace(/"[^"]*"/g, '');
-      expect(unquoted).toBe('SEARCH[Location]( AND  AND Canada)');
+      expect(unquoted).toBe(
+        'SEARCH[Location]( AND (AREA[LocationState] OR AREA[LocationState]MISSING) AND AREA[LocationCountry])',
+      );
+    });
+  });
+
+  // As plain terms, state and country matched any field of a site: a state
+  // named like a city or facility (Washington D.C., Washington University in
+  // St. Louis) admitted studies with no site there, and Mexico matched New
+  // Mexico. Each is bound to its own field and always quoted; a site that files
+  // no state passes only when a city locates it (#164).
+  describe('state and country bound to their site fields (#164)', () => {
+    const run = async (location: Record<string, string>) => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await findEligible.handler(findEligible.input!.parse({ ...baseInput, location }), ctx);
+      return ctx;
+    };
+    const mainLocn = () =>
+      (mockService.searchStudies.mock.calls[0]![0] as { queryLocn: string }).queryLocn;
+    const stageLocns = () =>
+      mockService.countStudies.mock.calls.map(
+        (call) => (call[0] as { queryLocn?: string }).queryLocn,
+      );
+    /** The query with every quoted phrase emptied, reading `\` as an escape the way upstream does. */
+    const skeleton = (locn: string) => locn.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+
+    it('binds state and country, with no MISSING arm, when no city is given', async () => {
+      const ctx = await run({ state: 'Washington', country: 'United States' });
+      const expected =
+        'SEARCH[Location](AREA[LocationState]"Washington" AND AREA[LocationCountry]"United States")';
+      expect(mainLocn()).toBe(expected);
+      expect(stageLocns()).toEqual([undefined, expected]);
+      expect((getEnrichment(ctx).searchCriteria as { location: string }).location).toBe(expected);
+    });
+
+    it('lets a site that files no state pass when a city is given', async () => {
+      await run({ city: 'London', state: 'England', country: 'United Kingdom' });
+      expect(mainLocn()).toBe(
+        'SEARCH[Location](London AND (AREA[LocationState]"England" OR AREA[LocationState]MISSING) AND AREA[LocationCountry]"United Kingdom")',
+      );
+    });
+
+    it('keeps the city a search term and quotes a single-word country', async () => {
+      await run({ city: 'London', country: 'Canada' });
+      expect(mainLocn()).toBe('SEARCH[Location](London AND AREA[LocationCountry]"Canada")');
+    });
+
+    it('sends a state spelled like the MISSING operator as a literal', async () => {
+      await run({ state: 'Missing', country: 'United States' });
+      expect(mainLocn()).toBe(
+        'SEARCH[Location](AREA[LocationState]"Missing" AND AREA[LocationCountry]"United States")',
+      );
+    });
+
+    it('strips an embedded double quote from a bound state and country', async () => {
+      await run({ state: 'New "York"', country: '"United" States' });
+      expect(mainLocn()).toBe(
+        'SEARCH[Location](AREA[LocationState]"New York" AND AREA[LocationCountry]"United States")',
+      );
+    });
+
+    it.each([
+      'a)OR(b',
+      '(a',
+      'x]y[',
+      'AREA[LocationCountry]Canada',
+      ') OR AREA[OverallStatus]COMPLETED OR (',
+    ])('keeps a state and country carrying %j each one literal phrase', async (value) => {
+      await run({ city: 'London', state: value, country: value });
+      expect(skeleton(mainLocn())).toBe(
+        'SEARCH[Location](London AND (AREA[LocationState]"" OR AREA[LocationState]MISSING) AND AREA[LocationCountry]"")',
+      );
+    });
+
+    // A trailing backslash would escape its own closing quote and leave the
+    // phrase open, so the next part's closer would regroup the query outside
+    // the wrapper. Every quoted slot doubles it.
+    it.each([
+      [
+        { city: 'Paris\\', state: ') OR (x', country: 'France' },
+        'SEARCH[Location]("" AND (AREA[LocationState]"" OR AREA[LocationState]MISSING) AND AREA[LocationCountry]"")',
+      ],
+      [
+        { state: 'Ile\\', country: ') OR AREA[OverallStatus]COMPLETED OR (' },
+        'SEARCH[Location](AREA[LocationState]"" AND AREA[LocationCountry]"")',
+      ],
+      [
+        { city: 'London', state: 'England\\', country: ']) OR (' },
+        'SEARCH[Location](London AND (AREA[LocationState]"" OR AREA[LocationState]MISSING) AND AREA[LocationCountry]"")',
+      ],
+      [{ country: 'France\\' }, 'SEARCH[Location](AREA[LocationCountry]"")'],
+      [
+        { city: 'x\\', state: '\\', country: '\\\\' },
+        'SEARCH[Location]("" AND (AREA[LocationState]"" OR AREA[LocationState]MISSING) AND AREA[LocationCountry]"")',
+      ],
+    ])(
+      'keeps a trailing backslash in %j from escaping its closing quote',
+      async (location, expected) => {
+        await run(location);
+        expect(skeleton(mainLocn())).toBe(expected);
+        expect(stageLocns()[1]).toBe(mainLocn());
+      },
+    );
+
+    it('doubles the backslash inside a bound state', async () => {
+      await run({ state: 'Ile\\', country: 'France' });
+      expect(mainLocn()).toBe(
+        'SEARCH[Location](AREA[LocationState]"Ile\\\\" AND AREA[LocationCountry]"France")',
+      );
+    });
+
+    // The country field resolves the registry's synonyms (UK, Türkiye) but
+    // folds no diacritics, unlike the state field: México matches no study
+    // while Mexico matches every Mexican site. A country carrying diacritics is
+    // also tried without them, on the same site field.
+    it.each([
+      [
+        { country: 'México' },
+        'SEARCH[Location]((AREA[LocationCountry]"México" OR AREA[LocationCountry]"Mexico"))',
+      ],
+      [
+        { city: 'Monterrey', state: 'Nuevo León', country: 'México' },
+        'SEARCH[Location](Monterrey AND (AREA[LocationState]"Nuevo León" OR AREA[LocationState]MISSING) AND (AREA[LocationCountry]"México" OR AREA[LocationCountry]"Mexico"))',
+      ],
+      [
+        { country: 'Türkiye' },
+        'SEARCH[Location]((AREA[LocationCountry]"Türkiye" OR AREA[LocationCountry]"Turkiye"))',
+      ],
+    ])('also tries the country in %j without its diacritics', async (location, expected) => {
+      const ctx = await run(location);
+      expect(mainLocn()).toBe(expected);
+      expect(stageLocns()).toEqual([undefined, expected]);
+      expect((getEnrichment(ctx).searchCriteria as { location: string }).location).toBe(expected);
+    });
+
+    it('keeps both country arms literal when the country carries grouping characters', async () => {
+      await run({ city: 'London', state: 'x', country: 'Mé)x OR (ico\\' });
+      expect(skeleton(mainLocn())).toBe(
+        'SEARCH[Location](London AND (AREA[LocationState]"" OR AREA[LocationState]MISSING) AND (AREA[LocationCountry]"" OR AREA[LocationCountry]""))',
+      );
     });
   });
 
@@ -1192,11 +1351,11 @@ describe('findEligible', () => {
       async (city) => {
         const ctx = await run({ location: { country: 'United States', city } });
         expect(sentLocations()).toEqual([
-          'SEARCH[Location]("United States")',
-          'SEARCH[Location]("United States")',
+          'SEARCH[Location](AREA[LocationCountry]"United States")',
+          'SEARCH[Location](AREA[LocationCountry]"United States")',
         ]);
         const sc = getEnrichment(ctx).searchCriteria as Record<string, unknown>;
-        expect(sc.location).toBe('SEARCH[Location]("United States")');
+        expect(sc.location).toBe('SEARCH[Location](AREA[LocationCountry]"United States")');
       },
     );
 
@@ -1206,11 +1365,11 @@ describe('findEligible', () => {
         const ctx = await run({ location: { country: 'United States', city } });
         // Main search + location-stage funnel both carry the same string.
         expect(sentLocations()).toEqual([
-          'SEARCH[Location]("United States")',
-          'SEARCH[Location]("United States")',
+          'SEARCH[Location](AREA[LocationCountry]"United States")',
+          'SEARCH[Location](AREA[LocationCountry]"United States")',
         ]);
         const sc = getEnrichment(ctx).searchCriteria as Record<string, unknown>;
-        expect(sc.location).toBe('SEARCH[Location]("United States")');
+        expect(sc.location).toBe('SEARCH[Location](AREA[LocationCountry]"United States")');
       },
     );
 
@@ -1219,11 +1378,13 @@ describe('findEligible', () => {
         location: { city: 'Seattle', state: '""', country: 'United States' },
       });
       expect(sentLocations()).toEqual([
-        'SEARCH[Location](Seattle AND "United States")',
-        'SEARCH[Location](Seattle AND "United States")',
+        'SEARCH[Location](Seattle AND AREA[LocationCountry]"United States")',
+        'SEARCH[Location](Seattle AND AREA[LocationCountry]"United States")',
       ]);
       const sc = getEnrichment(ctx).searchCriteria as Record<string, unknown>;
-      expect(sc.location).toBe('SEARCH[Location](Seattle AND "United States")');
+      expect(sc.location).toBe(
+        'SEARCH[Location](Seattle AND AREA[LocationCountry]"United States")',
+      );
     });
 
     it('gives an unset city the omitted-city notice, without city/state advice', async () => {
@@ -1246,7 +1407,8 @@ describe('findEligible', () => {
       expect(mockService.searchStudies).toHaveBeenCalledWith(
         expect.objectContaining({
           queryCond: 'ALS',
-          queryLocn: 'SEARCH[Location]("East Northport City" AND "United States")',
+          queryLocn:
+            'SEARCH[Location]("East Northport City" AND AREA[LocationCountry]"United States")',
         }),
         expect.anything(),
       );
@@ -1255,8 +1417,8 @@ describe('findEligible', () => {
     it('leaves an empty-string city unset, as before', async () => {
       await run({ location: { country: 'United States', city: '' } });
       expect(sentLocations()).toEqual([
-        'SEARCH[Location]("United States")',
-        'SEARCH[Location]("United States")',
+        'SEARCH[Location](AREA[LocationCountry]"United States")',
+        'SEARCH[Location](AREA[LocationCountry]"United States")',
       ]);
     });
   });
@@ -1556,7 +1718,7 @@ describe('findEligible', () => {
         { queryCond: '"Type 2 Diabetes"', includeUnknownEnrollment: true },
         {
           queryCond: '"Type 2 Diabetes"',
-          queryLocn: 'SEARCH[Location](Seattle AND Washington AND "United States")',
+          queryLocn: BASE_LOCATION_QUERY,
           includeUnknownEnrollment: true,
         },
       ]);
@@ -2776,7 +2938,7 @@ describe('findEligible', () => {
         });
         expect(mockService.searchStudies).toHaveBeenCalledWith(
           expect.objectContaining({
-            queryLocn: 'SEARCH[Location](Seattle AND Washington AND "United States")',
+            queryLocn: BASE_LOCATION_QUERY,
           }),
           expect.anything(),
         );
@@ -2952,11 +3114,34 @@ describe('findEligible', () => {
         expect(text).not.toContain('Guy’s Hospital');
       });
 
-      it('splits a country into distinct lowercased words on non-letter, non-digit runs', () => {
+      it('splits a country into distinct folded words on non-letter, non-digit runs', () => {
         expect(placeWords('Korea, Republic of')).toEqual(new Set(['korea', 'republic', 'of']));
-        expect(placeWords("  Côte d'Ivoire ")).toEqual(new Set(['côte', 'd', 'ivoire']));
+        expect(placeWords("  Côte d'Ivoire ")).toEqual(new Set(['cote', 'divoire']));
         expect(placeWords('Korea Korea')).toEqual(new Set(['korea']));
         expect(placeWords('--')).toEqual(new Set());
+      });
+
+      // Upstream folds case, diacritics, the letters that do not decompose,
+      // and periods and apostrophes inside a name; the site ranking folds the
+      // same way, so it agrees with the match (#166).
+      it.each([
+        ['Montréal', ['montreal']],
+        ['QUÉBEC', ['quebec']],
+        ['Wrocław', ['wroclaw']],
+        ['Gießen', ['giessen']],
+        ['Næstved', ['naestved']],
+        ['Tromsø', ['tromso']],
+        ['Diyarbakır', ['diyarbakir']],
+        ['İstanbul', ['istanbul']],
+        ['ŁÓDŹ', ['lodz']],
+        ['Washington D.C.', ['washington', 'dc']],
+        ['St. Louis', ['st', 'louis']],
+        ['‘Aiea', ['aiea']],
+        ['Côte d’Ivoire', ['cote', 'divoire']],
+        ['Hradec Králové', ['hradec', 'kralove']],
+        ['ʼ.’', []],
+      ])('folds %j to its plain words', (name, words) => {
+        expect(placeWords(name)).toEqual(new Set(words));
       });
 
       describe('the requested-country split stays linear on caller-sized text', () => {
@@ -2968,8 +3153,207 @@ describe('findEligible', () => {
             'distinct words',
             (n: number) => Array.from({ length: n / 8 }, (_, i) => `w${i}`).join(' '),
           ],
+          ['accented letters throughout', (n: number) => 'é'.repeat(n)],
+          ['one letter under a long run of combining marks', (n: number) => `a${'́'.repeat(n - 1)}`],
+          ['periods and apostrophes throughout', (n: number) => ".'’‘ʼ".repeat(n / 5)],
+          ['letters folded by mapping throughout', (n: number) => 'ßæøłı'.repeat(n / 5)],
         ] as const)('%s', (_name, shape) => {
           expectLinearGrowth(placeWords, shape);
+        });
+      });
+    });
+
+    // The registry mixes spellings — Montreal and Quebec, St Louis, Washington
+    // D.C., but São Paulo, and Québec for Quebec City — and upstream folds them,
+    // so a study is found whichever way the caller writes the place. The site
+    // ranking compares the same folded words, so the city sites lead (#166).
+    describe('folded place-name spellings (#166)', () => {
+      it.each([
+        {
+          name: 'Montréal / Québec against Montreal / Quebec',
+          location: { city: 'Montréal', state: 'Québec', country: 'Canada' },
+          sites: () => [
+            site('Barrie', 'Barrie', 'Ontario', 'Canada'),
+            site('MUHC', 'Montreal', 'Quebec', 'Canada'),
+            site('Kitchener', 'Kitchener', 'Ontario', 'Canada'),
+            site('CHUM', 'Montreal', 'Quebec', 'Canada'),
+          ],
+          expected: ['MUHC', 'CHUM'],
+        },
+        {
+          name: 'St. Louis against St Louis',
+          location: { city: 'St. Louis', state: 'Missouri', country: 'United States' },
+          sites: () => [
+            site('Ballwin', 'Ballwin', 'Missouri'),
+            site('Siteman', 'St Louis', 'Missouri'),
+            site('Cape Girardeau', 'Cape Girardeau', 'Missouri'),
+            site('SLU', 'St Louis', 'Missouri'),
+          ],
+          expected: ['Siteman', 'SLU'],
+        },
+        {
+          name: 'Sao Paulo against São Paulo',
+          location: { city: 'Sao Paulo', country: 'Brazil' },
+          sites: () => [
+            site('Belém', 'Belém', 'Pará', 'Brazil'),
+            site('ICESP', 'São Paulo', 'São Paulo', 'Brazil'),
+            site('Fortaleza', 'Fortaleza', 'Ceará', 'Brazil'),
+          ],
+          expected: ['ICESP'],
+        },
+        {
+          name: 'Washington DC against Washington D.C.',
+          location: { city: 'Washington DC', country: 'United States' },
+          sites: () => [
+            site('Bethesda', 'Bethesda', 'Maryland'),
+            site('Georgetown', 'Washington D.C.', 'District of Columbia'),
+          ],
+          expected: ['Georgetown'],
+        },
+        {
+          name: 'Wroclaw against Wrocław',
+          location: { city: 'Wroclaw', country: 'Poland' },
+          sites: () => [
+            site('Warsaw', 'Warsaw', 'Masovian', 'Poland'),
+            site('Wrocław Medical', 'Wrocław', 'Lower Silesian', 'Poland'),
+          ],
+          expected: ['Wrocław Medical'],
+        },
+        {
+          name: 'Quebec against the city filed Québec',
+          location: { city: 'Quebec', state: 'Quebec', country: 'Canada' },
+          sites: () => [
+            site('CHUM', 'Montreal', 'Quebec', 'Canada'),
+            site('CHU de Québec', 'Québec', 'Quebec', 'Canada'),
+          ],
+          expected: ['CHU de Québec'],
+        },
+      ])('ranks the city sites first for $name', async ({ location, sites, expected }) => {
+        const candidate = await runOne(studyWith('NCT1', sites()), { location });
+        expect(facilities(candidate)).toEqual(expected);
+        expect(candidate.locationSummary).toMatchObject({ matchedLocations: expected.length });
+      });
+
+      it('renders the folded-spelling city sites on content[] too', async () => {
+        const study = studyWith('NCT05879926', [
+          site('Barrie', 'Barrie', 'Ontario', 'Canada'),
+          site('MUHC', 'Montreal', 'Quebec', 'Canada'),
+        ]);
+        mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
+        const result = await runToolContract(findEligible, {
+          ...baseInput,
+          location: { city: 'Montréal', state: 'Québec', country: 'Canada' },
+        });
+        const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+        expect(text).toContain('MUHC, Montreal, Quebec, Canada');
+        expect(text).not.toContain('Barrie');
+        const sc = result.structuredContent as { studies: CandidateStudy[] };
+        expect(facilities(sc.studies[0]!)).toEqual(['MUHC']);
+      });
+
+      it('ranks exact spellings as before', async () => {
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            site('Barrie', 'Barrie', 'Ontario', 'Canada'),
+            site('MUHC', 'Montreal', 'Quebec', 'Canada'),
+          ]),
+          { location: { city: 'Montreal', state: 'Quebec', country: 'Canada' } },
+        );
+        expect(facilities(candidate)).toEqual(['MUHC']);
+      });
+
+      it('never matches a name that folds to no words, on either side', async () => {
+        // `.` and `-` fold to nothing, as does a blank site city; were an empty
+        // fold to match, the two cityless sites would take the city tier.
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            site('Blank city', '', 'Ontario', 'Canada'),
+            site('Princess Margaret', 'Toronto', 'Ontario', 'Canada'),
+            site('Dash city', '-', 'Ontario', 'Canada'),
+          ]),
+          { location: { city: '.', country: 'Canada' } },
+        );
+        expect(facilities(candidate)).toEqual(['Blank city', 'Princess Margaret', 'Dash city']);
+        expect(candidate.locationSummary).toBeUndefined();
+      });
+
+      it('passes the country gate for México on sites filed Mexico', async () => {
+        // Guadalajara is also a Spanish city; with the gate applied, the
+        // Spanish namesake earns no city credit.
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            site('Namesake', 'Guadalajara', 'Castilla-La Mancha', 'Spain'),
+            site('Hospital Civil', 'Guadalajara', 'Jalisco', 'Mexico'),
+          ]),
+          { location: { city: 'Guadalajara', country: 'México' } },
+        );
+        expect(facilities(candidate)).toEqual(['Hospital Civil']);
+      });
+
+      it('gives the country point to every site whose country carries the requested words', async () => {
+        // `Korea` passes the gate on `South Korea`; the country tier is the
+        // Korean sites, not every site the study registers.
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            site('Asan', 'Seoul', '', 'South Korea'),
+            site('Tokyo', 'Tokyo', '', 'Japan'),
+            site('Pusan National', 'Busan', '', 'South Korea'),
+          ]),
+          { location: { country: 'Korea' } },
+        );
+        expect(facilities(candidate)).toEqual(['Asan', 'Pusan National']);
+        expect(candidate.locationSummary).toMatchObject({ totalLocations: 3, matchedLocations: 2 });
+      });
+
+      describe('the added recruiting site stays in the requested country', () => {
+        const at = (lat: number, lon: number) => ({ lat, lon });
+
+        it('takes it from South Korea for a Korea request, over a nearer site in China', async () => {
+          // Dandong is ~362 km from Seoul, Jeju ~454 km.
+          const candidate = await runOne(
+            studyWith('NCT1', [
+              site('Asan', 'Seoul', '', 'South Korea', 'NOT_YET_RECRUITING', at(37.5665, 126.978)),
+              site('Dandong', 'Dandong', 'Liaoning', 'China', 'RECRUITING', at(40.1292, 124.3947)),
+              site('Jeju National', 'Jeju', '', 'South Korea', 'RECRUITING', at(33.4996, 126.5312)),
+            ]),
+            { location: { city: 'Seoul', country: 'Korea' } },
+          );
+          expect(facilities(candidate)).toEqual(['Asan', 'Jeju National']);
+          expect(candidate.locationSummary).toMatchObject({ nearestRecruitingSiteAdded: true });
+        });
+
+        it('takes it from Mexico for a México request, over a nearer site across the border', async () => {
+          // San Diego is ~25 km from Tijuana, Mexico City ~2,300 km.
+          const candidate = await runOne(
+            studyWith('NCT1', [
+              site(
+                'Tijuana',
+                'Tijuana',
+                'Baja California',
+                'Mexico',
+                'NOT_YET_RECRUITING',
+                at(32.5149, -117.0382),
+              ),
+              site(
+                'UCSD',
+                'San Diego',
+                'California',
+                'United States',
+                'RECRUITING',
+                at(32.7157, -117.1611),
+              ),
+              site(
+                'INCan',
+                'Mexico City',
+                'Ciudad de México',
+                'Mexico',
+                'RECRUITING',
+                at(19.4326, -99.1332),
+              ),
+            ]),
+            { location: { city: 'Tijuana', country: 'México' } },
+          );
+          expect(facilities(candidate)).toEqual(['Tijuana', 'INCan']);
         });
       });
     });

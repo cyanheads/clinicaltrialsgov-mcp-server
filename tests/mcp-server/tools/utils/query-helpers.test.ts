@@ -14,6 +14,7 @@ import {
   normalizeStatusFilter,
   PHASE_VALUES,
   queryTermContent,
+  quoteLocationLiteral,
   quoteLocationPart,
   quoteQueryTerm,
   splitListEntries,
@@ -477,6 +478,41 @@ describe('quoteLocationPart (#159)', () => {
       ['quotes throughout', (n: number) => '"x'.repeat(n / 2)],
     ] as const)('%s', (_name, shape) => {
       expectLinearGrowth(quoteLocationPart, shape);
+    });
+  });
+});
+
+// An AREA[…] operand left bare is read as syntax: a state of `Missing` would
+// reach upstream as the MISSING operator, matching every site with no state.
+describe('quoteLocationLiteral (#164)', () => {
+  it('quotes a single run of letters, the MISSING spelling included', () => {
+    expect(quoteLocationLiteral('Washington')).toBe('"Washington"');
+    expect(quoteLocationLiteral('Missing')).toBe('"Missing"');
+    expect(quoteLocationLiteral('MISSING')).toBe('"MISSING"');
+  });
+
+  it('quotes a multiword or punctuated value as written', () => {
+    expect(quoteLocationLiteral('United States')).toBe('"United States"');
+    expect(quoteLocationLiteral('a)OR(b')).toBe('"a)OR(b"');
+    expect(quoteLocationLiteral('AREA[LocationCountry]Canada')).toBe(
+      '"AREA[LocationCountry]Canada"',
+    );
+  });
+
+  it('strips an embedded double quote and doubles a backslash', () => {
+    expect(quoteLocationLiteral('Sea"ttle')).toBe('"Seattle"');
+    expect(quoteLocationLiteral('a\\')).toBe('"a\\\\"');
+    expect(quoteLocationLiteral('x\\"y')).toBe('"x\\\\y"');
+  });
+
+  describe('stays linear on caller-sized text', () => {
+    it.each([
+      ...LINE_BREAK_SHAPES,
+      ['letters only', (n: number) => 'x'.repeat(n)],
+      ['backslashes throughout', (n: number) => '\\'.repeat(n)],
+      ['quotes throughout', (n: number) => '"x'.repeat(n / 2)],
+    ] as const)('%s', (_name, shape) => {
+      expectLinearGrowth(quoteLocationLiteral, shape);
     });
   });
 });

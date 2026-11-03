@@ -6,6 +6,7 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
+import { normalizeAreaNames } from '@/services/clinical-trials/field-search.js';
 import {
   blankValueMessage,
   buildAdvancedFilter,
@@ -38,7 +39,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A field name in the advanced filter or AREA[] expression is invalid (often a module name instead of a piece name).',
+      when: 'An AREA[] expression in advancedFilter or a query parameter names a field ClinicalTrials.gov does not recognize or cannot search by value — often a module or group such as LeadSponsor instead of a leaf piece such as LeadSponsorName.',
       recovery: RECOVERY_HINTS.field_invalid,
       thrownBy: 'service',
     },
@@ -53,6 +54,13 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       code: JsonRpcErrorCode.ValidationError,
       when: 'A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a `[` or `]` outside an AREA[…] / RANGE[…] expression, an unmatched `(` / `)`, or an unterminated quote in a query/conditionQuery/etc. value.',
       recovery: RECOVERY_HINTS.query_parse_error,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'request_too_long',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The request URL runs past the length ClinicalTrials.gov accepts — typically a very long free-text query or advancedFilter expression.',
+      recovery: RECOVERY_HINTS.request_too_long,
       thrownBy: 'service',
     },
     {
@@ -130,7 +138,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       .string()
       .optional()
       .describe(
-        'Advanced filter using AREA[FieldName]value syntax. Examples: "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]", "AREA[Phase]PHASE2 AND AREA[StudyType]INTERVENTIONAL", "(AREA[Phase]PHASE3 OR AREA[Phase]PHASE4) AND AREA[StudyType]INTERVENTIONAL". AND/OR/NOT join complete AREA[FieldName]value expressions; parentheses group them. Call clinicaltrials_get_field_definitions to find AREA[]-compatible field names.',
+        'Advanced filter using AREA[FieldName]value syntax. Examples: "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]", "AREA[Phase]PHASE2 AND AREA[StudyType]INTERVENTIONAL", "(AREA[Phase]PHASE3 OR AREA[Phase]PHASE4) AND AREA[StudyType]INTERVENTIONAL". AND/OR/NOT join complete AREA[FieldName]value expressions; parentheses group them. Call clinicaltrials_get_field_definitions to find AREA[]-compatible field names. A field name that differs from one AREA[] accepts only by case (AREA[overallstatus]) is corrected before the request, here and in the query parameters, and searchCriteria shows the expression as sent.',
       ),
     includeUnknownEnrollment: z
       .boolean()
@@ -212,17 +220,34 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     }
 
     const service = getClinicalTrialsService();
+    // Upstream matches AREA[] field names case-sensitively; a name that misses
+    // only by case is corrected in the caller's own text, which is then both
+    // sent and echoed in searchCriteria.
+    const essie = await normalizeAreaNames(
+      {
+        query: input.query,
+        conditionQuery: input.conditionQuery,
+        interventionQuery: input.interventionQuery,
+        locationQuery: input.locationQuery,
+        sponsorQuery: input.sponsorQuery,
+        titleQuery: input.titleQuery,
+        outcomeQuery: input.outcomeQuery,
+        advancedFilter: input.advancedFilter,
+      },
+      () => service.getAreaIndex(ctx),
+      ctx.log,
+    );
     const totalCount = await service.countStudies(
       {
-        queryTerm: input.query,
-        queryCond: input.conditionQuery,
-        queryIntr: input.interventionQuery,
-        queryLocn: input.locationQuery,
-        querySpons: input.sponsorQuery,
-        queryTitles: input.titleQuery,
-        queryOutc: input.outcomeQuery,
+        queryTerm: essie.query,
+        queryCond: essie.conditionQuery,
+        queryIntr: essie.interventionQuery,
+        queryLocn: essie.locationQuery,
+        querySpons: essie.sponsorQuery,
+        queryTitles: essie.titleQuery,
+        queryOutc: essie.outcomeQuery,
         filterOverallStatus: statusFilter,
-        filterAdvanced: buildAdvancedFilter(phaseFilter, input.advancedFilter),
+        filterAdvanced: buildAdvancedFilter(phaseFilter, essie.advancedFilter),
         includeUnknownEnrollment: input.includeUnknownEnrollment,
       },
       ctx,
@@ -230,17 +255,17 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     ctx.log.info('Count completed', { totalCount });
 
     const criteria: Record<string, unknown> = {};
-    if (input.query) criteria.query = input.query;
-    if (input.conditionQuery) criteria.conditionQuery = input.conditionQuery;
-    if (input.interventionQuery) criteria.interventionQuery = input.interventionQuery;
-    if (input.locationQuery) criteria.locationQuery = input.locationQuery;
-    if (input.sponsorQuery) criteria.sponsorQuery = input.sponsorQuery;
-    if (input.titleQuery) criteria.titleQuery = input.titleQuery;
-    if (input.outcomeQuery) criteria.outcomeQuery = input.outcomeQuery;
+    if (essie.query) criteria.query = essie.query;
+    if (essie.conditionQuery) criteria.conditionQuery = essie.conditionQuery;
+    if (essie.interventionQuery) criteria.interventionQuery = essie.interventionQuery;
+    if (essie.locationQuery) criteria.locationQuery = essie.locationQuery;
+    if (essie.sponsorQuery) criteria.sponsorQuery = essie.sponsorQuery;
+    if (essie.titleQuery) criteria.titleQuery = essie.titleQuery;
+    if (essie.outcomeQuery) criteria.outcomeQuery = essie.outcomeQuery;
     // The canonical status and phase values actually sent, in the caller's scalar/list shape.
     if (statusFilter) criteria.statusFilter = inCallerShape(input.statusFilter, statusFilter);
     if (phaseFilter) criteria.phaseFilter = inCallerShape(input.phaseFilter, phaseFilter);
-    if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
+    if (essie.advancedFilter) criteria.advancedFilter = essie.advancedFilter;
     // Flag the default unknown-enrollment exclusion (EnrollmentCount=99999999),
     // mirroring search_studies — otherwise a count silently differs from an
     // unfiltered /stats total with no signal that a filter was applied.

@@ -1,15 +1,22 @@
 /**
  * @fileoverview Indexing and ranked-search utilities over the ClinicalTrials.gov
  * field model. Flattens the metadata tree into a flat list of valid field
- * identifiers (PascalCase `piece` names) and provides a scoring function used
- * for both keyword discovery and "did you mean" suggestions on validation.
+ * identifiers (PascalCase `piece` names), provides a scoring function used
+ * for both keyword discovery and "did you mean" suggestions on validation, and
+ * corrects the case of `AREA[…]` field names in caller expressions.
  * @module services/clinical-trials/field-search
  */
 
+import type { Context } from '@cyanheads/mcp-ts-core';
 import type { FieldNode } from './types.js';
 
 /** A flattened entry for one field in the ClinicalTrials.gov data model. */
 export interface FieldIndexEntry {
+  /**
+   * Legacy names upstream also resolves inside `AREA[…]` (`OVERALL-STATUS` for
+   * OverallStatus, `SPONSOR` for LeadSponsorName). Absent when the node lists none.
+   */
+  altPieceNames?: string[];
   /** Field description from the data model. */
   description?: string;
   /**
@@ -55,6 +62,7 @@ export function flattenMetadata(tree: FieldNode[]): FieldIndexEntry[] {
         if (node.sourceType) e.sourceType = node.sourceType;
         if (node.isEnum != null) e.isEnum = node.isEnum;
         if (node.description) e.description = node.description;
+        if (node.altPieceNames?.length) e.altPieceNames = node.altPieceNames;
         if (underArray) e.hasArrayAncestor = true;
         entries.push(e);
       }
@@ -218,4 +226,140 @@ export function nearestPieces(invalid: string, entries: FieldIndexEntry[], n = 3
     .sort((a, b) => a.dist - b.dist)
     .slice(0, n)
     .map((x) => x.piece);
+}
+
+/**
+ * The names `AREA[…]` resolves. Upstream refuses a `STRUCT` piece there
+ * (`LeadSponsor`, `Collaborator` — a group of fields), so the index holds every
+ * other piece plus the legacy `altPieceNames` each lists (`OVERALL-STATUS`,
+ * `COLLABORATOR`). Leaving the `STRUCT` pieces out is also what keeps the case
+ * fold unambiguous: `collaborator` would otherwise name both `Collaborator` and,
+ * through its alt name `COLLABORATOR`, `CollaboratorName`.
+ */
+export interface AreaIndex {
+  /** The non-`STRUCT` entries: the pieces AREA[] searches, and the pool its suggestions come from. */
+  entries: FieldIndexEntry[];
+  /**
+   * Lowercased name → the piece it names, for each lowercased form that reaches
+   * exactly one piece. A form two pieces share is left out, so a fold never
+   * picks between them.
+   */
+  fold: Map<string, string>;
+  /** Every name upstream resolves as written: each entry's piece and its altPieceNames. */
+  names: Set<string>;
+}
+
+/** Build the AREA[] name index from the flattened field index. */
+export function buildAreaIndex(entries: FieldIndexEntry[]): AreaIndex {
+  const queryable = entries.filter((e) => e.sourceType !== 'STRUCT');
+  const names = new Set<string>();
+  const targets = new Map<string, Set<string>>();
+  for (const entry of queryable) {
+    for (const name of [entry.piece, ...(entry.altPieceNames ?? [])]) {
+      names.add(name);
+      const key = name.toLowerCase();
+      const pieces = targets.get(key) ?? new Set<string>();
+      pieces.add(entry.piece);
+      targets.set(key, pieces);
+    }
+  }
+  const fold = new Map<string, string>();
+  for (const [key, pieces] of targets) {
+    const [piece] = pieces;
+    if (pieces.size === 1 && piece) fold.set(key, piece);
+  }
+  return { entries: queryable, fold, names };
+}
+
+/** One AREA[] name a rewrite changed: as the caller wrote it, and the piece sent in its place. */
+export interface AreaNameRewrite {
+  from: string;
+  to: string;
+}
+
+/**
+ * Rewrite each AREA[] name in an Essie expression that misses the index only by
+ * case to the piece it names: `AREA[overallstatus]` → `AREA[OverallStatus]`,
+ * and a legacy alt name in another case to its piece, `AREA[Sponsor]` →
+ * `AREA[LeadSponsorName]` (upstream resolves `SPONSOR`). A name the index holds
+ * as written goes out unchanged, and so does one that folds to no single piece,
+ * left for upstream to judge — so a rewrite only ever turns a request upstream
+ * would refuse into one it accepts. Surrounding whitespace inside the brackets
+ * is kept; upstream trims it.
+ *
+ * One left-to-right pass, no backtracking. Outside a double-quoted literal the
+ * uppercase `AREA[` opens a name that ends at the next `]`, inside
+ * `SEARCH[Location](…)` as anywhere else; upstream's keywords are uppercase only.
+ * Inside a literal `\` escapes the next character and `"` closes it, so literal
+ * text is never rewritten, and an unclosed literal leaves the rest unscanned.
+ * When no `]` follows an `AREA[`, none can close a later one either, so the
+ * scan stops there.
+ */
+export function rewriteAreaNames(
+  expression: string,
+  index: AreaIndex,
+): { rewrites: AreaNameRewrite[]; text: string } {
+  const rewrites: AreaNameRewrite[] = [];
+  let text = '';
+  let copied = 0;
+  let inLiteral = false;
+  let i = 0;
+  while (i < expression.length) {
+    const c = expression[i];
+    if (inLiteral) {
+      if (c === '\\') i++;
+      else if (c === '"') inLiteral = false;
+      i++;
+    } else if (c === '"') {
+      inLiteral = true;
+      i++;
+    } else if (c === 'A' && expression.startsWith('AREA[', i)) {
+      const start = i + 'AREA['.length;
+      const end = expression.indexOf(']', start);
+      if (end === -1) break;
+      const raw = expression.slice(start, end);
+      const name = raw.trim();
+      const piece = index.names.has(name) ? undefined : index.fold.get(name.toLowerCase());
+      if (piece) {
+        const nameStart = start + raw.length - raw.trimStart().length;
+        text += expression.slice(copied, nameStart) + piece;
+        copied = nameStart + name.length;
+        rewrites.push({ from: name, to: piece });
+      }
+      i = end + 1;
+    } else {
+      i++;
+    }
+  }
+  return rewrites.length === 0
+    ? { rewrites, text: expression }
+    : { rewrites, text: text + expression.slice(copied) };
+}
+
+/**
+ * Apply rewriteAreaNames to each caller expression, keyed by the parameter it
+ * came from, and log the rewrites as a notice. The index loads only when an
+ * expression contains `AREA[`, so a call naming no AREA[] field never waits on
+ * it; with no index, every expression passes through unchanged.
+ */
+export async function normalizeAreaNames<K extends string>(
+  expressions: Record<K, string | undefined>,
+  loadIndex: () => Promise<AreaIndex | undefined>,
+  log: Context['log'],
+): Promise<Record<K, string | undefined>> {
+  const params = Object.keys(expressions) as K[];
+  if (!params.some((param) => expressions[param]?.includes('AREA['))) return expressions;
+  const index = await loadIndex();
+  if (!index) return expressions;
+  const normalized = { ...expressions };
+  const rewrites: Array<AreaNameRewrite & { param: K }> = [];
+  for (const param of params) {
+    const expression = expressions[param];
+    if (!expression) continue;
+    const result = rewriteAreaNames(expression, index);
+    normalized[param] = result.text;
+    for (const rewrite of result.rewrites) rewrites.push({ param, ...rewrite });
+  }
+  if (rewrites.length > 0) log.notice('AREA[] field names auto-corrected', { rewrites });
+  return normalized;
 }

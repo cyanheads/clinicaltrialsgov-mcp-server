@@ -16,6 +16,7 @@ import {
   firstBlankListParam,
   firstBlankParam,
   queryTermContent,
+  quoteLocationLiteral,
   quoteLocationPart,
   quoteQueryTerm,
 } from '../utils/query-helpers.js';
@@ -86,34 +87,80 @@ interface UserLocation {
   state?: string | undefined;
 }
 
-/** The location one study's sites are scored against. */
-interface SiteMatchLocation extends UserLocation {
-  /** Whether a site may earn city and state credit; see `countryGate`. */
+/** The tests one study's sites are scored against. */
+interface SiteMatchLocation {
+  /** Whether city and state credit goes only to sites that pass `inCountry`. */
+  gated: boolean;
+  /** Whether a site is in the requested country; see `countryGate`. */
   inCountry: (site: StudyLocation) => boolean;
+  /** Whether a site's city is the requested one; see `samePlaceAs`. */
+  sameCity: (name: string | undefined) => boolean;
+  /** Whether a site's state is the requested one; see `samePlaceAs`. */
+  sameState: (name: string | undefined) => boolean;
 }
 
-/** Case-insensitive equality of two place names, false when either is absent. */
-function samePlace(a?: string, b?: string): boolean {
-  return a !== undefined && b !== undefined && a.toLowerCase() === b.toLowerCase();
+/**
+ * The words of a place name, folded the way upstream folds a location match so
+ * a site ranks the way it was found: `Montréal` and `Montreal`, `Wrocław` and
+ * `Wroclaw`, `St. Louis` and `St Louis`. Lowercased first, since stripping
+ * marks before lowercasing changes context-dependent case mappings (`İ`); then
+ * decomposed and stripped of combining marks; then the Latin letters with no
+ * decomposition mapped; then periods and apostrophes deleted, so `D.C.` is one
+ * word, `dc`; then split on every run of anything but letters and digits. Each
+ * step is one linear pass over the name.
+ */
+function foldedWords(name: string): string[] {
+  return name
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .replaceAll('ß', 'ss')
+    .replaceAll('æ', 'ae')
+    .replaceAll('ø', 'o')
+    .replaceAll('ł', 'l')
+    .replaceAll('ı', 'i')
+    .replace(/[.'’‘ʼ]/g, '')
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((w) => w.length > 0);
 }
 
-/** The distinct lowercased words of a place name, split on anything but letters and digits. */
+/** The distinct folded words of a place name; see `foldedWords`. */
 export function placeWords(name: string): Set<string> {
-  return new Set(
-    name
-      .toLowerCase()
-      .split(/[^\p{L}\p{N}]+/u)
-      .filter((w) => w.length > 0),
-  );
+  return new Set(foldedWords(name));
+}
+
+/**
+ * A test for whether a place name is the requested one: the same folded words
+ * in the same order (`foldedWords`), so `Washington DC` matches the registry's
+ * `Washington D.C.`. A sequence rather than a set, so `Baden-Baden` is not
+ * `Baden`. A name that folds to no words never matches, so a requested `-`
+ * cannot match a blank site field, and an absent request or site name never
+ * matches. Memoized per distinct site spelling, since the sort scores every
+ * site of every candidate repeatedly.
+ */
+function samePlaceAs(requested: string | undefined): (name: string | undefined) => boolean {
+  const wanted = requested === undefined ? '' : foldedWords(requested).join(' ');
+  if (wanted === '') return () => false;
+  const seen = new Map<string, boolean>();
+  return (name) => {
+    if (name === undefined) return false;
+    let hit = seen.get(name);
+    if (hit === undefined) {
+      hit = foldedWords(name).join(' ') === wanted;
+      seen.set(name, hit);
+    }
+    return hit;
+  };
 }
 
 /**
  * A test for whether a site's country carries every word of the requested
- * country — `Korea` matches the registry's `South Korea`. Word containment
- * rather than equality: the registry's spelling of a country rarely matches
- * what a patient types. A site that publishes no country fails. Memoized per
- * distinct site spelling, since one request scores every site of every
- * candidate — thousands — across a few countries.
+ * country, folded (`placeWords`) — `Korea` matches the registry's `South
+ * Korea`, `México` its `Mexico`. Word containment rather than equality: the
+ * registry's spelling of a country rarely matches what a patient types. A site
+ * that publishes no country fails. Memoized per distinct site spelling, since
+ * one request scores every site of every candidate — thousands — across a few
+ * countries.
  */
 function countryGate(requested: string): (site: StudyLocation) => boolean {
   const wanted = placeWords(requested);
@@ -132,21 +179,24 @@ function countryGate(requested: string): (site: StudyLocation) => boolean {
 
 /**
  * How closely a site's geography matches the user's stated location. City
- * equality dominates, then state, then country, so the score doubles as a match
- * tier: every site sharing the study's best score matched at the same level.
+ * dominates, then state, then country, so the score doubles as a match tier:
+ * every site sharing the study's best score matched at the same level. The
+ * country point goes to every site passing `user.inCountry`, so `Korea` earns
+ * it on `South Korea` (#166).
  *
- * City and state points go only to sites that pass `user.inCountry`. A study
- * qualifies on its whole site list, so the city it matched on can be a foreign
- * namesake (London, UK for a London, Canada request); scored on equality alone,
- * that site would outrank every in-country site and become the tier (#159).
+ * When `user.gated`, city and state points go only to sites that pass
+ * `user.inCountry`. A study qualifies on its whole site list, so the city it
+ * matched on can be a foreign namesake (London, UK for a London, Canada
+ * request); scored on the name alone, that site would outrank every in-country
+ * site and become the tier (#159).
  */
 function locationGeoScore(loc: StudyLocation, user: SiteMatchLocation): number {
-  let score = 0;
-  if (user.inCountry(loc)) {
-    if (samePlace(loc.city, user.city)) score += 4;
-    if (samePlace(loc.state, user.state)) score += 2;
+  const inCountry = user.inCountry(loc);
+  let score = inCountry ? 1 : 0;
+  if (inCountry || !user.gated) {
+    if (user.sameCity(loc.city)) score += 4;
+    if (user.sameState(loc.state)) score += 2;
   }
-  if (samePlace(loc.country, user.country)) score += 1;
   return score;
 }
 
@@ -265,13 +315,13 @@ function boundLocations(
   // candidate sits below it. Nothing is admitted when best === 0 (the tier is
   // every site) or when the study registers no recruiting site at all — both
   // leave the tier answer exactly as it was. Candidates in the requested country
-  // go first when there are any: distance alone would send a patient who named
-  // their country across a border (Seattle → Vancouver, BC) while a site at home
-  // recruits.
+  // (the gate's word test, so `Korea` keeps them in South Korea) go first when
+  // there are any: distance alone would send a patient who named their country
+  // across a border (Seattle → Vancouver, BC) while a site at home recruits.
   let admitted: LocationWithDistance | undefined;
   if (!capped.some(isRecruiting)) {
     const open = sortedLocations.filter(isRecruiting);
-    const home = open.filter((loc) => samePlace(loc.country, user.country));
+    const home = open.filter(user.inCountry);
     admitted = admitRecruitingSite(home.length > 0 ? home : open, matched);
   }
   const locations = admitted ? [...capped, admitted] : capped;
@@ -434,6 +484,27 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       recovery: RECOVERY_HINTS.blank_value,
     },
     {
+      reason: 'field_invalid',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A conditions entry carries an AREA[] expression naming a field ClinicalTrials.gov does not recognize or cannot search by value.',
+      recovery: RECOVERY_HINTS.field_invalid,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'query_parse_error',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A conditions entry uses syntax the upstream Essie parser rejects — typically an unmatched `(` or `)`, or a `[` or `]` outside an AREA[…] expression.',
+      recovery: RECOVERY_HINTS.query_parse_error,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'request_too_long',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The conditions list or location makes the request URL longer than ClinicalTrials.gov accepts — several hundred conditions in one call.',
+      recovery: RECOVERY_HINTS.request_too_long,
+      thrownBy: 'service',
+    },
+    {
       reason: 'rate_limited',
       code: JsonRpcErrorCode.RateLimited,
       when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
@@ -468,12 +539,17 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     location: z
       .object({
         country: z.string().describe('Country name. E.g., "United States".'),
-        state: z.string().optional().describe('State or province.'),
+        state: z
+          .string()
+          .optional()
+          .describe(
+            'State or province, compared with the state the site files. With city also given, a site that files no state still matches; without city, only sites filing this state match.',
+          ),
         city: z.string().optional().describe('City name.'),
       })
       .strict()
       .describe(
-        'Patient location as `{ country (required), state?, city? }`. Country is required; state/city narrow the match. For radius-based geographic search, use clinicaltrials_search_studies with geoFilter.',
+        "Patient location as `{ country (required), state?, city? }`. Country is required; state/city narrow the match. Every part given must hold for the same study site: country and state are compared with the site's filed country and state, while city is matched against the site's whole location text, so a site filed under a borough or neighbouring town that names the city still counts. For radius-based geographic search, use clinicaltrials_search_studies with geoFilter.",
       ),
     healthyVolunteer: z
       .boolean()
@@ -518,7 +594,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         location: z
           .string()
           .describe(
-            'The exact queryLocn string sent upstream: city/state/country AND-joined inside SEARCH[Location](…) so every part must match the same site, each part quoted unless it is a single run of letters and digits (Toronto stays bare; "United States", "Winston-Salem", and "L\'Aquila" are quoted), with any embedded double quote stripped and any backslash in a quoted part doubled. Pass as locationQuery to clinicaltrials_search_studies to reproduce the location filter beyond the maxResults cap.',
+            'The exact queryLocn string sent upstream: the parts AND-joined inside SEARCH[Location](…) so every part must match the same site. The city is a search term, quoted unless it is a single run of letters and digits (Toronto stays bare; "Winston-Salem" and "L\'Aquila" are quoted); the state is AREA[LocationState]"…", ORed with AREA[LocationState]MISSING when a city is given; the country is AREA[LocationCountry]"…", ORed with the same spelling without diacritics when it carries any (México also tries Mexico). Any embedded double quote is stripped and any backslash in a quoted value doubled. Pass as locationQuery to clinicaltrials_search_studies to reproduce the location filter beyond the maxResults cap.',
           ),
         age: z.number().describe('Patient age, in ageUnit when present, else in years.'),
         ageUnit: z
@@ -655,19 +731,19 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     // Sites are scored, bounded, and admitted against the text the query
     // carries, not the raw value: a quoted part finds a study through its bare
     // form, so it must match that study's sites the same way (#155).
-    const siteMatchCountry = queryTermContent(location.country);
-    const inRequestedCountry = countryGate(siteMatchCountry);
+    const inRequestedCountry = countryGate(queryTermContent(location.country));
     const gatedMatch: SiteMatchLocation = {
-      country: siteMatchCountry,
+      sameCity: samePlaceAs(location.city && queryTermContent(location.city)),
+      sameState: samePlaceAs(location.state && queryTermContent(location.state)),
       inCountry: inRequestedCountry,
-      city: location.city && queryTermContent(location.city),
-      state: location.state && queryTermContent(location.state),
+      gated: true,
     };
-    // A requested country the registry spells differently (Czech Republic for
-    // Czechia, UK, USA) still matches studies upstream through other site text.
-    // When none of a study's sites passes the gate, the gate would score every
-    // site 0 and keep the whole list, so that study is scored without it.
-    const ungatedMatch: SiteMatchLocation = { ...gatedMatch, inCountry: () => true };
+    // Upstream resolves country synonyms the gate's word test does not (Czech
+    // Republic for Czechia, UK, USA), so a study can qualify on sites the gate
+    // rejects. When none of a study's sites passes the gate, the gate would
+    // score every site 0 and keep the whole list, so that study's city and
+    // state points go ungated.
+    const ungatedMatch: SiteMatchLocation = { ...gatedMatch, gated: false };
 
     const service = getClinicalTrialsService();
 
@@ -683,20 +759,47 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     // SEARCH[Location](…) binds every part to the same site. A bare AND matches
     // the parts across a study's whole site list, so London + Canada admitted a
     // study whose London site is in the UK and whose Canadian site is in
-    // Toronto (#159). The parts stay bare search terms rather than
-    // AREA[LocationCity]-style field bindings, which drop genuine sites whose
-    // city field holds a borough (Harrow, state London). quoteLocationPart
-    // quotes every part that is not a single run of letters and digits: inside
-    // the wrapper a bare hyphenated part (Winston-Salem) under-matches, and a
-    // bare `(`, `)`, `[`, or `]` would close the wrapper early. One string feeds
-    // the main search, the location-stage funnel count, and the searchCriteria
-    // echo, so they cannot diverge; query.locn accepts it, so the echo replays
-    // as locationQuery.
-    const locationParts = [location.city, location.state, location.country]
-      .filter((part): part is string => Boolean(part))
-      .map(quoteLocationPart)
-      .join(' AND ');
-    const locationQuery = `SEARCH[Location](${locationParts})`;
+    // Toronto (#159).
+    //
+    // State and country are bound to their own fields (#164). As search terms
+    // they matched any field of a site: a state named like a city or facility
+    // (Washington D.C., Washington University in St. Louis) admitted studies with
+    // no site there, Mexico matched New Mexico, and Czech Republic, UK, and USA
+    // missed most of their country, whose synonyms resolve only through AREA[].
+    // Both operands are always quoted — a bare one-word state such as Missing
+    // reads as the MISSING operator. When a city is given, a site that files no
+    // state passes: the city locates it, and a blank state cannot contradict the
+    // requested one. Without a city the state is the only locator below the
+    // country, so it stays strict. The state field folds diacritics (São Paulo,
+    // Sao Paulo); the country field resolves synonyms (UK, Türkiye) but folds
+    // none — México matches no study while Mexico matches every Mexican site —
+    // so a country carrying diacritics is also tried without them, on the same
+    // site field.
+    //
+    // The city stays a search term: AREA[LocationCity] drops genuine sites whose
+    // city field holds a borough (Harrow, state London; The Bronx) or a
+    // neighbouring town whose facility carries the city's name (Burien, for
+    // Seattle). quoteLocationPart quotes it unless it is a single run of letters
+    // and digits: inside the wrapper a bare hyphenated part (Winston-Salem)
+    // under-matches, and a bare `(`, `)`, `[`, or `]` would close the wrapper
+    // early. One string feeds the main search, the location-stage funnel count,
+    // and the searchCriteria echo, so they cannot diverge; query.locn accepts
+    // it, so the echo replays as locationQuery.
+    const locationParts: string[] = [];
+    if (location.city) locationParts.push(quoteLocationPart(location.city));
+    if (location.state) {
+      const state = `AREA[LocationState]${quoteLocationLiteral(location.state)}`;
+      locationParts.push(location.city ? `(${state} OR AREA[LocationState]MISSING)` : state);
+    }
+    const countryArea = (country: string) =>
+      `AREA[LocationCountry]${quoteLocationLiteral(country)}`;
+    const plainCountry = location.country.normalize('NFD').replace(/\p{M}/gu, '');
+    locationParts.push(
+      plainCountry === location.country
+        ? countryArea(location.country)
+        : `(${countryArea(location.country)} OR ${countryArea(plainCountry)})`,
+    );
+    const locationQuery = `SEARCH[Location](${locationParts.join(' AND ')})`;
 
     const statusFilter = input.recruitingOnly ? ['RECRUITING'] : undefined;
 

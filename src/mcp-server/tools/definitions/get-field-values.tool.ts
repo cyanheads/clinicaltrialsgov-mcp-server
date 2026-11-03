@@ -208,6 +208,13 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
       thrownBy: 'service',
     },
     {
+      reason: 'request_too_long',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The fields list makes the request URL longer than ClinicalTrials.gov accepts — a few hundred piece names in one call.',
+      recovery: RECOVERY_HINTS.request_too_long,
+      thrownBy: 'service',
+    },
+    {
       reason: 'rate_limited',
       code: JsonRpcErrorCode.RateLimited,
       when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',

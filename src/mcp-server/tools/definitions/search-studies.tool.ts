@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { UPSTREAM_MAX_PAGE_SIZE } from '@/config/server-config.js';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
+import { normalizeAreaNames } from '@/services/clinical-trials/field-search.js';
 import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
 import { formatRemainingStudyFields } from '../utils/format-helpers.js';
@@ -31,6 +32,21 @@ import {
   toArray,
 } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
+
+/**
+ * Hard ceiling on `nctIds` entries, repeats included — counted on what the
+ * caller sent, against absurd input. One request carries far fewer (the
+ * service fits the list to the upstream URL limit and defers the rest), so the
+ * ceiling also bounds the `deferredNctIds` echo.
+ *
+ * Enforced by a root-level check rather than `.max()` on the array arm, which
+ * carries it only as advertised `maxItems`. The framework undoes a stringified
+ * list only when the repaired call validates, and an issue at `nctIds` refuses
+ * that repair, so the caller would be told about the call as sent — a string
+ * failing the single-ID format. Raised at the root, the issue leaves the
+ * repair standing and every input shape reports the same ceiling rejection.
+ */
+const NCT_ID_ENTRY_CEILING = 1000;
 
 /**
  * Dot-notation prefixes already rendered by the search formatter, named at the
@@ -324,7 +340,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A field name in the fields parameter or AREA[] expression is invalid (often a module name instead of a piece name).',
+      when: 'A name in the fields parameter is not a field, or an AREA[] expression names a field ClinicalTrials.gov does not recognize or cannot search by value — often a module or group such as LeadSponsor instead of a leaf piece such as LeadSponsorName.',
       recovery: RECOVERY_HINTS.field_invalid,
       thrownBy: 'service',
     },
@@ -362,6 +378,13 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       thrownBy: 'service',
     },
     {
+      reason: 'request_too_long',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'The request URL runs past the length ClinicalTrials.gov accepts — long free-text queries, advancedFilter, or fields — or the other parameters leave no room for even one nctIds entry.',
+      recovery: RECOVERY_HINTS.request_too_long,
+      thrownBy: 'service',
+    },
+    {
       reason: 'rate_limited',
       code: JsonRpcErrorCode.RateLimited,
       when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
@@ -371,136 +394,156 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     },
   ],
 
-  input: z.object({
-    query: z
-      .string()
-      .optional()
-      .describe(
-        'General free-text search across all fields. Runs the 57-field relevance search ClinicalTrials.gov publishes for this parameter — NCTId, NCTIdAlias, OrgStudyId, SecondaryId, Acronym, BriefTitle, OfficialTitle, Condition, InterventionName, InterventionOtherName, Phase, StdAge, StudyType, BriefSummary, outcome measures and their descriptions, LeadSponsorName, CollaboratorName, the Location* fields, the Design* fields, and the ConditionAncestorTerm/InterventionAncestorTerm MeSH umbrellas — so a hit need not carry your term in the field you had in mind. Plain words plus AND, OR, NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression — those work here as well as in advancedFilter, so AREA[Phase]PHASE2 is accepted in this parameter; a stray bracket fails. `( )` group sub-expressions and work when matched; `,` acts as AND. The dedicated *Query parameters (conditionQuery, interventionQuery, etc.) scope a search to one field.',
-      ),
-    conditionQuery: z
-      .string()
-      .optional()
-      .describe(
-        'Condition/disease-specific search. E.g., "Type 2 Diabetes", "non-small cell lung cancer". Matches Condition, BriefTitle, OfficialTitle, ConditionMeshTerm, ConditionAncestorTerm, Keyword, and NCTId. ConditionAncestorTerm is the MeSH umbrella above the conditions a study itself lists, so results run broader than those lists — a study can match a parent term it never names. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
-      ),
-    interventionQuery: z
-      .string()
-      .optional()
-      .describe(
-        'Intervention/treatment search. E.g., "pembrolizumab", "cognitive behavioral therapy". Matches InterventionName, InterventionType, ArmGroupType, InterventionOtherName, BriefTitle, OfficialTitle, ArmGroupLabel, InterventionMeshTerm, Keyword, InterventionAncestorTerm, InterventionDescription, and ArmGroupDescription. InterventionAncestorTerm is the MeSH umbrella above the interventions a study itself lists, so results run broader than those lists. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
-      ),
-    locationQuery: z
-      .string()
-      .optional()
-      .describe(
-        'Location search — city, state, country, or facility name. Matches LocationCity, LocationState, LocationCountry, LocationFacility, and LocationZip; a study matches when any of its sites does. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
-      ),
-    sponsorQuery: z
-      .string()
-      .optional()
-      .describe(
-        'Sponsor/collaborator name search. Matches LeadSponsorName, CollaboratorName, and OrgFullName. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
-      ),
-    titleQuery: z
-      .string()
-      .optional()
-      .describe(
-        'Search within study titles and acronyms only. Matches Acronym, BriefTitle, and OfficialTitle. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
-      ),
-    outcomeQuery: z
-      .string()
-      .optional()
-      .describe(
-        'Search within outcome measure fields. Matches PrimaryOutcomeMeasure, SecondaryOutcomeMeasure, OtherOutcomeMeasure, and OutcomeMeasureTitle, plus their description counterparts PrimaryOutcomeDescription, SecondaryOutcomeDescription, OtherOutcomeDescription, OutcomeMeasureDescription, and OutcomeMeasurePopulationDescription — so a term appearing only in outcome prose still matches. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
-      ),
-    statusFilter: z
-      .union([
-        z.string().describe('A single status value.'),
-        z.array(z.string()).describe('Multiple status values (OR).'),
-      ])
-      .optional()
-      .describe(
-        `Filter by study status. Omit to search all statuses — an empty list is rejected, not treated as "no filter". Values: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, NOT_YET_RECRUITING, ENROLLING_BY_INVITATION, SUSPENDED, TERMINATED, WITHDRAWN, UNKNOWN, WITHHELD, NO_LONGER_AVAILABLE, AVAILABLE, APPROVED_FOR_MARKETING, TEMPORARILY_NOT_AVAILABLE.`,
-      ),
-    phaseFilter: z
-      .union([
-        z.string().describe('A single phase value.'),
-        z.array(z.string()).describe('Multiple phase values (OR).'),
-      ])
-      .optional()
-      .describe(
-        'Filter by trial phase. Omit to search all phases — an empty list is rejected, not treated as "no filter". Values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA. Case and spacing variants ("Phase 3", "early phase 1", "Not Applicable") are accepted, and a list or a comma- or pipe-joined string matches any of the phases. Each entry must name a phase — put search expressions (OR, NOT, AREA[…]) in advancedFilter.',
-      ),
-    advancedFilter: z
-      .string()
-      .optional()
-      .describe(
-        `Advanced filter using AREA[FieldName]value syntax. Examples: "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]", "AREA[Phase]PHASE2 AND AREA[StudyType]INTERVENTIONAL", "(AREA[Phase]PHASE3 OR AREA[Phase]PHASE4) AND AREA[StudyType]INTERVENTIONAL". "AREA[HasResults]true" restricts to studies with posted results. AND/OR/NOT join complete AREA[FieldName]value expressions; parentheses group them. Call clinicaltrials_get_field_definitions to find AREA[]-compatible field names.`,
-      ),
-    geoFilter: z
-      .string()
-      .optional()
-      .describe(
-        `Geographic proximity filter. Format: distance(lat,lon,radius), where radius carries a \`mi\` or \`km\` suffix — e.g. "distance(47.6062,-122.3321,50mi)" for studies within 50 miles of Seattle. The suffix is required: a radius with no unit is rejected, as are a non-positive radius, a latitude outside [-90, 90], and a longitude outside [-180, 180]. When set, each study's locations are re-sorted by proximity to the center so the nearest matched site leads, annotated with its distance in miles; the full location list is preserved.`,
-      ),
-    nctIds: z
-      .union([
-        nctIdSchema.describe('A single NCT ID.'),
-        z.array(nctIdSchema).describe('Multiple NCT IDs (OR).'),
-      ])
-      .optional()
-      .describe(
-        'Filter to specific NCT IDs for batch lookups. Omit to search every study — an empty list is rejected, not treated as "no filter". Supplying this lifts the default unknown-enrollment exclusion, so an ID you name is never filtered out of its own lookup.',
-      ),
-    /**
-     * A lone string is wrapped as a one-element list here, comma or not, so the
-     * handler can split `"NCTId,BriefTitle"`; the framework's own lone-string
-     * repair refuses a string holding a comma. A `[`-leading string is left for
-     * the framework's stringified-array repair. The advertised schema stays
-     * `type: array`.
-     */
-    fields: z
-      .preprocess(
-        (v) => (typeof v === 'string' && !v.trim().startsWith('[') ? [v] : v),
-        z.array(z.string()),
-      )
-      .optional()
-      .describe(
-        `PascalCase leaf names to return; strongly recommended since full records are ~70KB. Omit for the compact index projection — an empty list is rejected, not treated as omission. A comma- or pipe-joined entry ("NCTId,BriefTitle") is split into separate names. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept.`,
-      ),
-    sort: z
-      .string()
-      .optional()
-      .describe(
-        `Sort order. Format: FieldName:asc or FieldName:desc. E.g., "LastUpdatePostDate:desc", "EnrollmentCount:desc". Max 2 fields comma-separated. For "largest trials" queries, pair EnrollmentCount:desc with advancedFilter "AREA[StudyType]INTERVENTIONAL" — the top enrollment counts are observational registry/claims studies enrolling tens of millions. Enrollment counts are sponsor-reported and not validated upstream beyond the unknown-enrollment sentinel exclusion. Use clinicaltrials_get_field_definitions to find sortable field names.`,
-      ),
-    pageSize: z
-      .number()
-      .int()
-      .min(1)
-      .max(UPSTREAM_MAX_PAGE_SIZE)
-      .default(10)
-      .describe(
-        `Results per page, 1–${UPSTREAM_MAX_PAGE_SIZE}. A value above this server's per-page cap (200 unless the operator changed it) returns a page at the cap, reported in truncated/shown/cap with nextPageToken to continue.`,
-      ),
-    pageToken: z
-      .string()
-      .optional()
-      .describe(
-        "Pagination cursor: a previous response's nextPageToken, passed back unchanged with the same criteria. Tokens expire when ClinicalTrials.gov refreshes its data.",
-      ),
-    countTotal: z
-      .boolean()
-      .default(true)
-      .describe('Include total study count in response. Only computed on the first page.'),
-    includeUnknownEnrollment: z
-      .boolean()
-      .default(false)
-      .describe(
-        'Include studies whose EnrollmentCount is the upstream "unknown" sentinel (99999999). Excluded by default — the sentinel pollutes RANGE[N, MAX] queries and EnrollmentCount:desc sorts. Set true for data-quality audits or when targeting unknown-enrollment studies specifically.',
-      ),
-  }),
+  input: z
+    .object({
+      query: z
+        .string()
+        .optional()
+        .describe(
+          'General free-text search across all fields. Runs the 57-field relevance search ClinicalTrials.gov publishes for this parameter — NCTId, NCTIdAlias, OrgStudyId, SecondaryId, Acronym, BriefTitle, OfficialTitle, Condition, InterventionName, InterventionOtherName, Phase, StdAge, StudyType, BriefSummary, outcome measures and their descriptions, LeadSponsorName, CollaboratorName, the Location* fields, the Design* fields, and the ConditionAncestorTerm/InterventionAncestorTerm MeSH umbrellas — so a hit need not carry your term in the field you had in mind. Plain words plus AND, OR, NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression — those work here as well as in advancedFilter, so AREA[Phase]PHASE2 is accepted in this parameter; a stray bracket fails. `( )` group sub-expressions and work when matched; `,` acts as AND. The dedicated *Query parameters (conditionQuery, interventionQuery, etc.) scope a search to one field.',
+        ),
+      conditionQuery: z
+        .string()
+        .optional()
+        .describe(
+          'Condition/disease-specific search. E.g., "Type 2 Diabetes", "non-small cell lung cancer". Matches Condition, BriefTitle, OfficialTitle, ConditionMeshTerm, ConditionAncestorTerm, Keyword, and NCTId. ConditionAncestorTerm is the MeSH umbrella above the conditions a study itself lists, so results run broader than those lists — a study can match a parent term it never names. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
+        ),
+      interventionQuery: z
+        .string()
+        .optional()
+        .describe(
+          'Intervention/treatment search. E.g., "pembrolizumab", "cognitive behavioral therapy". Matches InterventionName, InterventionType, ArmGroupType, InterventionOtherName, BriefTitle, OfficialTitle, ArmGroupLabel, InterventionMeshTerm, Keyword, InterventionAncestorTerm, InterventionDescription, and ArmGroupDescription. InterventionAncestorTerm is the MeSH umbrella above the interventions a study itself lists, so results run broader than those lists. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
+        ),
+      locationQuery: z
+        .string()
+        .optional()
+        .describe(
+          'Location search — city, state, country, or facility name. Matches LocationCity, LocationState, LocationCountry, LocationFacility, and LocationZip; a study matches when any of its sites does. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
+        ),
+      sponsorQuery: z
+        .string()
+        .optional()
+        .describe(
+          'Sponsor/collaborator name search. Matches LeadSponsorName, CollaboratorName, and OrgFullName. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
+        ),
+      titleQuery: z
+        .string()
+        .optional()
+        .describe(
+          'Search within study titles and acronyms only. Matches Acronym, BriefTitle, and OfficialTitle. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
+        ),
+      outcomeQuery: z
+        .string()
+        .optional()
+        .describe(
+          'Search within outcome measure fields. Matches PrimaryOutcomeMeasure, SecondaryOutcomeMeasure, OtherOutcomeMeasure, and OutcomeMeasureTitle, plus their description counterparts PrimaryOutcomeDescription, SecondaryOutcomeDescription, OtherOutcomeDescription, OutcomeMeasureDescription, and OutcomeMeasurePopulationDescription — so a term appearing only in outcome prose still matches. Plain words plus AND/OR/NOT. `[ ]` are valid only inside an AREA[FieldName]value or RANGE[min, max] expression, which this parameter accepts; a stray bracket fails. `( )` group sub-expressions when matched; `,` acts as AND.',
+        ),
+      statusFilter: z
+        .union([
+          z.string().describe('A single status value.'),
+          z.array(z.string()).describe('Multiple status values (OR).'),
+        ])
+        .optional()
+        .describe(
+          `Filter by study status. Omit to search all statuses — an empty list is rejected, not treated as "no filter". Values: RECRUITING, COMPLETED, ACTIVE_NOT_RECRUITING, NOT_YET_RECRUITING, ENROLLING_BY_INVITATION, SUSPENDED, TERMINATED, WITHDRAWN, UNKNOWN, WITHHELD, NO_LONGER_AVAILABLE, AVAILABLE, APPROVED_FOR_MARKETING, TEMPORARILY_NOT_AVAILABLE.`,
+        ),
+      phaseFilter: z
+        .union([
+          z.string().describe('A single phase value.'),
+          z.array(z.string()).describe('Multiple phase values (OR).'),
+        ])
+        .optional()
+        .describe(
+          'Filter by trial phase. Omit to search all phases — an empty list is rejected, not treated as "no filter". Values: EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4, NA. Case and spacing variants ("Phase 3", "early phase 1", "Not Applicable") are accepted, and a list or a comma- or pipe-joined string matches any of the phases. Each entry must name a phase — put search expressions (OR, NOT, AREA[…]) in advancedFilter.',
+        ),
+      advancedFilter: z
+        .string()
+        .optional()
+        .describe(
+          `Advanced filter using AREA[FieldName]value syntax. Examples: "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]", "AREA[Phase]PHASE2 AND AREA[StudyType]INTERVENTIONAL", "(AREA[Phase]PHASE3 OR AREA[Phase]PHASE4) AND AREA[StudyType]INTERVENTIONAL". "AREA[HasResults]true" restricts to studies with posted results. AND/OR/NOT join complete AREA[FieldName]value expressions; parentheses group them. Call clinicaltrials_get_field_definitions to find AREA[]-compatible field names. A field name that differs from one AREA[] accepts only by case (AREA[overallstatus]) is corrected before the request, here and in the query parameters, and searchCriteria shows the expression as sent.`,
+        ),
+      geoFilter: z
+        .string()
+        .optional()
+        .describe(
+          `Geographic proximity filter. Format: distance(lat,lon,radius), where radius carries a \`mi\` or \`km\` suffix — e.g. "distance(47.6062,-122.3321,50mi)" for studies within 50 miles of Seattle. The suffix is required: a radius with no unit is rejected, as are a non-positive radius, a latitude outside [-90, 90], and a longitude outside [-180, 180]. When set, each study's locations are re-sorted by proximity to the center so the nearest matched site leads, annotated with its distance in miles; the full location list is preserved.`,
+        ),
+      nctIds: z
+        .union([
+          nctIdSchema.describe('A single NCT ID.'),
+          z
+            .array(nctIdSchema)
+            .meta({ maxItems: NCT_ID_ENTRY_CEILING })
+            .describe(
+              `Multiple NCT IDs (OR), at most ${NCT_ID_ENTRY_CEILING} entries counting repeats.`,
+            ),
+        ])
+        .optional()
+        .describe(
+          `Filter to specific NCT IDs for batch lookups. Omit to search every study — an empty list is rejected, not treated as "no filter". Repeated IDs collapse to one, first occurrence kept. One request carries as many leading IDs as fit ClinicalTrials.gov's URL length limit beside the other parameters — about 560 when nothing else is set, fewer beside long queries or field lists — and the rest come back unqueried in deferredNctIds, in order, for a follow-up call; every page of a walk queries the same IDs. A list over ${NCT_ID_ENTRY_CEILING} entries, repeats included, is rejected. Supplying this lifts the default unknown-enrollment exclusion, so an ID you name is never filtered out of its own lookup.`,
+        ),
+      /**
+       * A lone string is wrapped as a one-element list here, comma or not, so the
+       * handler can split `"NCTId,BriefTitle"`; the framework's own lone-string
+       * repair refuses a string holding a comma. A `[`-leading string is left for
+       * the framework's stringified-array repair. The advertised schema stays
+       * `type: array`.
+       */
+      fields: z
+        .preprocess(
+          (v) => (typeof v === 'string' && !v.trim().startsWith('[') ? [v] : v),
+          z.array(z.string()),
+        )
+        .optional()
+        .describe(
+          `PascalCase leaf names to return; strongly recommended since full records are ~70KB. Omit for the compact index projection — an empty list is rejected, not treated as omission. A comma- or pipe-joined entry ("NCTId,BriefTitle") is split into separate names. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept.`,
+        ),
+      sort: z
+        .string()
+        .optional()
+        .describe(
+          `Sort order. Format: FieldName:asc or FieldName:desc. E.g., "LastUpdatePostDate:desc", "EnrollmentCount:desc". Max 2 fields comma-separated. For "largest trials" queries, pair EnrollmentCount:desc with advancedFilter "AREA[StudyType]INTERVENTIONAL" — the top enrollment counts are observational registry/claims studies enrolling tens of millions. Enrollment counts are sponsor-reported and not validated upstream beyond the unknown-enrollment sentinel exclusion. Use clinicaltrials_get_field_definitions to find sortable field names.`,
+        ),
+      pageSize: z
+        .number()
+        .int()
+        .min(1)
+        .max(UPSTREAM_MAX_PAGE_SIZE)
+        .default(10)
+        .describe(
+          `Results per page, 1–${UPSTREAM_MAX_PAGE_SIZE}. A value above this server's per-page cap (200 unless the operator changed it) returns a page at the cap, reported in truncated/shown/cap with nextPageToken to continue.`,
+        ),
+      pageToken: z
+        .string()
+        .optional()
+        .describe(
+          "Pagination cursor: a previous response's nextPageToken, passed back unchanged with the same criteria. Tokens expire when ClinicalTrials.gov refreshes its data.",
+        ),
+      countTotal: z
+        .boolean()
+        .default(true)
+        .describe('Include total study count in response. Only computed on the first page.'),
+      includeUnknownEnrollment: z
+        .boolean()
+        .default(false)
+        .describe(
+          'Include studies whose EnrollmentCount is the upstream "unknown" sentinel (99999999). Excluded by default — the sentinel pollutes RANGE[N, MAX] queries and EnrollmentCount:desc sorts. Set true for data-quality audits or when targeting unknown-enrollment studies specifically.',
+        ),
+    })
+    // The nctIds ceiling, at the root so a repaired stringified list reports it (see NCT_ID_ENTRY_CEILING).
+    .check((ctx) => {
+      const { nctIds } = ctx.value;
+      if (!Array.isArray(nctIds) || nctIds.length <= NCT_ID_ENTRY_CEILING) return;
+      ctx.issues.push({
+        code: 'too_big',
+        origin: 'array',
+        maximum: NCT_ID_ENTRY_CEILING,
+        inclusive: true,
+        input: nctIds,
+        path: [],
+        message: `nctIds: Too big: expected at most ${NCT_ID_ENTRY_CEILING} entries, repeats included (received ${nctIds.length}). Each call queries as many distinct IDs as fit in one request and returns the rest in deferredNctIds; send a longer list across several calls.`,
+      });
+    }),
 
   output: z.object({
     studies: z
@@ -529,6 +572,12 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .optional()
       .describe(
         'True when this call supplied a pageToken and the continuation page came back empty — the walk is finished and no further pages exist. Absent on every other response, including an empty first page, which is an unmatched search rather than exhausted pagination.',
+      ),
+    deferredNctIds: z
+      .array(z.string())
+      .optional()
+      .describe(
+        'IDs from nctIds that did not fit in one ClinicalTrials.gov request beside the other parameters, deduplicated, in first-occurrence order. Not queried — studies and totalCount cover only the IDs that went out; pass these as nctIds in a follow-up call with the same criteria. Every page of a walk defers the same IDs. Absent when every requested ID was queried.',
       ),
   }),
 
@@ -598,7 +647,9 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     const fields = splitListEntries(input.fields);
     const statusFilter = normalizeStatusFilter(input.statusFilter);
     const phaseFilter = normalizePhaseFilter(input.phaseFilter);
-    const filterIds = toArray(input.nctIds);
+    // Repeats collapse in first-occurrence order: one only lengthens the
+    // request, costing a distinct ID its room in it.
+    const filterIds = input.nctIds === undefined ? undefined : [...new Set(toArray(input.nctIds))];
     const blankParam =
       firstBlankParam({
         query: input.query,
@@ -656,22 +707,41 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     const includeUnknownEnrollment = input.includeUnknownEnrollment || Boolean(filterIds?.length);
 
     const service = getClinicalTrialsService();
+    // Upstream matches AREA[] field names case-sensitively; a name that misses
+    // only by case is corrected here, in the caller's own text, so it is what
+    // gets sent, what the ID fit measures, and what searchCriteria echoes.
+    const essie = await normalizeAreaNames(
+      {
+        query: input.query,
+        conditionQuery: input.conditionQuery,
+        interventionQuery: input.interventionQuery,
+        locationQuery: input.locationQuery,
+        sponsorQuery: input.sponsorQuery,
+        titleQuery: input.titleQuery,
+        outcomeQuery: input.outcomeQuery,
+        advancedFilter: input.advancedFilter,
+      },
+      () => service.getAreaIndex(ctx),
+      ctx.log,
+    );
     // The per-call page cap applies to this caller-facing page only; the
     // schema ceiling is ClinicalTrials.gov's own page maximum.
     const pageCap = service.maxPageSize;
-    const result = await service.searchStudies(
+    // The service sends the leading IDs that fit one request and names the rest;
+    // the same criteria fit the same IDs on every page of a walk.
+    const { deferredIds = [], ...result } = await service.searchStudies(
       {
-        queryTerm: input.query,
-        queryCond: input.conditionQuery,
-        queryIntr: input.interventionQuery,
-        queryLocn: input.locationQuery,
-        querySpons: input.sponsorQuery,
-        queryTitles: input.titleQuery,
-        queryOutc: input.outcomeQuery,
+        queryTerm: essie.query,
+        queryCond: essie.conditionQuery,
+        queryIntr: essie.interventionQuery,
+        queryLocn: essie.locationQuery,
+        querySpons: essie.sponsorQuery,
+        queryTitles: essie.titleQuery,
+        queryOutc: essie.outcomeQuery,
         filterOverallStatus: statusFilter,
         filterGeo: input.geoFilter,
         filterIds,
-        filterAdvanced: buildAdvancedFilter(phaseFilter, input.advancedFilter),
+        filterAdvanced: buildAdvancedFilter(phaseFilter, essie.advancedFilter),
         fields,
         sort: input.sort,
         countTotal: input.countTotal,
@@ -681,9 +751,11 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       },
       ctx,
     );
+    const queriedIds = filterIds?.slice(0, filterIds.length - deferredIds.length);
     ctx.log.info('Search completed', {
       count: result.studies.length,
       totalCount: result.totalCount,
+      deferredIds: deferredIds.length,
     });
 
     // With an active geoFilter, lead each study with its matched (nearest) site:
@@ -697,21 +769,23 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     // so agents can confirm which filters were actually in effect when a result
     // set is smaller than expected. sentinelFilterActive flags the default
     // unknown-enrollment exclusion, which silently drops EnrollmentCount=99999999
-    // studies from RANGE/EnrollmentCount:desc queries.
+    // studies from RANGE/EnrollmentCount:desc queries. Query and advancedFilter
+    // text is echoed as sent, AREA[] name corrections included.
     const criteria: Record<string, unknown> = {};
-    if (input.query) criteria.query = input.query;
-    if (input.conditionQuery) criteria.conditionQuery = input.conditionQuery;
-    if (input.interventionQuery) criteria.interventionQuery = input.interventionQuery;
-    if (input.locationQuery) criteria.locationQuery = input.locationQuery;
-    if (input.sponsorQuery) criteria.sponsorQuery = input.sponsorQuery;
-    if (input.titleQuery) criteria.titleQuery = input.titleQuery;
-    if (input.outcomeQuery) criteria.outcomeQuery = input.outcomeQuery;
+    if (essie.query) criteria.query = essie.query;
+    if (essie.conditionQuery) criteria.conditionQuery = essie.conditionQuery;
+    if (essie.interventionQuery) criteria.interventionQuery = essie.interventionQuery;
+    if (essie.locationQuery) criteria.locationQuery = essie.locationQuery;
+    if (essie.sponsorQuery) criteria.sponsorQuery = essie.sponsorQuery;
+    if (essie.titleQuery) criteria.titleQuery = essie.titleQuery;
+    if (essie.outcomeQuery) criteria.outcomeQuery = essie.outcomeQuery;
     // The canonical status and phase values actually sent, in the caller's scalar/list shape.
     if (statusFilter) criteria.statusFilter = inCallerShape(input.statusFilter, statusFilter);
     if (phaseFilter) criteria.phaseFilter = inCallerShape(input.phaseFilter, phaseFilter);
-    if (input.advancedFilter) criteria.advancedFilter = input.advancedFilter;
+    if (essie.advancedFilter) criteria.advancedFilter = essie.advancedFilter;
     if (input.geoFilter) criteria.geoFilter = input.geoFilter;
-    if (input.nctIds) criteria.nctIds = input.nctIds;
+    // The IDs actually queried — deferred ones are named in deferredNctIds instead.
+    if (queriedIds) criteria.nctIds = inCallerShape(input.nctIds, queriedIds);
     // Reports the exclusion that actually ran, so it stays absent on the
     // ID-targeted path where the override lifted it.
     if (!includeUnknownEnrollment) criteria.sentinelFilterActive = true;
@@ -818,11 +892,21 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       ...(servedToken !== undefined ? { nextPageToken: servedToken } : {}),
       ...(fields?.length ? { requestedFields: fields } : {}),
       ...(pageExhausted ? { pageExhausted } : {}),
+      ...(deferredIds.length > 0 ? { deferredNctIds: deferredIds } : {}),
     };
   },
 
   format: (result) => {
     const lines: string[] = [];
+    // Leads the output, as in clinicaltrials_get_study_results: a reader learns
+    // that part of the ID list went unqueried before any count or study.
+    if (result.deferredNctIds?.length) {
+      const deferred = result.deferredNctIds;
+      const one = deferred.length === 1;
+      lines.push(
+        `Deferred: ${deferred.length} NCT ${one ? 'ID' : 'IDs'} did not fit in one ClinicalTrials.gov request beside the other parameters and ${one ? 'was' : 'were'} not queried — the studies and total below cover only the IDs that went out. Pass ${one ? 'it' : 'them'} as nctIds in a follow-up call with the same criteria: ${deferred.join(', ')}\n`,
+      );
+    }
     const count = result.studies.length;
     // What kind of page this is and how many studies it holds are separate
     // lines, not one if/else chain. A finished walk and an unmatched search are

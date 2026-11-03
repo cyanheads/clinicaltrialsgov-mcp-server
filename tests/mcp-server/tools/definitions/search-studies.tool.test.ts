@@ -17,16 +17,69 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
 
 import { searchStudies } from '@/mcp-server/tools/definitions/search-studies.tool.js';
 import { haversineMi } from '@/mcp-server/tools/utils/geo-helpers.js';
+import { areaIndex } from '../../../helpers/area-metadata.js';
 import { readMarkdown } from '../../../helpers/commonmark.js';
 import { missingLeaves } from '../../../helpers/format-parity.js';
+import { nctIds as ids } from '../../../helpers/nct-ids.js';
 
 describe('searchStudies', () => {
-  const mockService = { searchStudies: vi.fn(), maxPageSize: 200 };
+  const mockService = { getAreaIndex: vi.fn(), searchStudies: vi.fn(), maxPageSize: 200 };
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockService.maxPageSize = 200;
+    // No AREA index unless a test supplies one: AREA[] names pass through as written.
+    mockService.getAreaIndex.mockResolvedValue(undefined);
     mockGetService.mockReturnValue(mockService as never);
+  });
+
+  // Upstream matches AREA[] names case-sensitively; the handler corrects them
+  // before the search and echoes the corrected text (#170).
+  describe('AREA[] field-name correction (#170)', () => {
+    it('searches and echoes every expression in its corrected spelling, beside the ID list', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      mockService.getAreaIndex.mockResolvedValue(areaIndex());
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(
+        searchStudies.input!.parse({
+          titleQuery: 'AREA[city]Seattle',
+          advancedFilter: 'AREA[overall-status]RECRUITING',
+          nctIds: ['NCT03722472'],
+        }),
+        ctx,
+      );
+
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          queryTitles: 'AREA[LocationCity]Seattle',
+          filterAdvanced: 'AREA[OverallStatus]RECRUITING',
+          filterIds: ['NCT03722472'],
+        }),
+        ctx,
+      );
+      expect(getEnrichment(ctx).searchCriteria).toMatchObject({
+        titleQuery: 'AREA[LocationCity]Seattle',
+        advancedFilter: 'AREA[OverallStatus]RECRUITING',
+      });
+    });
+
+    it('never asks for the AREA index when no expression names an AREA[] field', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(
+        searchStudies.input!.parse({ query: 'asthma', phaseFilter: 'PHASE3' }),
+        ctx,
+      );
+      expect(mockService.getAreaIndex).not.toHaveBeenCalled();
+    });
+
+    it('describes the correction on advancedFilter and the AREA[] failure on field_invalid', () => {
+      const shape = searchStudies.input!.shape as Record<string, { description?: string }>;
+      expect(shape.advancedFilter?.description).toContain('only by case (AREA[overallstatus])');
+      expect(searchStudies.errors?.find((e) => e.reason === 'field_invalid')?.when).toContain(
+        'LeadSponsorName',
+      );
+    });
   });
 
   describe('input validation', () => {
@@ -2728,6 +2781,131 @@ describe('searchStudies', () => {
       const { description, ...shape } = props.fields!;
       expect(shape).toEqual({ type: 'array', items: { type: 'string' } });
       expect(description).toContain('comma- or pipe-joined');
+    });
+  });
+
+  /**
+   * The service fits an ID list to one upstream request and names the IDs left
+   * out; the handler dedupes before it, echoes only the queried IDs, and
+   * carries the remainder on both surfaces.
+   */
+  describe('nctIds served up to what fits one request (#163)', () => {
+    const firstBlock = (result: { content: unknown }) =>
+      readMarkdown((result.content as Array<{ text: string }>)[0]!.text);
+    type Wire = {
+      deferredNctIds?: string[];
+      searchCriteria?: { nctIds?: unknown };
+      studies: unknown[];
+    };
+
+    it('collapses repeats in first-occurrence order before the service sees the list', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      await runToolContract(searchStudies, {
+        nctIds: ['NCT00000002', 'nct00000001', 'NCT00000002', ' NCT00000001 ', 'NCT00000003'],
+      });
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterIds: ['NCT00000002', 'NCT00000001', 'NCT00000003'] }),
+        expect.anything(),
+      );
+    });
+
+    it.each([
+      { deferred: ids(3, 4), lead: 'Deferred: 3 NCT IDs did not fit', pronoun: 'them' },
+      { deferred: ids(1, 6), lead: 'Deferred: 1 NCT ID did not fit', pronoun: 'it' },
+    ])(
+      'carries $deferred.length deferred ID(s) on both surfaces and echoes only the queried ones',
+      async ({ deferred, lead, pronoun }) => {
+        mockService.searchStudies.mockResolvedValue({
+          studies: [{ protocolSection: { identificationModule: { nctId: 'NCT00000000' } } }],
+          totalCount: 1,
+          deferredIds: deferred,
+        });
+        const result = await runToolContract(searchStudies, { nctIds: ids(7) });
+        const sc = result.structuredContent as Wire;
+
+        expect(result.isError).toBeFalsy();
+        expect(sc.deferredNctIds).toEqual(deferred);
+        expect(sc).not.toHaveProperty('deferredIds');
+        expect(sc.searchCriteria?.nctIds).toEqual(ids(7 - deferred.length));
+        const text = firstBlock(result);
+        expect(text.startsWith(lead)).toBe(true);
+        expect(text).toContain(
+          `Pass ${pronoun} as nctIds in a follow-up call with the same criteria: ${deferred.join(', ')}`,
+        );
+      },
+    );
+
+    it('omits deferredNctIds when the service queried every ID', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const result = await runToolContract(searchStudies, { nctIds: ids(2) });
+      expect(result.structuredContent).not.toHaveProperty('deferredNctIds');
+      expect(firstBlock(result)).not.toContain('Deferred');
+      expect((result.structuredContent as Wire).searchCriteria?.nctIds).toEqual(ids(2));
+    });
+
+    it.each([
+      { path: 'a plain array', args: (list: string[]) => ({ nctIds: list }) },
+      {
+        path: 'a JSON-stringified array',
+        args: (list: string[]) => ({ nctIds: JSON.stringify(list) }),
+      },
+    ])('accepts exactly 1,000 entries through $path', async ({ args }) => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const result = await runToolContract(searchStudies, args(ids(1000)) as never);
+      expect(result.isError).toBeFalsy();
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterIds: ids(1000) }),
+        expect.anything(),
+      );
+    });
+
+    type Rejection = { error: { code: number; message: string; data?: { reason?: string } } };
+
+    /**
+     * The framework undoes a stringified list only when the repaired call then
+     * validates; otherwise it reports the call as sent. Every shape over the
+     * ceiling must still name the ceiling, never the single-ID format error.
+     */
+    it.each([
+      {
+        path: 'a JSON-stringified array',
+        args: (list: string[]) => ({ nctIds: JSON.stringify(list) }),
+      },
+      {
+        path: 'a JSON-stringified array of two distinct IDs padded with repeats',
+        args: (list: string[]) => ({
+          nctIds: JSON.stringify([list[0], ...list.slice(1).map(() => list[1]!)]),
+        }),
+      },
+    ])('rejects 1,001 entries through $path as the plain array is rejected', async ({ args }) => {
+      const plain = (await runToolContract(searchStudies, { nctIds: ids(1001) }))
+        .structuredContent as Rejection;
+      const result = await runToolContract(searchStudies, args(ids(1001)) as never);
+      const { error } = result.structuredContent as Rejection;
+
+      expect(result.isError).toBe(true);
+      expect(error.code).toBe(JsonRpcErrorCode.InvalidParams);
+      expect(error.data?.reason).toBe('invalid_arguments');
+      expect(error.message).toBe(plain.error.message);
+      expect(error.message).toContain(
+        'nctIds: Too big: expected at most 1000 entries, repeats included (received 1001).',
+      );
+      expect(error.message).not.toContain('NCTxxxxxxxx');
+      expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+
+    it('advertises the ceiling on the array arm and the deferral in the description', () => {
+      const nctIds = (
+        searchStudies.input!.toJSONSchema({ io: 'input' }) as {
+          properties: Record<
+            string,
+            { anyOf: Array<Record<string, unknown>>; description: string }
+          >;
+        }
+      ).properties.nctIds!;
+      expect(nctIds.anyOf.find((arm) => arm.type === 'array')).toMatchObject({ maxItems: 1000 });
+      expect(nctIds.description).toContain('deferredNctIds');
+      expect(nctIds.description).toContain('over 1000 entries, repeats included, is rejected');
     });
   });
 });

@@ -17,6 +17,8 @@ import {
 import { httpErrorFromResponse } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
 import {
+  type AreaIndex,
+  buildAreaIndex,
   type FieldIndexEntry,
   flattenMetadata,
   isArrayType,
@@ -38,6 +40,22 @@ const DEFAULT_BASE_BACKOFF_MS = 1000;
 const DEFAULT_MAX_BACKOFF_MS = 30_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MIN_INTERVAL_MS = 1000;
+/**
+ * Longest request target — URL path plus query string — ClinicalTrials.gov
+ * serves. Measured 2026-11-02: 8,177 bytes is answered and 8,178 gets HTTP 414
+ * from its nginx front end, whether the bytes are NCT IDs, `query.term`, or
+ * `filter.advanced` — nginx's 8,192-byte request line less `GET `, ` HTTP/1.1`,
+ * and CRLF. There is no POST search to move a long list out of the URL.
+ */
+const UPSTREAM_MAX_REQUEST_TARGET_BYTES = 8177;
+/**
+ * Bytes an ID-fitted search keeps free for its paging parameters, so the same
+ * criteria fit the same IDs on every page of a walk: `&pageSize=1000`,
+ * `&countTotal=false`, and `&pageToken=` take 42, leaving 214 for the token.
+ * The longest tokens measured (2026-11-02) ran 100 characters under a two-key
+ * date sort, and a walk's tokens kept one length from page to page.
+ */
+const PAGING_RESERVE_BYTES = 256;
 /**
  * Maps the trailing segment of an Essie field path (lowercased) to the
  * PascalCase piece a caller writes inside AREA[]. Used to translate "Allowed
@@ -156,6 +174,46 @@ function describeQueryParseError(text: string): string {
     : 'Query syntax error: the upstream parser rejected the query. Free-text fields take plain words plus AND, OR, NOT.';
 }
 
+/** An AREA[] field name upstream rejected, and how. */
+export interface AreaRejection {
+  /** `unknown`: no field by that name. `unsearchable`: a field AREA[] cannot match a value in, such as LeadSponsor. */
+  kind: 'unknown' | 'unsearchable';
+  name: string;
+}
+
+/**
+ * Read an upstream rejection of an AREA[] field name out of a 400 body:
+ * `Unknown area name: \`X\`` for a name upstream does not know, and `This type
+ * of query is not allowed for X` for one it knows but refuses there — every
+ * `STRUCT` piece probed (LeadSponsor, SponsorCollaboratorsModule, DesignInfo).
+ * Undefined for any other body.
+ */
+export function parseAreaRejection(text: string): AreaRejection | undefined {
+  const unknown = text.match(/Unknown area name:\s*`([^`]+)`/)?.[1];
+  if (unknown) return { kind: 'unknown', name: unknown };
+  const unsearchable = text.match(/This type of query is not allowed for ([\w-]+)/)?.[1];
+  return unsearchable ? { kind: 'unsearchable', name: unsearchable } : undefined;
+}
+
+/**
+ * The message for a rejected AREA[] name, carrying the nearest searchable
+ * pieces in the same `'X' — did you mean …?` form an invalid `fields` entry gets.
+ */
+function describeAreaRejection(
+  { kind, name }: AreaRejection,
+  text: string,
+  near: string[],
+): string {
+  const upstream = text.trim();
+  const lead =
+    kind === 'unknown'
+      ? `${upstream} '${name}' is not a recognized AREA[]-compatible field.`
+      : `${upstream}${upstream.endsWith('.') ? '' : '.'} '${name}' cannot be searched by value with AREA[].`;
+  const didYouMean =
+    near.length > 0 ? ` '${name}' — did you mean ${near.map((p) => `'${p}'`).join(', ')}?` : '';
+  return `${lead}${didYouMean} Call clinicaltrials_get_field_definitions to look up valid PascalCase piece names.`;
+}
+
 /** The shape and cap ClinicalTrials.gov enforces on `sort`, stated once. */
 const SORT_SHAPE =
   'Format must be FieldName:asc or FieldName:desc (e.g. "LastUpdatePostDate:desc", "EnrollmentCount:asc"). Max 2 fields comma-separated.';
@@ -176,6 +234,35 @@ function parseSortItems(sort: string): Array<{ name: string; suffix: string }> {
   });
 }
 
+/**
+ * A request target's size as the upstream front end counts it. Every character
+ * is ASCII once the URL is encoded, so its length is its byte count.
+ */
+function requestTargetBytes(url: URL): number {
+  return url.pathname.length + url.search.length;
+}
+
+/** Bytes `value` occupies in a query string, encoded as `URLSearchParams` encodes it (`|` → `%7C`). */
+function queryEncodedBytes(value: string): number {
+  return new URLSearchParams({ v: value }).toString().length - 'v='.length;
+}
+
+/** A search page, plus the `filterIds` its request had no room for. */
+export interface SearchStudiesResult extends PagedStudiesResponse {
+  /** Trailing `filterIds` left out of the request, in order. Absent when every ID went out. */
+  deferredIds?: string[];
+}
+
+/** The field index built once from /studies/metadata, with the lookups derived from it. */
+interface FieldIndex {
+  /** The AREA[] name index — the pieces AREA[] accepts and their case fold. */
+  area: AreaIndex;
+  /** Lowercased piece → piece, for each lowercased form exactly one piece has. */
+  caseFold: Map<string, string>;
+  entries: FieldIndexEntry[];
+  pieceSet: Set<string>;
+}
+
 /** Constructor options for overriding retry/backoff/validation behavior (primarily for tests). */
 export interface ClinicalTrialsServiceOptions {
   baseBackoffMs?: number;
@@ -183,8 +270,9 @@ export interface ClinicalTrialsServiceOptions {
   maxRetries?: number;
   /**
    * Whether to validate `fields` against the cached metadata index before
-   * making API calls. Defaults to true; lazy-fetches /studies/metadata on
-   * first use, then caches the index in-memory.
+   * making API calls, and to correct and suggest AREA[] field names from it.
+   * Defaults to true; lazy-fetches /studies/metadata on first use, then caches
+   * the index in-memory.
    */
   validateFieldsLocally?: boolean;
 }
@@ -212,13 +300,7 @@ export class ClinicalTrialsService {
    * `lastRequestAt` and firing together. See `throttle()`.
    */
   private throttleQueue: Promise<void> = Promise.resolve();
-  private fieldIndexPromise:
-    | Promise<{
-        caseFold: Map<string, string>;
-        entries: FieldIndexEntry[];
-        pieceSet: Set<string>;
-      }>
-    | undefined;
+  private fieldIndexPromise: Promise<FieldIndex> | undefined;
 
   constructor(config: ServerConfig, options: ClinicalTrialsServiceOptions = {}) {
     this.baseUrl = config.apiBaseUrl;
@@ -230,8 +312,19 @@ export class ClinicalTrialsService {
     this.validateFieldsLocally = options.validateFieldsLocally ?? true;
   }
 
-  /** Search studies with query, filters, pagination, and field selection. */
-  async searchStudies(params: SearchParams, ctx: Context): Promise<PagedStudiesResponse> {
+  /**
+   * Search studies with query, filters, pagination, and field selection. A
+   * `filterIds` list is fitted to one request first: the leading IDs that fit
+   * beside every other parameter go out, and the rest come back unqueried in
+   * `deferredIds` (see fitFilterIds).
+   */
+  async searchStudies(params: SearchParams, ctx: Context): Promise<SearchStudiesResult> {
+    let deferredIds: string[] = [];
+    if (params.filterIds?.length) {
+      const fit = this.fitFilterIds(params.filterIds, params);
+      params = { ...params, filterIds: fit.sent };
+      deferredIds = fit.deferred;
+    }
     if (this.validateFieldsLocally && params.fields?.length) {
       const normalized = await this.normalizeFields(params.fields, ctx);
       await this.validateFields(normalized, ctx);
@@ -241,8 +334,9 @@ export class ClinicalTrialsService {
       params = { ...params, sort: await this.normalizeSort(params.sort, ctx) };
     }
     const q = this.buildSearchQuery(params);
-    ctx.log.debug('searchStudies', { paramKeys: Object.keys(q) });
-    return this.fetchJson<PagedStudiesResponse>('/studies', q, ctx);
+    ctx.log.debug('searchStudies', { paramKeys: Object.keys(q), deferred: deferredIds.length });
+    const page = await this.fetchJson<PagedStudiesResponse>('/studies', q, ctx);
+    return deferredIds.length > 0 ? { ...page, deferredIds } : page;
   }
 
   /**
@@ -278,6 +372,10 @@ export class ClinicalTrialsService {
    * previous (alias) ID to its canonical record silently: the record comes back
    * under an ID the caller never asked for, and the alias list is the only thing
    * tying it to the ID they did ask for.
+   *
+   * A batch of 20 IDs (the results tool's per-call cap) comes to about 400
+   * bytes of the request-target limit, so the ID fit in searchStudies never
+   * defers one here.
    */
   async getStudiesBatch(nctIds: string[], ctx: Context): Promise<Study[]> {
     ctx.log.debug('getStudiesBatch', { count: nctIds.length });
@@ -391,16 +489,32 @@ export class ClinicalTrialsService {
     return searchFields(query, entries, limit);
   }
 
+  /**
+   * The AREA[] name index (see buildAreaIndex), built with the cached field
+   * index. Undefined when local validation is disabled or /studies/metadata
+   * cannot be fetched — AREA[] names then reach upstream as written.
+   *
+   * @throws the caller's cancellation, which never passes for an unavailable index.
+   */
+  async getAreaIndex(ctx: Context): Promise<AreaIndex | undefined> {
+    if (!this.validateFieldsLocally) return undefined;
+    try {
+      return (await this.getFieldIndex(ctx)).area;
+    } catch (err) {
+      if (ctx.signal.aborted) throw err;
+      ctx.log.warning('AREA[] field-name lookup skipped — metadata unavailable', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return undefined;
+    }
+  }
+
   /* ------------------------------------------------------------------ */
   /*  Internal                                                           */
   /* ------------------------------------------------------------------ */
 
   /** Lazy-load and memoize the flattened field index from /studies/metadata. */
-  private getFieldIndex(ctx: Context): Promise<{
-    caseFold: Map<string, string>;
-    entries: FieldIndexEntry[];
-    pieceSet: Set<string>;
-  }> {
+  private getFieldIndex(ctx: Context): Promise<FieldIndex> {
     if (!this.fieldIndexPromise) {
       this.fieldIndexPromise = (async () => {
         const tree = await this.getMetadata(false, ctx);
@@ -418,11 +532,13 @@ export class ClinicalTrialsService {
           const lp = p.toLowerCase();
           if (lowerCounts.get(lp) === 1) caseFold.set(lp, p);
         }
+        const area = buildAreaIndex(entries);
         ctx.log.debug('Field index built', {
           entryCount: entries.length,
           caseFoldable: caseFold.size,
+          areaNames: area.names.size,
         });
-        return { entries, pieceSet, caseFold };
+        return { area, entries, pieceSet, caseFold };
       })().catch((err) => {
         // Reset on failure so the next call can retry the metadata fetch
         this.fieldIndexPromise = undefined;
@@ -540,6 +656,17 @@ export class ClinicalTrialsService {
   }
 
   /**
+   * Up to three AREA[]-searchable pieces nearest a rejected AREA[] name. Drawn
+   * from the AREA index, so no suggestion is a `STRUCT` piece upstream would
+   * refuse in turn. None when the index is unavailable — this runs on an error
+   * path, where a metadata failure must not replace the real error.
+   */
+  private async suggestAreaPieces(name: string, ctx: Context): Promise<string[]> {
+    const area = await this.getAreaIndex(ctx);
+    return area ? nearestPieces(name, area.entries, 3) : [];
+  }
+
+  /**
    * Reduce an upstream `sort` rejection to one actionable sentence. The 2-item
    * cap, an unsortable field type, and an unrecognized field name are three
    * different things for a caller to fix, so each is told apart by its own
@@ -639,6 +766,81 @@ export class ClinicalTrialsService {
   }
 
   /**
+   * Split an ID list into the leading run one request carries and the rest.
+   *
+   * Measured on the request as it is built and encoded, from the params as
+   * given — before field and sort normalization, which only trims, case-folds,
+   * and applies the legacy field renames, each to an equal or shorter name, so
+   * the request sent is never longer than the one measured, and
+   * the fit does not shift between pages when the metadata index is reachable
+   * for one page and not the next. The paging parameters stay out of the
+   * measurement, covered by PAGING_RESERVE_BYTES: upstream accepts a pageToken
+   * replayed against a different ID set without complaint, so a fit that moved
+   * with the token would skip or repeat studies silently. The list never leaves
+   * the request empty — that would widen an ID lookup to the whole registry.
+   *
+   * When the other parameters leave no room for even one ID beside the reserve,
+   * the first ID still goes out alone as long as this page's whole request
+   * fits: refusing it would refuse a request upstream answers. The fit is then
+   * one ID on every page, and a page whose token runs it past the limit fails.
+   *
+   * @throws request_too_long when the request carrying only the first ID is
+   * still past the limit.
+   */
+  private fitFilterIds(
+    ids: string[],
+    params: SearchParams,
+  ): { deferred: string[]; sent: string[] } {
+    const budget = UPSTREAM_MAX_REQUEST_TARGET_BYTES - PAGING_RESERVE_BYTES;
+    const criteria = {
+      ...params,
+      countTotal: undefined,
+      pageSize: undefined,
+      pageToken: undefined,
+    };
+    const first = ids.slice(0, 1);
+    let bytes = requestTargetBytes(
+      this.buildUrl('/studies', this.buildSearchQuery({ ...criteria, filterIds: first })),
+    );
+    if (bytes > budget) {
+      const requestBytes = requestTargetBytes(
+        this.buildUrl('/studies', this.buildSearchQuery({ ...params, filterIds: first })),
+      );
+      if (requestBytes <= UPSTREAM_MAX_REQUEST_TARGET_BYTES) {
+        return { sent: first, deferred: ids.slice(1) };
+      }
+      throw validationError(
+        `${ids.length === 1 ? 'The NCT ID does not fit' : `None of the ${ids.length} NCT IDs fits`} in one ClinicalTrials.gov request beside the other search parameters: with a single ID the request needs ${requestBytes} bytes, and the registry accepts at most ${UPSTREAM_MAX_REQUEST_TARGET_BYTES}.`,
+        {
+          reason: 'request_too_long',
+          requestBytes,
+          maxRequestBytes: UPSTREAM_MAX_REQUEST_TARGET_BYTES,
+          recovery: {
+            hint: 'Shorten query, the other free-text queries, or advancedFilter, or request fewer fields — together they leave no room in the request for an NCT ID.',
+          },
+        },
+      );
+    }
+    let sent = 1;
+    for (const id of ids.slice(1)) {
+      bytes += queryEncodedBytes(`|${id}`);
+      if (bytes > budget) break;
+      sent++;
+    }
+    return { sent: ids.slice(0, sent), deferred: ids.slice(sent) };
+  }
+
+  /** The request URL for a path and its query params; a blank value is left out. */
+  private buildUrl(path: string, params: Record<string, string>, jsonFormat = true): URL {
+    const url = new URL(`${this.baseUrl}${path}`);
+    if (jsonFormat) url.searchParams.set('format', 'json');
+    for (const [k, v] of Object.entries(params)) {
+      if (v) url.searchParams.set(k, v);
+    }
+    return url;
+  }
+
+  /**
    * Hold each caller until at least MIN_INTERVAL_MS has passed since the
    * previous request left. Serialization is the point: reading `lastRequestAt`
    * and sleeping against it is not enough, because concurrent callers all read
@@ -663,11 +865,7 @@ export class ClinicalTrialsService {
     ctx: Context,
     { jsonFormat = true }: { jsonFormat?: boolean } = {},
   ): Promise<T> {
-    const url = new URL(`${this.baseUrl}${path}`);
-    if (jsonFormat) url.searchParams.set('format', 'json');
-    for (const [k, v] of Object.entries(params)) {
-      if (v) url.searchParams.set(k, v);
-    }
+    const url = this.buildUrl(path, params, jsonFormat);
 
     let lastError: unknown;
     let lastStatus: number | undefined;
@@ -846,7 +1044,9 @@ export class ClinicalTrialsService {
           }
           // Essie parser errors share the `Error parsing query in <where>: …` prefix.
           // Several shapes show up:
-          //   1. `Unknown area name: \`X\`` — bad field in AREA[X]
+          //   1. `Unknown area name: \`X\`` — no field X for AREA[X]; and `This type
+          //      of query is not allowed for X` — a field AREA[X] refuses (a STRUCT
+          //      piece). Both are a field-name mistake, not a syntax error.
           //   2. `Allowed values for enum field \`<path>\` are \`V1\`, \`V2\`, …` — invalid enum
           //      value in a caller's AREA[] expression (advancedFilter or a query parameter;
           //      phaseFilter entries are validated in the tool handlers before any request)
@@ -854,12 +1054,16 @@ export class ClinicalTrialsService {
           //      unterminated quote in a free-text field — several distinct shapes,
           //      each read by describeQueryParseError (the catch-all below).
           if (text.startsWith('Error parsing query in')) {
-            const areaMatch = text.match(/Unknown area name:\s*`([^`]+)`/);
-            if (areaMatch) {
-              throw validationError(
-                `${text.trim()} '${areaMatch[1]}' is not a recognized AREA[]-compatible field. Call clinicaltrials_get_field_definitions to look up valid PascalCase piece names.`,
-                { reason: 'field_invalid' },
-              );
+            const rejected = parseAreaRejection(text);
+            if (rejected) {
+              const near = await this.suggestAreaPieces(rejected.name, ctx);
+              throw validationError(describeAreaRejection(rejected, text, near), {
+                reason: 'field_invalid',
+                invalid: [rejected.name],
+                ...(near.length > 0
+                  ? { suggestions: Object.fromEntries([[rejected.name, near]]) }
+                  : {}),
+              });
             }
             const enumMatch = text.match(/Allowed values for enum field\s+`([^`]+)`\s+are\s+(.+)/i);
             if (enumMatch) {
@@ -889,6 +1093,21 @@ export class ClinicalTrialsService {
             throw validationError(describeQueryParseError(text), { reason: 'query_parse_error' });
           }
           throw validationError(text || `Bad request: ${path}`);
+        }
+
+        // A request target past the upstream limit. Final, not retried — the
+        // same URL fails the same way — and the nginx error page that comes
+        // with it says nothing a caller can act on, so only the sizes go back.
+        if (res.status === 414) {
+          const requestBytes = requestTargetBytes(url);
+          throw validationError(
+            `ClinicalTrials.gov rejected the request as too long (HTTP 414): its URL path and query string come to ${requestBytes} bytes, and the registry accepts at most ${UPSTREAM_MAX_REQUEST_TARGET_BYTES}.`,
+            {
+              reason: 'request_too_long',
+              requestBytes,
+              maxRequestBytes: UPSTREAM_MAX_REQUEST_TARGET_BYTES,
+            },
+          );
         }
 
         if (RETRYABLE_STATUS.has(res.status)) {

@@ -350,6 +350,8 @@ export interface FieldValueStats {
 
 /** Field node from GET /studies/metadata. */
 export interface FieldNode {
+  /** Legacy names upstream also resolves inside `AREA[…]` (`OVERALL-STATUS`, `SPONSOR`). */
+  altPieceNames?: string[];
   children?: FieldNode[];
   description?: string;
   isEnum?: boolean;

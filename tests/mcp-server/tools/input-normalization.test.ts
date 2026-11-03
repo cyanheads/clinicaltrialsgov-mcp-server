@@ -1,6 +1,6 @@
 /**
  * @fileoverview End-to-end input normalization for statusFilter, phaseFilter,
- * fields, and NCT IDs.
+ * fields, NCT IDs, and AREA[] field names.
  * Each case runs a definition through its public contract boundary (input
  * parse → handler → output parse → format / error envelope) against the real
  * `ClinicalTrialsService` with `fetch` stubbed, and asserts the request URL the
@@ -13,7 +13,9 @@
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerConfig } from '@/config/server-config.js';
+import { AREA_METADATA } from '../../helpers/area-metadata.js';
 import { readMarkdown } from '../../helpers/commonmark.js';
+import { nctIds as ids } from '../../helpers/nct-ids.js';
 
 const { mockGetService } = vi.hoisted(() => ({ mockGetService: vi.fn() }));
 
@@ -28,6 +30,7 @@ import { getStudy } from '@/mcp-server/tools/definitions/get-study.tool.js';
 import { getStudyCount } from '@/mcp-server/tools/definitions/get-study-count.tool.js';
 import { getStudyResults } from '@/mcp-server/tools/definitions/get-study-results.tool.js';
 import { searchStudies } from '@/mcp-server/tools/definitions/search-studies.tool.js';
+import { RECOVERY_HINTS } from '@/mcp-server/tools/utils/recovery-hints.js';
 import { ClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { FieldNode } from '@/services/clinical-trials/types.js';
 
@@ -336,8 +339,8 @@ describe('comma- or pipe-joined fields reach upstream as separate names (#152)',
     expect(result.structuredContent).toMatchObject({ requestedFields: ['NCTId', 'BriefTitle'] });
   });
 
-  // A repeated name only lengthens the URL: a 1,000-piece string earns an
-  // unclassified HTTP 414 upstream.
+  // A repeated name only lengthens the URL: a 1,000-piece string runs past the
+  // request length upstream accepts and fails as request_too_long.
   it('search_studies sends a name repeated 1,000 times once', async () => {
     route({ studies: [study('NCT03722472')], totalCount: 1 });
     const result = await runToolContract(searchStudies, {
@@ -468,5 +471,393 @@ describe('get_study_results nctIds forms reach upstream canonicalized (#154, #15
     expect(text(result)).toContain('nctIds: NCT IDs must match format NCTxxxxxxxx (8 digits).');
     expect(text(result)).not.toContain('Unrecognized key');
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * ClinicalTrials.gov answers a request target past 8,177 bytes with HTTP 414
+ * (#163). Driven through each tool's contract boundary against the real
+ * service: an ID list is served up to what fits, and every other over-long
+ * request fails typed, with the declaring tool's hint and no upstream body.
+ */
+describe('over-long requests (#163)', () => {
+  /** A fresh instance per call, so a walk's next request never waits on the throttle. */
+  const freshService = () =>
+    mockGetService.mockReturnValue(
+      new ClinicalTrialsService(config, { maxRetries: 0, validateFieldsLocally: false }),
+    );
+  const sentIds = (call: number) => fetchedUrls()[call]?.searchParams.get('filter.ids')?.split('|');
+  /** A pageToken as long as the longest measured (100 characters, two-key date sort). */
+  const longToken =
+    'ZVJ76sWHmqU2wRk2CJf6_LLvwtOWKd8od7KrgP4enT2Tu_0-KXvIFvHRzo5F2CyTasQDTLISRQHVdLwLYomsxf2DUA-SJ6pLPyK4';
+  const uriTooLong = () => ({
+    ok: false,
+    status: 414,
+    statusText: 'URI Too Long',
+    headers: new Headers({ 'content-type': 'text/html' }),
+    json: () => Promise.reject(new Error('Not JSON')),
+    text: () =>
+      Promise.resolve(
+        '<html>\r\n<head><title>414 Request-URI Too Large</title></head>\r\n<body>\r\n<center><h1>414 Request-URI Too Large</h1></center>\r\n<hr><center>nginx/1.26.2</center>\r\n</body>\r\n</html>\r\n',
+      ),
+  });
+  type Wire = {
+    deferredNctIds?: string[];
+    nextPageToken?: string;
+    searchCriteria?: { nctIds?: string[] };
+    studies: unknown[];
+  };
+
+  it('search_studies queries the leading 563 of 1,000 IDs and names the other 437 on both surfaces', async () => {
+    // `/v2/studies` (11) + `?format=json` (12) + `&filter.ids=` (12) + 14n − 3,
+    // with 256 of the 8,177 bytes held for the paging parameters: n ≤ 563.
+    mockFetch.mockResolvedValue(jsonResponse({ studies: [study('NCT00000000')], totalCount: 563 }));
+    const requested = ids(1000);
+    const result = await runToolContract(searchStudies, { nctIds: requested });
+    const sc = result.structuredContent as Wire;
+
+    expect(result.isError).toBeFalsy();
+    expect(sentIds(0)).toEqual(ids(563));
+    expect(sc.deferredNctIds).toEqual(ids(437, 563));
+    expect([...(sentIds(0) ?? []), ...(sc.deferredNctIds ?? [])]).toEqual(requested);
+    expect(sc.searchCriteria?.nctIds).toEqual(ids(563));
+    expect(seenText(result)).toContain(
+      `Pass them as nctIds in a follow-up call with the same criteria: ${ids(437, 563).join(', ')}`,
+    );
+  });
+
+  it('search_studies queries the same IDs on the next page of a deferring walk', async () => {
+    freshService();
+    mockFetch.mockResolvedValueOnce(
+      jsonResponse({ studies: [study('NCT00000000')], totalCount: 563, nextPageToken: longToken }),
+    );
+    const first = await runToolContract(searchStudies, { nctIds: ids(1000), pageSize: 1 });
+    freshService();
+    mockFetch.mockResolvedValueOnce(jsonResponse({ studies: [study('NCT00000001')] }));
+    const next = await runToolContract(searchStudies, {
+      nctIds: ids(1000),
+      pageSize: 1,
+      pageToken: (first.structuredContent as Wire).nextPageToken,
+    });
+
+    expect(fetchedUrls()[1]?.searchParams.get('pageToken')).toBe(longToken);
+    expect(sentIds(1)).toEqual(sentIds(0));
+    expect((next.structuredContent as Wire).deferredNctIds).toHaveLength(437);
+    expect((next.structuredContent as Wire).deferredNctIds).toEqual(
+      (first.structuredContent as Wire).deferredNctIds,
+    );
+  });
+
+  it('search_studies walks 500 IDs at pageSize 500 as 200, 200, 100 with every ID on every page', async () => {
+    const pages = [
+      { studies: ids(200).map(study), totalCount: 500, nextPageToken: longToken },
+      { studies: ids(200, 200).map(study), nextPageToken: `${longToken.slice(0, -1)}X` },
+      { studies: ids(100, 400).map(study) },
+    ];
+    const served: string[] = [];
+    let pageToken: string | undefined;
+    for (const page of pages) {
+      freshService();
+      mockFetch.mockResolvedValueOnce(jsonResponse(page));
+      const result = await runToolContract(searchStudies, {
+        nctIds: ids(500),
+        fields: ['NCTId'],
+        pageSize: 500,
+        ...(pageToken ? { pageToken } : {}),
+      });
+      const sc = result.structuredContent as Wire;
+      expect(sc).not.toHaveProperty('deferredNctIds');
+      served.push(
+        ...sc.studies.map(
+          (s) =>
+            (s as { protocolSection: { identificationModule: { nctId: string } } }).protocolSection
+              .identificationModule.nctId,
+        ),
+      );
+      pageToken = sc.nextPageToken;
+    }
+
+    expect(fetchedUrls().map((u) => u.searchParams.get('pageSize'))).toEqual(['200', '200', '200']);
+    expect([0, 1, 2].map(sentIds)).toEqual([ids(500), ids(500), ids(500)]);
+    expect(served).toEqual(ids(500));
+    expect(pageToken).toBeUndefined();
+  });
+
+  it('search_studies serves the first ID when the other parameters fill the paging reserve but the request fits', async () => {
+    mockFetch.mockResolvedValue(jsonResponse({ studies: [study(ids(1)[0]!)], totalCount: 1 }));
+    const result = await runToolContract(
+      searchStudies,
+      { query: 'a'.repeat(7900), nctIds: ids(3) },
+      { context: { errors: searchStudies.errors } },
+    );
+    const sc = result.structuredContent as { deferredNctIds?: string[] };
+
+    expect(result.isError).toBeFalsy();
+    expect(sentIds(0)).toEqual(ids(1));
+    expect(sc.deferredNctIds).toEqual(ids(2, 1));
+    expect(seenText(result)).toContain(ids(2, 1).join(', '));
+  });
+
+  it('search_studies fails request_too_long before any request when the other parameters leave no room for an ID', async () => {
+    const result = await runToolContract(
+      searchStudies,
+      { query: 'a'.repeat(8150), nctIds: ids(3) },
+      { context: { errors: searchStudies.errors } },
+    );
+    const error = (result.structuredContent as { error: { data: Record<string, unknown> } }).error;
+
+    expect(result.isError).toBe(true);
+    expect(error.data.reason).toBe('request_too_long');
+    expect(seenText(result)).toContain('None of the 3 NCT IDs fits');
+    expect(seenText(result)).toContain('Recovery: Shorten query, the other free-text queries');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['search_studies', () => runToolContract(searchStudies, { query: 'a'.repeat(9099) })],
+    ['get_study_count', () => runToolContract(getStudyCount, { query: 'a'.repeat(9099) })],
+    [
+      'get_field_values',
+      () =>
+        runToolContract(getFieldValues, {
+          fields: Array.from({ length: 700 }, (_, i) => `Piece${i}`),
+        }),
+    ],
+  ] as const)(
+    '%s fails an upstream 414 as request_too_long, with no upstream body',
+    async (_name, run) => {
+      mockFetch.mockResolvedValue(uriTooLong());
+      const result = await run();
+      const error = (result.structuredContent as { error: { data: Record<string, unknown> } })
+        .error;
+
+      expect(result.isError).toBe(true);
+      expect(error.data.reason).toBe('request_too_long');
+      expect(error.data).not.toHaveProperty('body');
+      expect(error.data).not.toHaveProperty('responseBody');
+      expect(JSON.stringify(result)).not.toContain('nginx');
+      expect(seenText(result)).toContain(`Recovery: ${RECOVERY_HINTS.request_too_long}`);
+      expect(fetchedUrls()).toHaveLength(1);
+    },
+  );
+});
+
+describe('AREA[] field names reach upstream in the spelling it accepts (#170)', () => {
+  const TOOLS = [
+    ['search_studies', searchStudies],
+    ['get_study_count', getStudyCount],
+  ] as const;
+  type Criteria = { searchCriteria?: Record<string, unknown> };
+  type ErrorWire = { error: { data: Record<string, unknown> } };
+
+  /** A field-validating service: /studies/metadata answers with the AREA fixture, every other request with `primary`. */
+  const validating = (
+    primary: () => unknown = () => jsonResponse({ studies: [], totalCount: 7 }),
+  ) => {
+    mockGetService.mockReturnValue(new ClinicalTrialsService(config, { maxRetries: 0 }));
+    mockFetch.mockImplementation((url: URL | string) =>
+      Promise.resolve(
+        String(url).includes('/studies/metadata') ? jsonResponse(AREA_METADATA) : primary(),
+      ),
+    );
+  };
+  const searches = () => fetchedUrls().filter((u) => !u.pathname.endsWith('/metadata'));
+  const metadataRequests = () => fetchedUrls().length - searches().length;
+  const rejection400 = (body: string) => ({
+    ok: false,
+    status: 400,
+    statusText: 'HTTP 400',
+    headers: new Headers({ 'content-type': 'text/plain' }),
+    json: () => Promise.reject(new Error('Not JSON')),
+    text: () => Promise.resolve(body),
+  });
+
+  /** Run with fake timers standing in for the throttle's one-second gaps between requests. */
+  async function throttled<T>(run: () => Promise<T>): Promise<T> {
+    vi.useFakeTimers();
+    try {
+      const pending = run();
+      await vi.advanceTimersByTimeAsync(10_000);
+      return await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+  }
+
+  it.each(TOOLS)(
+    '%s sends and echoes the canonical spelling in advancedFilter and a query parameter',
+    async (_name, definition) => {
+      validating();
+      const result = await throttled(() =>
+        runToolContract(definition, {
+          advancedFilter: 'AREA[overallstatus]RECRUITING',
+          query: 'AREA[StudyFirstSubmitQcDate]RANGE[2024-01-01,MAX]',
+          conditionQuery: 'SEARCH[Location](AREA[locationcity]Seattle)',
+        }),
+      );
+      const [sent] = searches();
+
+      expect(result.isError).toBeFalsy();
+      expect(sent?.searchParams.get('filter.advanced')).toBe(
+        '(AREA[OverallStatus]RECRUITING) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])',
+      );
+      expect(sent?.searchParams.get('query.term')).toBe(
+        'AREA[StudyFirstSubmitQCDate]RANGE[2024-01-01,MAX]',
+      );
+      expect(sent?.searchParams.get('query.cond')).toBe(
+        'SEARCH[Location](AREA[LocationCity]Seattle)',
+      );
+      expect((result.structuredContent as Criteria).searchCriteria).toMatchObject({
+        advancedFilter: 'AREA[OverallStatus]RECRUITING',
+        query: 'AREA[StudyFirstSubmitQCDate]RANGE[2024-01-01,MAX]',
+        conditionQuery: 'SEARCH[Location](AREA[LocationCity]Seattle)',
+      });
+      expect(seenText(result)).toContain('advancedFilter: AREA[OverallStatus]RECRUITING');
+      expect(seenText(result)).toContain(
+        'query: AREA[StudyFirstSubmitQCDate]RANGE[2024-01-01,MAX]',
+      );
+      expect(metadataRequests()).toBe(1);
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s sends names upstream accepts, and quoted literals, byte-identical',
+    async (_name, definition) => {
+      validating();
+      const advancedFilter =
+        'AREA[COLLABORATOR]Pfizer AND AREA[OVERALL-STATUS]RECRUITING AND AREA[NumLocations]RANGE[100,MAX] AND AREA[ConditionSearch]diabetes AND AREA[numlocations]RANGE[1,MAX]';
+      const query = '"AREA[overallstatus]RECRUITING"';
+      const result = await throttled(() =>
+        runToolContract(definition, { advancedFilter, query, includeUnknownEnrollment: true }),
+      );
+      const [sent] = searches();
+
+      expect(sent?.searchParams.get('filter.advanced')).toBe(advancedFilter);
+      expect(sent?.searchParams.get('query.term')).toBe(query);
+      expect((result.structuredContent as Criteria).searchCriteria).toMatchObject({
+        advancedFilter,
+        query,
+      });
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s sends a legacy alt name in another case as the piece it names',
+    async (_name, definition) => {
+      validating();
+      await throttled(() =>
+        runToolContract(definition, {
+          advancedFilter: 'AREA[Sponsor]Pfizer OR AREA[Collaborator]Pfizer',
+          includeUnknownEnrollment: true,
+        }),
+      );
+
+      expect(searches()[0]?.searchParams.get('filter.advanced')).toBe(
+        'AREA[LeadSponsorName]Pfizer OR AREA[CollaboratorName]Pfizer',
+      );
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s requests no metadata for a call naming no AREA[] field of its own',
+    async (_name, definition) => {
+      validating();
+      const result = await runToolContract(definition, {
+        conditionQuery: 'asthma',
+        phaseFilter: 'phase 3',
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(fetchedUrls()).toHaveLength(1);
+      expect(searches()[0]?.searchParams.get('filter.advanced')).toContain('AREA[Phase]PHASE3');
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s answers a STRUCT piece with field_invalid naming its leaves on both surfaces',
+    async (_name, definition) => {
+      validating(() =>
+        rejection400(
+          'Error parsing query in advanced filter: This type of query is not allowed for LeadSponsor',
+        ),
+      );
+      const result = await throttled(() =>
+        runToolContract(
+          definition,
+          { advancedFilter: 'AREA[LeadSponsor]Pfizer' },
+          { context: { errors: definition.errors } },
+        ),
+      );
+      const { data } = (result.structuredContent as ErrorWire).error;
+
+      expect(result.isError).toBe(true);
+      expect(data).toMatchObject({
+        reason: 'field_invalid',
+        invalid: ['LeadSponsor'],
+        suggestions: {
+          LeadSponsor: ['LeadSponsorName', 'LeadSponsorClass', 'AgreementPISponsorEmployee'],
+        },
+      });
+      expect(seenText(result)).toContain(
+        "'LeadSponsor' — did you mean 'LeadSponsorName', 'LeadSponsorClass', 'AgreementPISponsorEmployee'?",
+      );
+      expect(seenText(result)).toContain(`Recovery: ${RECOVERY_HINTS.field_invalid}`);
+      expect(seenText(result)).not.toContain('Query syntax error');
+      expect(metadataRequests()).toBe(1);
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s keeps today’s message and hint for an unknown name nothing resembles',
+    async (_name, definition) => {
+      validating(() =>
+        rejection400('Error parsing query in advanced filter: Unknown area name: `NotARealField`'),
+      );
+      const result = await throttled(() =>
+        runToolContract(
+          definition,
+          { advancedFilter: 'AREA[NotARealField]x' },
+          { context: { errors: definition.errors } },
+        ),
+      );
+
+      expect((result.structuredContent as ErrorWire).error.data).toMatchObject({
+        reason: 'field_invalid',
+        invalid: ['NotARealField'],
+      });
+      expect((result.structuredContent as ErrorWire).error.data).not.toHaveProperty('suggestions');
+      expect(seenText(result)).toContain(
+        "Unknown area name: `NotARealField` 'NotARealField' is not a recognized AREA[]-compatible field. Call clinicaltrials_get_field_definitions to look up valid PascalCase piece names.",
+      );
+      expect(seenText(result)).toContain(`Recovery: ${RECOVERY_HINTS.field_invalid}`);
+    },
+  );
+
+  it('search_studies fits nctIds on the corrected text, which a fold to a longer piece lengthens', async () => {
+    /**
+     * `/v2/studies?format=json` (23) + `&query.term=` (12) + 6,428 + `&filter.ids=`
+     * (12) + 14n − 3 + `&filter.advanced=` (17) + `AREA%5BLeadSponsorName%5Dx` (26),
+     * within the 7,921 bytes left after the paging reserve: n ≤ 100. Measured on
+     * `AREA%5Bsponsor%5Dx` (18), the fit would have taken 101.
+     */
+    validating();
+    const nctIds = ids(200);
+    const run = (advancedFilter: string) =>
+      runToolContract(searchStudies, { query: 'a'.repeat(6428), nctIds, advancedFilter });
+    const [corrected, canonical] = await throttled(async () => [
+      await run('AREA[sponsor]x'),
+      await run('AREA[LeadSponsorName]x'),
+    ]);
+    const [first, second] = searches();
+
+    expect(first?.searchParams.get('filter.advanced')).toBe('AREA[LeadSponsorName]x');
+    expect(first?.searchParams.get('filter.ids')?.split('|')).toEqual(nctIds.slice(0, 100));
+    expect(second?.searchParams.get('filter.ids')).toBe(first?.searchParams.get('filter.ids'));
+    expect((corrected.structuredContent as { deferredNctIds?: string[] }).deferredNctIds).toEqual(
+      nctIds.slice(100),
+    );
+    expect((canonical.structuredContent as { deferredNctIds?: string[] }).deferredNctIds).toEqual(
+      nctIds.slice(100),
+    );
   });
 });

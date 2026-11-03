@@ -3837,7 +3837,7 @@ describe('oneLine (#168)', () => {
   describe('stays linear on long upstream text', () => {
     /** Each line-break shape's folded form, so every size proves the whole input was read. */
     const foldedLineBreakShape: Record<string, (input: string) => string> = {
-      'one long line ending in a break': (input) => input.replace('\n', ' '),
+      'one long line ending in a break': (input) => input.replaceAll('\n', ' '),
       'breaks throughout': () => ' ',
     };
 

@@ -38,15 +38,18 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * Agent-doc entries under `node_modules/` that must not ship in a bundle.
+ * Agent-doc entries under `node_modules/` that must not ship in a bundle:
+ * `framework-skills/`, `skills/`, `.claude/`, and `.agents/` trees at an
+ * installed package's root (scoped and nested packages included), plus a
+ * `SKILL.md` anywhere inside a package. A `skills/` directory deeper in a
+ * package is runtime code and ships — the MCP SDK's `dist/ext/skills/` is
+ * imported at startup (cyanheads/mcp-ts-core#794).
  * KEEP IN SYNC with `AGENT_DOC_ENTRY` in `scripts/lint-packaging.ts`
- * (post-bundle content check) — edit both literals together. The assertion that
- * they match lives in the mcp-ts-core repository's own test suite; `tests/` is
- * not part of the published package, so nothing enforces the pair in a server
- * these scripts were copied into.
+ * (post-bundle content check) — edit both literals together;
+ * `tests/scripts/packaging-selectors.test.ts` pins the pair.
  */
 export const AGENT_DOC_ENTRY =
-  /^node_modules\/.*(?:\/framework-skills\/|\/skills\/|\/\.claude\/|\/\.agents\/|\/SKILL\.md$)/;
+  /^node_modules\/(?:(?:@[^/]+\/[^/]+|[^@/][^/]*)\/node_modules\/)*(?:@[^/]+\/[^/]+|[^@/][^/]*)\/(?:(?:framework-skills|skills|\.claude|\.agents)\/|(?:.*\/)?SKILL\.md$)/;
 
 /**
  * Platform-specific native binding packages, which must not ship in a bundle.

@@ -231,17 +231,19 @@ export const CRITICAL_RUNTIME_PATHS = [
 ];
 
 /**
- * Agent-doc entries under `node_modules/` that must not ship in a bundle.
- * `framework-skills/` is this framework's tree; `skills/` covers any other
- * dependency that vendors agent skills.
+ * Agent-doc entries under `node_modules/` that must not ship in a bundle:
+ * `framework-skills/` (this framework's tree), `skills/` (any other dependency
+ * that vendors agent skills), `.claude/`, and `.agents/` at an installed
+ * package's root (scoped and nested packages included), plus a `SKILL.md`
+ * anywhere inside a package. A `skills/` directory deeper in a package is
+ * runtime code and ships — the MCP SDK's `dist/ext/skills/` is imported at
+ * startup (cyanheads/mcp-ts-core#794).
  * KEEP IN SYNC with `AGENT_DOC_ENTRY` in `scripts/clean-mcpb.ts` (the strip
- * step this check verifies) — edit both literals together. The assertion that
- * they match lives in the mcp-ts-core repository's own test suite; `tests/` is
- * not part of the published package, so nothing enforces the pair in a server
- * these scripts were copied into.
+ * step this check verifies) — edit both literals together;
+ * `tests/scripts/packaging-selectors.test.ts` pins the pair.
  */
 export const AGENT_DOC_ENTRY =
-  /^node_modules\/.*(?:\/framework-skills\/|\/skills\/|\/\.claude\/|\/\.agents\/|\/SKILL\.md$)/;
+  /^node_modules\/(?:(?:@[^/]+\/[^/]+|[^@/][^/]*)\/node_modules\/)*(?:@[^/]+\/[^/]+|[^@/][^/]*)\/(?:(?:framework-skills|skills|\.claude|\.agents)\/|(?:.*\/)?SKILL\.md$)/;
 
 /**
  * Platform-specific native binding packages that must not ship in a bundle.

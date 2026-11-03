@@ -16,8 +16,9 @@ await createApp({
   tools: allToolDefinitions,
   resources: allResourceDefinitions,
   prompts: allPromptDefinitions,
+  skills: 'skills',
   sessionMode: 'stateless',
-  instructions: `Use the clinicaltrials_* tools to access the ClinicalTrials.gov registry — public, read-only, 600K+ studies. Studies are addressed by NCT ID (NCT followed by 8 digits). Field names for the fields, advancedFilter, and sort parameters are PascalCase leaves (NCTId, OverallStatus, EnrollmentCount) — call clinicaltrials_get_field_definitions to discover them and clinicaltrials_get_field_values for valid enum values. Typical workflow: clinicaltrials_search_studies (compact per-study index by default, including hasResults; pass fields for specific leaves) → clinicaltrials_get_study_record → clinicaltrials_get_study_results (only when hasResults=true). Use clinicaltrials_get_study_count for cheap breakdowns and clinicaltrials_find_eligible for patient matching.`,
+  instructions: `Use the clinicaltrials_* tools to access the ClinicalTrials.gov registry — public, read-only, 600K+ studies. Studies are addressed by NCT ID (NCT followed by 8 digits). Field names for the fields, advancedFilter, and sort parameters are PascalCase leaves (NCTId, OverallStatus, EnrollmentCount) — call clinicaltrials_get_field_definitions to discover them and clinicaltrials_get_field_values for valid enum values. Typical workflow: clinicaltrials_search_studies (compact per-study index by default, including hasResults; pass fields for specific leaves) → clinicaltrials_get_study_record → clinicaltrials_get_study_results (only when hasResults=true). Use clinicaltrials_get_study_count for cheap breakdowns and clinicaltrials_find_eligible for patient matching. The clinicaltrialsgov-guide skill (skill://clinicaltrialsgov-guide/SKILL.md) carries the gates for site versus study recruiting status, overlapping phase counts, RANGE and partial-date filters, the status vocabulary, and reading posted results.`,
   landing: {
     requireAuth: false,
   },

@@ -71,6 +71,9 @@ describe('getStudyCount', () => {
     it('describes the correction on advancedFilter and the AREA[] failure on field_invalid', () => {
       const shape = getStudyCount.input!.shape as Record<string, { description?: string }>;
       expect(shape.advancedFilter?.description).toContain('only by case (AREA[overallstatus])');
+      expect(shape.advancedFilter?.description).toContain(
+        'index-only pieces and search areas are not case-corrected',
+      );
       expect(getStudyCount.errors?.find((e) => e.reason === 'field_invalid')?.when).toContain(
         'LeadSponsorName',
       );

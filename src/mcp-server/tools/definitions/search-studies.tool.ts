@@ -460,7 +460,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         .string()
         .optional()
         .describe(
-          `Advanced filter using AREA[FieldName]value syntax. Examples: "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]", "AREA[Phase]PHASE2 AND AREA[StudyType]INTERVENTIONAL", "(AREA[Phase]PHASE3 OR AREA[Phase]PHASE4) AND AREA[StudyType]INTERVENTIONAL". "AREA[HasResults]true" restricts to studies with posted results. AND/OR/NOT join complete AREA[FieldName]value expressions; parentheses group them. Call clinicaltrials_get_field_definitions to find AREA[]-compatible field names. A field name that differs from one AREA[] accepts only by case (AREA[overallstatus]) is corrected before the request, here and in the query parameters, and searchCriteria shows the expression as sent.`,
+          `Advanced filter using AREA[FieldName]value syntax. Examples: "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]", "AREA[Phase]PHASE2 AND AREA[StudyType]INTERVENTIONAL", "(AREA[Phase]PHASE3 OR AREA[Phase]PHASE4) AND AREA[StudyType]INTERVENTIONAL". "AREA[HasResults]true" restricts to studies with posted results. AND/OR/NOT join complete AREA[FieldName]value expressions; parentheses group them. Call clinicaltrials_get_field_definitions to find AREA[]-compatible field names. A record-field name that differs from the spelling AREA[] accepts only by case (AREA[overallstatus]) is corrected before the request, here and in the query parameters, and searchCriteria shows the expression as sent; index-only pieces and search areas are not case-corrected.`,
         ),
       geoFilter: z
         .string()

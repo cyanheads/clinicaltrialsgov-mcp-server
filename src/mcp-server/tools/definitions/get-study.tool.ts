@@ -255,7 +255,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       })
       .optional()
       .describe(
-        'Compact counts of posted results, present when hasResults is true. The full resultsSection is intentionally omitted from this record-level tool — fetch it via clinicaltrials_get_study_results or the clinicaltrials://{nctId} resource.',
+        'Compact counts of posted results, present when hasResults is true. The full resultsSection is intentionally omitted from this record-level tool — fetch it via clinicaltrials_get_study_results.',
       ),
   }),
 

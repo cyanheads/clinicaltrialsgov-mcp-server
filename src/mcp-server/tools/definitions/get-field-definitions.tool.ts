@@ -134,7 +134,9 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
     includeIndexedOnly: z
       .boolean()
       .optional()
-      .describe('drill mode only. Only return indexed (searchable) fields. Default: false.'),
+      .describe(
+        'drill mode only. Also list index-only pieces (search-index fields such as StudyFirstPostYear) alongside the record fields. Default: false.',
+      ),
   }),
 
   output: z.object({

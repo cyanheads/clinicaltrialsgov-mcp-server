@@ -315,6 +315,8 @@ src/
       index.ts                          # allToolDefinitions barrel
     tools/utils/
       query-helpers.ts                  # toArray, buildAdvancedFilter shared helpers
+      format-helpers.ts                 # oneLine, formatSearchCriteria, formatRemainingStudyFields
+      place-names.ts                    # country / US state synonyms -> registry spelling (find_eligible ranking)
     resources/definitions/
       study.resource.ts                 # clinicaltrials://{nctId}
       index.ts                          # allResourceDefinitions barrel

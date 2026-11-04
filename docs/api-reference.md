@@ -160,7 +160,7 @@ Each `FieldNode` contains:
 
 ## 6. `GET /studies/search-areas` -- Search Area Definitions
 
-Returns all search documents and their constituent search areas, including field weights and synonym support.
+Returns all search documents and their constituent search areas, including field weights and synonym support. Each area (`ConditionSearch`, `LocationSearch`) is a valid `AREA[]` name; `sort` refuses it (`Unknown sort field`).
 
 ---
 
@@ -481,7 +481,7 @@ sort=LastUpdatePostDate:desc
 sort=EnrollmentCount:desc,LastUpdatePostDate:asc
 ```
 
-Sortable fields include any indexed field piece name. Common sort fields:
+Sortable fields include any indexed field piece name, index-only pieces such as `NumLocations` among them. Names are case-sensitive: `sort=numlocations:desc` answers HTTP 400 `Unknown sort field`. Common sort fields:
 
 | Sort Field           | Description                                                   |
 | :------------------- | :------------------------------------------------------------ |
@@ -554,6 +554,7 @@ AREA[ResultsFirstPostDate]RANGE[MIN, MAX]
 ### Verified Behavior
 
 - `filter.advanced` with `AREA[]` syntax is confirmed working (tested: returned 4,103 results for `AREA[Phase]PHASE3 AND AREA[StudyType]INTERVENTIONAL AND AREA[OverallStatus]RECRUITING`)
+- Area names are case-sensitive: `AREA[numlocations]` answers HTTP 400 `Unknown area name`, while `AREA[NumLocations]` (an index-only piece, listed by `/studies/metadata?includeIndexedOnly=true`) and `AREA[ConditionSearch]` (a search area) are accepted
 - Multiple AREA conditions combine with AND/OR
 - Parentheses for grouping are supported
 

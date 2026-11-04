@@ -112,7 +112,7 @@ Plugin installs load it from `skills/`; MCP clients that support the Skills exte
 
 ### `clinicaltrials_find_eligible` <sub>tool</sub>
 
-- `age` (whole number 0–120) with optional `ageUnit` (`years` default, `months`, `weeks`, `days`) for infants and young children, `sex` (`FEMALE` / `MALE` / `ALL`), `conditions[]`, `location` (`country` required, `state` / `city` optional), `healthyVolunteer`, `recruitingOnly` (default true), `maxResults` (up to 1000; each call returns at most 50, disclosing the rest via `truncated` / `shown` / `cap` and a replayable `searchCriteria`), `locationLimit` (no upper bound; a value past the matched sites returns them all)
+- `age` (whole number 0–120) with optional `ageUnit` (`years` default, `months`, `weeks`, `days`) for infants and young children, `sex` (`FEMALE` / `MALE` / `ALL`), `conditions[]`, `location` (`country` required, `state` / `city` optional; country synonyms such as `USA`, `UK`, and `Czech Republic`, and US state abbreviations, rank sites as the registry's spelling does), `healthyVolunteer`, `recruitingOnly` (default true), `maxResults` (up to 1000; each call returns at most 50, disclosing the rest via `truncated` / `shown` / `cap` and a replayable `searchCriteria`), `locationLimit` (no upper bound; a value past the matched sites returns them all)
 - Matches on age, sex, location, recruitment status, and a fuzzy condition search; `funnel` reports match counts per filter stage, and a `notice` says inclusion/exclusion criteria were not checked (use `clinicaltrials_get_study_record` to review them)
 - Typed errors: `blank_value`, `field_invalid`, `query_parse_error`, `request_too_long`, `rate_limited`
 
@@ -139,7 +139,7 @@ ClinicalTrials.gov-specific:
 
 - Type-safe client for the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — public, no authentication or API keys required
 - Serialized request queue enforcing ClinicalTrials.gov's ~1 req/sec rate limit, with retry and exponential backoff on 429/5xx responses and HTML error pages
-- Auto-corrects field names passed to `fields`/`sort` (case, whitespace, legacy aliases like `RecruitmentStatus` → `OverallStatus`) and the case of `AREA[…]` field names in `advancedFilter` and the query parameters (`AREA[overallstatus]` → `AREA[OverallStatus]`), and logs each correction
+- Auto-corrects field names passed to `fields`/`sort` (case, whitespace, legacy aliases like `RecruitmentStatus` → `OverallStatus`) and the case of `AREA[…]` field names in `advancedFilter` and the query parameters (`AREA[overallstatus]` → `AREA[OverallStatus]`), index-only pieces and search areas included (`AREA[numlocations]`, `AREA[conditionsearch]`; `sort` takes the index-only pieces too), and logs each correction
 - Geographic proximity search and nearest-site re-ranking, with no geocoding dependency
 - Excludes the "unknown" enrollment sentinel (`99999999`) from searches and counts by default; `includeUnknownEnrollment` brings it back
 

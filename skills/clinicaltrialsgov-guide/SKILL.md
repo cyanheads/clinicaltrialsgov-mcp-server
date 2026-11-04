@@ -27,7 +27,7 @@ The ClinicalTrials.gov registry as sponsors and investigators submit it: protoco
 
 ## Gates
 
-**Study status is not site status.** `statusFilter` matches the study's overall status. A RECRUITING study can list a site near the patient that is NOT_YET_RECRUITING or ACTIVE_NOT_RECRUITING, and the compact index's nearest site carries no status at all. Before telling someone a trial recruits near them, confirm that site's own status: bind it in `advancedFilter` with `SEARCH[Location](…)` (see Syntax), read it from clinicaltrials_get_study_record with `nearLocation`, which shows each site's status, or read it on the sites clinicaltrials_find_eligible returns. When none of a candidate's matched sites recruits, find_eligible adds one recruiting site, which carries `distanceMi` and can be far from the patient. Two AREA terms outside `SEARCH[Location]` can match two different sites of one study.
+**Study status is not site status.** `statusFilter` matches the study's overall status. A RECRUITING study can list a site near the patient that is NOT_YET_RECRUITING or ACTIVE_NOT_RECRUITING, and the compact index shows one site per study (the nearest to `geoFilter`, else the lead registered site) with that site's own status in brackets, which says nothing about the study's other sites. Before telling someone a trial recruits near them, confirm the status of the site near them: bind it in `advancedFilter` with `SEARCH[Location](…)` (see Syntax), read it from clinicaltrials_get_study_record with `nearLocation`, which shows each site's status, or read it on the sites clinicaltrials_find_eligible returns. When none of a candidate's matched sites recruits, find_eligible adds one recruiting site, which carries `distanceMi` and can be far from the patient. Two AREA terms outside `SEARCH[Location]` can match two different sites of one study.
 
 **Location pieces return every site.** `fields` with any `Location*` piece returns the study's full site list, and multinational trials register hundreds of sites, some over a thousand: two such studies can make a response of hundreds of KB. For one study's nearby sites, use clinicaltrials_get_study_record with `nearLocation` and `locationLimit`.
 
@@ -47,7 +47,7 @@ The ClinicalTrials.gov registry as sponsors and investigators submit it: protoco
 
 **Results group IDs belong to one section.** Outcomes use OG…, adverse events EG…, participant flow FG…, and baseline BG…, and each section defines its own groups: a study can report two outcome groups and four event groups. Match arms across sections by group title, never by the number in the ID.
 
-**Other adverse events stop at a threshold.** Serious events are reported however rare; other (non-serious) events only at or above the study's `frequencyThreshold`, a percentage. An event absent from `otherEvents` may have occurred below it. Summary mode leaves the threshold out: read it in full mode with `sections` set to adverseEvents and `adverseEventLimit` to bound the lists.
+**Other adverse events stop at a threshold.** Serious events are reported however rare; other (non-serious) events only at or above the study's `frequencyThreshold`, usually a percentage (`5`, `0.5`) and in rare records text (`any`). An event absent from `otherEvents` may have occurred below it. Summary and full mode both carry the threshold, so read it before saying an event did not occur.
 
 ## Syntax
 
@@ -64,7 +64,7 @@ The ClinicalTrials.gov registry as sponsors and investigators submit it: protoco
 
 ## Workflows
 
-**Recruiting trials near a place.** Geocode the place, then call clinicaltrials_search_studies with `geoFilter`, the condition, `statusFilter` RECRUITING, and any phase. `geoFilter` admits a study when any of its sites falls in the radius, whatever that site's status, so check each candidate's nearby site with clinicaltrials_get_study_record and `nearLocation` before presenting it. For a named city with no radius, bind city and site status together with `SEARCH[Location](…)` in `advancedFilter` instead.
+**Recruiting trials near a place.** Geocode the place, then call clinicaltrials_search_studies with `geoFilter`, the condition, `statusFilter` RECRUITING, and any phase. `geoFilter` admits a study when any of its sites falls in the radius, whatever that site's status, so read the status in brackets on each candidate's nearest site, and where it is not RECRUITING check the in-radius sites with clinicaltrials_get_study_record and `nearLocation` before presenting the study. For a named city with no radius, bind city and site status together with `SEARCH[Location](…)` in `advancedFilter` instead.
 
 **Counts and trends.** Make one clinicaltrials_get_study_count call per bucket (status, phase, year, sponsor class). clinicaltrials_get_field_values gives the vocabulary and registry-wide counts only; it cannot be scoped to a query. clinicaltrials_get_study_count takes no `geoFilter` or `nctIds`: count inside a radius with clinicaltrials_search_studies at `pageSize` 1 and read `totalCount`. For trends by year, bin `StartDate` (planned for studies not yet started) or `StudyFirstPostDate` (when the record was first posted), per the month-only date gate.
 

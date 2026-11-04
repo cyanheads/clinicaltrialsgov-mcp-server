@@ -12,8 +12,15 @@ import {
   getClinicalTrialsService,
   parseAreaRejection,
 } from '@/services/clinical-trials/clinical-trials-service.js';
+import { normalizeAreaNames } from '@/services/clinical-trials/field-search.js';
 import type { FieldNode } from '@/services/clinical-trials/types.js';
-import { AREA_METADATA, STRUCT_PIECES } from '../../helpers/area-metadata.js';
+import {
+  AREA_METADATA,
+  INDEXED_METADATA,
+  RECORD_METADATA,
+  SEARCH_AREAS,
+  STRUCT_PIECES,
+} from '../../helpers/area-metadata.js';
 import { expectLinearGrowth, LINE_BREAK_SHAPES } from '../../helpers/cpu-timing.js';
 import { nctIds as ids } from '../../helpers/nct-ids.js';
 
@@ -1982,13 +1989,24 @@ describe('ClinicalTrialsService', () => {
       },
     ];
 
+    /**
+     * Answer each endpoint by its path: both metadata reads with `metadata`, the
+     * search-areas read with SEARCH_AREAS, the search and the field-values read
+     * with `primary`; anything else is an unmocked request.
+     */
     function mockByRoute(routes: { metadata?: unknown; primary?: unknown } = {}) {
       mockFetch.mockImplementation((url: string | URL) => {
-        const u = typeof url === 'string' ? url : url.toString();
-        if (u.includes('/studies/metadata')) {
+        const { pathname } = new URL(String(url));
+        if (pathname === '/v2/studies/metadata') {
           return Promise.resolve(routes.metadata ?? jsonResponse(sampleMetadata));
         }
-        return Promise.resolve(routes.primary ?? jsonResponse({ studies: [] }));
+        if (pathname === '/v2/studies/search-areas') {
+          return Promise.resolve(jsonResponse(SEARCH_AREAS));
+        }
+        if (pathname === '/v2/studies' || pathname === '/v2/stats/field/values') {
+          return Promise.resolve(routes.primary ?? jsonResponse({ studies: [] }));
+        }
+        return Promise.reject(new Error('unmocked fetch'));
       });
     }
 
@@ -2066,10 +2084,36 @@ describe('ClinicalTrialsService', () => {
 
       mockFetch.mockClear();
       mockByRoute();
-      await validatingService.searchStudies({ sort: 'Bogus:desc' }, ctx);
+      // An unrecognized name also reads the index-only and search-area sources
+      // first (#179); fake timers stand in for the throttle's gaps between them.
+      const next = createMockContext();
+      vi.useFakeTimers();
+      try {
+        const sent = validatingService.searchStudies({ sort: 'Bogus:desc' }, next);
+        await vi.advanceTimersByTimeAsync(10_000);
+        await sent;
+      } finally {
+        vi.useRealTimers();
+      }
+      const paths = mockFetch.mock.calls.map(([u]) => {
+        const url = new URL(String(u));
+        return `${url.pathname}${url.searchParams.has('includeIndexedOnly') ? '?indexed' : ''}`;
+      });
+      // The field index is cached from the first call; the second tier is read,
+      // and loads, before the search goes out with the name as written.
+      expect(paths).toEqual([
+        '/v2/studies/metadata?indexed',
+        '/v2/studies/search-areas',
+        '/v2/studies',
+      ]);
+      expect(
+        (next.log as unknown as { calls: Array<{ level: string }> }).calls.filter(
+          (c) => c.level === 'warning',
+        ),
+      ).toEqual([]);
       const second = mockFetch.mock.calls
         .map((c) => (typeof c[0] === 'string' ? c[0] : (c[0] as URL).toString()))
-        .find((u) => !u.includes('/studies/metadata'));
+        .find((u) => new URL(u).pathname === '/v2/studies');
       expect(new URL(second!).searchParams.get('sort')).toBe('Bogus:desc');
     });
 
@@ -2768,6 +2812,537 @@ describe('ClinicalTrialsService', () => {
             (n) => `This type of query is not allowed for ${'X'.repeat(n)}`,
           );
         });
+      });
+    });
+  });
+
+  // Names AREA[] and `sort` resolve beyond the record pieces: the index-only
+  // pieces `/studies/metadata?includeIndexedOnly=true` flags, and the areas
+  // `/studies/search-areas` lists. Read only on a record-tier miss, one attempt
+  // each, and any failure leaves the call as it was without them (#179).
+  describe('index-only pieces and search areas (#179)', () => {
+    const STUDIES = '/v2/studies';
+    /** A response, or a function of the request's init that builds one. */
+    type Answer = unknown;
+    interface Routes {
+      indexed?: Answer;
+      metadata?: Answer;
+      searchAreas?: Answer;
+      studies?: Answer;
+    }
+
+    /** Answer each endpoint by its path; anything else is an unmocked request. */
+    const routes = ({
+      metadata = jsonResponse(RECORD_METADATA),
+      indexed = jsonResponse(INDEXED_METADATA),
+      searchAreas = jsonResponse(SEARCH_AREAS),
+      studies = jsonResponse({ studies: [], totalCount: 7 }),
+    }: Routes = {}) =>
+      mockFetch.mockImplementation((url: string | URL, init?: RequestInit) => {
+        const { pathname, searchParams } = new URL(String(url));
+        const answer =
+          pathname === `${STUDIES}/metadata`
+            ? searchParams.get('includeIndexedOnly') === 'true'
+              ? indexed
+              : metadata
+            : pathname === `${STUDIES}/search-areas`
+              ? searchAreas
+              : pathname === STUDIES
+                ? studies
+                : undefined;
+        if (answer === undefined) return Promise.reject(new Error('unmocked fetch'));
+        return Promise.resolve(typeof answer === 'function' ? answer(init) : answer);
+      });
+
+    /** A request that never answers: it fails only when its own signal aborts. */
+    const hang = (init?: RequestInit) =>
+      new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason));
+      });
+
+    /** Requests sent to each endpoint. */
+    const requestCounts = () => {
+      const counts = { metadata: 0, indexed: 0, searchAreas: 0, studies: 0 };
+      for (const [url] of mockFetch.mock.calls) {
+        const { pathname, searchParams } = new URL(String(url));
+        if (pathname === `${STUDIES}/metadata`) {
+          counts[searchParams.has('includeIndexedOnly') ? 'indexed' : 'metadata']++;
+        } else if (pathname === `${STUDIES}/search-areas`) counts.searchAreas++;
+        else if (pathname === STUDIES) counts.studies++;
+      }
+      return counts;
+    };
+    const studyRequests = () =>
+      mockFetch.mock.calls
+        .map(([url]) => new URL(String(url)))
+        .filter((u) => u.pathname === STUDIES);
+
+    const logCalls = (ctx: ReturnType<typeof createMockContext>) =>
+      (ctx.log as unknown as { calls: Array<{ level: string; msg: string; data?: unknown }> })
+        .calls;
+
+    /**
+     * Settle `call` under fake timers one throttle gap at a time. A real
+     * macrotask runs between gaps, so a read's own timeout — a real timer — can
+     * fire while the throttle's fake one-second gaps elapse instantly.
+     */
+    async function settle<T>(call: () => Promise<T>): Promise<T> {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      try {
+        let done = false;
+        const outcome = call()
+          .then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          )
+          .finally(() => {
+            done = true;
+          });
+        for (let gap = 0; !done && gap < 1000; gap++) {
+          await vi.advanceTimersByTimeAsync(1000);
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+        const settled = await outcome;
+        if ('error' in settled) throw settled.error;
+        return settled.value;
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+
+    /** The error `call` rejects with. */
+    const rejection = async (call: () => Promise<unknown>): Promise<McpError> => {
+      try {
+        await call();
+      } catch (err) {
+        return err as McpError;
+      }
+      throw new Error('expected a rejection');
+    };
+
+    let validating: ClinicalTrialsService;
+    beforeEach(() => {
+      validating = new ClinicalTrialsService(testConfig, {
+        ...fastOptions,
+        validateFieldsLocally: true,
+        extendedReadTimeoutMs: 1,
+      });
+    });
+
+    /** The AREA[] correction a tool handler runs, against this service. */
+    const correct = (
+      expressions: Record<string, string | undefined>,
+      ctx: ReturnType<typeof createMockContext>,
+    ) => normalizeAreaNames(expressions, () => validating.getAreaIndex(ctx), ctx.log);
+
+    describe('AREA[] correction', () => {
+      it('corrects a mis-cased index-only piece, its alt name, and a search area, reading each source once', async () => {
+        routes();
+        const ctx = createMockContext();
+        const next = createMockContext();
+        const [first, second] = await settle(async () => [
+          await correct(
+            {
+              advancedFilter: 'AREA[numlocations]RANGE[100,MAX]',
+              query: 'AREA[conditionsearch]diabetes',
+              conditionQuery: 'AREA[number-of-locations]RANGE[100,MAX]',
+              titleQuery:
+                'AREA[NumLocations]x AND AREA[ConditionSearch]y AND AREA[NUMBER-OF-LOCATIONS]z',
+            },
+            ctx,
+          ),
+          await correct({ advancedFilter: 'AREA[numconditions]RANGE[3,MAX]' }, next),
+        ]);
+
+        expect(first).toEqual({
+          advancedFilter: 'AREA[NumLocations]RANGE[100,MAX]',
+          query: 'AREA[ConditionSearch]diabetes',
+          conditionQuery: 'AREA[NumLocations]RANGE[100,MAX]',
+          titleQuery:
+            'AREA[NumLocations]x AND AREA[ConditionSearch]y AND AREA[NUMBER-OF-LOCATIONS]z',
+        });
+        expect(second).toEqual({ advancedFilter: 'AREA[NumConditions]RANGE[3,MAX]' });
+        expect(logCalls(ctx)).toContainEqual({
+          level: 'notice',
+          msg: 'AREA[] field names auto-corrected',
+          data: {
+            rewrites: [
+              { param: 'advancedFilter', from: 'numlocations', to: 'NumLocations' },
+              { param: 'query', from: 'conditionsearch', to: 'ConditionSearch' },
+              { param: 'conditionQuery', from: 'number-of-locations', to: 'NumLocations' },
+            ],
+          },
+        });
+        // A success is kept: the second call reads neither source again.
+        expect(requestCounts()).toEqual({ metadata: 1, indexed: 1, searchAreas: 1, studies: 0 });
+      });
+
+      it('requests neither new endpoint while every name resolves in the record tier', async () => {
+        routes();
+        const ctx = createMockContext();
+        const out = await settle(() =>
+          correct(
+            {
+              advancedFilter:
+                'AREA[OverallStatus]RECRUITING AND AREA[overallstatus]COMPLETED AND AREA[Sponsor]x AND AREA[LeadSponsor]y',
+            },
+            ctx,
+          ),
+        );
+
+        expect(out.advancedFilter).toBe(
+          'AREA[OverallStatus]RECRUITING AND AREA[OverallStatus]COMPLETED AND AREA[LeadSponsorName]x AND AREA[LeadSponsor]y',
+        );
+        expect(requestCounts()).toEqual({ metadata: 1, indexed: 0, searchAreas: 0, studies: 0 });
+      });
+
+      it.each([
+        ['NumLocation', ['NumLocations', 'LocationStatus', 'LocationCity']],
+        ['NumberOfLocations', ['NumLocations', 'LocationStatus', 'LocationCity']],
+        ['ConditionSearches', ['ConditionSearch', 'Condition']],
+      ])(
+        'leads the suggestions for %s with the extended name it nearly matches',
+        async (name, near) => {
+          routes({
+            studies: textResponse(
+              `Error parsing query in advanced filter: Unknown area name: \`${name}\``,
+            ),
+          });
+          const err = await settle(() =>
+            rejection(() =>
+              validating.countStudies({ filterAdvanced: `AREA[${name}]x` }, createMockContext()),
+            ),
+          );
+
+          expect(err.data).toEqual({
+            reason: 'field_invalid',
+            invalid: [name],
+            suggestions: { [name]: near },
+          });
+          expect(err.message).toContain(
+            `'${name}' — did you mean ${near.map((p) => `'${p}'`).join(', ')}?`,
+          );
+        },
+      );
+    });
+
+    describe('sort', () => {
+      it('sorts on a mis-cased index-only piece or alt name as its canonical spelling', async () => {
+        routes();
+        const ctx = createMockContext();
+        await settle(async () => {
+          await validating.searchStudies({ sort: 'numlocations:desc' }, ctx);
+          await validating.searchStudies({ sort: 'number-of-locations:DESC,NCTId:asc' }, ctx);
+        });
+
+        expect(studyRequests().map((u) => u.searchParams.get('sort'))).toEqual([
+          'NumLocations:desc',
+          'NumLocations:desc,NCTId:asc',
+        ]);
+        expect(logCalls(ctx)).toContainEqual({
+          level: 'notice',
+          msg: 'Sort field auto-corrected',
+          data: { corrections: [{ from: 'numlocations:desc', to: 'NumLocations:desc' }] },
+        });
+      });
+
+      it('sends an index-only piece, its alt name, and any search area exactly as written', async () => {
+        routes();
+        await settle(async () => {
+          for (const sort of [
+            'NumLocations:desc',
+            'NUMBER-OF-LOCATIONS:desc',
+            'ConditionSearch:asc',
+            'conditionsearch:asc',
+          ]) {
+            await validating.searchStudies({ sort }, createMockContext());
+          }
+        });
+
+        expect(studyRequests().map((u) => u.searchParams.get('sort'))).toEqual([
+          'NumLocations:desc',
+          'NUMBER-OF-LOCATIONS:desc',
+          'ConditionSearch:asc',
+          'conditionsearch:asc',
+        ]);
+      });
+
+      it('sends record fields and @relevance as before, reading neither new endpoint', async () => {
+        routes();
+        await settle(async () => {
+          for (const sort of ['BriefTitle:asc', 'LastUpdatePostDate:desc', '@relevance']) {
+            await validating.searchStudies({ sort }, createMockContext());
+          }
+        });
+
+        expect(studyRequests().map((u) => u.searchParams.get('sort'))).toEqual([
+          'BriefTitle:asc',
+          'LastUpdatePostDate:desc',
+          '@relevance',
+        ]);
+        expect(requestCounts()).toEqual({ metadata: 1, indexed: 0, searchAreas: 0, studies: 3 });
+      });
+
+      it('suggests an index-only near miss first, and never a search area', async () => {
+        routes({ studies: textResponse('Unknown sort field') });
+        const [indexOnly, area] = await settle(async () => [
+          await rejection(() =>
+            validating.searchStudies({ sort: 'NumLocation:desc' }, createMockContext()),
+          ),
+          await rejection(() =>
+            validating.searchStudies({ sort: 'ConditionSearches:asc' }, createMockContext()),
+          ),
+        ]);
+
+        expect(indexOnly.data).toMatchObject({ reason: 'sort_invalid' });
+        expect(indexOnly.message).toContain(
+          "'NumLocation' — did you mean 'NumLocations', 'Location', 'LocationStatus'?",
+        );
+        expect(area.message).toContain(
+          "'ConditionSearches' — did you mean 'Condition', 'ConditionsModule'?",
+        );
+      });
+    });
+
+    describe('when a read fails', () => {
+      const failures = [
+        ['404', () => jsonResponse(null, 404)],
+        ['403', () => textResponse('Forbidden', 403)],
+        ['500', () => jsonResponse(null, 500)],
+        ['a hang past the read timeout', () => hang],
+      ] as const;
+      const sources = ['indexed', 'searchAreas'] as const;
+
+      it.each(
+        sources.flatMap((source) =>
+          failures.map(([label, answer]) => [source, label, answer] as const),
+        ),
+      )(
+        'answers as without them when the %s read fails with %s, once per call',
+        async (source, _label, answer) => {
+          routes({
+            [source]: answer(),
+            studies: textResponse(
+              'Error parsing query in advanced filter: Unknown area name: `numlocations`',
+            ),
+          });
+          const ctx = createMockContext();
+          const next = createMockContext();
+          const { corrected, err, retried } = await settle(async () => {
+            const corrected = await correct(
+              {
+                advancedFilter:
+                  'AREA[numlocations]RANGE[100,MAX] AND AREA[overallstatus]RECRUITING',
+              },
+              ctx,
+            );
+            const err = await rejection(() =>
+              validating.countStudies({ filterAdvanced: corrected.advancedFilter }, ctx),
+            );
+            const before = requestCounts()[source];
+            await correct({ advancedFilter: 'AREA[numlocations]x' }, next);
+            return { corrected, err, retried: requestCounts()[source] - before };
+          });
+
+          // The record tier still corrects; the index-only name goes out as written.
+          expect(corrected.advancedFilter).toBe(
+            'AREA[numlocations]RANGE[100,MAX] AND AREA[OverallStatus]RECRUITING',
+          );
+          // The rejection is the one 2.11.0 gave: nothing from the failed tier.
+          expect(err.data).toEqual({ reason: 'field_invalid', invalid: ['numlocations'] });
+          expect(logCalls(ctx)).toContainEqual(
+            expect.objectContaining({
+              level: 'warning',
+              msg: 'Index-only piece and search-area lookup skipped — read failed',
+            }),
+          );
+          // One attempt for the whole call, error path included; the next call reads afresh.
+          expect(requestCounts()[source] - retried).toBe(1);
+          expect(retried).toBe(1);
+        },
+      );
+
+      it('still answers a search area and a record fix, and never reports a study, when search areas 404', async () => {
+        routes({
+          searchAreas: jsonResponse(null, 404),
+          studies: textResponse(
+            'Error parsing query in advanced filter: Unknown area name: `conditionsearch`',
+          ),
+        });
+        const ctx = createMockContext();
+        const { err, sent } = await settle(async () => {
+          const sent = await correct(
+            {
+              advancedFilter: 'AREA[conditionsearch]diabetes',
+              query: 'AREA[ConditionSearch]diabetes',
+              conditionQuery: 'AREA[overallstatus]RECRUITING',
+            },
+            ctx,
+          );
+          return {
+            sent,
+            err: await rejection(() =>
+              validating.countStudies({ filterAdvanced: sent.advancedFilter }, ctx),
+            ),
+          };
+        });
+
+        expect(sent).toEqual({
+          advancedFilter: 'AREA[conditionsearch]diabetes',
+          query: 'AREA[ConditionSearch]diabetes',
+          conditionQuery: 'AREA[OverallStatus]RECRUITING',
+        });
+        expect(err.data).toEqual({
+          reason: 'field_invalid',
+          invalid: ['conditionsearch'],
+          suggestions: { conditionsearch: ['Condition'] },
+        });
+        const warning = logCalls(ctx).find((c) => c.level === 'warning');
+        expect(JSON.stringify(warning?.data)).not.toMatch(/study/i);
+      });
+
+      it('still answers an index-only name and validates fields locally when the index-only read hangs', async () => {
+        routes({ indexed: hang });
+        const ctx = createMockContext();
+        const { count, err } = await settle(async () => {
+          const { advancedFilter } = await correct(
+            { advancedFilter: 'AREA[NumLocations]RANGE[100,MAX]' },
+            ctx,
+          );
+          const count = await validating.countStudies({ filterAdvanced: advancedFilter }, ctx);
+          const err = await rejection(() =>
+            validating.searchStudies({ fields: ['Sponsor'] }, createMockContext()),
+          );
+          return { count, err };
+        });
+
+        expect(count).toBe(7);
+        expect(studyRequests()[0]?.searchParams.get('filter.advanced')).toBe(
+          '(AREA[NumLocations]RANGE[100,MAX]) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])',
+        );
+        expect(err.data).toEqual({
+          reason: 'field_invalid',
+          invalid: ['Sponsor'],
+          suggestions: {
+            Sponsor: ['SponsorCollaboratorsModule', 'LeadSponsor', 'LeadSponsorName'],
+          },
+        });
+        expect(studyRequests()).toHaveLength(1);
+      });
+    });
+
+    describe('cancellation', () => {
+      it('rejects as cancelled when the caller aborts mid-load, and keeps the read for the next caller', async () => {
+        const controller = new AbortController();
+        routes({
+          indexed: () => {
+            controller.abort();
+            return jsonResponse(INDEXED_METADATA);
+          },
+        });
+        const ctx = createMockContext({ signal: controller.signal });
+        const { err, next } = await settle(async () => ({
+          err: await rejection(() => correct({ advancedFilter: 'AREA[numlocations]x' }, ctx)),
+          next: await correct({ advancedFilter: 'AREA[numlocations]x' }, createMockContext()),
+        }));
+
+        expect(err.code).toBe(JsonRpcErrorCode.RequestCancelled);
+        expect(err.message).toContain('cancelled by caller');
+        expect(logCalls(ctx).filter((c) => c.level === 'warning')).toEqual([]);
+        expect(next).toEqual({ advancedFilter: 'AREA[NumLocations]x' });
+        expect(requestCounts()).toMatchObject({ indexed: 1, searchAreas: 1 });
+      });
+
+      it('lets a concurrent caller finish the load another caller abandoned', async () => {
+        const controller = new AbortController();
+        routes({
+          searchAreas: () => {
+            controller.abort();
+            return jsonResponse(SEARCH_AREAS);
+          },
+        });
+        const leaving = createMockContext({ signal: controller.signal });
+        const staying = createMockContext();
+        const [left, stayed] = await settle(() =>
+          Promise.allSettled([
+            correct({ advancedFilter: 'AREA[conditionsearch]x' }, leaving),
+            correct({ advancedFilter: 'AREA[conditionsearch]x' }, staying),
+          ]),
+        );
+
+        expect(left.status).toBe('rejected');
+        expect((left as PromiseRejectedResult).reason).toMatchObject({
+          code: JsonRpcErrorCode.RequestCancelled,
+        });
+        expect(stayed).toEqual({
+          status: 'fulfilled',
+          value: { advancedFilter: 'AREA[ConditionSearch]x' },
+        });
+        expect(requestCounts()).toEqual({ metadata: 1, indexed: 1, searchAreas: 1, studies: 0 });
+      });
+    });
+
+    // An index-only piece holds no record value, so `fields` cannot return it and
+    // field search must not offer it — whether or not this call read the tier.
+    describe('fields and field search', () => {
+      /** The index-only pieces INDEXED_METADATA flags. */
+      const INDEX_ONLY = [
+        'LastUpdatePostYear',
+        'LocationCountryCode',
+        'NumLocations',
+        'NumConditions',
+      ];
+
+      it('keeps index-only pieces out of fields validation and field search after the second tier loads', async () => {
+        routes();
+        const ctx = createMockContext();
+        const { corrected, exact, folded, found } = await settle(async () => {
+          // A record-tier miss reads the second tier for this call first.
+          const corrected = await correct({ advancedFilter: 'AREA[numlocations]x' }, ctx);
+          const exact = await rejection(() =>
+            validating.searchStudies({ fields: ['NumLocations'] }, ctx),
+          );
+          const folded = await rejection(() =>
+            validating.searchStudies({ fields: ['numlocations'] }, ctx),
+          );
+          const found = await validating.searchFieldDefinitions('LastUpdatePost', 50, ctx);
+          return { corrected, exact, folded, found };
+        });
+
+        expect(corrected).toEqual({ advancedFilter: 'AREA[NumLocations]x' });
+        expect(requestCounts()).toEqual({ metadata: 1, indexed: 1, searchAreas: 1, studies: 0 });
+        expect(exact.data).toMatchObject({ reason: 'field_invalid', invalid: ['NumLocations'] });
+        // Not folded to the index-only piece, the way AREA[] and sort fold it.
+        expect(folded.data).toMatchObject({ reason: 'field_invalid', invalid: ['numlocations'] });
+        for (const err of [exact, folded]) {
+          const suggested = Object.values(
+            (err.data as { suggestions?: Record<string, string[]> }).suggestions ?? {},
+          ).flat();
+          expect(suggested.filter((piece) => INDEX_ONLY.includes(piece))).toEqual([]);
+        }
+        // The record piece the query names is found; its index-only sibling is not.
+        const pieces = found.entries.map((e) => e.piece);
+        expect(pieces).toContain('LastUpdatePostDate');
+        expect(pieces.filter((piece) => INDEX_ONLY.includes(piece))).toEqual([]);
+      });
+    });
+
+    describe('404s outside the single-study route', () => {
+      it('reports a metadata 404 as a missing endpoint, never study_not_found', async () => {
+        mockFetch.mockResolvedValue(textResponse('No such endpoint', 404));
+        const err = await rejection(() => service.getMetadata(false, createMockContext()));
+
+        expect(err.code).toBe(JsonRpcErrorCode.NotFound);
+        expect(err.message).toBe('No such endpoint');
+        expect((err.data as Record<string, unknown> | undefined)?.reason).toBeUndefined();
+      });
+
+      it('still reports a 404 for an NCT ID as study_not_found', async () => {
+        mockFetch.mockResolvedValue(jsonResponse(null, 404));
+        const err = await rejection(() => service.getStudy('NCT12345678', createMockContext()));
+
+        expect(err.message).toBe('Study NCT12345678 not found');
+        expect(err.data).toEqual({ reason: 'study_not_found' });
       });
     });
   });

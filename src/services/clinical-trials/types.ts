@@ -354,9 +354,25 @@ export interface FieldNode {
   altPieceNames?: string[];
   children?: FieldNode[];
   description?: string;
+  /**
+   * Set on the search-index pieces only `includeIndexedOnly=true` lists
+   * (`NumLocations`, `StudyFirstPostYear`): AREA[] and `sort` take them, but they
+   * hold no record value, so `fields` does not. Absent on every record field.
+   */
+  indexedOnly?: boolean;
   isEnum?: boolean;
   name: string;
   piece?: string;
   sourceType?: string;
   type?: string;
+}
+
+/**
+ * One document type's search areas from GET /studies/search-areas — the
+ * registry lists one, `Study`. Each area (`ConditionSearch`, `LocationSearch`)
+ * is a name AREA[] searches as a group of fields; `sort` refuses it.
+ */
+export interface SearchAreaGroup {
+  areas: Array<{ name: string }>;
+  name: string;
 }

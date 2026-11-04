@@ -22,7 +22,8 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
   getClinicalTrialsService: mockGetService,
 }));
 
-import { getStudyResults, oneLine } from '@/mcp-server/tools/definitions/get-study-results.tool.js';
+import { getStudyResults } from '@/mcp-server/tools/definitions/get-study-results.tool.js';
+import { oneLine } from '@/mcp-server/tools/utils/format-helpers.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 import { expectLinearGrowth, LINE_BREAK_SHAPES } from '../../../helpers/cpu-timing.js';
 import { loadStudyFixture, missingLeaves } from '../../../helpers/format-parity.js';
@@ -3602,6 +3603,210 @@ describe('getStudyResults', () => {
         const { result, text } = await render(section);
         expect(missingLeaves(result, text)).toEqual([]);
       }
+    });
+  });
+
+  // Registries list other (non-serious) adverse events only at or above the
+  // study's reporting threshold, so the threshold is what tells an unlisted
+  // event from one reported below it. Summary mode carries it beside the counts.
+  describe('adverse-event frequency threshold (#174)', () => {
+    const NCT03096834_TIME_FRAME =
+      'Adverse events were reported from the first dose of study treatment through the completion of the up to 196-week trial for a maximum treatment exposure of 199 weeks (includes 4 week follow-up).';
+
+    /** NCT03096834's adverse-events module (a 5% threshold), trimmed to one event of each kind. */
+    const nct03096834Module = (frequencyThreshold?: string) => ({
+      timeFrame: NCT03096834_TIME_FRAME,
+      ...(frequencyThreshold === undefined ? {} : { frequencyThreshold }),
+      eventGroups: [
+        { id: 'EG000', title: 'AMG334 140 mg DB', seriousNumAffected: 3, seriousNumAtRisk: 119 },
+        { id: 'EG001', title: 'Placebo DB', seriousNumAffected: 4, seriousNumAtRisk: 124 },
+      ],
+      seriousEvents: [
+        {
+          term: 'Migraine',
+          organSystem: 'Nervous system disorders',
+          stats: [
+            { groupId: 'EG000', numAffected: 1, numAtRisk: 119 },
+            { groupId: 'EG001', numAffected: 0, numAtRisk: 124 },
+          ],
+        },
+      ],
+      otherEvents: [
+        {
+          term: 'Nasopharyngitis',
+          organSystem: 'Infections and infestations',
+          stats: [
+            { groupId: 'EG000', numAffected: 6, numAtRisk: 119 },
+            { groupId: 'EG001', numAffected: 12, numAtRisk: 124 },
+          ],
+        },
+      ],
+    });
+
+    /** NCT01115166's adverse-events module: a "0" threshold, one group, no events. */
+    const nct01115166Module = {
+      timeFrame:
+        'Patients were followed up to 24 hours after CPB. No intervention except additional blood samples was performed, during the CPB.',
+      frequencyThreshold: '0',
+      eventGroups: [{ id: 'EG000', title: 'Cardiac Surgery' }],
+    };
+
+    /** One adverse-events call through the assembled pipeline: parse → handler → output parse → format. */
+    const call = async (
+      nctId: string,
+      adverseEventsModule: Record<string, unknown>,
+      summary: boolean,
+    ) => {
+      mockService.getStudiesBatch.mockResolvedValue([
+        makeStudy(nctId, true, { adverseEventsModule }),
+      ]);
+      const result = await runToolContract(getStudyResults, {
+        nctIds: nctId,
+        sections: ['adverseEvents'],
+        summary,
+      });
+      expect(result.isError).toBeFalsy();
+      const structured = result.structuredContent as {
+        results: Array<{ adverseEvents?: Record<string, unknown> }>;
+      };
+      const text = (result.content as Array<{ type: string; text?: string }>)
+        .filter((b) => b.type === 'text')
+        .map((b) => b.text ?? '')
+        .join('\n');
+      return { ae: structured.results[0]!.adverseEvents!, text };
+    };
+
+    const thresholdLines = (text: string) =>
+      text.split('\n').filter((line) => line.startsWith('Frequency threshold'));
+
+    it('carries the threshold in summary mode beside unchanged summary fields, on both channels', async () => {
+      const { ae, text } = await call('NCT03096834', nct03096834Module('5'), true);
+      expect(ae).toEqual({
+        timeFrame: NCT03096834_TIME_FRAME,
+        frequencyThreshold: '5',
+        groupCount: 2,
+        seriousEventCount: 1,
+        otherEventCount: 1,
+        eventGroups: [
+          { id: 'EG000', title: 'AMG334 140 mg DB' },
+          { id: 'EG001', title: 'Placebo DB' },
+        ],
+        topEvents: [
+          {
+            term: 'Nasopharyngitis',
+            organSystem: 'Infections and infestations',
+            kind: 'other',
+            byGroup: [
+              { groupId: 'EG000', numAffected: 6, numAtRisk: 119 },
+              { groupId: 'EG001', numAffected: 12, numAtRisk: 124 },
+            ],
+          },
+          {
+            term: 'Migraine',
+            organSystem: 'Nervous system disorders',
+            kind: 'serious',
+            byGroup: [
+              { groupId: 'EG000', numAffected: 1, numAtRisk: 119 },
+              { groupId: 'EG001', numAffected: 0, numAtRisk: 124 },
+            ],
+          },
+        ],
+      });
+      // The line sits right after the assessment period, as in full mode.
+      expect(text).toContain(
+        `\n### Adverse Events\nAssessment period: ${NCT03096834_TIME_FRAME}\nFrequency threshold: 5%\n2 groups | 1 serious events | 1 other events\n`,
+      );
+    });
+
+    it('keeps a "0" threshold — zero is data', async () => {
+      const { ae, text } = await call('NCT01115166', nct01115166Module, true);
+      expect(ae).toEqual({
+        timeFrame: nct01115166Module.timeFrame,
+        frequencyThreshold: '0',
+        groupCount: 1,
+        eventGroups: [{ id: 'EG000', title: 'Cardiac Surgery' }],
+      });
+      expect(thresholdLines(text)).toEqual(['Frequency threshold: 0%']);
+    });
+
+    it('omits the key and the line when the module publishes no threshold, in either mode', async () => {
+      for (const summary of [true, false]) {
+        const { ae, text } = await call('NCT03096834', nct03096834Module(), summary);
+        expect(ae).not.toHaveProperty('frequencyThreshold');
+        expect(ae.timeFrame).toBe(NCT03096834_TIME_FRAME);
+        expect(thresholdLines(text)).toEqual([]);
+      }
+    });
+
+    it('renders a non-numeric threshold verbatim, without the %, in summary and full mode', async () => {
+      for (const summary of [true, false]) {
+        const { ae, text } = await call('NCT03096834', nct03096834Module('any'), summary);
+        expect(ae.frequencyThreshold).toBe('any');
+        expect(thresholdLines(text)).toEqual(['Frequency threshold: any']);
+      }
+    });
+
+    /** The threshold line `format()` renders for a module carrying `frequencyThreshold`. */
+    const renderThreshold = (frequencyThreshold: string) =>
+      thresholdLines(
+        (
+          getStudyResults.format!({
+            results: [
+              {
+                nctId: 'NCT03096834',
+                title: 'Threshold Study',
+                hasResults: true,
+                adverseEvents: { frequencyThreshold, eventGroups: [{ id: 'EG000' }] },
+              },
+            ],
+          })[0] as { text: string }
+        ).text,
+      );
+
+    it.each([
+      ['5', 'Frequency threshold: 5%'],
+      ['5.00', 'Frequency threshold: 5.00%'],
+      ['.5', 'Frequency threshold: .5%'],
+      ['0,001', 'Frequency threshold: 0,001%'],
+      ['0', 'Frequency threshold: 0%'],
+      ['00', 'Frequency threshold: 00%'],
+      ['4.9999', 'Frequency threshold: 4.9999%'],
+      ['any', 'Frequency threshold: any'],
+    ])(
+      'renders the threshold %j as %j — the percent sign follows numeric spellings only',
+      (value, line) => {
+        expect(renderThreshold(value)).toEqual([line]);
+      },
+    );
+
+    it('names frequencyThreshold in both modes of the adverseEvents description', () => {
+      const results = getStudyResults.output!.shape.results as unknown as {
+        element: { shape: Record<string, { description?: string }> };
+      };
+      const description = results.element.shape.adverseEvents?.description ?? '';
+      const [summaryPart, fullPart] = description.split('Full mode:');
+      expect(fullPart).toBeDefined();
+      expect(summaryPart).toContain('frequencyThreshold');
+      expect(fullPart).toContain('frequencyThreshold');
+    });
+
+    describe('the % decision stays linear on long upstream text', () => {
+      it.each([
+        ...LINE_BREAK_SHAPES,
+        ['a digit run ending off-pattern', (n: number) => `${'1'.repeat(n)}x`],
+        [
+          'a decimal run ending off-pattern',
+          (n: number) => `${'1'.repeat(n / 2)}.${'1'.repeat(n / 2)}x`,
+        ],
+      ] as ReadonlyArray<[string, (n: number) => string]>)('%s', (_name, shape) => {
+        expectLinearGrowth(renderThreshold, (n) => {
+          const input = shape(n);
+          // Every shape is non-numeric, so the whole value renders and no % follows.
+          const folded = oneLine(input.trim());
+          expect(renderThreshold(input)).toEqual(folded ? [`Frequency threshold: ${folded}`] : []);
+          return input;
+        });
+      });
     });
   });
 

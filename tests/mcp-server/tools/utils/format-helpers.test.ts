@@ -4,7 +4,13 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { formatRemainingStudyFields } from '@/mcp-server/tools/utils/format-helpers.js';
+import {
+  formatEchoValue,
+  formatRemainingStudyFields,
+  formatSearchCriteria,
+} from '@/mcp-server/tools/utils/format-helpers.js';
+import { commonmark, type InlineToken, readMarkdown } from '../../../helpers/commonmark.js';
+import { expectLinearGrowth, LINE_BREAK_SHAPES } from '../../../helpers/cpu-timing.js';
 
 describe('formatRemainingStudyFields', () => {
   it('returns empty array when all fields are already rendered', () => {
@@ -339,5 +345,231 @@ describe('formatRemainingStudyFields', () => {
     const line = lines.find((l) => l.includes('RECRUITING'));
     expect(line).toBeDefined();
     expect(line).not.toContain('protocolSection');
+  });
+
+  // Each field is one `Label: value` row, so a line break in a registry value
+  // would end the row and start a forged row or heading of its own. Long-form
+  // prose — summaries, descriptions, criteria, populations, details, notes —
+  // keeps its breaks, as a prose field under its own label does (#180).
+  describe.each(['\r\n', '\n', '\r'])('with a %j in a value (#180)', (lineBreak) => {
+    const dump = (study: Record<string, unknown>) =>
+      formatRemainingStudyFields(study, new Set(), {
+        maxLines: Number.POSITIVE_INFINITY,
+        maxValueLen: Number.POSITIVE_INFINITY,
+      });
+
+    it('keeps a value, a list, and each array entry on its own row', () => {
+      const study = {
+        protocolSection: {
+          identificationModule: { officialTitle: `Title start${lineBreak}## Forged title` },
+          conditionsModule: { keywords: [`a${lineBreak}- forged`, 'b'] },
+          referencesModule: {
+            references: [
+              { citation: `Ref one${lineBreak}  Forged > Row: x` },
+              { citation: 'Ref two' },
+            ],
+          },
+          statusModule: { whyStopped: `${lineBreak}${lineBreak}Funding` },
+        },
+      };
+      expect(dump(study)).toEqual([
+        '  Identification > Official Title: Title start ## Forged title',
+        '  Conditions > Keywords: a - forged, b',
+        '  References[0] > Citation: Ref one Forged > Row: x',
+        '  References[1] > Citation: Ref two',
+        '  Status > Why Stopped: Funding',
+      ]);
+    });
+
+    it('keeps the line breaks of long-form prose', () => {
+      const prose = (name: string) => `${name} start${lineBreak}${lineBreak}## Kept ${name}`;
+      const study = {
+        protocolSection: {
+          descriptionModule: {
+            briefSummary: prose('summary'),
+            detailedDescription: prose('detail'),
+          },
+          eligibilityModule: {
+            eligibilityCriteria: prose('criteria'),
+            studyPopulation: prose('population'),
+          },
+          armsInterventionsModule: { armGroups: [{ description: prose('arm') }] },
+        },
+        resultsSection: {
+          participantFlowModule: { recruitmentDetails: prose('recruitment') },
+          adverseEventsModule: { otherEvents: [{ notes: prose('notes') }] },
+        },
+      };
+      expect(dump(study)).toEqual([
+        `  Description > Brief Summary: ${prose('summary')}`,
+        `  Description > Detailed Description: ${prose('detail')}`,
+        `  Eligibility > Eligibility Criteria: ${prose('criteria')}`,
+        `  Eligibility > Study Population: ${prose('population')}`,
+        `  Arm Groups > Description: ${prose('arm')}`,
+        `  Participant Flow > Recruitment Details: ${prose('recruitment')}`,
+        `  Other Events > Notes: ${prose('notes')}`,
+      ]);
+    });
+  });
+});
+
+/**
+ * What a CommonMark parse makes of `markdown`: its code literals in order (a
+ * fence's content keeps its closing line break), its block types, and any
+ * inline markup other than a code span and the bold labels.
+ */
+function parse(markdown: string) {
+  const tokens = commonmark.parse(markdown, {}) as InlineToken[];
+  const literals: string[] = [];
+  const markup: string[] = [];
+  for (const token of tokens) {
+    if (token.type === 'fence') literals.push(token.content);
+    for (const child of token.children ?? []) {
+      if (child.type === 'code_inline') literals.push(child.content);
+      else if (!['text', 'softbreak', 'strong_open', 'strong_close'].includes(child.type)) {
+        markup.push(child.type);
+      }
+    }
+  }
+  const blocks = new Set(
+    tokens.filter((t) => t.type !== 'inline').map((t) => t.type.replace(/_(open|close)$/, '')),
+  );
+  return { blocks: [...blocks].sort(), literals, markup };
+}
+
+// Every searchCriteria trailer writes its values through formatEchoValue (#177),
+// so a content[]-only caller reads back, and can replay, the exact string
+// structuredContent carries.
+describe('formatEchoValue', () => {
+  /** A value between authored text, as the trailers place it. */
+  const echoed = (value: unknown) => `**Label:** ${formatEchoValue(value)} | next`;
+
+  it.each([
+    ['a link-shaped location query', 'SEARCH[Location](AREA[LocationCountry]"Mexico")'],
+    ['a link-shaped condition', 'AREA[Condition](cancer)'],
+    ['an underscore emphasis run', '_x_'],
+    ['asterisk emphasis runs', '*x* and **y**'],
+    ['raw HTML', '<b>bold</b>'],
+    ['a URI autolink', '<https://example.org>'],
+    ['an email autolink', '<a@b.co>'],
+    ['entities', 'AT&amp;T &#123;'],
+    ['a doubled trailing backslash', 'AREA[LocationState]"Ile\\\\"'],
+    ['a backslash before punctuation', 'a\\*b'],
+    ['a backtick', 'a`b'],
+    ['backtick runs of several lengths', 'a``b```c'],
+    ['a leading backtick', '`a'],
+    ['a trailing backtick', 'a`'],
+    ['only backticks', '``'],
+    ['a space at each end', ' a '],
+    ['only spaces', '   '],
+    ['a pipe', 'a | b'],
+    ['a heading marker', '# no heading'],
+    ['a list marker', '- no list'],
+  ])('reads %s back as one code span', (_name, value) => {
+    const { blocks, literals, markup } = parse(echoed(value));
+    expect(literals).toEqual([value]);
+    expect(markup).toEqual([]);
+    expect(blocks).toEqual(['paragraph']);
+  });
+
+  // A line break inside a code span still ends the line for the block parse,
+  // so the next line would open a heading, list, or quote of its own.
+  it.each([
+    ['a heading on its second line', 'diabetes\n# heading'],
+    ['list items', '- a\n- b'],
+    ['a setext underline', 'title\n==='],
+    ['a block quote', 'a\n> b'],
+    ['a fence of its own', 'a\n```\nb'],
+    ['a blank line', 'a\n\nb'],
+    ['indented lines', 'a\n    b'],
+    ['a trailing line break', 'a\n'],
+  ])('reads a value with %s back as one fenced block', (_name, value) => {
+    const { blocks, literals, markup } = parse(echoed(value));
+    expect(literals).toEqual([`${value}\n`]);
+    expect(markup).toEqual([]);
+    expect(blocks).toEqual(['fence', 'paragraph']);
+  });
+
+  it.each([
+    ['CRLF', 'a\r\nb'],
+    ['CR', 'a\rb'],
+  ])(
+    'reads %s line breaks back as LF, the line endings CommonMark normalizes to',
+    (_name, value) => {
+      expect(parse(echoed(value)).literals).toEqual(['a\nb\n']);
+    },
+  );
+
+  it('frames each entry of a list on its own, inside brackets', () => {
+    const list = ['RECRUITING', '_x_', 'a`b', 'x\n# y', 'AREA[Condition](cancer)'];
+    const text = echoed(list);
+    const { literals, markup } = parse(text);
+
+    expect(literals).toEqual(['RECRUITING', '_x_', 'a`b', 'x\n# y\n', 'AREA[Condition](cancer)']);
+    expect(markup).toEqual([]);
+    expect(readMarkdown(text)).toBe(
+      'Label: [RECRUITING, _x_, a`b,\nx\n# y\n\n, AREA[Condition](cancer)] | next',
+    );
+  });
+
+  it.each([
+    [55, '55'],
+    [true, 'true'],
+  ])('renders %j as itself', (value, text) => {
+    expect(formatEchoValue(value)).toBe(text);
+  });
+
+  describe('stays linear on caller-sized text', () => {
+    it.each([
+      ...LINE_BREAK_SHAPES,
+      ['one long backtick run', (n: number) => '`'.repeat(n)],
+      ['short backtick runs throughout', (n: number) => '`a'.repeat(n / 2)],
+      ['spaces throughout', (n: number) => ' '.repeat(n)],
+      ['a long digit run', (n: number) => '1'.repeat(n)],
+    ] as const)('%s', (_name, shape) => {
+      expectLinearGrowth(formatEchoValue, shape);
+    });
+
+    it('a list of conditions', () => {
+      expectLinearGrowth(
+        (input) => formatEchoValue(input.split(',')),
+        (n) => 'condition0000,'.repeat(n / 14),
+      );
+    });
+  });
+});
+
+describe('formatSearchCriteria', () => {
+  it('lists each criterion under its label, its value read back as written', () => {
+    const criteria = {
+      locationQuery: 'SEARCH[Location](AREA[LocationCountry]"Mexico")',
+      query: 'diabetes\n# heading',
+      statusFilter: ['RECRUITING', 'COMPLETED'],
+      advancedFilter: 'SEARCH[Location](AREA[LocationCity]Seattle)',
+      sentinelFilterActive: true,
+    };
+    const text = formatSearchCriteria(criteria);
+    const { literals, markup } = parse(text);
+
+    expect(literals).toEqual([
+      criteria.locationQuery,
+      `${criteria.query}\n`,
+      'RECRUITING',
+      'COMPLETED',
+      criteria.advancedFilter,
+    ]);
+    expect(markup).toEqual([]);
+    // The criterion after a multi-line value still reads as its own labelled line.
+    expect(readMarkdown(text).split('\n')).toEqual([
+      'Search Criteria:',
+      `locationQuery: ${criteria.locationQuery}`,
+      'query:',
+      'diabetes',
+      '# heading',
+      '',
+      'statusFilter: [RECRUITING, COMPLETED]',
+      `advancedFilter: ${criteria.advancedFilter}`,
+      'sentinelFilterActive: true',
+    ]);
   });
 });

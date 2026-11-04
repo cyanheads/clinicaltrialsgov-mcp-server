@@ -1,7 +1,26 @@
 /**
- * @fileoverview Shared formatting helpers for tool format() functions.
+ * @fileoverview Shared formatting helpers for tool format() functions and
+ * searchCriteria enrichment trailers.
  * @module mcp-server/tools/utils/format-helpers
  */
+
+import { markdown } from '@cyanheads/mcp-ts-core/utils';
+
+/**
+ * Flatten CR/LF in upstream text interpolated into a single line, so a line
+ * break in the value cannot start a new `content[]` line and forge structure:
+ * each whitespace run holding a CR or LF becomes one space, and every other
+ * run is kept as is. Runs in time linear in the input. Applied to a value, or
+ * to a whole rendered row whose every part is meant to share one line.
+ * `structuredContent` keeps the value verbatim.
+ */
+export function oneLine(value: string): string;
+export function oneLine(value: string | undefined): string | undefined;
+export function oneLine(value: string | undefined): string | undefined {
+  // A lone whitespace character needs folding only when it is a break, so the
+  // single spaces between words never reach the callback.
+  return value?.replace(/\s{2,}|[\r\n]/g, (run) => (/[\r\n]/.test(run) ? ' ' : run));
+}
 
 /** Truncate a string, appending ellipsis when trimmed. */
 function truncate(value: string, max: number): string {
@@ -180,6 +199,14 @@ function collectLeaves(obj: unknown, path: PathPart[], out: Leaf[]): void {
   }
 }
 
+/**
+ * Leaf keys holding long-form prose: summaries, descriptions, criteria,
+ * populations, details, notes. Their rows keep their line breaks, as a
+ * prose field the tools render under its own label does; every other row
+ * renders on one line.
+ */
+const PROSE_LEAF = /(?:description|summary|criteria|population|details|notes)$/i;
+
 /** Check if a leaf's path starts with any rendered prefix. */
 function isRendered(path: PathPart[], renderedPrefixes: ReadonlySet<string>): boolean {
   const dotted = path.map((part) => part.key).join('.');
@@ -194,7 +221,9 @@ function isRendered(path: PathPart[], renderedPrefixes: ReadonlySet<string>): bo
  * `renderedPrefixes` uses dot-notation paths matching the study structure
  * (e.g., `"protocolSection.identificationModule.nctId"`).
  *
- * Returns indented lines suitable for appending after a study's primary output.
+ * Returns indented lines suitable for appending after a study's primary output,
+ * one row per field: a line break in a value folds to a space, unless the leaf
+ * is long-form prose (`PROSE_LEAF`), which keeps its breaks.
  */
 export function formatRemainingStudyFields(
   study: Record<string, unknown>,
@@ -226,14 +255,15 @@ export function formatRemainingStudyFields(
   const seen = new Set<string>();
   const lines: string[] = [];
   let dropped = 0;
-  for (const { label, key, value } of described) {
+  for (const { label, key, meaningful, value } of described) {
     if (!label || seen.has(key)) continue;
     seen.add(key);
     if (lines.length >= maxLines) {
       dropped++;
       continue;
     }
-    lines.push(`  ${label}: ${truncate(value, maxValueLen)}`);
+    const row = `  ${label}: ${truncate(value, maxValueLen)}`;
+    lines.push(PROSE_LEAF.test(meaningful.at(-1)?.key ?? '') ? row : oneLine(row));
   }
 
   if (dropped > 0) {
@@ -241,4 +271,34 @@ export function formatRemainingStudyFields(
   }
 
   return lines;
+}
+
+/**
+ * A searchCriteria value as Markdown a CommonMark parse reads back as written,
+ * so a `content[]`-only caller can copy it into its next call unchanged. A
+ * string is a code literal: a code span sized past its longest backtick run,
+ * or, when it holds a line break, a fenced block on lines of its own — a code
+ * span cannot hold one, since the block parse ends the line there and reads
+ * the next as a heading, list item, or quote. Each entry of a list renders the
+ * same way, inside `[…]`; a number or boolean renders as itself.
+ */
+export function formatEchoValue(value: unknown): string {
+  if (typeof value === 'string') {
+    return /[\r\n]/.test(value)
+      ? `\n${markdown().codeBlock(value).build()}\n`
+      : markdown().inlineCode(value).build();
+  }
+  if (Array.isArray(value)) return `[${value.map(formatEchoValue).join(', ')}]`;
+  return String(value);
+}
+
+/**
+ * The searchCriteria trailer of `clinicaltrials_search_studies` and
+ * `clinicaltrials_get_study_count`: one `- **key:** value` line per criterion.
+ */
+export function formatSearchCriteria(criteria: Record<string, unknown>): string {
+  const lines = Object.entries(criteria).map(
+    ([key, value]) => `- **${key}:** ${formatEchoValue(value)}`,
+  );
+  return `**Search Criteria:**\n${lines.join('\n')}`;
 }

@@ -7,10 +7,12 @@
 
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
-import { formatRemainingStudyFields } from '../utils/format-helpers.js';
+import { formatEchoValue, formatRemainingStudyFields, oneLine } from '../utils/format-helpers.js';
 import { haversineMi, type LocationWithDistance } from '../utils/geo-helpers.js';
+import { foldedWords, registryCountry, registryState } from '../utils/place-names.js';
 import {
   blankValueMessage,
   firstBlankListParam,
@@ -99,31 +101,6 @@ interface SiteMatchLocation {
   sameState: (name: string | undefined) => boolean;
 }
 
-/**
- * The words of a place name, folded the way upstream folds a location match so
- * a site ranks the way it was found: `Montréal` and `Montreal`, `Wrocław` and
- * `Wroclaw`, `St. Louis` and `St Louis`. Lowercased first, since stripping
- * marks before lowercasing changes context-dependent case mappings (`İ`); then
- * decomposed and stripped of combining marks; then the Latin letters with no
- * decomposition mapped; then periods and apostrophes deleted, so `D.C.` is one
- * word, `dc`; then split on every run of anything but letters and digits. Each
- * step is one linear pass over the name.
- */
-function foldedWords(name: string): string[] {
-  return name
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '')
-    .replaceAll('ß', 'ss')
-    .replaceAll('æ', 'ae')
-    .replaceAll('ø', 'o')
-    .replaceAll('ł', 'l')
-    .replaceAll('ı', 'i')
-    .replace(/[.'’‘ʼ]/g, '')
-    .split(/[^\p{L}\p{N}]+/u)
-    .filter((w) => w.length > 0);
-}
-
 /** The distinct folded words of a place name; see `foldedWords`. */
 export function placeWords(name: string): Set<string> {
   return new Set(foldedWords(name));
@@ -157,10 +134,11 @@ function samePlaceAs(requested: string | undefined): (name: string | undefined) 
  * A test for whether a site's country carries every word of the requested
  * country, folded (`placeWords`) — `Korea` matches the registry's `South
  * Korea`, `México` its `Mexico`. Word containment rather than equality: the
- * registry's spelling of a country rarely matches what a patient types. A site
- * that publishes no country fails. Memoized per distinct site spelling, since
- * one request scores every site of every candidate — thousands — across a few
- * countries.
+ * registry's spelling of a country rarely matches what a patient types. The
+ * handler passes a synonym's registry spelling (`registryCountry`), so `USA`
+ * passes on `United States` (#172). A site that publishes no country fails.
+ * Memoized per distinct site spelling, since one request scores every site of
+ * every candidate — thousands — across a few countries.
  */
 function countryGate(requested: string): (site: StudyLocation) => boolean {
   const wanted = placeWords(requested);
@@ -538,12 +516,16 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       ),
     location: z
       .object({
-        country: z.string().describe('Country name. E.g., "United States".'),
+        country: z
+          .string()
+          .describe(
+            'Country name, e.g. "United States". Common synonyms rank sites as the registry spelling does: USA and US as United States, UK and England as United Kingdom, Czech Republic as Czechia, Republic of Korea as South Korea, and PR, GU, VI, AS, and MP as the US territories, which the registry files as countries.',
+          ),
         state: z
           .string()
           .optional()
           .describe(
-            'State or province, compared with the state the site files. With city also given, a site that files no state still matches; without city, only sites filing this state match.',
+            'State or province, compared with the state the site files. A US state or DC abbreviation (WA, DC) is compared as its full name when the country is the United States or a synonym for it. With city also given, a site that files no state still matches; without city, only sites filing this state match.',
           ),
         city: z.string().optional().describe('City name.'),
       })
@@ -675,19 +657,20 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     searchCriteria: {
       render: (sc) => {
         const lines = [
-          `**Search:** conditions=[${sc.conditions.join(', ')}] | location=${sc.location} | age=${sc.age}${sc.ageUnit ? ` ${sc.ageUnit}` : ''} | sex=${sc.sex}`,
+          `**Search:** conditions=${formatEchoValue(sc.conditions)} | location=${formatEchoValue(sc.location)} | age=${sc.age}${sc.ageUnit ? ` ${formatEchoValue(sc.ageUnit)}` : ''} | sex=${formatEchoValue(sc.sex)}`,
         ];
         // Echo the exact upstream query strings so a content[]-only caller can
         // reproduce the full match set (find_eligible returns only maxResults) by
         // replaying them through clinicaltrials_search_studies. Every sub-field's
-        // VALUE must render here or it reaches structuredContent but not content[].
+        // VALUE must render here or it reaches structuredContent but not content[],
+        // and each renders through formatEchoValue so it reads back as sent (#177).
         const repro: string[] = [];
-        if (sc.conditionQuery) repro.push(`conditionQuery=${sc.conditionQuery}`);
+        if (sc.conditionQuery) repro.push(`conditionQuery=${formatEchoValue(sc.conditionQuery)}`);
         // location IS an applied upstream filter (queryLocn) — without it in the
         // repro set a caller replays a broader, all-locations query (#91-C).
-        if (sc.location) repro.push(`locationQuery=${sc.location}`);
-        if (sc.statusFilter?.length) repro.push(`statusFilter=[${sc.statusFilter.join(', ')}]`);
-        if (sc.advancedFilter) repro.push(`advancedFilter=${sc.advancedFilter}`);
+        if (sc.location) repro.push(`locationQuery=${formatEchoValue(sc.location)}`);
+        if (sc.statusFilter?.length) repro.push(`statusFilter=${formatEchoValue(sc.statusFilter)}`);
+        if (sc.advancedFilter) repro.push(`advancedFilter=${formatEchoValue(sc.advancedFilter)}`);
         if (repro.length) {
           // find_eligible always queries with includeUnknownEnrollment=true (eligibility
           // ignores enrollment-count quality); search_studies defaults it false and drops
@@ -701,6 +684,17 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     funnel: {
       render: (f) =>
         `**Funnel:** ${f.conditionMatched} condition → ${f.locationMatched} + location → ${f.demographicsMatched} + demographics`,
+    },
+    // A notice renders as authored Markdown, and the no-match notice quotes the
+    // caller's conditions, so the whole notice is escaped here and quoted line
+    // by line. Escaping in the handler would put the escapes in
+    // structuredContent too (#177).
+    notice: {
+      render: (notice: string) =>
+        escapeMarkdownInline(notice)
+          .split('\n')
+          .map((line) => `> ${line}`)
+          .join('\n'),
     },
   },
 
@@ -730,19 +724,25 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     };
     // Sites are scored, bounded, and admitted against the text the query
     // carries, not the raw value: a quoted part finds a study through its bare
-    // form, so it must match that study's sites the same way (#155).
-    const inRequestedCountry = countryGate(queryTermContent(location.country));
+    // form, so it must match that study's sites the same way (#155). A country
+    // or US state synonym upstream resolves (USA, UK, WA) is compared as the
+    // registry spelling it resolves to, so its sites rank as that spelling's
+    // do; the query and its echo keep the caller's spelling (#172).
+    const comparedCountry = registryCountry(queryTermContent(location.country));
+    const inRequestedCountry = countryGate(comparedCountry);
     const gatedMatch: SiteMatchLocation = {
       sameCity: samePlaceAs(location.city && queryTermContent(location.city)),
-      sameState: samePlaceAs(location.state && queryTermContent(location.state)),
+      sameState: samePlaceAs(
+        location.state && registryState(queryTermContent(location.state), comparedCountry),
+      ),
       inCountry: inRequestedCountry,
       gated: true,
     };
-    // Upstream resolves country synonyms the gate's word test does not (Czech
-    // Republic for Czechia, UK, USA), so a study can qualify on sites the gate
-    // rejects. When none of a study's sites passes the gate, the gate would
-    // score every site 0 and keep the whole list, so that study's city and
-    // state points go ungated.
+    // Upstream also resolves country spellings neither the synonym table nor
+    // the gate's word test carries (CZ for Czechia), so a study can qualify on
+    // sites the gate rejects. When none of a study's sites passes the gate, the
+    // gate would score every site 0 and keep the whole list, so that study's
+    // city and state points go ungated.
     const ungatedMatch: SiteMatchLocation = { ...gatedMatch, gated: false };
 
     const service = getClinicalTrialsService();
@@ -845,37 +845,40 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       sex: input.sex,
     });
 
-    // Run the main search and the two funnel-stage counts together. The service
-    // queues outbound requests one per ~1s, so these three leave ~1s apart
-    // whether written as Promise.all or chained awaits — Promise.all just keeps
-    // the code straight. That makes the funnel cost a real ~2s on every call,
-    // paid deliberately: the counts turn "2 matches" into "298 match the
-    // condition, 4 of those are in this location", which is what tells a caller
-    // which constraint to relax, and getting it any other way costs two more
-    // round-trips.
-    const [result, conditionMatched, locationMatched] = await Promise.all([
-      service.searchStudies(
-        {
-          queryCond: conditionQuery,
-          queryLocn: locationQuery,
-          filterOverallStatus: statusFilter,
-          filterAdvanced: advancedFilter,
-          fields: ELIGIBLE_FIELDS,
-          pageSize: Math.min(input.maxResults, MAX_RESULTS_PER_CALL),
-          countTotal: true,
-          // Eligibility matches are about who can enroll, not about enrollment
-          // count quality. Don't drop matches just because the sponsor didn't
-          // publish a count.
-          includeUnknownEnrollment: true,
-        },
-        ctx,
-      ),
-      service.countStudies({ queryCond: conditionQuery, includeUnknownEnrollment: true }, ctx),
-      service.countStudies(
-        { queryCond: conditionQuery, queryLocn: locationQuery, includeUnknownEnrollment: true },
-        ctx,
-      ),
-    ]);
+    // The main search, then the two funnel-stage counts, in sequence. The
+    // service paces outbound requests at least ~1s apart, so issuing them
+    // together gains nothing, and a failure would leave the others queued to
+    // reach ClinicalTrials.gov after the error returned, delaying the next
+    // call's requests (#176). In sequence a failure sends nothing further and
+    // the caller gets that request's own error. The funnel costs a real ~2s on
+    // every call, paid deliberately: the counts turn "2 matches" into "298 match
+    // the condition, 4 of those are in this location", which is what tells a
+    // caller which constraint to relax, and getting it any other way costs two
+    // more round-trips.
+    const result = await service.searchStudies(
+      {
+        queryCond: conditionQuery,
+        queryLocn: locationQuery,
+        filterOverallStatus: statusFilter,
+        filterAdvanced: advancedFilter,
+        fields: ELIGIBLE_FIELDS,
+        pageSize: Math.min(input.maxResults, MAX_RESULTS_PER_CALL),
+        countTotal: true,
+        // Eligibility matches are about who can enroll, not about enrollment
+        // count quality. Don't drop matches just because the sponsor didn't
+        // publish a count.
+        includeUnknownEnrollment: true,
+      },
+      ctx,
+    );
+    const conditionMatched = await service.countStudies(
+      { queryCond: conditionQuery, includeUnknownEnrollment: true },
+      ctx,
+    );
+    const locationMatched = await service.countStudies(
+      { queryCond: conditionQuery, queryLocn: locationQuery, includeUnknownEnrollment: true },
+      ctx,
+    );
 
     ctx.log.info('Eligibility search complete', {
       returned: result.studies.length,
@@ -1053,7 +1056,10 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         const elig = s.protocolSection?.eligibilityModule ?? {};
         const locs = s.protocolSection?.contactsLocationsModule?.locations ?? [];
 
-        lines.push(`**${nctId}**: ${title} [${status}]`);
+        // Every single-line slot is folded with oneLine, so a line break in
+        // registry text cannot end the line and forge a heading or a candidate.
+        // The summary, a prose field under its own label, keeps its breaks (#180).
+        lines.push(oneLine(`**${nctId}**: ${title} [${status}]`));
 
         // Study metadata
         const phases = s.protocolSection?.designModule?.phases;
@@ -1066,12 +1072,12 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         if (enrollment != null) studyMeta.push(`N=${enrollment}`);
         if (sponsor) studyMeta.push(sponsor);
         if (conditions?.length) studyMeta.push(conditions.join(', '));
-        if (studyMeta.length) lines.push(`  ${studyMeta.join(' | ')}`);
+        if (studyMeta.length) lines.push(`  ${oneLine(studyMeta.join(' | '))}`);
         if (interventions?.length) {
           // Render every intervention name — content[] must match the full list
           // carried in structuredContent, not a first-3 preview (#91).
           const names = interventions.map((i) => i.name).filter(Boolean);
-          if (names.length) lines.push(`  Interventions: ${names.join(', ')}`);
+          if (names.length) lines.push(oneLine(`  Interventions: ${names.join(', ')}`));
         }
         const summary = s.protocolSection?.descriptionModule?.briefSummary;
         // Render the full summary — structuredContent carries it complete, so a
@@ -1088,7 +1094,8 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         if (elig.sex) eligParts.push(`Sex: ${elig.sex}`);
         if (elig.healthyVolunteers != null)
           eligParts.push(`Healthy Volunteers: ${elig.healthyVolunteers ? 'Yes' : 'No'}`);
-        if (eligParts.length) lines.push(`  Demographic criteria: ${eligParts.join(' | ')}`);
+        if (eligParts.length)
+          lines.push(oneLine(`  Demographic criteria: ${eligParts.join(' | ')}`));
 
         // Disclose the bound the handler applied, so a content[]-only reader knows
         // the site list is the near-the-patient subset rather than the full one,
@@ -1106,7 +1113,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
               ? '; none of them is recruiting, so the nearest recruiting site is included'
               : '; none of them is recruiting, so one recruiting site from a wider area is included (picked by match order — coordinates to measure distance are missing)';
           lines.push(
-            `  Sites: showing ${locs.length} of ${locationSummary.totalLocations} registered (${locationSummary.matchedLocations} match the requested location${truncated}${admitted}). Full site list: ${locationSummary.retrieveFullStudyWith} with ${nctId}.`,
+            oneLine(
+              `  Sites: showing ${locs.length} of ${locationSummary.totalLocations} registered (${locationSummary.matchedLocations} match the requested location${truncated}${admitted}). Full site list: ${locationSummary.retrieveFullStudyWith} with ${nctId}.`,
+            ),
           );
         }
 
@@ -1131,7 +1140,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
               return `${site}${status}${distance}`;
             })
             .join(' | ');
-          lines.push(`  Locations: ${locStr}`);
+          lines.push(oneLine(`  Locations: ${locStr}`));
         }
 
         // Central contacts — render all; the full set rides in structuredContent (#91).
@@ -1140,7 +1149,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
           const contactStr = centralContacts
             .map((c) => [c.name, c.phone, c.email].filter(Boolean).join(', '))
             .join(' | ');
-          lines.push(`  Contact: ${contactStr}`);
+          lines.push(oneLine(`  Contact: ${contactStr}`));
         }
         // Lift both caps on the field-dump fallback so any remaining requested leaf
         // reaches content[] at full length, matching structuredContent (#91, mirrors #89).

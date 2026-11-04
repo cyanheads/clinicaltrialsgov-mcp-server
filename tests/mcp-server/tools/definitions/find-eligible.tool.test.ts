@@ -4,7 +4,7 @@
  */
 
 import { z } from '@cyanheads/mcp-ts-core';
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, rateLimited, validationError } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -21,6 +21,7 @@ import {
   findEligible,
   placeWords,
 } from '@/mcp-server/tools/definitions/find-eligible.tool.js';
+import { readMarkdown } from '../../../helpers/commonmark.js';
 import { expectLinearGrowth, LINE_BREAK_SHAPES } from '../../../helpers/cpu-timing.js';
 import { loadStudyFixture } from '../../../helpers/format-parity.js';
 
@@ -513,8 +514,8 @@ describe('findEligible', () => {
       expect(sc.age).toBe(30);
       expect(sc).not.toHaveProperty('ageUnit');
       expect(sc.advancedFilter).toBe(yearsFilter);
-      expect(textOf(result)).toContain(
-        `**Search:** conditions=[Type 2 Diabetes] | location=${BASE_LOCATION_QUERY} | age=30 | sex=ALL`,
+      expect(readMarkdown(textOf(result))).toContain(
+        `Search: conditions=[Type 2 Diabetes] | location=${BASE_LOCATION_QUERY} | age=30 | sex=ALL`,
       );
     });
 
@@ -558,9 +559,9 @@ describe('findEligible', () => {
       const sc = (result.structuredContent as { searchCriteria: Record<string, unknown> })
         .searchCriteria;
       expect(sc).toMatchObject({ age: 7, ageUnit: 'months', advancedFilter: monthsFilter });
-      const text = textOf(result);
-      expect(text).toContain('| age=7 months | sex=ALL');
-      expect(text).toContain(`advancedFilter=${monthsFilter}`);
+      const seen = readMarkdown(textOf(result));
+      expect(seen).toContain('| age=7 months | sex=ALL');
+      expect(seen).toContain(`advancedFilter=${monthsFilter}`);
     });
 
     it.each(['weeks', 'days'] as const)('sends and echoes %s the same way', async (ageUnit) => {
@@ -571,7 +572,7 @@ describe('findEligible', () => {
       expect(filter).toContain(`AREA[MaximumAge]RANGE[30 ${ageUnit}, MAX]`);
       expect(filter).not.toContain('years');
       expect(result.structuredContent).toMatchObject({ searchCriteria: { age: 30, ageUnit } });
-      expect(textOf(result)).toContain(`| age=30 ${ageUnit} | sex=ALL`);
+      expect(readMarkdown(textOf(result))).toContain(`| age=30 ${ageUnit} | sex=ALL`);
     });
 
     it.each(['years', 'months', 'weeks', 'days'])('keeps age an integer 0-120 in %s', (ageUnit) => {
@@ -1024,7 +1025,7 @@ describe('findEligible', () => {
         conditionQuery: '"Type 2 Diabetes"',
         statusFilter: ['RECRUITING'],
       });
-      expect(text).toContain(
+      expect(readMarkdown(text)).toContain(
         'locationQuery=SEARCH[Location]("East Northport" AND "New York" AND "United States")',
       );
     });
@@ -1061,10 +1062,12 @@ describe('findEligible', () => {
         ...baseInput,
         location: { city: 'London', country: 'United Kingdom' },
       });
-      const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+      const seen = readMarkdown(
+        (result.content as { text: string }[]).map((b) => b.text).join('\n'),
+      );
       const expected = 'SEARCH[Location](London AND AREA[LocationCountry]"United Kingdom")';
-      expect(text).toContain(`location=${expected}`);
-      expect(text).toContain(`locationQuery=${expected}`);
+      expect(seen).toContain(`location=${expected}`);
+      expect(seen).toContain(`locationQuery=${expected}`);
       expect(result.structuredContent).toMatchObject({ searchCriteria: { location: expected } });
     });
 
@@ -1608,16 +1611,18 @@ describe('findEligible', () => {
     it('renders the reproducible query strings in the searchCriteria content[] trailer (#91)', () => {
       // The trailer is content[]'s twin of the searchCriteria enrichment — every
       // sub-field VALUE must render here, or it reaches structuredContent only.
-      const text = findEligible.enrichmentTrailer!.searchCriteria!.render!({
-        conditions: ['Type 2 Diabetes'],
-        location: 'SEARCH[Location](Seattle AND Washington AND "United States")',
-        age: 30,
-        sex: 'ALL',
-        conditionQuery: '"Type 2 Diabetes"',
-        statusFilter: ['RECRUITING'],
-        advancedFilter:
-          '(AREA[MinimumAge]RANGE[MIN, 30 years] OR AREA[MinimumAge]MISSING) AND (AREA[MaximumAge]RANGE[30 years, MAX] OR AREA[MaximumAge]MISSING)',
-      });
+      const text = readMarkdown(
+        findEligible.enrichmentTrailer!.searchCriteria!.render!({
+          conditions: ['Type 2 Diabetes'],
+          location: 'SEARCH[Location](Seattle AND Washington AND "United States")',
+          age: 30,
+          sex: 'ALL',
+          conditionQuery: '"Type 2 Diabetes"',
+          statusFilter: ['RECRUITING'],
+          advancedFilter:
+            '(AREA[MinimumAge]RANGE[MIN, 30 years] OR AREA[MinimumAge]MISSING) AND (AREA[MaximumAge]RANGE[30 years, MAX] OR AREA[MaximumAge]MISSING)',
+        }),
+      );
       expect(text).toContain('conditions=[Type 2 Diabetes]');
       expect(text).toContain('conditionQuery="Type 2 Diabetes"');
       // location is an applied upstream filter (queryLocn) — it must ride in the
@@ -1923,6 +1928,369 @@ describe('findEligible', () => {
       const locs = sortedStudy.protocolSection.contactsLocationsModule.locations;
       // Seattle (city match) wins over WA-state-only and US-country-only sites.
       expect(locs[0]!.facility).toBe('Seattle Site');
+    });
+  });
+
+  // The main search and the two funnel counts go upstream one after another,
+  // main search first, so once one fails the call sends nothing further and
+  // fails with that request's error (#176). The counts stay mandatory.
+  describe('upstream request sequence (#176)', () => {
+    const fieldInvalid = () =>
+      validationError('Error parsing query in Conditions or disease: Unknown area name: `FooBar`', {
+        reason: 'field_invalid',
+      });
+    const tooLong = () =>
+      validationError('ClinicalTrials.gov rejected the request as too long (HTTP 414).', {
+        reason: 'request_too_long',
+      });
+    const limited = () =>
+      rateLimited('Rate limited by ClinicalTrials.gov after 3 retries', { reason: 'rate_limited' });
+
+    /**
+     * Settle `run` with fake timers standing in for the pacer's one-second gap
+     * between requests — long enough that a request left queued behind an
+     * abort or a rejection would reach the fetch fake too.
+     */
+    async function throttled<T>(run: () => Promise<T>) {
+      vi.useFakeTimers();
+      try {
+        const outcome = run().then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
+        await vi.advanceTimersByTimeAsync(10_000);
+        return await outcome;
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    }
+
+    it.each([
+      {
+        failing: 'the main search',
+        reason: 'field_invalid',
+        counts: 0,
+        arrange: () => mockService.searchStudies.mockRejectedValue(fieldInvalid()),
+      },
+      {
+        failing: 'the condition-only count',
+        reason: 'request_too_long',
+        counts: 1,
+        arrange: () => {
+          mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+          mockService.countStudies.mockRejectedValueOnce(tooLong());
+        },
+      },
+      {
+        failing: 'the condition + location count',
+        reason: 'rate_limited',
+        counts: 2,
+        arrange: () => {
+          mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+          mockService.countStudies.mockResolvedValueOnce(298).mockRejectedValueOnce(limited());
+        },
+      },
+    ])(
+      'fails with the error of $failing and asks for nothing after it',
+      async ({ arrange, reason, counts }) => {
+        arrange();
+        const result = await runToolContract(findEligible, baseInput);
+
+        expect(result.isError).toBe(true);
+        expect(
+          (result.structuredContent as { error: { data: { reason: string } } }).error.data.reason,
+        ).toBe(reason);
+        expect(mockService.searchStudies).toHaveBeenCalledTimes(1);
+        expect(mockService.countStudies).toHaveBeenCalledTimes(counts);
+      },
+    );
+
+    it('asks for each request only once the one before it has answered, main search first', async () => {
+      const events: string[] = [];
+      const answer =
+        <T>(name: string, value: T) =>
+        async () => {
+          events.push(`ask ${name}`);
+          await Promise.resolve();
+          events.push(`answer ${name}`);
+          return value;
+        };
+      mockService.searchStudies.mockImplementation(
+        answer('search', { studies: [], totalCount: 2 }),
+      );
+      mockService.countStudies
+        .mockImplementationOnce(answer('condition', 298))
+        .mockImplementationOnce(answer('location', 47));
+
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+
+      expect(events).toEqual([
+        'ask search',
+        'answer search',
+        'ask condition',
+        'answer condition',
+        'ask location',
+        'answer location',
+      ]);
+      expect(getEnrichment(ctx).funnel).toEqual({
+        conditionMatched: 298,
+        locationMatched: 47,
+        demographicsMatched: 2,
+      });
+    });
+
+    // A real service over a fetch fake: the main search answers, then the caller
+    // aborts during the first funnel count.
+    describe('caller cancellation mid-call', () => {
+      const study = { protocolSection: { identificationModule: { nctId: 'NCT12345678' } } };
+
+      async function cancelDuringFirstCount() {
+        const { ClinicalTrialsService } = await vi.importActual<
+          typeof import('@/services/clinical-trials/clinical-trials-service.js')
+        >('@/services/clinical-trials/clinical-trials-service.js');
+        const controller = new AbortController();
+        const fetchFake = vi.fn(async (input: string | URL | Request) => {
+          const url = new URL(input instanceof Request ? input.url : input);
+          if (url.origin !== 'https://test.api' || url.pathname !== '/v2/studies') {
+            throw new Error('unmocked fetch');
+          }
+          // A funnel count asks for one study; the main search for a page of them.
+          if (url.searchParams.get('pageSize') !== '1') {
+            return Response.json({ studies: [study], totalCount: 1 });
+          }
+          controller.abort();
+          throw new DOMException('This operation was aborted', 'AbortError');
+        });
+        vi.stubGlobal('fetch', fetchFake);
+        mockGetService.mockReturnValue(
+          new ClinicalTrialsService(
+            { apiBaseUrl: 'https://test.api/v2', requestTimeoutMs: 5000, maxPageSize: 100 },
+            { validateFieldsLocally: false },
+          ),
+        );
+        return { fetchFake, signal: controller.signal };
+      }
+
+      it('rejects the handler with RequestCancelled and sends no request after the aborted one', async () => {
+        const { fetchFake, signal } = await cancelDuringFirstCount();
+        const ctx = createMockContext({ errors: findEligible.errors, signal });
+
+        const outcome = await throttled(async () =>
+          findEligible.handler(findEligible.input!.parse(baseInput), ctx),
+        );
+
+        expect(outcome).toMatchObject({
+          error: {
+            code: JsonRpcErrorCode.RequestCancelled,
+            message: 'Request cancelled by caller',
+            cause: { name: 'AbortError' },
+          },
+        });
+        // The main search, then the aborted count — never the location count.
+        expect(fetchFake).toHaveBeenCalledTimes(2);
+      });
+
+      it('answers RequestCancelled on both surfaces', async () => {
+        const { signal } = await cancelDuringFirstCount();
+
+        const outcome = await throttled(() =>
+          runToolContract(findEligible, baseInput, { context: { signal } }),
+        );
+
+        const result = (outcome as { value: Awaited<ReturnType<typeof runToolContract>> }).value;
+        expect(result.isError).toBe(true);
+        expect(result.structuredContent).toMatchObject({
+          error: {
+            code: JsonRpcErrorCode.RequestCancelled,
+            message: 'Request cancelled by caller',
+          },
+        });
+        expect(readMarkdown((result.content as { text: string }[])[0]!.text)).toContain(
+          'Request cancelled by caller',
+        );
+      });
+    });
+
+    // The issue's own observable, read at the fetch boundary of a real service:
+    // the request ClinicalTrials.gov rejects is the call's last, so nothing it
+    // would have sent waits in the pacer ahead of the next call's request.
+    describe('a rejected request leaves nothing queued upstream', () => {
+      it.each([
+        {
+          rejected: 'a condition ClinicalTrials.gov cannot parse (HTTP 400)',
+          conditions: ['AREA[FooBar]x'],
+          reason: 'field_invalid',
+          answer: () =>
+            new Response(
+              'Error parsing query in Conditions or disease: Unknown area name: `FooBar`',
+              { status: 400, headers: { 'content-type': 'text/plain' } },
+            ),
+        },
+        {
+          rejected: 'a condition list too long for one request (HTTP 414)',
+          conditions: Array.from(
+            { length: 700 },
+            (_, i) => `condition${String(i).padStart(4, '0')}`,
+          ),
+          reason: 'request_too_long',
+          answer: () => new Response('<html>414 Request-URI Too Large</html>', { status: 414 }),
+        },
+      ])(
+        'sends one request for $rejected, and the next call’s request goes next',
+        async ({ conditions, reason, answer }) => {
+          const { ClinicalTrialsService } = await vi.importActual<
+            typeof import('@/services/clinical-trials/clinical-trials-service.js')
+          >('@/services/clinical-trials/clinical-trials-service.js');
+          const sent: URL[] = [];
+          vi.stubGlobal(
+            'fetch',
+            vi.fn(async (input: string | URL | Request) => {
+              const url = new URL(input instanceof Request ? input.url : input);
+              if (url.origin !== 'https://test.api' || url.pathname !== '/v2/studies') {
+                throw new Error('unmocked fetch');
+              }
+              sent.push(url);
+              return url.searchParams.get('query.cond') === 'diabetes'
+                ? Response.json({ studies: [], totalCount: 5 })
+                : answer();
+            }),
+          );
+          const service = new ClinicalTrialsService(
+            { apiBaseUrl: 'https://test.api/v2', requestTimeoutMs: 5000, maxPageSize: 100 },
+            { validateFieldsLocally: false },
+          );
+          mockGetService.mockReturnValue(service);
+
+          const outcome = await throttled(async () => {
+            const result = await runToolContract(findEligible, { ...baseInput, conditions });
+            // The next call: the count the issue's repro sends as soon as the first returns.
+            const next = await service.countStudies({ queryCond: 'diabetes' }, createMockContext());
+            return { result, next };
+          });
+          const { result, next } = (
+            outcome as {
+              value: { result: Awaited<ReturnType<typeof runToolContract>>; next: number };
+            }
+          ).value;
+
+          expect(result.isError).toBe(true);
+          expect(
+            (result.structuredContent as { error: { data: { reason: string } } }).error.data.reason,
+          ).toBe(reason);
+          // find_eligible's one request is its main search, a page of ten — never a
+          // one-study funnel count — and the next call's count follows it directly.
+          expect(sent.map((u) => u.searchParams.get('pageSize'))).toEqual(['10', '1']);
+          expect(sent[1]?.searchParams.get('query.cond')).toBe('diabetes');
+          expect(next).toBe(5);
+        },
+      );
+    });
+  });
+
+  // Every string the searchCriteria trailer echoes reads back in content[] as
+  // structuredContent carries it, and the no-match notice reads back the
+  // conditions it quotes (#177). The value table lives with formatEchoValue in
+  // the format-helpers suite; these prove the wiring.
+  describe('content[] reads back the echoed criteria (#177)', () => {
+    const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+      (result.content as { text: string }[]).map((b) => b.text).join('\n');
+    const run = async (input: Record<string, unknown>) => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const result = await runToolContract(findEligible, { ...baseInput, ...input });
+      const structured = result.structuredContent as {
+        notice: string;
+        searchCriteria: Record<string, unknown>;
+      };
+      return {
+        notice: structured.notice,
+        sc: structured.searchCriteria,
+        seen: readMarkdown(textOf(result)),
+      };
+    };
+    const ageFilter = (age: number) =>
+      `(AREA[MinimumAge]RANGE[MIN, ${age} years] OR AREA[MinimumAge]MISSING) AND (AREA[MaximumAge]RANGE[${age} years, MAX] OR AREA[MaximumAge]MISSING)`;
+
+    it('reads a country-only location back on the Search and Reproduce lines, structuredContent unchanged', async () => {
+      const { sc, seen } = await run({
+        age: 55,
+        conditions: ['cancer'],
+        location: { country: 'Mexico' },
+      });
+      const location = 'SEARCH[Location](AREA[LocationCountry]"Mexico")';
+
+      expect(sc).toEqual({
+        conditions: ['cancer'],
+        location,
+        age: 55,
+        sex: 'ALL',
+        conditionQuery: 'cancer',
+        statusFilter: ['RECRUITING'],
+        advancedFilter: ageFilter(55),
+      });
+      expect(seen).toContain(
+        `Search: conditions=[cancer] | location=${location} | age=55 | sex=ALL`,
+      );
+      expect(seen).toContain(
+        `Reproduce via clinicaltrials_search_studies: conditionQuery=cancer | locationQuery=${location} | statusFilter=[RECRUITING] | advancedFilter=${ageFilter(55)} | includeUnknownEnrollment=true`,
+      );
+    });
+
+    it('reads back a condition shaped like a link', async () => {
+      const { sc, seen } = await run({ conditions: ['AREA[Condition](cancer)'] });
+
+      expect(sc.conditionQuery).toBe('AREA[Condition](cancer)');
+      expect(seen).toContain('conditions=[AREA[Condition](cancer)] |');
+      expect(seen).toContain('conditionQuery=AREA[Condition](cancer) |');
+    });
+
+    it('reads back an emphasis-shaped condition in the echo and the no-match notice, raw in structuredContent', async () => {
+      const { notice, seen } = await run({ conditions: ['_x_'] });
+
+      expect(notice).toMatch(/^No studies found for "_x_" matching the specified criteria\. /);
+      expect(seen).toContain('conditions=[_x_] |');
+      expect(seen).toContain('conditionQuery=_x_ |');
+      expect(seen).toContain(notice);
+    });
+
+    it('reads back a state ending in a backslash, which the query doubles', async () => {
+      const { sc, seen } = await run({ location: { country: 'France', state: 'Ile\\' } });
+      const location =
+        'SEARCH[Location](AREA[LocationState]"Ile\\\\" AND AREA[LocationCountry]"France")';
+
+      expect(sc.location).toBe(location);
+      expect(seen).toContain(`location=${location} |`);
+      expect(seen).toContain(`locationQuery=${location} |`);
+    });
+
+    it('frames each condition on its own, a multi-line one as a block, which the notice quotes across a line break', async () => {
+      const conditions = ['Type 2 Diabetes', 'x\n# y'];
+      const { notice, sc, seen } = await run({ conditions });
+
+      expect(sc.conditions).toEqual(conditions);
+      expect(notice).toMatch(/^No studies found for "Type 2 Diabetes, x\n# y" matching /);
+      expect(seen).toContain('Search: conditions=[Type 2 Diabetes,\nx\n# y\n\n] | location=');
+      expect(seen).toContain(`conditionQuery=\n${sc.conditionQuery as string}\n`);
+      expect(seen).toContain(notice);
+    });
+
+    describe('the notice render stays linear on caller-sized text', () => {
+      const render = (notice: string) => findEligible.enrichmentTrailer!.notice!.render!(notice);
+
+      it.each([
+        ...LINE_BREAK_SHAPES,
+        [
+          'a heading-marker run inside quotes',
+          (n: number) => `No studies found for "${'#'.repeat(n)}" matching`,
+        ],
+        ['autolink openers throughout', (n: number) => '<1@'.repeat(n / 3)],
+        ['backslashes throughout', (n: number) => '\\'.repeat(n)],
+        ['underscores throughout', (n: number) => '_'.repeat(n)],
+        ['a long digit run', (n: number) => '1'.repeat(n)],
+      ] as const)('%s', (_name, shape) => {
+        expectLinearGrowth(render, shape);
+      });
     });
   });
 
@@ -3035,9 +3403,10 @@ describe('findEligible', () => {
       });
 
       // A study can match a country spelled differently from the registry
-      // (Czech Republic for Czechia) through other site text. With no site
-      // passing the gate, the gate would score every site 0 and keep the whole
-      // list; the study is scored ungated instead, so the city still bounds it.
+      // through a synonym upstream resolves and the synonym table does not carry
+      // (CZ for Czechia). With no site passing the gate, the gate would score
+      // every site 0 and keep the whole list; the study is scored ungated
+      // instead, so the city still bounds it.
       describe('a requested country no site of the study spells the same way', () => {
         const pragueStudy = () =>
           studyWith('NCT06607458', [
@@ -3048,9 +3417,9 @@ describe('findEligible', () => {
             site('Bulovka', 'Prague', '', 'Czechia', 'NOT_YET_RECRUITING'),
           ]);
 
-        it('bounds a Prague + Czech Republic request to the Prague sites', async () => {
+        it('bounds a Prague + CZ request to the Prague sites', async () => {
           const candidate = await runOne(pragueStudy(), {
-            location: { city: 'Prague', country: 'Czech Republic' },
+            location: { city: 'Prague', country: 'CZ' },
           });
           expect(facilities(candidate)).toEqual(['Motol', 'Bulovka']);
           expect(candidate.locationSummary).toMatchObject({
@@ -3064,7 +3433,7 @@ describe('findEligible', () => {
           mockService.searchStudies.mockResolvedValue({ studies: [pragueStudy()], totalCount: 1 });
           const result = await runToolContract(findEligible, {
             ...baseInput,
-            location: { city: 'Prague', country: 'Czech Republic' },
+            location: { city: 'Prague', country: 'CZ' },
           });
           const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
           expect(text).toContain('Motol, Prague, Czechia');
@@ -3355,6 +3724,161 @@ describe('findEligible', () => {
           );
           expect(facilities(candidate)).toEqual(['Tijuana', 'INCan']);
         });
+      });
+    });
+
+    // ClinicalTrials.gov resolves country synonyms (USA, UK) and, bound to the
+    // United States, state abbreviations (WA), so a study is found whichever
+    // spelling the caller writes. The ranking compares each as the registry
+    // spelling it resolves to, so its sites rank as that spelling's do, while
+    // the query and its echo keep the caller's spelling (#172). The rows
+    // themselves are tabled in the place-names suite; these prove the wiring.
+    describe('synonyms upstream resolves (#172)', () => {
+      /** NCT07864168's shape: the Washington sites file after a dozen others. */
+      const washingtonStudy = () =>
+        studyWith('NCT07864168', [
+          site('Chula Vista', 'Chula Vista', 'California'),
+          site('Santa Barbara', 'Santa Barbara', 'California'),
+          site('Walnut Creek', 'Walnut Creek', 'California'),
+          site('Aurora A', 'Aurora', 'Colorado'),
+          site('Aurora B', 'Aurora', 'Colorado'),
+          site('Atlanta', 'Atlanta', 'Georgia'),
+          site('Idaho Falls', 'Idaho Falls', 'Idaho'),
+          site('Austin', 'Austin', 'Texas'),
+          site('San Antonio', 'San Antonio', 'Texas'),
+          site('Charlottesville', 'Charlottesville', 'Virginia'),
+          site('Portland', 'Portland', 'Oregon'),
+          site('Boise', 'Boise', 'Idaho'),
+          site('Renton', 'Renton', 'Washington'),
+          site('Seattle', 'Seattle', 'Washington'),
+        ]);
+
+      it('ranks a WA request as Washington: the Washington sites, not the first ten', async () => {
+        const abbreviated = await runOne(washingtonStudy(), {
+          location: { state: 'WA', country: 'United States' },
+        });
+        const spelled = await runOne(washingtonStudy(), {
+          location: { state: 'Washington', country: 'United States' },
+        });
+        expect(facilities(abbreviated)).toEqual(['Renton', 'Seattle']);
+        expect(abbreviated.locationSummary).toEqual({
+          totalLocations: 14,
+          matchedLocations: 2,
+          locationsTruncated: false,
+          retrieveFullStudyWith: 'clinicaltrials_get_study_record',
+        });
+        expect(abbreviated).toEqual(spelled);
+      });
+
+      // The Perth site files state Washington, country Australia, as some
+      // registry records do: the gate keeps it out of a United States tier.
+      it.each([
+        { state: 'WA', country: 'USA' },
+        { state: 'wa', country: 'United States' },
+      ])('ranks $state + $country as Washington + United States', async (location) => {
+        const study = () =>
+          studyWith('NCT1', [
+            site('Perth', 'Perth', 'Washington', 'Australia'),
+            site('Portland', 'Portland', 'Oregon'),
+            site('Renton', 'Renton', 'Washington'),
+          ]);
+        const synonym = await runOne(study(), { location });
+        const registry = await runOne(study(), {
+          location: { state: 'Washington', country: 'United States' },
+        });
+        expect(facilities(synonym)).toEqual(['Renton']);
+        expect(synonym.locationSummary).toMatchObject({ totalLocations: 3, matchedLocations: 1 });
+        expect(synonym).toEqual(registry);
+      });
+
+      it('ranks a USA request as United States: the US site, not the Australian one', async () => {
+        const study = () =>
+          studyWith('NCT07873450', [
+            site('Minneapolis', 'Minneapolis', 'Minnesota'),
+            site('Nedlands', 'Nedlands', 'Western Australia', 'Australia'),
+          ]);
+        const synonym = await runOne(study(), { location: { country: 'USA' } });
+        const registry = await runOne(study(), { location: { country: 'United States' } });
+        expect(facilities(synonym)).toEqual(['Minneapolis']);
+        expect(synonym.locationSummary).toMatchObject({ totalLocations: 2, matchedLocations: 1 });
+        expect(synonym).toEqual(registry);
+      });
+
+      it.each(['UK', 'u.k.'])(
+        'gates a London + %s request: London, Ontario earns no city credit',
+        async (country) => {
+          const candidate = await runOne(
+            studyWith('NCT1', [
+              site('Victoria Hospital', 'London', 'Ontario', 'Canada'),
+              site('St Thomas', 'London', '', 'United Kingdom'),
+              site('Christie', 'Manchester', '', 'United Kingdom'),
+            ]),
+            { location: { city: 'London', country } },
+          );
+          expect(facilities(candidate)).toEqual(['St Thomas']);
+          expect(candidate.locationSummary).toMatchObject({
+            totalLocations: 3,
+            matchedLocations: 1,
+          });
+        },
+      );
+
+      it('gives a WA + Australia request no credit from the US state rows', async () => {
+        // Read as Washington, WA would put the Perth site filed state
+        // Washington alone in the tier.
+        const candidate = await runOne(
+          studyWith('NCT1', [
+            site('Fiona Stanley', 'Perth', 'Western Australia', 'Australia'),
+            site('Perth Washington', 'Perth', 'Washington', 'Australia'),
+            site('Seattle', 'Seattle', 'Washington'),
+          ]),
+          { location: { state: 'WA', country: 'Australia' } },
+        );
+        expect(facilities(candidate)).toEqual(['Fiona Stanley', 'Perth Washington']);
+        expect(candidate.locationSummary).toMatchObject({ totalLocations: 3, matchedLocations: 2 });
+      });
+
+      it('renders the synonym-ranked sites on content[] too', async () => {
+        mockService.searchStudies.mockResolvedValue({
+          studies: [washingtonStudy()],
+          totalCount: 1,
+        });
+        const result = await runToolContract(findEligible, {
+          ...baseInput,
+          location: { state: 'WA', country: 'USA' },
+        });
+        const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+        expect(text).toContain(
+          '  Sites: showing 2 of 14 registered (2 match the requested location). Full site list: clinicaltrials_get_study_record with NCT07864168.',
+        );
+        expect(text).toContain(
+          '  Locations: Renton, Renton, Washington, United States [RECRUITING] | Seattle, Seattle, Washington, United States [RECRUITING]\n',
+        );
+        expect(text).not.toContain('Chula Vista');
+        const sc = result.structuredContent as { studies: CandidateStudy[] };
+        expect(facilities(sc.studies[0]!)).toEqual(['Renton', 'Seattle']);
+      });
+
+      it('sends and echoes the caller spelling upstream, unchanged', async () => {
+        mockService.searchStudies.mockResolvedValue({
+          studies: [washingtonStudy()],
+          totalCount: 1,
+        });
+        const ctx = createMockContext({ errors: findEligible.errors });
+        await findEligible.handler(
+          findEligible.input!.parse({
+            ...baseInput,
+            location: { city: 'Seattle', state: 'WA', country: 'USA' },
+          }),
+          ctx,
+        );
+        const expected =
+          'SEARCH[Location](Seattle AND (AREA[LocationState]"WA" OR AREA[LocationState]MISSING) AND AREA[LocationCountry]"USA")';
+        expect(mockService.searchStudies).toHaveBeenCalledWith(
+          expect.objectContaining({ queryLocn: expected }),
+          expect.anything(),
+        );
+        expect((getEnrichment(ctx).searchCriteria as { location: string }).location).toBe(expected);
       });
     });
   });

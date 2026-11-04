@@ -1,6 +1,7 @@
 /**
  * @fileoverview Tests for field-search utilities: flattenMetadata, searchFields,
- * nearestPieces, and the AREA[] name index and rewrite.
+ * nearestPieces, the AREA[] name index and rewrite, and the second tier of
+ * index-only pieces and search areas behind it.
  * @module tests/services/clinical-trials/field-search
  */
 
@@ -8,16 +9,34 @@ import { createMockLogger } from '@cyanheads/mcp-ts-core/testing';
 import { describe, expect, it, vi } from 'vitest';
 import {
   type AreaIndex,
+  type AreaLookup,
   buildAreaIndex,
+  buildExtendedIndex,
+  type ExtendedName,
   type FieldIndexEntry,
   flattenMetadata,
+  indexOnlyNames,
+  missesRecordTier,
+  type NameFold,
   nearestPieces,
   normalizeAreaNames,
+  resolveName,
   rewriteAreaNames,
+  searchAreaNames,
   searchFields,
 } from '@/services/clinical-trials/field-search.js';
 import type { FieldNode } from '@/services/clinical-trials/types.js';
-import { AREA_METADATA, areaIndex, STRUCT_PIECES } from '../../helpers/area-metadata.js';
+import {
+  AREA_METADATA,
+  areaIndex,
+  INDEXED_METADATA,
+  LIVE_INDEX_ONLY,
+  LIVE_RECORD_PIECES,
+  LIVE_SEARCH_AREAS,
+  RECORD_METADATA,
+  SEARCH_AREAS,
+  STRUCT_PIECES,
+} from '../../helpers/area-metadata.js';
 import { expectLinearGrowth, LINE_BREAK_SHAPES } from '../../helpers/cpu-timing.js';
 
 // ---------------------------------------------------------------------------
@@ -786,5 +805,519 @@ describe('normalizeAreaNames (#170)', () => {
         createMockLogger(),
       ),
     ).rejects.toBe(cancelled);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Index-only pieces and search areas (#179)
+// ---------------------------------------------------------------------------
+
+describe('index-only pieces and search areas (#179)', () => {
+  /** An index-only piece as indexOnlyNames emits it: the piece, then its alt names. */
+  const indexOnly = (piece: string, ...alts: string[]): ExtendedName => ({
+    kind: 'index-only',
+    piece,
+    names: [piece, ...alts],
+  });
+  /** A search area as searchAreaNames emits it. */
+  const searchArea = (piece: string): ExtendedName => ({
+    kind: 'search-area',
+    piece,
+    names: [piece],
+  });
+
+  /** The record tier the service builds from the default metadata read. */
+  const recordIndex = () => buildAreaIndex(flattenMetadata(RECORD_METADATA));
+  /** The second tier the service builds from the same read and the two extended reads. */
+  const extendedIndex = () =>
+    buildExtendedIndex(flattenMetadata(RECORD_METADATA), [
+      ...indexOnlyNames(INDEXED_METADATA),
+      ...searchAreaNames(SEARCH_AREAS),
+    ]);
+
+  /** The live record pool, each entry's path its piece (see LIVE_RECORD_PIECES). */
+  const LIVE_ENTRIES: FieldIndexEntry[] = LIVE_RECORD_PIECES.map((piece) => ({
+    piece,
+    path: piece,
+    name: piece,
+  }));
+  /** The live second tier: all 77 index-only pieces with their alt names, and all 19 search areas. */
+  const LIVE_EXTRAS: ExtendedName[] = [
+    ...LIVE_INDEX_ONLY.map(([piece, ...alts]) => indexOnly(piece!, ...alts)),
+    ...LIVE_SEARCH_AREAS.map((piece) => searchArea(piece)),
+  ];
+
+  describe('indexOnlyNames', () => {
+    it('finds every indexedOnly node with its alt names, two and three levels below a section, in tree order', () => {
+      expect(indexOnlyNames(INDEXED_METADATA)).toEqual([
+        // protocolSection.statusModule.lastUpdatePostDateStruct.lastUpdatePostYear
+        indexOnly('LastUpdatePostYear'),
+        // protocolSection.contactsLocationsModule.locations.countryCode
+        indexOnly('LocationCountryCode'),
+        // protocolSection.contactsLocationsModule.numLocations
+        indexOnly('NumLocations', 'NUMBER-OF-LOCATIONS'),
+        // protocolSection.conditionsModule.numConditions
+        indexOnly('NumConditions', 'NUMBER-OF-CONDITIONS'),
+      ]);
+    });
+
+    it('finds none in the default read, which holds record pieces only', () => {
+      expect(flattenMetadata(RECORD_METADATA).length).toBeGreaterThan(0);
+      expect(indexOnlyNames(RECORD_METADATA)).toEqual([]);
+      expect(indexOnlyNames([])).toEqual([]);
+    });
+
+    it('walks below a flagged node with no piece, skipping it and every unflagged piece', () => {
+      const tree: FieldNode[] = [
+        {
+          name: 'section',
+          piece: 'Section',
+          children: [
+            {
+              name: 'counts',
+              indexedOnly: true,
+              children: [{ name: 'numThings', piece: 'NumThings', indexedOnly: true }],
+            },
+            { name: 'thing', piece: 'Thing', indexedOnly: false },
+            { name: 'numOthers', piece: 'NumOthers', indexedOnly: true, altPieceNames: [] },
+          ],
+        },
+      ];
+      expect(indexOnlyNames(tree)).toEqual([indexOnly('NumThings'), indexOnly('NumOthers')]);
+    });
+  });
+
+  describe('searchAreaNames', () => {
+    it('lists every area of every group, in order', () => {
+      expect(
+        searchAreaNames([...SEARCH_AREAS, { name: 'Other', areas: [{ name: 'TitleSearch' }] }]),
+      ).toEqual([
+        searchArea('BasicSearch'),
+        searchArea('ConditionSearch'),
+        searchArea('LocationSearch'),
+        searchArea('TitleSearch'),
+      ]);
+    });
+
+    it('lists none for no groups, or a group with no areas', () => {
+      expect(searchAreaNames([])).toEqual([]);
+      expect(searchAreaNames([{ name: 'Empty', areas: [] }])).toEqual([]);
+    });
+  });
+
+  describe('buildExtendedIndex', () => {
+    const extended = extendedIndex();
+
+    it('resolves every record AREA name, index-only name, and search area as written for AREA[]', () => {
+      for (const name of [
+        'OverallStatus',
+        'OVERALL-STATUS',
+        'CONDITIONS',
+        'NumLocations',
+        'NUMBER-OF-LOCATIONS',
+        'LastUpdatePostYear',
+        'ConditionSearch',
+        'BasicSearch',
+      ]) {
+        expect(extended.area.names.has(name), name).toBe(true);
+      }
+      for (const group of ['LeadSponsor', 'ConditionsModule']) {
+        expect(extended.area.names.has(group), group).toBe(false);
+      }
+    });
+
+    it('folds each lowered name to its piece for AREA[], alt names included', () => {
+      expect(extended.area.fold.get('numlocations')).toBe('NumLocations');
+      expect(extended.area.fold.get('number-of-locations')).toBe('NumLocations');
+      expect(extended.area.fold.get('number-of-conditions')).toBe('NumConditions');
+      expect(extended.area.fold.get('locationcountrycode')).toBe('LocationCountryCode');
+      expect(extended.area.fold.get('conditionsearch')).toBe('ConditionSearch');
+      expect(extended.area.fold.get('overallstatus')).toBe('OverallStatus');
+    });
+
+    it('resolves record pieces and index-only names for sort, never a search area', () => {
+      for (const name of [
+        'NumLocations',
+        'NUMBER-OF-LOCATIONS',
+        'LastUpdatePostDate',
+        'LeadSponsor',
+      ]) {
+        expect(extended.sort.names.has(name), name).toBe(true);
+      }
+      // As before #179, sort takes no record alt name; upstream refuses every search area there.
+      for (const name of ['OVERALL-STATUS', 'ConditionSearch', 'BasicSearch']) {
+        expect(extended.sort.names.has(name), name).toBe(false);
+      }
+      expect(extended.sort.fold.get('number-of-locations')).toBe('NumLocations');
+      expect(extended.sort.fold.has('conditionsearch')).toBe(false);
+    });
+
+    it('keeps the extended names it was built from as the suggestion pool', () => {
+      expect(extended.extras).toEqual([
+        indexOnly('LastUpdatePostYear'),
+        indexOnly('LocationCountryCode'),
+        indexOnly('NumLocations', 'NUMBER-OF-LOCATIONS'),
+        indexOnly('NumConditions', 'NUMBER-OF-CONDITIONS'),
+        searchArea('BasicSearch'),
+        searchArea('ConditionSearch'),
+        searchArea('LocationSearch'),
+      ]);
+    });
+
+    it('folds every live index-only and search-area name to its piece', () => {
+      const live = buildExtendedIndex(LIVE_ENTRIES, LIVE_EXTRAS);
+      const names = LIVE_EXTRAS.flatMap(({ kind, piece, names }) =>
+        names.map((name) => ({ kind, key: name.toLowerCase(), piece })),
+      );
+
+      expect(LIVE_EXTRAS).toHaveLength(77 + 19);
+      expect(names).toHaveLength(77 + 10 + 19);
+      for (const { kind, key, piece } of names) {
+        expect(live.area.fold.get(key), key).toBe(piece);
+        expect(live.sort.fold.get(key), key).toBe(kind === 'index-only' ? piece : undefined);
+      }
+    });
+  });
+
+  describe('resolveName', () => {
+    const record = recordIndex();
+    const extended = extendedIndex().area;
+
+    it.each([
+      ['a record piece as written', 'OverallStatus', 'OverallStatus'],
+      ['a record alt name as written', 'OVERALL-STATUS', 'OVERALL-STATUS'],
+      ['a record piece off by case', 'overallstatus', 'OverallStatus'],
+      ['a record alt name off by case, as its piece', 'sponsor', 'LeadSponsorName'],
+      ['an index-only piece as written', 'NumLocations', 'NumLocations'],
+      ['an index-only alt name as written', 'NUMBER-OF-LOCATIONS', 'NUMBER-OF-LOCATIONS'],
+      ['an index-only piece off by case', 'numlocations', 'NumLocations'],
+      ['an index-only alt name off by case, as its piece', 'number-of-locations', 'NumLocations'],
+      ['a search area as written', 'ConditionSearch', 'ConditionSearch'],
+      ['a search area off by case', 'CONDITIONSEARCH', 'ConditionSearch'],
+      ['a name neither tier holds', 'NotARealField', undefined],
+    ])('resolves %s', (_label, name, expected) => {
+      expect(resolveName(name, record, extended)).toBe(expected);
+    });
+
+    it('resolves in the record tier alone without a second tier', () => {
+      expect(resolveName('overallstatus', record)).toBe('OverallStatus');
+      expect(resolveName('NumLocations', record)).toBeUndefined();
+      expect(resolveName('numlocations', record)).toBeUndefined();
+    });
+
+    it('lets the record tier decide whenever it can', () => {
+      const elsewhere: NameFold = {
+        names: new Set(['overallstatus']),
+        fold: new Map([
+          ['overallstatus', 'Elsewhere'],
+          ['numlocations', 'Elsewhere'],
+        ]),
+      };
+      expect(resolveName('OverallStatus', record, elsewhere)).toBe('OverallStatus');
+      expect(resolveName('overallstatus', record, elsewhere)).toBe('OverallStatus');
+      expect(resolveName('numlocations', record, elsewhere)).toBe('Elsewhere');
+    });
+  });
+
+  describe('missesRecordTier', () => {
+    const index = recordIndex();
+
+    it.each([
+      ['an index-only piece', 'NumLocations'],
+      ['an index-only piece off by case', 'numlocations'],
+      ['a search area', 'ConditionSearch'],
+      ['an unknown name', 'NotARealField'],
+      // Refused only as written: in another case a STRUCT piece is a miss like any other.
+      ['a STRUCT piece off by case', 'leadsponsor'],
+    ])('is true for %s', (_label, name) => {
+      expect(missesRecordTier(name, index)).toBe(true);
+    });
+
+    it.each([
+      ['a record piece as written', 'OverallStatus'],
+      ['a record piece off by case', 'overallstatus'],
+      ['a record alt name', 'OVERALL-STATUS'],
+      ['a STRUCT piece, which upstream refuses', 'LeadSponsor'],
+      ['a STRUCT piece an alt name also folds', 'Collaborator'],
+      ['an empty name', ''],
+    ])('is false for %s', (_label, name) => {
+      expect(missesRecordTier(name, index)).toBe(false);
+    });
+  });
+
+  describe('AreaIndex.refused', () => {
+    it('holds the STRUCT pieces as written, none of them a name the index resolves', () => {
+      const index = areaIndex();
+      expect([...index.refused].sort()).toEqual(
+        [
+          'ProtocolSection',
+          'IdentificationModule',
+          'StatusModule',
+          'SponsorCollaboratorsModule',
+          'LeadSponsor',
+          'Collaborator',
+          'ArmsInterventionsModule',
+          'Intervention',
+          'ContactsLocationsModule',
+          'Location',
+          'ResultsSection',
+          'MoreInfoModule',
+          'CertainAgreement',
+        ].sort(),
+      );
+      expect([...index.refused].filter((piece) => index.names.has(piece))).toEqual([]);
+      expect(buildAreaIndex([]).refused.size).toBe(0);
+    });
+  });
+
+  describe('lowered forms the second tier shares', () => {
+    it('rewrites no lowered form two extended names share, while a lone one still folds', () => {
+      const index = recordIndex();
+      const { area, sort } = buildExtendedIndex(flattenMetadata(RECORD_METADATA), [
+        indexOnly('NumLocations', 'NUMBER-OF-LOCATIONS'),
+        searchArea('Number-Of-Locations'),
+        indexOnly('NumConditions'),
+        searchArea('NUMCONDITIONS'),
+      ]);
+      const out = rewriteAreaNames(
+        'AREA[number-of-locations]x AND AREA[numconditions]y AND AREA[numlocations]z',
+        index,
+        area,
+      );
+
+      expect(out.text).toBe(
+        'AREA[number-of-locations]x AND AREA[numconditions]y AND AREA[NumLocations]z',
+      );
+      expect(out.rewrites).toEqual([{ from: 'numlocations', to: 'NumLocations' }]);
+      // Each spelling still goes out as written.
+      const asWritten =
+        'AREA[NUMBER-OF-LOCATIONS]x AND AREA[Number-Of-Locations]y AND AREA[NumConditions]z AND AREA[NUMCONDITIONS]w';
+      expect(rewriteAreaNames(asWritten, index, area)).toEqual({ rewrites: [], text: asWritten });
+      // sort holds no search area, so there the form it shared names a single piece.
+      expect(sort.fold.get('numconditions')).toBe('NumConditions');
+    });
+
+    it('rewrites no lowered form two record pieces share, though an extended name shares it too', () => {
+      const entries: FieldIndexEntry[] = [
+        { piece: 'StartDate', path: 'a.startDate', name: 'startDate', sourceType: 'DATE' },
+        {
+          piece: 'StartDateType',
+          path: 'a.startDateType',
+          name: 'startDateType',
+          sourceType: 'TEXT',
+          altPieceNames: ['STARTDATE'],
+        },
+      ];
+      const index = buildAreaIndex(entries);
+      const { area } = buildExtendedIndex(entries, [
+        indexOnly('Startdate'),
+        indexOnly('NumStartDates'),
+      ]);
+      const out = rewriteAreaNames(
+        'AREA[startdate]2024 AND AREA[numstartdates]x AND AREA[Startdate]y',
+        index,
+        area,
+      );
+
+      // The record tier leaves `startdate` to the second, which must not pick the extended name.
+      expect(missesRecordTier('startdate', index)).toBe(true);
+      expect(out.text).toBe('AREA[startdate]2024 AND AREA[NumStartDates]x AND AREA[Startdate]y');
+      expect(out.rewrites).toEqual([{ from: 'numstartdates', to: 'NumStartDates' }]);
+    });
+
+    it('changes nothing the record tier resolves, though an extended name shares its lowered form', () => {
+      const { area } = buildExtendedIndex(flattenMetadata(RECORD_METADATA), [
+        searchArea('OVERALLSTATUS'),
+      ]);
+      expect(
+        rewriteAreaNames('AREA[overallstatus]x AND AREA[OverallStatus]y', recordIndex(), area).text,
+      ).toBe('AREA[OverallStatus]x AND AREA[OverallStatus]y');
+    });
+  });
+
+  describe('normalizeAreaNames with a second tier', () => {
+    /** A loader handing out the record tier with `extended` behind it. */
+    const lookup = (extended: NonNullable<AreaLookup['extended']>) => () =>
+      Promise.resolve<AreaLookup>({ ...recordIndex(), extended });
+
+    it.each([
+      ['a record piece as written', 'AREA[OverallStatus]x', 'AREA[OverallStatus]x'],
+      ['a record piece off by case', 'AREA[overallstatus]x', 'AREA[OverallStatus]x'],
+      ['a record alt name in another case', 'AREA[Sponsor]x', 'AREA[LeadSponsorName]x'],
+      ['a STRUCT piece exactly as written', 'AREA[LeadSponsor]x', 'AREA[LeadSponsor]x'],
+      ['an empty name', 'AREA[]x', 'AREA[]x'],
+      [
+        'a missing name inside a quoted literal',
+        '"AREA[numlocations]x" AND AREA[OverallStatus]y',
+        '"AREA[numlocations]x" AND AREA[OverallStatus]y',
+      ],
+    ])('never reads the second tier for %s', async (_label, advancedFilter, sent) => {
+      const extended = vi.fn(() => Promise.resolve(extendedIndex()));
+      await expect(
+        normalizeAreaNames({ advancedFilter }, lookup(extended), createMockLogger()),
+      ).resolves.toEqual({ advancedFilter: sent });
+      expect(extended).not.toHaveBeenCalled();
+    });
+
+    it('reads the second tier once for every name that misses, across expressions', async () => {
+      const extended = vi.fn(() => Promise.resolve(extendedIndex()));
+      const log = createMockLogger();
+      const result = await normalizeAreaNames(
+        {
+          advancedFilter: 'AREA[numlocations]RANGE[100,MAX] AND AREA[overallstatus]RECRUITING',
+          query: 'AREA[conditionsearch]diabetes',
+          conditionQuery: 'AREA[number-of-locations]RANGE[1,MAX]',
+          titleQuery: undefined,
+        },
+        lookup(extended),
+        log,
+      );
+
+      expect(extended).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({
+        advancedFilter: 'AREA[NumLocations]RANGE[100,MAX] AND AREA[OverallStatus]RECRUITING',
+        query: 'AREA[ConditionSearch]diabetes',
+        conditionQuery: 'AREA[NumLocations]RANGE[1,MAX]',
+        titleQuery: undefined,
+      });
+      expect(log.calls).toEqual([
+        {
+          level: 'notice',
+          msg: 'AREA[] field names auto-corrected',
+          data: {
+            rewrites: [
+              { param: 'advancedFilter', from: 'numlocations', to: 'NumLocations' },
+              { param: 'advancedFilter', from: 'overallstatus', to: 'OverallStatus' },
+              { param: 'query', from: 'conditionsearch', to: 'ConditionSearch' },
+              { param: 'conditionQuery', from: 'number-of-locations', to: 'NumLocations' },
+            ],
+          },
+        },
+      ]);
+    });
+
+    it('corrects in the record tier alone when the second tier cannot be read', async () => {
+      const extended = vi.fn(() => Promise.resolve(undefined));
+      await expect(
+        normalizeAreaNames(
+          { advancedFilter: 'AREA[numlocations]RANGE[100,MAX] AND AREA[overallstatus]RECRUITING' },
+          lookup(extended),
+          createMockLogger(),
+        ),
+      ).resolves.toEqual({
+        advancedFilter: 'AREA[numlocations]RANGE[100,MAX] AND AREA[OverallStatus]RECRUITING',
+      });
+      expect(extended).toHaveBeenCalledTimes(1);
+    });
+
+    it('lets the caller’s cancellation through from the second tier', async () => {
+      const cancelled = new Error('Request cancelled by caller');
+      const extended = vi.fn(() => Promise.reject(cancelled));
+      const log = createMockLogger();
+      await expect(
+        normalizeAreaNames(
+          { advancedFilter: 'AREA[numlocations]x AND AREA[overallstatus]y' },
+          lookup(extended),
+          log,
+        ),
+      ).rejects.toBe(cancelled);
+      expect(extended).toHaveBeenCalledTimes(1);
+      expect(log.calls).toEqual([]);
+    });
+  });
+
+  describe('nearestPieces with the second tier', () => {
+    // A plain merge of the pools would reorder these (`Phases` → NumPhases ahead of Phase).
+    it.each([
+      ['Phases', ['Phase']],
+      [
+        'InterventionNames',
+        ['InterventionName', 'InterventionOtherName', 'ArmGroupInterventionName'],
+      ],
+      ['ConditionList', ['Condition', 'ConditionMeshId', 'ConditionMeshTerm']],
+      ['LeadSponsor', ['LeadSponsorName', 'LeadSponsorClass', 'AgreementPISponsorEmployee']],
+      ['FirstPostDate', ['DispFirstPostDate', 'StudyFirstPostDate', 'ResultsFirstPostDate']],
+      ['NotARealField', []],
+    ])('keeps today’s record ranking for %s, extended names or none', (input, expected) => {
+      expect(nearestPieces(input, LIVE_ENTRIES, 3, LIVE_EXTRAS)).toEqual(expected);
+      expect(nearestPieces(input, LIVE_ENTRIES, 3)).toEqual(expected);
+    });
+
+    it.each([
+      ['NumLocation', 'NumLocations'],
+      // Two edits from NumLocations' alt name, NUMBER-OF-LOCATIONS.
+      ['NumberOfLocations', 'NumLocations'],
+      ['ConditionSearches', 'ConditionSearch'],
+    ])(
+      'leads the suggestions for %s with %s, which the record pieces never offer',
+      (input, lead) => {
+        const suggested = nearestPieces(input, LIVE_ENTRIES, 3, LIVE_EXTRAS);
+        expect(suggested[0]).toBe(lead);
+        expect(suggested).toHaveLength(3);
+        expect(nearestPieces(input, LIVE_ENTRIES, 3)).not.toContain(lead);
+      },
+    );
+
+    it('matches case-insensitively, but never offers back the spelling the caller sent', () => {
+      expect(nearestPieces('conditionsearch', [], 3, LIVE_EXTRAS)).toEqual(['ConditionSearch']);
+      expect(nearestPieces('number-of-locations', [], 3, LIVE_EXTRAS)).toEqual(['NumLocations']);
+      expect(nearestPieces('ConditionSearch', [], 3, LIVE_EXTRAS)).toEqual([]);
+      expect(nearestPieces('NUMBER-OF-LOCATIONS', [], 3, LIVE_EXTRAS)).toEqual([]);
+    });
+
+    it('orders extended near misses nearest first, stops at two edits, and keeps to n', () => {
+      // NCIdSearch is one edit from NCTIdSearch and two from IdSearch.
+      expect(nearestPieces('NCIdSearch', [], 3, LIVE_EXTRAS)).toEqual(['NCTIdSearch', 'IdSearch']);
+      expect(nearestPieces('NCIdSearch', [], 1, LIVE_EXTRAS)).toEqual(['NCTIdSearch']);
+      expect(nearestPieces('NumLocatio', [], 3, LIVE_EXTRAS)).toEqual(['NumLocations']);
+      expect(nearestPieces('NumLocati', [], 3, LIVE_EXTRAS)).toEqual([]);
+    });
+  });
+
+  describe('stays linear on caller-sized text with the second tier', () => {
+    // The extended names alone: the record ranking nearestPieces runs beside them predates #179.
+    it.each([
+      ...LINE_BREAK_SHAPES,
+      ['a long digit run', (n: number) => '7'.repeat(n)],
+      ['repeated near misses of an index-only piece', (n: number) => 'NumLocation'.repeat(n / 11)],
+    ] as const)('nearestPieces over the extended names: %s', (_name, shape) => {
+      expectLinearGrowth((input) => {
+        if (nearestPieces(input, [], 3, LIVE_EXTRAS).length > 0) {
+          throw new Error(`unexpected suggestion at ${input.length} chars`);
+        }
+      }, shape);
+    });
+
+    describe('rewriteAreaNames with both tiers', () => {
+      const index = recordIndex();
+      const { area } = extendedIndex();
+      type Check = (input: string, out: ReturnType<typeof rewriteAreaNames>) => boolean;
+      const unchanged: Check = (input, out) => out.text === input && out.rewrites.length === 0;
+      const rewritten = 'AREA[NumLocations]x ';
+      const shapes: Array<[name: string, shape: (n: number) => string, check: Check]> = [
+        ...LINE_BREAK_SHAPES.map(([name, shape]): [string, (n: number) => string, Check] => [
+          name,
+          shape,
+          unchanged,
+        ]),
+        [
+          'every name an index-only piece off by case',
+          (n) => 'AREA[numlocations]x '.repeat(n / 20),
+          (input, out) =>
+            out.rewrites.length === Math.floor(input.length / 20) &&
+            out.text.length === input.length &&
+            out.text.startsWith(rewritten) &&
+            out.text.endsWith(rewritten),
+        ],
+        ['one long digit-run name neither tier holds', (n) => `AREA[${'7'.repeat(n)}]x`, unchanged],
+      ];
+
+      it.each(shapes)('%s', (_name, shape, check) => {
+        expectLinearGrowth((input) => {
+          const out = rewriteAreaNames(input, index, area);
+          if (!check(input, out)) throw new Error(`unexpected output at ${input.length} chars`);
+        }, shape);
+      });
+    });
   });
 });

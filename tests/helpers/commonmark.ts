@@ -7,9 +7,9 @@
 
 import MarkdownIt from 'markdown-it';
 
-const commonmark = new MarkdownIt('commonmark');
+export const commonmark = new MarkdownIt('commonmark');
 
-type InlineToken = { type: string; content: string; children: InlineToken[] | null };
+export type InlineToken = { type: string; content: string; children: InlineToken[] | null };
 
 const seen = (children: InlineToken[]): string =>
   children

@@ -8,6 +8,7 @@ import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
+import { oneLine } from '../utils/format-helpers.js';
 import { blankValueMessage, firstBlankListParam, toArray } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
@@ -363,13 +364,17 @@ function topAdverseEvents(ae: Record<string, unknown>): TopAdverseEvent[] {
 /**
  * Condense the adverse events module to counts, the event group roster the
  * top-events rows are keyed against (id and title only), and a ranked
- * top-events view.
+ * top-events view. The reporting threshold rides along verbatim: other events
+ * are listed only at or above it, so it is what tells an unlisted event from
+ * one reported below it.
  */
 function summarizeAdverseEvents(ae: Record<string, unknown>) {
   const groups = ae.eventGroups as Array<Record<string, unknown>> | undefined;
   const topEvents = topAdverseEvents(ae);
   return {
     timeFrame: ae.timeFrame,
+    // Gated as format() reads it, so the key and its line appear together.
+    ...(text(ae.frequencyThreshold) ? { frequencyThreshold: ae.frequencyThreshold } : {}),
     groupCount: Array.isArray(groups) ? groups.length : undefined,
     seriousEventCount: Array.isArray(ae.seriousEvents) ? ae.seriousEvents.length : undefined,
     otherEventCount: Array.isArray(ae.otherEvents) ? ae.otherEvents.length : undefined,
@@ -694,22 +699,6 @@ function renderClasses(classes: unknown, indent: string, lines: string[]): void 
 }
 
 /**
- * Flatten CR/LF in upstream text interpolated into a single line, so a line
- * break in the value cannot start a new `content[]` line and forge structure:
- * each whitespace run holding a CR or LF becomes one space, and every other
- * run is kept as is. Runs in time linear in the input. Applied to a value, or
- * to a whole rendered row whose every part is meant to share one line.
- * `structuredContent` keeps the value verbatim.
- */
-export function oneLine(value: string): string;
-export function oneLine(value: string | undefined): string | undefined;
-export function oneLine(value: string | undefined): string | undefined {
-  // A lone whitespace character needs folding only when it is a break, so the
-  // single spaces between words never reach the callback.
-  return value?.replace(/\s{2,}|[\r\n]/g, (run) => (/[\r\n]/.test(run) ? ' ' : run));
-}
-
-/**
  * Render an analysis's compared groups — each id paired with the title a
  * summary resolved for it, in `groupIds` order. Full-mode analyses carry no
  * titles; their ids resolve against the measure's roster.
@@ -939,6 +928,15 @@ function formatOutcomes(outcomes: RO[], lines: string[]) {
   }
 }
 
+/**
+ * A frequency threshold spelled as a number: digits with at most one `.` or `,`
+ * decimal separator (`5`, `5.00`, `.5`, `0,001`), the shape of every value
+ * upstream publishes but `any`. Only these read as a percentage; anything else
+ * renders as written. No two quantifiers can claim the same digit, so a long
+ * value that misses is rejected in one pass.
+ */
+const NUMERIC_THRESHOLD = /^(?:\d+(?:[.,]\d*)?|[.,]\d+)$/;
+
 function formatAdverseEvents(ae: RO, lines: string[]) {
   lines.push('\n### Adverse Events');
   const timeFrame = oneLine(text(ae.timeFrame));
@@ -946,7 +944,8 @@ function formatAdverseEvents(ae: RO, lines: string[]) {
   const description = text(ae.description);
   if (description) lines.push(description);
   const threshold = oneLine(text(ae.frequencyThreshold));
-  if (threshold) lines.push(`Frequency threshold: ${threshold}%`);
+  if (threshold)
+    lines.push(`Frequency threshold: ${threshold}${NUMERIC_THRESHOLD.test(threshold) ? '%' : ''}`);
   const mortality = oneLine(text(ae.allCauseMortalityComment));
   if (mortality) lines.push(`All-cause mortality: ${mortality}`);
 
@@ -1282,7 +1281,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
               .record(z.string(), z.unknown())
               .optional()
               .describe(
-                'Adverse events. Summary mode: timeFrame, groupCount, seriousEventCount, otherEventCount, eventGroups (id and title of each event group), plus topEvents — up to 20 events ranked by the most participants affected in any one event group, each with term, organSystem, kind, and byGroup (one { groupId, numAffected, numAtRisk } row per event group; resolve groupId against eventGroups). Counts are never pooled across groups: groups can overlap (a crossover or second-course group re-counts participants of its parent arm), so compare arms row by row. Full mode: eventGroups with descriptions and per-group totals, plus seriousEvents and otherEvents with per-event term and per-group affected/at-risk stats.',
+                'Adverse events. Summary mode: timeFrame, frequencyThreshold, groupCount, seriousEventCount, otherEventCount, eventGroups (id and title of each event group), plus topEvents — up to 20 events ranked by the most participants affected in any one event group, each with term, organSystem, kind, and byGroup (one { groupId, numAffected, numAtRisk } row per event group; resolve groupId against eventGroups). Counts are never pooled across groups: groups can overlap (a crossover or second-course group re-counts participants of its parent arm), so compare arms row by row. Full mode: frequencyThreshold, eventGroups with descriptions and per-group totals, plus seriousEvents and otherEvents with per-event term and per-group affected/at-risk stats. frequencyThreshold, in either mode, is the reporting threshold as upstream sends it: other (non-serious) events are listed only when their frequency reaches it, so an other event the study does not list may still have occurred below it. Usually a percentage ("5", "0"), occasionally text ("any"); absent when the study publishes none.',
               ),
             participantFlow: z
               .record(z.string(), z.unknown())

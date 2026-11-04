@@ -78,6 +78,60 @@ const OVERSIZED_INPUTS = {
 };
 
 // ---------------------------------------------------------------------------
+// Line-break tables (#180)
+// ---------------------------------------------------------------------------
+
+/**
+ * Registry values for a line-break table. `br` makes a value for a single-line
+ * slot, whose break would open a forged `## Forged <field>` heading if left
+ * in; `prose` makes a long-form prose value, which keeps its break. Each is
+ * recorded under its field name, so a table checks exactly the values its
+ * fixture placed.
+ */
+function lineBreakValues(lineBreak: string) {
+  const single = new Map<string, string>();
+  const block = new Map<string, string>();
+  const record = (map: Map<string, string>, field: string, value: string) => {
+    map.set(field, value);
+    return value;
+  };
+  return {
+    single,
+    block,
+    br: (field: string, value = `${field} start${lineBreak}## Forged ${field}`) =>
+      record(single, field, value),
+    prose: (field: string) => record(block, field, `${field} start${lineBreak}## Kept ${field}`),
+  };
+}
+
+/**
+ * What a rendering did with the values `lineBreakValues` recorded: lines that
+ * open with a forged heading, single-line values absent from the text or not
+ * kept whole on one line with their break folded to a space, and prose values
+ * not rendered verbatim. All three are empty when every slot holds.
+ */
+function lineBreakFindings(
+  text: string,
+  { single, block }: ReturnType<typeof lineBreakValues>,
+  lineBreak: string,
+) {
+  const lines = text.split(/\r\n|\r|\n/);
+  return {
+    forgedHeadings: lines.filter((l) => /^\s*## Forged/.test(l)),
+    unfolded: [...single]
+      .filter(([field, value]) => {
+        const rendered = lines.filter((l) => new RegExp(`## Forged ${field}(?![A-Za-z])`).test(l));
+        const folded = value.replace(lineBreak, ' ');
+        return rendered.length === 0 || rendered.some((l) => !l.includes(folded));
+      })
+      .map(([field]) => field),
+    proseChanged: [...block].filter(([, value]) => !text.includes(value)).map(([field]) => field),
+  };
+}
+
+const NO_LINE_BREAK_FINDINGS = { forgedHeadings: [], unfolded: [], proseChanged: [] };
+
+// ---------------------------------------------------------------------------
 // searchStudies — input validation security
 // ---------------------------------------------------------------------------
 
@@ -184,6 +238,89 @@ describe('searchStudies — injection and oversized inputs', () => {
     );
     expect(result.requestedFields).toEqual(names);
   });
+
+  /**
+   * Every registry string the index entry, the requested-fields header and
+   * site lines, and the field dump write into a single-line slot is flattened,
+   * so a line break in it cannot end the line and start a forged heading,
+   * bullet, or row; long-form prose in the dump keeps its breaks (#180).
+   */
+  it.each(['\r\n', '\n', '\r'])(
+    'keeps a %j in any single-line slot from starting a new content[] line (#180)',
+    async (lineBreak) => {
+      const record = ({ br }: ReturnType<typeof lineBreakValues>) => ({
+        hasResults: false,
+        protocolSection: {
+          identificationModule: { nctId: br('nctId'), briefTitle: br('briefTitle') },
+          statusModule: {
+            overallStatus: br('overallStatus'),
+            startDateStruct: { date: br('startDate') },
+            primaryCompletionDateStruct: { date: br('primaryCompletionDate') },
+          },
+          designModule: { phases: [br('phase')], enrollmentInfo: { count: 10 } },
+          sponsorCollaboratorsModule: { leadSponsor: { name: br('leadSponsor') } },
+          conditionsModule: { conditions: [br('condition')] },
+          contactsLocationsModule: {
+            locations: [
+              {
+                facility: br('facility'),
+                city: br('city'),
+                state: br('state'),
+                country: br('country'),
+                status: br('siteStatus'),
+                geoPoint: { lat: 47.6, lon: -122.3 },
+              },
+              { facility: 'Second site' },
+            ],
+          },
+        },
+      });
+      const render = async (input: Record<string, unknown>, study: unknown) => {
+        mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
+        const ctx = createMockContext({ errors: searchStudies.errors });
+        const result = await searchStudies.handler(searchStudies.input!.parse(input), ctx);
+        return { result, text: (searchStudies.format!(result)[0] as { text: string }).text };
+      };
+
+      // The compact index: the lead site, and the nearest site under a geoFilter.
+      for (const input of [{}, { geoFilter: 'distance(47.6,-122.3,50mi)' }]) {
+        const values = lineBreakValues(lineBreak);
+        const study = record(values);
+        const { result, text } = await render(input, study);
+        expect(lineBreakFindings(text, values, lineBreak), JSON.stringify(input)).toEqual(
+          NO_LINE_BREAK_FINDINGS,
+        );
+        // structuredContent keeps every upstream value verbatim.
+        const site = study.protocolSection.contactsLocationsModule.locations[0]!;
+        expect(result.studies[0]).toMatchObject({
+          briefTitle: study.protocolSection.identificationModule.briefTitle,
+          leadSponsor: study.protocolSection.sponsorCollaboratorsModule.leadSponsor.name,
+          conditions: study.protocolSection.conditionsModule.conditions,
+          locations: { nearest: { facility: site.facility, country: site.country } },
+        });
+      }
+
+      // Requested fields: the header, every site line, and the field dump.
+      const values = lineBreakValues(lineBreak);
+      const base = record(values);
+      const [lead, second] = base.protocolSection.contactsLocationsModule.locations;
+      const study = {
+        ...base,
+        protocolSection: {
+          ...base.protocolSection,
+          identificationModule: {
+            ...base.protocolSection.identificationModule,
+            officialTitle: values.br('officialTitle'),
+          },
+          descriptionModule: { briefSummary: values.prose('briefSummary') },
+          contactsLocationsModule: { locations: [{ ...lead, zip: values.br('zip') }, second] },
+        },
+      };
+      const { result, text } = await render({ fields: ['NCTId', 'BriefTitle'] }, study);
+      expect(lineBreakFindings(text, values, lineBreak)).toEqual(NO_LINE_BREAK_FINDINGS);
+      expect(result.studies[0]).toEqual(study);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -217,6 +354,282 @@ describe('getStudy — injection and output safety', () => {
     const formatted = getStudy.format!(result);
     assertNoSecretLeak(formatted);
   });
+
+  /**
+   * Every registry string the record writes into a single-line slot — the
+   * title heading, `**Label:** value` lines, bullets, and their indented
+   * detail rows — is flattened, so a line break in it cannot end the line and
+   * start a forged heading, bullet, or row. A prose field under its own
+   * heading or label keeps its breaks (#180).
+   */
+  it.each(['\r\n', '\n', '\r'])(
+    'keeps a %j in any single-line slot from starting a new content[] line (#180)',
+    async (lineBreak) => {
+      const values = lineBreakValues(lineBreak);
+      const { br, prose } = values;
+      const dated = (field: string) => ({ date: br(field), type: br(`${field}Type`) });
+      const study = {
+        hasResults: false,
+        protocolSection: {
+          identificationModule: {
+            nctId: br('nctId'),
+            briefTitle: br('briefTitle'),
+            officialTitle: br('officialTitle'),
+            acronym: br('acronym'),
+            nctIdAliases: [br('nctIdAlias')],
+            orgStudyIdInfo: { id: br('orgStudyId'), type: br('orgStudyIdType') },
+            organization: { fullName: br('organization'), class: br('organizationClass') },
+            secondaryIdInfos: [
+              {
+                id: br('secondaryId'),
+                type: br('secondaryIdType'),
+                domain: br('secondaryIdDomain'),
+                link: br('secondaryIdLink'),
+              },
+            ],
+          },
+          statusModule: {
+            overallStatus: br('overallStatus'),
+            lastKnownStatus: br('lastKnownStatus'),
+            whyStopped: br('whyStopped'),
+            startDateStruct: dated('startDate'),
+            primaryCompletionDateStruct: { date: br('primaryCompletionDate') },
+            completionDateStruct: { date: br('completionDate') },
+            studyFirstSubmitDate: br('firstSubmit'),
+            studyFirstSubmitQcDate: br('firstSubmitQc'),
+            studyFirstPostDateStruct: { date: br('firstPost') },
+            resultsFirstSubmitDate: br('resultsFirstSubmit'),
+            resultsFirstSubmitQcDate: br('resultsFirstSubmitQc'),
+            resultsFirstPostDateStruct: { date: br('resultsFirstPost') },
+            dispFirstSubmitDate: br('dispFirstSubmit'),
+            dispFirstSubmitQcDate: br('dispFirstSubmitQc'),
+            dispFirstPostDateStruct: { date: br('dispFirstPost') },
+            lastUpdateSubmitDate: br('lastUpdateSubmit'),
+            lastUpdatePostDateStruct: { date: br('lastUpdatePost') },
+            statusVerifiedDate: br('verified'),
+            expandedAccessInfo: {
+              hasExpandedAccess: true,
+              nctId: br('expandedAccessNctId'),
+              statusForNctId: br('expandedAccessStatus'),
+            },
+          },
+          sponsorCollaboratorsModule: {
+            leadSponsor: { name: br('leadSponsor'), class: br('leadSponsorClass') },
+            collaborators: [{ name: br('collaborator'), class: br('collaboratorClass') }],
+            responsibleParty: {
+              type: br('responsiblePartyType'),
+              investigatorFullName: br('investigatorFullName'),
+              investigatorTitle: br('investigatorTitle'),
+              investigatorAffiliation: br('investigatorAffiliation'),
+              oldNameTitle: br('oldNameTitle'),
+              oldOrganization: br('oldOrganization'),
+            },
+          },
+          descriptionModule: {
+            briefSummary: prose('briefSummary'),
+            detailedDescription: prose('detailedDescription'),
+          },
+          conditionsModule: { conditions: [br('condition')], keywords: [br('keyword')] },
+          designModule: {
+            studyType: br('studyType'),
+            phases: [br('phase')],
+            enrollmentInfo: { count: 10, type: br('enrollmentType') },
+            designInfo: {
+              allocation: br('allocation'),
+              interventionModel: br('interventionModel'),
+              primaryPurpose: br('primaryPurpose'),
+              observationalModel: br('observationalModel'),
+              timePerspective: br('timePerspective'),
+              interventionModelDescription: prose('interventionModelDescription'),
+              maskingInfo: {
+                masking: br('masking'),
+                whoMasked: [br('whoMasked')],
+                maskingDescription: prose('maskingDescription'),
+              },
+            },
+            targetDuration: br('targetDuration'),
+            bioSpec: { retention: br('bioSpecRetention'), description: br('bioSpecDescription') },
+          },
+          armsInterventionsModule: {
+            interventions: [
+              {
+                type: br('interventionType'),
+                name: br('interventionName'),
+                description: br('interventionDescription'),
+                otherNames: [br('interventionOtherName')],
+                armGroupLabels: [br('interventionArmLabel')],
+              },
+            ],
+            armGroups: [
+              {
+                label: br('armLabel'),
+                type: br('armType'),
+                description: br('armDescription'),
+                interventionNames: [br('armInterventionName')],
+              },
+            ],
+          },
+          outcomesModule: {
+            primaryOutcomes: [
+              {
+                measure: br('primaryMeasure'),
+                timeFrame: br('primaryTimeFrame'),
+                description: prose('primaryDescription'),
+              },
+            ],
+            secondaryOutcomes: [
+              { measure: br('secondaryMeasure'), timeFrame: br('secondaryTimeFrame') },
+            ],
+            otherOutcomes: [{ measure: br('otherMeasure'), timeFrame: br('otherTimeFrame') }],
+          },
+          eligibilityModule: {
+            minimumAge: br('minimumAge'),
+            maximumAge: br('maximumAge'),
+            sex: br('sex'),
+            genderBased: true,
+            genderDescription: prose('genderDescription'),
+            healthyVolunteers: false,
+            stdAges: [br('stdAge')],
+            samplingMethod: br('samplingMethod'),
+            studyPopulation: prose('studyPopulation'),
+            eligibilityCriteria: prose('eligibilityCriteria'),
+          },
+          contactsLocationsModule: {
+            centralContacts: [
+              {
+                name: br('centralName'),
+                role: br('centralRole'),
+                phone: br('centralPhone'),
+                phoneExt: br('centralPhoneExt'),
+                email: br('centralEmail'),
+              },
+            ],
+            overallOfficials: [
+              {
+                name: br('officialName'),
+                role: br('officialRole'),
+                affiliation: br('officialAffiliation'),
+              },
+            ],
+            locations: [
+              {
+                facility: br('facility'),
+                city: br('city'),
+                state: br('state'),
+                zip: br('zip'),
+                country: br('country'),
+                status: br('siteStatus'),
+                contacts: [{ name: br('siteContactName'), email: br('siteContactEmail') }],
+              },
+            ],
+          },
+          ipdSharingStatementModule: {
+            ipdSharing: br('ipdSharing'),
+            infoTypes: [br('ipdInfoType')],
+            timeFrame: br('ipdTimeFrame'),
+            accessCriteria: prose('ipdAccessCriteria'),
+            url: br('ipdUrl'),
+            description: prose('ipdDescription'),
+          },
+          referencesModule: {
+            references: [
+              {
+                citation: br('citation'),
+                pmid: br('pmid'),
+                type: br('referenceType'),
+                retractions: [{ source: br('retractionSource'), pmid: br('retractionPmid') }],
+              },
+            ],
+            seeAlsoLinks: [{ label: br('seeAlsoLabel'), url: br('seeAlsoUrl') }],
+            availIpds: [
+              {
+                type: br('availIpdType'),
+                id: br('availIpdId'),
+                url: br('availIpdUrl'),
+                comment: br('availIpdComment'),
+              },
+            ],
+          },
+        },
+        derivedSection: {
+          conditionBrowseModule: {
+            meshes: [{ term: br('conditionMesh'), id: br('conditionMeshId') }],
+            browseLeaves: [
+              {
+                name: br('conditionLeaf'),
+                id: br('conditionLeafId'),
+                relevance: br('conditionLeafRelevance'),
+                asFound: br('conditionLeafAsFound'),
+              },
+            ],
+            ancestors: [{ term: br('conditionAncestor'), id: br('conditionAncestorId') }],
+            browseBranches: [{ name: br('conditionBranch'), abbrev: br('conditionBranchAbbrev') }],
+          },
+          interventionBrowseModule: { meshes: [{ term: br('interventionMesh') }] },
+          miscInfoModule: {
+            versionHolder: br('versionHolder'),
+            removedCountries: [br('removedCountry')],
+            submissionTracking: {
+              estimatedResultsFirstSubmitDate: br('estimatedResultsFirstSubmit'),
+              firstMcpInfo: { postDateStruct: { date: br('firstMcpPost') } },
+              submissionInfos: [
+                {
+                  releaseDate: br('submissionRelease'),
+                  unreleaseDate: br('submissionUnrelease'),
+                  resetDate: br('submissionReset'),
+                },
+              ],
+            },
+          },
+        },
+        documentSection: {
+          largeDocumentModule: {
+            largeDocs: [
+              {
+                label: br('docLabel'),
+                typeAbbrev: br('docType'),
+                date: br('docDate'),
+                filename: br('docFilename'),
+                uploadDate: br('docUploadDate'),
+                hasProtocol: true,
+                size: 10,
+              },
+            ],
+          },
+        },
+        annotationSection: {
+          annotationModule: {
+            unpostedAnnotation: {
+              unpostedResponsibleParty: br('unpostedParty'),
+              unpostedEvents: [{ type: br('unpostedType'), date: br('unpostedDate') }],
+            },
+            violationAnnotation: {
+              violationEvents: [
+                {
+                  type: br('violationType'),
+                  creationDate: br('violationCreated'),
+                  issuedDate: br('violationIssued'),
+                  releaseDate: br('violationReleased'),
+                  postedDate: br('violationPosted'),
+                  resetDate: br('violationReset'),
+                  description: prose('violationDescription'),
+                },
+              ],
+            },
+          },
+        },
+      };
+      mockService.getStudy.mockResolvedValue(study);
+
+      const ctx = createMockContext({ errors: getStudy.errors });
+      const result = await getStudy.handler(getStudy.input!.parse({ nctId: 'NCT12345678' }), ctx);
+      const text = (getStudy.format!(result)[0] as { text: string }).text;
+
+      expect(lineBreakFindings(text, values, lineBreak)).toEqual(NO_LINE_BREAK_FINDINGS);
+      // structuredContent keeps every upstream value verbatim.
+      expect(result.study).toMatchObject(study);
+    },
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -595,6 +1008,7 @@ describe('getStudyResults — injection and output safety', () => {
         'baselineMeasure',
         'baselineUnit',
         'aeTimeFrame',
+        'aeThreshold',
         'aeGroupTitle',
         'aeTerm',
         'aeOrganSystem',
@@ -614,7 +1028,6 @@ describe('getStudyResults — injection and output safety', () => {
         'baselineDenomUnits',
         'baselineClass',
         'baselineCategory',
-        'aeThreshold',
         'flowUnitsAnalyzed',
         'flowGroup',
         'periodTitle',
@@ -864,6 +1277,76 @@ describe('findEligible — injection and output safety', () => {
     const formatted = findEligible.format!({ studies: [], totalCount: 0 });
     assertNoSecretLeak(formatted);
   });
+
+  /**
+   * Every registry string a candidate writes into a single-line slot — its
+   * headline, meta, interventions, demographics, sites, contacts, the Sites
+   * bound line, and the field dump — is flattened, so a line break in it cannot
+   * end the line and start a forged heading or candidate. The summary, a prose
+   * field under its own label, keeps its breaks (#180).
+   */
+  it.each(['\r\n', '\n', '\r'])(
+    'keeps a %j in any single-line slot from starting a new content[] line (#180)',
+    async (lineBreak) => {
+      const values = lineBreakValues(lineBreak);
+      const { br, prose } = values;
+      // The matched site: its country still carries the requested one's words.
+      const matchedSite = {
+        facility: br('facility'),
+        city: br('city'),
+        state: br('state'),
+        country: br('country', `country start United States${lineBreak}## Forged country`),
+        status: br('siteStatus'),
+      };
+      const study = {
+        protocolSection: {
+          identificationModule: { nctId: br('nctId'), briefTitle: br('briefTitle') },
+          statusModule: { overallStatus: br('overallStatus') },
+          designModule: { phases: [br('phase')], enrollmentInfo: { count: 10 } },
+          sponsorCollaboratorsModule: { leadSponsor: { name: br('leadSponsor') } },
+          conditionsModule: { conditions: [br('condition')] },
+          armsInterventionsModule: { interventions: [{ name: br('interventionName') }] },
+          descriptionModule: { briefSummary: prose('briefSummary') },
+          eligibilityModule: {
+            minimumAge: br('minimumAge'),
+            maximumAge: br('maximumAge'),
+            sex: br('sex'),
+            healthyVolunteers: false,
+          },
+          contactsLocationsModule: {
+            centralContacts: [
+              { name: br('contactName'), phone: br('contactPhone'), email: br('contactEmail') },
+            ],
+            // The closed foreign site is bounded out, so the Sites line renders.
+            locations: [matchedSite, { facility: 'Toronto site', country: 'Canada' }],
+          },
+          // Not rendered by a dedicated line, so both reach the field dump.
+          outcomesModule: {
+            primaryOutcomes: [
+              { measure: br('dumpMeasure'), description: prose('dumpDescription') },
+            ],
+          },
+        },
+      };
+      mockService.searchStudies.mockResolvedValue({ studies: [study], totalCount: 1 });
+      mockService.countStudies.mockResolvedValue(1);
+
+      const ctx = createMockContext({ errors: findEligible.errors });
+      const result = await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+      const text = (findEligible.format!(result)[0] as { text: string }).text;
+
+      expect(text).toContain('Sites: showing 1 of 2 registered');
+      expect(lineBreakFindings(text, values, lineBreak)).toEqual(NO_LINE_BREAK_FINDINGS);
+      // structuredContent keeps every upstream value verbatim.
+      expect(result.studies[0]).toMatchObject({
+        protocolSection: {
+          identificationModule: study.protocolSection.identificationModule,
+          descriptionModule: study.protocolSection.descriptionModule,
+          contactsLocationsModule: { locations: [matchedSite] },
+        },
+      });
+    },
+  );
 
   // Quote-only forms are blank too: the query builder strips `"` (#145). So are
   // zero-width forms: U+200B survives String.trim() but carries no content.

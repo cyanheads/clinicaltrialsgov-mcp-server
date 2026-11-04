@@ -10,7 +10,11 @@ import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-tr
 import { normalizeAreaNames } from '@/services/clinical-trials/field-search.js';
 import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
-import { formatRemainingStudyFields } from '../utils/format-helpers.js';
+import {
+  formatRemainingStudyFields,
+  formatSearchCriteria,
+  oneLine,
+} from '../utils/format-helpers.js';
 import {
   describeGeoFilterRejection,
   haversineMi,
@@ -113,6 +117,8 @@ interface NearestSite {
   distanceMi?: number;
   facility?: string;
   state?: string;
+  /** The site's own recruitment status, verbatim from upstream; it can differ from the study's. */
+  status?: string;
 }
 
 /**
@@ -157,6 +163,7 @@ function pickNearest(loc: LocationWithDistance): NearestSite {
   if (loc.city != null) site.city = loc.city;
   if (loc.state != null) site.state = loc.state;
   if (loc.country != null) site.country = loc.country;
+  if (loc.status != null) site.status = loc.status;
   if (loc.distanceMi != null) site.distanceMi = loc.distanceMi;
   return site;
 }
@@ -206,7 +213,8 @@ function projectStudyIndex(study: RawStudyShape): Record<string, unknown> {
 
 /**
  * Render the shared `- **NCT**: title [status]` headline + meta line.
- * `extraMeta` appends caller-specific segments to the meta line.
+ * `extraMeta` appends caller-specific segments to the meta line. Each of the
+ * two lines is folded on its own, so registry text cannot add a third.
  */
 function renderStudyHeaderLine(e: StudyHeaderFields, extraMeta: string[] = []): string {
   const nctId = e.nctId ?? 'Unknown';
@@ -218,8 +226,8 @@ function renderStudyHeaderLine(e: StudyHeaderFields, extraMeta: string[] = []): 
   if (e.leadSponsor) meta.push(e.leadSponsor);
   if (e.conditions?.length) meta.push(e.conditions.join(', '));
   meta.push(...extraMeta);
-  const metaStr = meta.length ? `\n  ${meta.join(' | ')}` : '';
-  return `- **${nctId}**${titleStr}${statusStr}${metaStr}`;
+  const metaStr = meta.length ? `\n  ${oneLine(meta.join(' | '))}` : '';
+  return `${oneLine(`- **${nctId}**${titleStr}${statusStr}`)}${metaStr}`;
 }
 
 /** Render one compact index entry (the default, no-`fields` search projection). */
@@ -234,22 +242,28 @@ function renderIndexEntry(entry: StudyIndexEntry): string[] {
 
   // Surface the study's site — the headline carries no location. With an active
   // geoFilter the projection's nearest site is annotated with distanceMi: lead
-  // with it. Without one, show the lead registered site. Either way the total
-  // site count discloses how many sites the full record holds.
+  // with it. Without one, show the lead registered site. Either way the site's
+  // own status follows its place, as in the requested-fields site lines, and
+  // the total site count discloses how many sites the full record holds. A site
+  // naming no place still renders, so its status or distance never reaches
+  // structuredContent alone.
   const near = entry.locations?.nearest;
   if (near) {
-    const place = [near.facility, near.city, near.state, near.country].filter(Boolean).join(', ');
-    if (place) {
-      const total = entry.locations?.total ?? 0;
-      if (near.distanceMi != null) {
-        const totalStr = total > 1 ? ` of ${total} sites` : '';
-        lines.push(
-          `  Nearest site: ${place} (${near.distanceMi.toFixed(1)} mi from geoFilter center${totalStr})`,
-        );
-      } else {
-        const totalStr = total > 1 ? ` (1 of ${total} sites)` : '';
-        lines.push(`  Site: ${place}${totalStr}`);
-      }
+    const place =
+      [near.facility, near.city, near.state, near.country].filter(Boolean).join(', ') ||
+      '(unnamed site)';
+    const statusNote = near.status ? ` [${near.status}]` : '';
+    const total = entry.locations?.total ?? 0;
+    if (near.distanceMi != null) {
+      const totalStr = total > 1 ? ` of ${total} sites` : '';
+      lines.push(
+        oneLine(
+          `  Nearest site: ${place}${statusNote} (${near.distanceMi.toFixed(1)} mi from geoFilter center${totalStr})`,
+        ),
+      );
+    } else {
+      const totalStr = total > 1 ? ` (1 of ${total} sites)` : '';
+      lines.push(oneLine(`  Site: ${place}${statusNote}${totalStr}`));
     }
   }
   return lines;
@@ -271,7 +285,7 @@ function renderSiteLines(locations: LocationWithDistance[]): string[] {
     const statusNote = loc.status ? ` [${loc.status}]` : '';
     const distNote = loc.distanceMi != null ? ` (${loc.distanceMi.toFixed(1)} mi)` : '';
     const geoNote = loc.geoPoint ? ` @${loc.geoPoint.lat},${loc.geoPoint.lon}` : '';
-    lines.push(`    - ${place || '(unnamed site)'}${statusNote}${distNote}${geoNote}`);
+    lines.push(oneLine(`    - ${place || '(unnamed site)'}${statusNote}${distNote}${geoNote}`));
   }
   return lines;
 }
@@ -460,7 +474,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         .string()
         .optional()
         .describe(
-          `Advanced filter using AREA[FieldName]value syntax. Examples: "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]", "AREA[Phase]PHASE2 AND AREA[StudyType]INTERVENTIONAL", "(AREA[Phase]PHASE3 OR AREA[Phase]PHASE4) AND AREA[StudyType]INTERVENTIONAL". "AREA[HasResults]true" restricts to studies with posted results. AND/OR/NOT join complete AREA[FieldName]value expressions; parentheses group them. Call clinicaltrials_get_field_definitions to find AREA[]-compatible field names. A record-field name that differs from the spelling AREA[] accepts only by case (AREA[overallstatus]) is corrected before the request, here and in the query parameters, and searchCriteria shows the expression as sent; index-only pieces and search areas are not case-corrected.`,
+          `Advanced filter using AREA[FieldName]value syntax. Examples: "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]", "AREA[Phase]PHASE2 AND AREA[StudyType]INTERVENTIONAL", "(AREA[Phase]PHASE3 OR AREA[Phase]PHASE4) AND AREA[StudyType]INTERVENTIONAL". "AREA[HasResults]true" restricts to studies with posted results. AND/OR/NOT join complete AREA[FieldName]value expressions; parentheses group them. Call clinicaltrials_get_field_definitions to find AREA[]-compatible field names. A field name — a record field, an index-only piece such as NumLocations, or a search area such as ConditionSearch — that differs from the spelling AREA[] accepts only by case (AREA[overallstatus]) is corrected before the request, here and in the query parameters, and searchCriteria shows the expression as sent.`,
         ),
       geoFilter: z
         .string()
@@ -549,7 +563,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     studies: z
       .array(z.record(z.string(), z.unknown()))
       .describe(
-        'Matching studies. By default each entry is a COMPACT index projection — nctId, briefTitle, overallStatus, phases, enrollmentCount, leadSponsor, conditions, hasResults, startDate and primaryCompletionDate (YYYY-MM or YYYY-MM-DD, as registered), and a bounded locations summary ({ total, nearest }); keys the study does not publish are omitted — mirroring the rendered result, NOT the full ~70KB record. Pass the fields parameter to receive exactly the requested leaves at full fidelity instead (e.g. all locations). Fetch a full single record with clinicaltrials_get_study_record.',
+        "Matching studies. By default each entry is a COMPACT index projection — nctId, briefTitle, overallStatus, phases, enrollmentCount, leadSponsor, conditions, hasResults, startDate and primaryCompletionDate (YYYY-MM or YYYY-MM-DD, as registered), and a bounded locations summary ({ total, nearest: { facility, city, state, country, status, distanceMi } }). nearest is the site closest to the geoFilter center, carrying distanceMi, or the lead registered site when no geoFilter is set; its status is that one site's own recruitment status, which can differ from the study's overallStatus, and is absent when the site publishes none. Keys the study does not publish are omitted — mirroring the rendered result, NOT the full ~70KB record. Pass the fields parameter to receive exactly the requested leaves at full fidelity instead (e.g. all locations). Fetch a full single record with clinicaltrials_get_study_record.",
       ),
     totalCount: z
       .number()
@@ -618,15 +632,8 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
   },
 
   enrichmentTrailer: {
-    searchCriteria: {
-      render: (criteria) => {
-        if (!criteria || Object.keys(criteria).length === 0) return '';
-        const parts = Object.entries(criteria).map(([k, v]) =>
-          Array.isArray(v) ? `- **${k}:** [${(v as unknown[]).join(', ')}]` : `- **${k}:** ${v}`,
-        );
-        return `**Search Criteria:**\n${parts.join('\n')}`;
-      },
-    },
+    // Each value reads back as sent, so a content[]-only caller can replay it (#177).
+    searchCriteria: { render: formatSearchCriteria },
   },
 
   async handler(input, ctx) {

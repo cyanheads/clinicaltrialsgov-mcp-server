@@ -17,7 +17,18 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
 
 import { searchStudies } from '@/mcp-server/tools/definitions/search-studies.tool.js';
 import { haversineMi } from '@/mcp-server/tools/utils/geo-helpers.js';
-import { areaIndex } from '../../../helpers/area-metadata.js';
+import {
+  buildExtendedIndex,
+  flattenMetadata,
+  indexOnlyNames,
+  searchAreaNames,
+} from '@/services/clinical-trials/field-search.js';
+import {
+  AREA_METADATA,
+  areaIndex,
+  INDEXED_METADATA,
+  SEARCH_AREAS,
+} from '../../../helpers/area-metadata.js';
 import { readMarkdown } from '../../../helpers/commonmark.js';
 import { missingLeaves } from '../../../helpers/format-parity.js';
 import { nctIds as ids } from '../../../helpers/nct-ids.js';
@@ -63,6 +74,31 @@ describe('searchStudies', () => {
       });
     });
 
+    it('searches and echoes an index-only piece off by case in its canonical spelling (#179)', async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const tier = buildExtendedIndex(flattenMetadata(AREA_METADATA), [
+        ...indexOnlyNames(INDEXED_METADATA),
+        ...searchAreaNames(SEARCH_AREAS),
+      ]);
+      const extended = vi.fn().mockResolvedValue(tier);
+      mockService.getAreaIndex.mockResolvedValue({ ...areaIndex(), extended });
+      const ctx = createMockContext({ errors: searchStudies.errors });
+      await searchStudies.handler(
+        searchStudies.input!.parse({
+          advancedFilter: 'AREA[numlocations]RANGE[100,MAX] AND AREA[overallstatus]RECRUITING',
+        }),
+        ctx,
+      );
+
+      const sent = 'AREA[NumLocations]RANGE[100,MAX] AND AREA[OverallStatus]RECRUITING';
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterAdvanced: sent }),
+        ctx,
+      );
+      expect(getEnrichment(ctx).searchCriteria).toMatchObject({ advancedFilter: sent });
+      expect(extended).toHaveBeenCalledTimes(1);
+    });
+
     it('never asks for the AREA index when no expression names an AREA[] field', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext({ errors: searchStudies.errors });
@@ -76,9 +112,11 @@ describe('searchStudies', () => {
     it('describes the correction on advancedFilter and the AREA[] failure on field_invalid', () => {
       const shape = searchStudies.input!.shape as Record<string, { description?: string }>;
       expect(shape.advancedFilter?.description).toContain('only by case (AREA[overallstatus])');
+      // #179 extended the correction past the record fields.
       expect(shape.advancedFilter?.description).toContain(
-        'index-only pieces and search areas are not case-corrected',
+        'an index-only piece such as NumLocations, or a search area such as ConditionSearch',
       );
+      expect(shape.advancedFilter?.description).not.toContain('not case-corrected');
       expect(searchStudies.errors?.find((e) => e.reason === 'field_invalid')?.when).toContain(
         'LeadSponsorName',
       );
@@ -1667,6 +1705,37 @@ describe('searchStudies', () => {
     });
   });
 
+  // The searchCriteria trailer writes each value through formatEchoValue, which
+  // the format-helpers suite tables; this proves the wiring (#177).
+  it("reads find_eligible's replayed location and a SEARCH[] advancedFilter back from the trailer as sent (#177)", async () => {
+    mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+    const input = {
+      query: 'diabetes\n# heading',
+      locationQuery: 'SEARCH[Location](AREA[LocationCountry]"Mexico")',
+      advancedFilter: 'SEARCH[Location](AREA[LocationCity]Seattle)',
+      statusFilter: ['RECRUITING', 'COMPLETED'],
+    };
+
+    const result = await runToolContract(searchStudies, input);
+
+    expect((result.structuredContent as { searchCriteria: unknown }).searchCriteria).toEqual({
+      ...input,
+      sentinelFilterActive: true,
+    });
+    const seen = readMarkdown((result.content as { text: string }[]).at(-1)!.text).split('\n');
+    expect(seen).toEqual(
+      expect.arrayContaining([
+        'query:',
+        'diabetes',
+        '# heading',
+        `locationQuery: ${input.locationQuery}`,
+        'statusFilter: [RECRUITING, COMPLETED]',
+        `advancedFilter: ${input.advancedFilter}`,
+        'sentinelFilterActive: true',
+      ]),
+    );
+  });
+
   describe('output-channel parity — structuredContent and content[] carry the same data (#86)', () => {
     const seattleGeo = 'distance(47.6062,-122.3321,50mi)';
 
@@ -2343,6 +2412,259 @@ describe('searchStudies', () => {
           '  Primary Completion Date > Type: ACTUAL',
           '  Has Results: true',
         ].join('\n'),
+      );
+    });
+  });
+
+  // A study's recruiting status says nothing about the one site the index shows:
+  // NCT06590467 is RECRUITING while its Seattle site is NOT_YET_RECRUITING. The
+  // compact index carries that site's own status, read from the full record the
+  // default search already fetches. Every case runs the real pipeline.
+  describe('compact index — the nearest or lead site carries its status (#173)', () => {
+    const seattleGeo = 'distance(47.6062,-122.3321,50mi)';
+
+    type Site = {
+      city?: string;
+      country?: string;
+      facility?: string;
+      geoPoint?: { lat: number; lon: number };
+      state?: string;
+      status?: string;
+    };
+
+    const study = (nctId: string, overallStatus: string, locations: Site[]) => ({
+      protocolSection: {
+        identificationModule: { nctId, briefTitle: `Study ${nctId}` },
+        statusModule: { overallStatus },
+        contactsLocationsModule: { locations },
+      },
+    });
+
+    /** University of Washington Medical Center, geocoded upstream to the Seattle centroid. */
+    const uwSite: Site = {
+      facility: 'University of Washington Medical Center',
+      city: 'Seattle',
+      state: 'Washington',
+      country: 'United States',
+      status: 'NOT_YET_RECRUITING',
+      geoPoint: { lat: 47.60621, lon: -122.33207 },
+    };
+
+    /**
+     * NCT06590467's shape: 36 sites, the registered lead far from Seattle and
+     * the Seattle site part-way down the list, so only the proximity re-rank
+     * makes it the nearest.
+     */
+    const nct06590467 = () =>
+      study('NCT06590467', 'RECRUITING', [
+        {
+          facility: 'Mayo Clinic',
+          city: 'Rochester',
+          state: 'Minnesota',
+          country: 'United States',
+          status: 'ACTIVE_NOT_RECRUITING',
+          geoPoint: { lat: 44.02163, lon: -92.4699 },
+        },
+        ...Array.from({ length: 17 }, (_, i) => ({
+          facility: `Filler Site ${i}`,
+          city: 'Philadelphia',
+          state: 'Pennsylvania',
+          country: 'United States',
+          status: 'RECRUITING',
+          geoPoint: { lat: 39.95233, lon: -75.16379 },
+        })),
+        uwSite,
+        ...Array.from({ length: 17 }, (_, i) => ({
+          facility: `Filler Site ${i + 17}`,
+          city: 'Houston',
+          state: 'Texas',
+          country: 'United States',
+          status: 'RECRUITING',
+          geoPoint: { lat: 29.76328, lon: -95.36327 },
+        })),
+      ]);
+
+    const run = async (studies: unknown[], input: Record<string, unknown> = {}) => {
+      mockService.searchStudies.mockResolvedValue({ studies, totalCount: studies.length });
+      const result = await runToolContract(searchStudies, input, {
+        context: { errors: searchStudies.errors },
+      });
+      expect(result.isError).toBeFalsy();
+      const structured = result.structuredContent as { studies: Record<string, unknown>[] };
+      const text = (result.content as Array<{ type: string; text?: string }>)
+        .filter((b) => b.type === 'text')
+        .map((b) => b.text ?? '')
+        .join('\n');
+      return { structured, text };
+    };
+
+    /** Every compact-index site line, in study order. */
+    const siteLines = (text: string) =>
+      text.split('\n').filter((line) => /^ {2}(Nearest site|Site): /.test(line));
+
+    it('carries the nearest site’s own status under geoFilter, after the re-rank, on both channels', async () => {
+      const { structured, text } = await run([nct06590467()], {
+        statusFilter: 'RECRUITING',
+        geoFilter: seattleGeo,
+      });
+      expect(structured.studies[0]?.overallStatus).toBe('RECRUITING');
+      expect(structured.studies[0]?.locations).toEqual({
+        total: 36,
+        nearest: {
+          facility: 'University of Washington Medical Center',
+          city: 'Seattle',
+          state: 'Washington',
+          country: 'United States',
+          status: 'NOT_YET_RECRUITING',
+          distanceMi: expect.closeTo(
+            haversineMi({ lat: 47.6062, lon: -122.3321 }, uwSite.geoPoint!),
+            6,
+          ),
+        },
+      });
+      expect(siteLines(text)).toEqual([
+        '  Nearest site: University of Washington Medical Center, Seattle, Washington, United States [NOT_YET_RECRUITING] (0.0 mi from geoFilter center of 36 sites)',
+      ]);
+      // Projection only: one request, and still no fields parameter upstream.
+      expect(mockService.searchStudies).toHaveBeenCalledTimes(1);
+      expect(mockService.searchStudies.mock.calls[0]?.[0]?.fields).toBeUndefined();
+      expect(mockService.searchStudies.mock.calls[0]?.[0]?.filterGeo).toBe(seattleGeo);
+    });
+
+    it('carries the lead site’s status without geoFilter', async () => {
+      const { structured, text } = await run([nct06590467()], { statusFilter: 'RECRUITING' });
+      expect(structured.studies[0]?.locations).toEqual({
+        total: 36,
+        nearest: {
+          facility: 'Mayo Clinic',
+          city: 'Rochester',
+          state: 'Minnesota',
+          country: 'United States',
+          status: 'ACTIVE_NOT_RECRUITING',
+        },
+      });
+      expect(siteLines(text)).toEqual([
+        '  Site: Mayo Clinic, Rochester, Minnesota, United States [ACTIVE_NOT_RECRUITING] (1 of 36 sites)',
+      ]);
+      expect(mockService.searchStudies.mock.calls[0]?.[0]?.fields).toBeUndefined();
+    });
+
+    it('reads the bracket as literal text, not Markdown', async () => {
+      const { text } = await run([nct06590467()], { geoFilter: seattleGeo });
+      expect(readMarkdown(text)).toContain(
+        'Nearest site: University of Washington Medical Center, Seattle, Washington, United States [NOT_YET_RECRUITING] (0.0 mi from geoFilter center of 36 sites)',
+      );
+    });
+
+    it('gives a site that publishes no status no key and no bracket, with or without geoFilter', async () => {
+      // NCT01452594 (COMPLETED): its one site, like every site on a COMPLETED
+      // page, publishes no status.
+      const rockefeller = study('NCT01452594', 'COMPLETED', [
+        {
+          facility: 'The Rockefeller University',
+          city: 'New York',
+          state: 'New York',
+          country: 'United States',
+          geoPoint: { lat: 40.71427, lon: -74.00597 },
+        },
+      ]);
+
+      const lead = await run([rockefeller]);
+      expect(lead.structured.studies[0]?.locations).toEqual({
+        total: 1,
+        nearest: {
+          facility: 'The Rockefeller University',
+          city: 'New York',
+          state: 'New York',
+          country: 'United States',
+        },
+      });
+      expect(siteLines(lead.text)).toEqual([
+        '  Site: The Rockefeller University, New York, New York, United States',
+      ]);
+
+      const near = await run([rockefeller], { geoFilter: 'distance(40.71427,-74.00597,25mi)' });
+      const nearest = (near.structured.studies[0]!.locations as { nearest: object }).nearest;
+      expect(nearest).not.toHaveProperty('status');
+      expect(nearest).toHaveProperty('distanceMi');
+      expect(siteLines(near.text)).toEqual([
+        '  Nearest site: The Rockefeller University, New York, New York, United States (0.0 mi from geoFilter center)',
+      ]);
+    });
+
+    it('keeps each status with its own study across a page of mixed site shapes', async () => {
+      const { structured, text } = await run([
+        study('NCT07000001', 'RECRUITING', [
+          {
+            facility: 'North Clinic',
+            city: 'Portland',
+            country: 'United States',
+            status: 'SUSPENDED',
+          },
+          {
+            facility: 'South Clinic',
+            city: 'Eugene',
+            country: 'United States',
+            status: 'RECRUITING',
+          },
+        ]),
+        study('NCT07000002', 'RECRUITING', [{ city: 'Lyon', country: 'France' }]),
+        // A site upstream names by status alone still reaches content[].
+        study('NCT07000003', 'RECRUITING', [{ status: 'WITHDRAWN' }, { city: 'Oslo' }]),
+      ]);
+      expect(structured.studies.map((s) => s.locations)).toEqual([
+        {
+          total: 2,
+          nearest: {
+            facility: 'North Clinic',
+            city: 'Portland',
+            country: 'United States',
+            status: 'SUSPENDED',
+          },
+        },
+        { total: 1, nearest: { city: 'Lyon', country: 'France' } },
+        { total: 2, nearest: { status: 'WITHDRAWN' } },
+      ]);
+      expect(siteLines(text)).toEqual([
+        '  Site: North Clinic, Portland, United States [SUSPENDED] (1 of 2 sites)',
+        '  Site: Lyon, France',
+        '  Site: (unnamed site) [WITHDRAWN] (1 of 2 sites)',
+      ]);
+      expect(missingLeaves(structured, text)).toEqual([]);
+    });
+
+    it('leaves requested-fields mode unchanged — every site, its status, no nearest summary', async () => {
+      const trimmed = {
+        protocolSection: {
+          identificationModule: { nctId: 'NCT06590467' },
+          contactsLocationsModule: {
+            locations: [
+              { facility: 'Mayo Clinic', city: 'Rochester', status: 'ACTIVE_NOT_RECRUITING' },
+              { facility: 'University of Washington Medical Center', city: 'Seattle' },
+            ],
+          },
+        },
+      };
+      const { structured, text } = await run([structuredClone(trimmed)], {
+        fields: ['NCTId', 'LocationFacility', 'LocationCity', 'LocationStatus'],
+      });
+      expect(structured.studies[0]).toEqual(trimmed);
+      expect(text.split('\n\n')[0]).toBe(
+        [
+          'Found 1 studies (1 total matching)',
+          'Requested fields: NCTId, LocationFacility, LocationCity, LocationStatus',
+          '- **NCT06590467**',
+          '  Locations (2):',
+          '    - Mayo Clinic, Rochester [ACTIVE_NOT_RECRUITING]',
+          '    - University of Washington Medical Center, Seattle',
+        ].join('\n'),
+      );
+    });
+
+    it('names the nearest site’s keys, status included, in the studies description', () => {
+      const out = searchStudies.output!.shape as Record<string, { description?: string }>;
+      expect(out.studies?.description).toContain(
+        '{ total, nearest: { facility, city, state, country, status, distanceMi } }',
       );
     });
   });

@@ -18,11 +18,19 @@ import { httpErrorFromResponse } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
 import {
   type AreaIndex,
+  type AreaLookup,
   buildAreaIndex,
+  buildExtendedIndex,
+  type ExtendedIndex,
+  type ExtendedName,
   type FieldIndexEntry,
   flattenMetadata,
+  indexOnlyNames,
   isArrayType,
+  missesRecordTier,
   nearestPieces,
+  resolveName,
+  searchAreaNames,
   searchFields,
 } from './field-search.js';
 import { geoFilterShapeMessage } from './geo-filter-message.js';
@@ -31,6 +39,7 @@ import type {
   FieldNode,
   FieldValueStats,
   PagedStudiesResponse,
+  SearchAreaGroup,
   SearchParams,
   Study,
 } from './types.js';
@@ -40,6 +49,18 @@ const DEFAULT_BASE_BACKOFF_MS = 1000;
 const DEFAULT_MAX_BACKOFF_MS = 30_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 const MIN_INTERVAL_MS = 1000;
+/**
+ * Timeout for each read behind the second AREA[] and `sort` tier —
+ * `/studies/metadata?includeIndexedOnly=true` (~198 KB) and
+ * `/studies/search-areas` (~25 KB). Measured 2026-11-03 at 0.16–0.31 s and
+ * 0.12–0.66 s; 5 s is several times the slowest. Each read gets one attempt;
+ * the pacer starts the two a throttle gap apart and they are awaited together,
+ * so a call that misses the record tier waits at most two throttle gaps plus
+ * this before its own request, whose timeout and retry
+ * budget are unchanged — a hung read cannot spend a client's 60 s request
+ * timeout on a correction the call can do without.
+ */
+const EXTENDED_READ_TIMEOUT_MS = 5000;
 /**
  * Longest request target — URL path plus query string — ClinicalTrials.gov
  * serves. Measured 2026-11-02: 8,177 bytes is answered and 8,178 gets HTTP 414
@@ -247,6 +268,19 @@ function queryEncodedBytes(value: string): number {
   return new URLSearchParams({ v: value }).toString().length - 'v='.length;
 }
 
+/**
+ * `work`'s outcome, or the caller's cancellation as soon as `signal` aborts.
+ * Only the wait ends: `work` runs on, since other callers may be awaiting it.
+ */
+function untilCancelled<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(requestCancelled('Request cancelled by caller'));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(requestCancelled('Request cancelled by caller'));
+    signal.addEventListener('abort', onAbort, { once: true });
+    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
 /** A search page, plus the `filterIds` its request had no room for. */
 export interface SearchStudiesResult extends PagedStudiesResponse {
   /** Trailing `filterIds` left out of the request, in order. Absent when every ID went out. */
@@ -266,6 +300,8 @@ interface FieldIndex {
 /** Constructor options for overriding retry/backoff/validation behavior (primarily for tests). */
 export interface ClinicalTrialsServiceOptions {
   baseBackoffMs?: number;
+  /** Timeout for each read behind the second AREA[] and `sort` tier; defaults to EXTENDED_READ_TIMEOUT_MS. */
+  extendedReadTimeoutMs?: number;
   maxBackoffMs?: number;
   maxRetries?: number;
   /**
@@ -292,6 +328,7 @@ export class ClinicalTrialsService {
   private readonly maxRetries: number;
   private readonly baseBackoffMs: number;
   private readonly maxBackoffMs: number;
+  private readonly extendedReadTimeoutMs: number;
   private readonly validateFieldsLocally: boolean;
   private lastRequestAt = 0;
   /**
@@ -301,6 +338,14 @@ export class ClinicalTrialsService {
    */
   private throttleQueue: Promise<void> = Promise.resolve();
   private fieldIndexPromise: Promise<FieldIndex> | undefined;
+  /**
+   * The two reads behind the second tier, each kept once it succeeds and
+   * cleared when it fails, so a source that is down costs only its own re-read.
+   */
+  private indexOnlyRead: Promise<ExtendedName[]> | undefined;
+  private searchAreasRead: Promise<ExtendedName[]> | undefined;
+  /** Each call's one attempt at the second tier, shared by every consumer in that call. */
+  private readonly extendedByCall = new WeakMap<Context, Promise<ExtendedIndex | undefined>>();
 
   constructor(config: ServerConfig, options: ClinicalTrialsServiceOptions = {}) {
     this.baseUrl = config.apiBaseUrl;
@@ -309,6 +354,7 @@ export class ClinicalTrialsService {
     this.maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
     this.baseBackoffMs = options.baseBackoffMs ?? DEFAULT_BASE_BACKOFF_MS;
     this.maxBackoffMs = options.maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS;
+    this.extendedReadTimeoutMs = options.extendedReadTimeoutMs ?? EXTENDED_READ_TIMEOUT_MS;
     this.validateFieldsLocally = options.validateFieldsLocally ?? true;
   }
 
@@ -361,7 +407,9 @@ export class ClinicalTrialsService {
   /** Fetch a single study by NCT ID. */
   getStudy(nctId: string, ctx: Context): Promise<Study> {
     ctx.log.debug('getStudy', { nctId });
-    return this.fetchJson<Study>(`/studies/${encodeURIComponent(nctId)}`, {}, ctx);
+    return this.fetchJson<Study>(`/studies/${encodeURIComponent(nctId)}`, {}, ctx, {
+      studyId: nctId,
+    });
   }
 
   /**
@@ -491,15 +539,18 @@ export class ClinicalTrialsService {
 
   /**
    * The AREA[] name index (see buildAreaIndex), built with the cached field
-   * index. Undefined when local validation is disabled or /studies/metadata
-   * cannot be fetched — AREA[] names then reach upstream as written.
+   * index, and the loader for the second tier behind it — the index-only pieces
+   * and search areas — scoped to this call. Undefined when local validation is
+   * disabled or /studies/metadata cannot be fetched — AREA[] names then reach
+   * upstream as written.
    *
    * @throws the caller's cancellation, which never passes for an unavailable index.
    */
-  async getAreaIndex(ctx: Context): Promise<AreaIndex | undefined> {
+  async getAreaIndex(ctx: Context): Promise<AreaLookup | undefined> {
     if (!this.validateFieldsLocally) return undefined;
+    let index: FieldIndex;
     try {
-      return (await this.getFieldIndex(ctx)).area;
+      index = await this.getFieldIndex(ctx);
     } catch (err) {
       if (ctx.signal.aborted) throw err;
       ctx.log.warning('AREA[] field-name lookup skipped — metadata unavailable', {
@@ -507,11 +558,91 @@ export class ClinicalTrialsService {
       });
       return undefined;
     }
+    return { ...index.area, extended: () => this.getExtendedIndex(index, ctx) };
   }
 
   /* ------------------------------------------------------------------ */
   /*  Internal                                                           */
   /* ------------------------------------------------------------------ */
+
+  /**
+   * The second tier for this call, read when a name misses the record tier:
+   * one attempt per call, shared by every consumer in it — the AREA[] rewrite,
+   * the sort fold, the suggestions on an upstream rejection — so a read that
+   * failed is not retried before the call ends, and the next call that needs it
+   * reads it afresh. Undefined when either read fails, which leaves the call
+   * exactly as it would be with the record tier alone.
+   *
+   * @throws the caller's cancellation, never passed off as an unavailable tier.
+   */
+  private getExtendedIndex(index: FieldIndex, ctx: Context): Promise<ExtendedIndex | undefined> {
+    let attempt = this.extendedByCall.get(ctx);
+    if (!attempt) {
+      attempt = this.loadExtendedIndex(index, ctx);
+      this.extendedByCall.set(ctx, attempt);
+    }
+    return attempt;
+  }
+
+  private async loadExtendedIndex(
+    index: FieldIndex,
+    ctx: Context,
+  ): Promise<ExtendedIndex | undefined> {
+    if (ctx.signal.aborted) throw requestCancelled('Request cancelled by caller');
+    try {
+      const [indexOnly, areas] = await untilCancelled(
+        Promise.all([this.readIndexOnly(ctx), this.readSearchAreas(ctx)]),
+        ctx.signal,
+      );
+      return buildExtendedIndex(index.entries, [...indexOnly, ...areas]);
+    } catch (err) {
+      if (ctx.signal.aborted) throw err;
+      ctx.log.warning('Index-only piece and search-area lookup skipped — read failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return undefined;
+    }
+  }
+
+  private readIndexOnly(ctx: Context): Promise<ExtendedName[]> {
+    this.indexOnlyRead ??= this.readReference<FieldNode[]>(
+      '/studies/metadata',
+      { includeIndexedOnly: 'true' },
+      ctx,
+    )
+      .then(indexOnlyNames)
+      .catch((err: unknown) => {
+        this.indexOnlyRead = undefined;
+        throw err;
+      });
+    return this.indexOnlyRead;
+  }
+
+  private readSearchAreas(ctx: Context): Promise<ExtendedName[]> {
+    this.searchAreasRead ??= this.readReference<SearchAreaGroup[]>('/studies/search-areas', {}, ctx)
+      .then(searchAreaNames)
+      .catch((err: unknown) => {
+        this.searchAreasRead = undefined;
+        throw err;
+      });
+    return this.searchAreasRead;
+  }
+
+  /**
+   * One attempt at a reference read behind the second tier, under its own short
+   * timeout. It runs on a signal of its own, never the caller's: concurrent
+   * callers await the same read, so one caller cancelling must not fail it for
+   * the rest — each caller's wait ends on its own cancellation instead
+   * (untilCancelled), and the read stays bounded by its timeout.
+   */
+  private readReference<T>(path: string, params: Record<string, string>, ctx: Context): Promise<T> {
+    return this.fetchJson<T>(
+      path,
+      params,
+      { ...ctx, signal: new AbortController().signal },
+      { jsonFormat: false, maxRetries: 0, timeoutMs: this.extendedReadTimeoutMs },
+    );
+  }
 
   /** Lazy-load and memoize the flattened field index from /studies/metadata. */
   private getFieldIndex(ctx: Context): Promise<FieldIndex> {
@@ -599,6 +730,11 @@ export class ClinicalTrialsService {
    * a comma, `enrollmentCount:desc`, `EnrollmentCount:DESC` — so correcting
    * them here spends no round-trip on a pure casing or spacing mistake.
    *
+   * A name the record pieces leave unresolved is looked up among the
+   * index-only pieces and their alt names the same way (`numlocations:desc` →
+   * `NumLocations:desc`); upstream sorts on those. Never among the search areas,
+   * which it refuses to sort on.
+   *
    * Normalization never rejects. The metadata index knows which pieces exist,
    * not which upstream will sort on (`BriefTitle` is a valid piece that upstream
    * refuses to sort), so an unrecognized name is left for upstream to judge and
@@ -606,18 +742,23 @@ export class ClinicalTrialsService {
    * entry and passes through untouched.
    */
   private async normalizeSort(sort: string, ctx: Context): Promise<string> {
-    let pieceSet: Set<string>;
-    let caseFold: Map<string, string>;
+    let index: FieldIndex;
     try {
-      ({ pieceSet, caseFold } = await this.getFieldIndex(ctx));
+      index = await this.getFieldIndex(ctx);
     } catch {
       // Same fail-open as normalizeFields — the request still reaches upstream.
       return sort;
     }
+    const record = { names: index.pieceSet, fold: index.caseFold };
+    const items = parseSortItems(sort);
+    const missed = items.some(
+      ({ name }) => name !== '' && !name.startsWith('@') && !resolveName(name, record),
+    );
+    const extended = missed ? (await this.getExtendedIndex(index, ctx))?.sort : undefined;
     const corrections: Array<{ from: string; to: string }> = [];
-    const normalized = parseSortItems(sort)
+    const normalized = items
       .map(({ name, suffix }) => {
-        const folded = pieceSet.has(name) ? name : (caseFold.get(name.toLowerCase()) ?? name);
+        const folded = resolveName(name, record, extended) ?? name;
         const lowered = suffix.toLowerCase();
         const direction = lowered === ':asc' || lowered === ':desc' ? lowered : suffix;
         const original = `${name}${suffix}`;
@@ -633,37 +774,52 @@ export class ClinicalTrialsService {
   }
 
   /**
-   * Name the sort items whose field name is absent from the metadata index,
-   * each with its nearest valid pieces — the did-you-mean treatment an invalid
-   * `fields` entry already gets. Fails open to none: this runs on an error path
-   * where the index may be unavailable or disabled, and no suggestion is better
-   * than a metadata fetch that throws over the real error.
+   * Name the sort items whose field name is absent from the metadata index and
+   * from the index-only pieces, each with its nearest valid pieces — the
+   * did-you-mean treatment an invalid `fields` entry already gets, led by any
+   * index-only piece the name is a near miss of. Fails open to none: this runs
+   * on an error path where the index may be unavailable or disabled, and no
+   * suggestion is better than a metadata fetch that throws over the real error.
+   *
+   * @throws the caller's cancellation.
    */
   private async suggestSortFields(
     sort: string,
     ctx: Context,
   ): Promise<Array<{ name: string; near: string[] }>> {
     if (!this.validateFieldsLocally) return [];
+    let index: FieldIndex;
     try {
-      const { entries, pieceSet } = await this.getFieldIndex(ctx);
-      return parseSortItems(sort)
-        .filter(({ name }) => name.length > 0 && !name.startsWith('@') && !pieceSet.has(name))
-        .map(({ name }) => ({ name, near: nearestPieces(name, entries, 3) }))
-        .filter(({ near }) => near.length > 0);
+      index = await this.getFieldIndex(ctx);
     } catch {
       return [];
     }
+    const unknown = parseSortItems(sort).filter(
+      ({ name }) => name.length > 0 && !name.startsWith('@') && !index.pieceSet.has(name),
+    );
+    if (unknown.length === 0) return [];
+    const extended = await this.getExtendedIndex(index, ctx);
+    const indexOnly = extended?.extras.filter((e) => e.kind === 'index-only');
+    return unknown
+      .filter(({ name }) => !extended?.sort.names.has(name))
+      .map(({ name }) => ({ name, near: nearestPieces(name, index.entries, 3, indexOnly) }))
+      .filter(({ near }) => near.length > 0);
   }
 
   /**
-   * Up to three AREA[]-searchable pieces nearest a rejected AREA[] name. Drawn
-   * from the AREA index, so no suggestion is a `STRUCT` piece upstream would
-   * refuse in turn. None when the index is unavailable — this runs on an error
-   * path, where a metadata failure must not replace the real error.
+   * Up to three AREA[]-searchable pieces nearest a rejected AREA[] name, led by
+   * any index-only piece or search area it is a near miss of when the record
+   * tier misses it. Drawn from the AREA index, so no suggestion is a `STRUCT`
+   * piece upstream would refuse in turn. None when the index is unavailable —
+   * this runs on an error path, where a metadata failure must not replace the
+   * real error.
    */
   private async suggestAreaPieces(name: string, ctx: Context): Promise<string[]> {
     const area = await this.getAreaIndex(ctx);
-    return area ? nearestPieces(name, area.entries, 3) : [];
+    if (!area) return [];
+    const extended =
+      area.extended && missesRecordTier(name, area) ? await area.extended() : undefined;
+    return nearestPieces(name, area.entries, 3, extended?.extras);
   }
 
   /**
@@ -859,18 +1015,29 @@ export class ClinicalTrialsService {
     return slot;
   }
 
+  /**
+   * GET `path` and parse its JSON, retrying transient failures and translating
+   * upstream rejections into typed errors. `studyId` marks the single-study
+   * route, the only one whose 404 means a study is missing; `maxRetries` and
+   * `timeoutMs` override the service's own for a read that must stay short.
+   */
   private async fetchJson<T>(
     path: string,
     params: Record<string, string>,
     ctx: Context,
-    { jsonFormat = true }: { jsonFormat?: boolean } = {},
+    {
+      jsonFormat = true,
+      maxRetries = this.maxRetries,
+      studyId,
+      timeoutMs = this.timeoutMs,
+    }: { jsonFormat?: boolean; maxRetries?: number; studyId?: string; timeoutMs?: number } = {},
   ): Promise<T> {
     const url = this.buildUrl(path, params, jsonFormat);
 
     let lastError: unknown;
     let lastStatus: number | undefined;
 
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
       if (ctx.signal.aborted) throw requestCancelled('Request cancelled by caller', { path });
 
       if (attempt > 0) {
@@ -888,7 +1055,7 @@ export class ClinicalTrialsService {
       await this.throttle();
 
       try {
-        const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(this.timeoutMs)]);
+        const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(timeoutMs)]);
         const res = await fetch(url, {
           signal,
           headers: { Accept: 'application/json' },
@@ -908,13 +1075,13 @@ export class ClinicalTrialsService {
         }
 
         if (res.status === 404) {
-          if (path.startsWith('/studies/')) {
-            const id = path.split('/').pop() ?? path;
-            throw notFound(`Study ${id} not found`, { reason: 'study_not_found' });
+          if (studyId !== undefined) {
+            throw notFound(`Study ${studyId} not found`, { reason: 'study_not_found' });
           }
-          // Non-/studies/ endpoints (e.g. /stats/field/values) — surface the
-          // upstream body so callers can extract specific offenders instead of
-          // getting a generic "not found" that loses which input was bad.
+          // Every other endpoint (/stats/field/values, /studies/metadata,
+          // /studies/search-areas) — surface the upstream body so callers can
+          // extract specific offenders instead of getting a generic "not found"
+          // that loses which input was bad, or blames a study no one named.
           const text = (await res.text()).trim();
           throw notFound(text || `Not found: ${path}`);
         }
@@ -981,10 +1148,9 @@ export class ClinicalTrialsService {
             }
           }
           if (text.includes('incorrect format')) {
-            if (path.startsWith('/studies/')) {
-              const id = path.split('/').pop() ?? path;
+            if (studyId !== undefined) {
               throw notFound(
-                `Study ${id} not found. Verify the NCT ID exists on ClinicalTrials.gov.`,
+                `Study ${studyId} not found. Verify the NCT ID exists on ClinicalTrials.gov.`,
                 { reason: 'study_not_found' },
               );
             }
@@ -1053,7 +1219,10 @@ export class ClinicalTrialsService {
           //   3. ANTLR syntax errors from a stray bracket, unbalanced parens, or an
           //      unterminated quote in a free-text field — several distinct shapes,
           //      each read by describeQueryParseError (the catch-all below).
-          if (text.startsWith('Error parsing query in')) {
+          // Only the search route parses a query. Read elsewhere, the shape would
+          // send a second-tier read's own failure back into the suggestion path
+          // that awaits it.
+          if (path === '/studies' && text.startsWith('Error parsing query in')) {
             const rejected = parseAreaRejection(text);
             if (rejected) {
               const near = await this.suggestAreaPieces(rejected.name, ctx);
@@ -1141,7 +1310,7 @@ export class ClinicalTrialsService {
     }
 
     if (lastStatus === 429) {
-      throw rateLimited(`Rate limited by ClinicalTrials.gov after ${this.maxRetries} retries`, {
+      throw rateLimited(`Rate limited by ClinicalTrials.gov after ${maxRetries} retries`, {
         path,
         lastError: String(lastError),
         reason: 'rate_limited',

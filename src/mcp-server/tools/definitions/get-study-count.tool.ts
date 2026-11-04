@@ -7,6 +7,7 @@ import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import { normalizeAreaNames } from '@/services/clinical-trials/field-search.js';
+import { formatSearchCriteria } from '../utils/format-helpers.js';
 import {
   blankValueMessage,
   buildAdvancedFilter,
@@ -138,7 +139,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
       .string()
       .optional()
       .describe(
-        'Advanced filter using AREA[FieldName]value syntax. Examples: "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]", "AREA[Phase]PHASE2 AND AREA[StudyType]INTERVENTIONAL", "(AREA[Phase]PHASE3 OR AREA[Phase]PHASE4) AND AREA[StudyType]INTERVENTIONAL". AND/OR/NOT join complete AREA[FieldName]value expressions; parentheses group them. Call clinicaltrials_get_field_definitions to find AREA[]-compatible field names. A record-field name that differs from the spelling AREA[] accepts only by case (AREA[overallstatus]) is corrected before the request, here and in the query parameters, and searchCriteria shows the expression as sent; index-only pieces and search areas are not case-corrected.',
+        'Advanced filter using AREA[FieldName]value syntax. Examples: "AREA[StudyType]INTERVENTIONAL", "AREA[EnrollmentCount]RANGE[100, 1000]", "AREA[Phase]PHASE2 AND AREA[StudyType]INTERVENTIONAL", "(AREA[Phase]PHASE3 OR AREA[Phase]PHASE4) AND AREA[StudyType]INTERVENTIONAL". AND/OR/NOT join complete AREA[FieldName]value expressions; parentheses group them. Call clinicaltrials_get_field_definitions to find AREA[]-compatible field names. A field name — a record field, an index-only piece such as NumLocations, or a search area such as ConditionSearch — that differs from the spelling AREA[] accepts only by case (AREA[overallstatus]) is corrected before the request, here and in the query parameters, and searchCriteria shows the expression as sent.',
       ),
     includeUnknownEnrollment: z
       .boolean()
@@ -169,15 +170,8 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
   },
 
   enrichmentTrailer: {
-    searchCriteria: {
-      render: (criteria) => {
-        if (!criteria || Object.keys(criteria).length === 0) return '';
-        const parts = Object.entries(criteria).map(([k, v]) =>
-          Array.isArray(v) ? `- **${k}:** [${(v as unknown[]).join(', ')}]` : `- **${k}:** ${v}`,
-        );
-        return `**Search Criteria:**\n${parts.join('\n')}`;
-      },
-    },
+    // Each value reads back as sent, so a content[]-only caller can replay it (#177).
+    searchCriteria: { render: formatSearchCriteria },
   },
 
   async handler(input, ctx) {

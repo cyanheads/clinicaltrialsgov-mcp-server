@@ -4,7 +4,7 @@
  */
 
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetService } = vi.hoisted(() => ({
@@ -17,7 +17,19 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
 
 import { getStudyCount } from '@/mcp-server/tools/definitions/get-study-count.tool.js';
 import { searchStudies } from '@/mcp-server/tools/definitions/search-studies.tool.js';
-import { areaIndex } from '../../../helpers/area-metadata.js';
+import {
+  buildExtendedIndex,
+  flattenMetadata,
+  indexOnlyNames,
+  searchAreaNames,
+} from '@/services/clinical-trials/field-search.js';
+import {
+  AREA_METADATA,
+  areaIndex,
+  INDEXED_METADATA,
+  SEARCH_AREAS,
+} from '../../../helpers/area-metadata.js';
+import { readMarkdown } from '../../../helpers/commonmark.js';
 
 describe('getStudyCount', () => {
   const mockService = { countStudies: vi.fn(), getAreaIndex: vi.fn(), searchStudies: vi.fn() };
@@ -58,6 +70,31 @@ describe('getStudyCount', () => {
       });
     });
 
+    it('counts and echoes an index-only piece off by case in its canonical spelling (#179)', async () => {
+      mockService.countStudies.mockResolvedValue(6221);
+      const tier = buildExtendedIndex(flattenMetadata(AREA_METADATA), [
+        ...indexOnlyNames(INDEXED_METADATA),
+        ...searchAreaNames(SEARCH_AREAS),
+      ]);
+      const extended = vi.fn().mockResolvedValue(tier);
+      mockService.getAreaIndex.mockResolvedValue({ ...areaIndex(), extended });
+      const ctx = createMockContext({ errors: getStudyCount.errors });
+      await getStudyCount.handler(
+        getStudyCount.input!.parse({
+          advancedFilter: 'AREA[numlocations]RANGE[100,MAX] AND AREA[overallstatus]RECRUITING',
+        }),
+        ctx,
+      );
+
+      const sent = 'AREA[NumLocations]RANGE[100,MAX] AND AREA[OverallStatus]RECRUITING';
+      expect(mockService.countStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ filterAdvanced: sent }),
+        ctx,
+      );
+      expect(getEnrichment(ctx).searchCriteria).toMatchObject({ advancedFilter: sent });
+      expect(extended).toHaveBeenCalledTimes(1);
+    });
+
     it('never asks for the AREA index when no expression names an AREA[] field', async () => {
       mockService.countStudies.mockResolvedValue(1);
       const ctx = createMockContext({ errors: getStudyCount.errors });
@@ -71,9 +108,11 @@ describe('getStudyCount', () => {
     it('describes the correction on advancedFilter and the AREA[] failure on field_invalid', () => {
       const shape = getStudyCount.input!.shape as Record<string, { description?: string }>;
       expect(shape.advancedFilter?.description).toContain('only by case (AREA[overallstatus])');
+      // #179 extended the correction past the record fields.
       expect(shape.advancedFilter?.description).toContain(
-        'index-only pieces and search areas are not case-corrected',
+        'an index-only piece such as NumLocations, or a search area such as ConditionSearch',
       );
+      expect(shape.advancedFilter?.description).not.toContain('not case-corrected');
       expect(getStudyCount.errors?.find((e) => e.reason === 'field_invalid')?.when).toContain(
         'LeadSponsorName',
       );
@@ -663,6 +702,33 @@ describe('getStudyCount', () => {
       expect(entry).toBeDefined();
       expect(entry).not.toHaveProperty('thrownBy');
     });
+  });
+
+  // The searchCriteria trailer writes each value through formatEchoValue, which
+  // the format-helpers suite tables; this proves the wiring (#177).
+  it("reads find_eligible's replayed location and a SEARCH[] advancedFilter back from the trailer as sent (#177)", async () => {
+    mockService.countStudies.mockResolvedValue(0);
+    const input = {
+      locationQuery: 'SEARCH[Location](AREA[LocationCountry]"Mexico")',
+      advancedFilter: 'SEARCH[Location](AREA[LocationCity]Seattle)',
+      phaseFilter: ['PHASE2', 'PHASE3'],
+    };
+
+    const result = await runToolContract(getStudyCount, input);
+
+    expect((result.structuredContent as { searchCriteria: unknown }).searchCriteria).toEqual({
+      ...input,
+      sentinelFilterActive: true,
+    });
+    expect(readMarkdown((result.content as { text: string }[]).at(-1)!.text)).toContain(
+      [
+        'Search Criteria:',
+        `locationQuery: ${input.locationQuery}`,
+        'phaseFilter: [PHASE2, PHASE3]',
+        `advancedFilter: ${input.advancedFilter}`,
+        'sentinelFilterActive: true',
+      ].join('\n'),
+    );
   });
 
   describe('format', () => {

@@ -13,7 +13,7 @@
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerConfig } from '@/config/server-config.js';
-import { AREA_METADATA } from '../../helpers/area-metadata.js';
+import { AREA_METADATA, INDEXED_METADATA, SEARCH_AREAS } from '../../helpers/area-metadata.js';
 import { readMarkdown } from '../../helpers/commonmark.js';
 import { nctIds as ids } from '../../helpers/nct-ids.js';
 
@@ -224,7 +224,7 @@ describe('phaseFilter reaches upstream as canonical AREA[Phase] values (#144)', 
     expect(fetchedUrls()[0]?.searchParams.get('filter.advanced')).toBe(
       '(AREA[Phase]PHASE2 OR AREA[Phase]NA) AND (AREA[StudyType]INTERVENTIONAL)',
     );
-    expect(text(result)).toContain('- **phaseFilter:** [PHASE2, NA]');
+    expect(seenText(result)).toContain('phaseFilter: [PHASE2, NA]');
   });
 
   it.each([
@@ -650,18 +650,30 @@ describe('AREA[] field names reach upstream in the spelling it accepts (#170)', 
   type Criteria = { searchCriteria?: Record<string, unknown> };
   type ErrorWire = { error: { data: Record<string, unknown> } };
 
-  /** A field-validating service: /studies/metadata answers with the AREA fixture, every other request with `primary`. */
+  /**
+   * A field-validating service: the default /studies/metadata read answers with
+   * the AREA fixture, the second tier's two reads (#179) with theirs, and the
+   * /studies search with `primary`.
+   */
   const validating = (
     primary: () => unknown = () => jsonResponse({ studies: [], totalCount: 7 }),
   ) => {
     mockGetService.mockReturnValue(new ClinicalTrialsService(config, { maxRetries: 0 }));
-    mockFetch.mockImplementation((url: URL | string) =>
-      Promise.resolve(
-        String(url).includes('/studies/metadata') ? jsonResponse(AREA_METADATA) : primary(),
-      ),
-    );
+    mockFetch.mockImplementation((url: URL | string) => {
+      const { pathname, searchParams } = new URL(String(url));
+      if (pathname === '/v2/studies/metadata') {
+        const indexedOnly = searchParams.get('includeIndexedOnly') === 'true';
+        return Promise.resolve(jsonResponse(indexedOnly ? INDEXED_METADATA : AREA_METADATA));
+      }
+      if (pathname === '/v2/studies/search-areas') {
+        return Promise.resolve(jsonResponse(SEARCH_AREAS));
+      }
+      if (pathname === '/v2/studies') return Promise.resolve(primary());
+      return Promise.reject(new Error('unmocked fetch'));
+    });
   };
-  const searches = () => fetchedUrls().filter((u) => !u.pathname.endsWith('/metadata'));
+  const searches = () => fetchedUrls().filter((u) => u.pathname === '/v2/studies');
+  /** Every request but the search: the metadata read, and the second tier's two when a name misses. */
   const metadataRequests = () => fetchedUrls().length - searches().length;
   const rejection400 = (body: string) => ({
     ok: false,
@@ -726,16 +738,19 @@ describe('AREA[] field names reach upstream in the spelling it accepts (#170)', 
       validating();
       const advancedFilter =
         'AREA[COLLABORATOR]Pfizer AND AREA[OVERALL-STATUS]RECRUITING AND AREA[NumLocations]RANGE[100,MAX] AND AREA[ConditionSearch]diabetes AND AREA[numlocations]RANGE[1,MAX]';
+      // `numlocations` misses the index-only piece NumLocations only by case, which #179 corrects.
+      const sentFilter =
+        'AREA[COLLABORATOR]Pfizer AND AREA[OVERALL-STATUS]RECRUITING AND AREA[NumLocations]RANGE[100,MAX] AND AREA[ConditionSearch]diabetes AND AREA[NumLocations]RANGE[1,MAX]';
       const query = '"AREA[overallstatus]RECRUITING"';
       const result = await throttled(() =>
         runToolContract(definition, { advancedFilter, query, includeUnknownEnrollment: true }),
       );
       const [sent] = searches();
 
-      expect(sent?.searchParams.get('filter.advanced')).toBe(advancedFilter);
+      expect(sent?.searchParams.get('filter.advanced')).toBe(sentFilter);
       expect(sent?.searchParams.get('query.term')).toBe(query);
       expect((result.structuredContent as Criteria).searchCriteria).toMatchObject({
-        advancedFilter,
+        advancedFilter: sentFilter,
         query,
       });
     },

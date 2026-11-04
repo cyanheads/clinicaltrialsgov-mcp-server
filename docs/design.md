@@ -515,7 +515,6 @@ Single service wrapping all API interactions. Init/accessor pattern.
 | `countStudies(params)`   | `GET /studies`            | Total for a query and filters (`countTotal=true&pageSize=1&fields=NCTId`) |
 | `getStudy(nctId)`        | `GET /studies/{nctId}`    | Fetch single study by NCT ID                            |
 | `getFieldValues(fields)` | `GET /stats/field/values` | Get value frequency stats for fields                    |
-| `getEnums()`             | `GET /studies/enums`      | Get all enum type definitions                           |
 | `getMetadata(indexed)`   | `GET /studies/metadata`   | Get field tree (optional indexed-only filter)           |
 
 **A separate `countStudies` method** serves every count-only request — `clinicaltrials_get_study_count` and both `clinicaltrials_find_eligible` funnel stages. Upstream treats `pageSize=0` as its default page (ten full studies, ~200–650 KB on a broad query), so the count asks for one `NCTId`-only study (~160 B) and reads `totalCount`. It skips local `fields` validation: `NCTId` is fixed and valid, and validating it would fetch `/studies/metadata` (~175 KB) on a fresh server's first count.
@@ -715,7 +714,6 @@ See [docs/api-reference.md](api-reference.md) for the complete ClinicalTrials.go
 - [ ] `searchStudies(params)` method — `GET /studies` with full param mapping
 - [ ] `getStudy(nctId)` method — `GET /studies/{nctId}`
 - [ ] `getFieldValues(fields)` method — `GET /stats/field/values`
-- [x] `getEnums()` method — `GET /studies/enums`
 - [x] `getMetadata(indexedOnly)` method — `GET /studies/metadata`
 - [ ] Retry logic — retryable status codes (429, 5xx), exponential backoff, 1s base delay
 - [ ] Request timeout — 30s via AbortSignal

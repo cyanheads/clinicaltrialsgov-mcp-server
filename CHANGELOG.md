@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.11.1](changelog/2.11.x/2.11.1.md) — 2026-11-03
+
+find_eligible ranks sites for country and US state synonyms (USA, UK, WA) and runs its three requests in sequence. search_studies shows the nearest site's status. get_study_results summaries carry the adverse-event threshold. AREA[] and sort correct index-only names. searchCriteria echoes and registry line breaks render as written.
+
 ## [2.11.0](changelog/2.11.x/2.11.0.md) — 2026-11-03
 
 Publishes the clinicaltrialsgov-guide skill. search_studies fits an nctIds list too long for one request and returns the rest in deferredNctIds. Over-long requests fail as request_too_long. find_eligible binds state and country to the site and matches accented place names. Mis-cased AREA[] names are corrected. The .mcpb bundle starts again.

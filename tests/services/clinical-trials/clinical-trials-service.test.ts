@@ -3327,13 +3327,23 @@ describe('ClinicalTrialsService', () => {
       });
     });
 
-    describe('404s outside the single-study route', () => {
+    describe('rejections outside the single-study route', () => {
       it('reports a metadata 404 as a missing endpoint, never study_not_found', async () => {
         mockFetch.mockResolvedValue(textResponse('No such endpoint', 404));
         const err = await rejection(() => service.getMetadata(false, createMockContext()));
 
         expect(err.code).toBe(JsonRpcErrorCode.NotFound);
         expect(err.message).toBe('No such endpoint');
+        expect((err.data as Record<string, unknown> | undefined)?.reason).toBeUndefined();
+      });
+
+      it('reports a metadata 400 "incorrect format" as the upstream body, never study_not_found', async () => {
+        const body = 'Parameter `includeIndexedOnly` has incorrect format';
+        mockFetch.mockResolvedValue(textResponse(body, 400));
+        const err = await rejection(() => service.getMetadata(true, createMockContext()));
+
+        expect(err.code).toBe(JsonRpcErrorCode.ValidationError);
+        expect(err.message).toContain(body);
         expect((err.data as Record<string, unknown> | undefined)?.reason).toBeUndefined();
       });
 

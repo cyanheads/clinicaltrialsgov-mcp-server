@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.11.2](changelog/2.11.x/2.11.2.md) — 2026-11-09
+
+One 50 s time budget covers every request, retry, and wait of a tool call and ends it with a typed Timeout. fields takes full field paths, sort suggests only sortable fields, and AREA[], RANGE[], and object-field refusals name the field and the form that works. REST parameter names alias onto the search tools.
+
 ## [2.11.1](changelog/2.11.x/2.11.1.md) — 2026-11-03
 
 find_eligible ranks sites for country and US state synonyms (USA, UK, WA) and runs its three requests in sequence. search_studies shows the nearest site's status. get_study_results summaries carry the adverse-event threshold. AREA[] and sort correct index-only names. searchCriteria echoes and registry line breaks render as written.

@@ -19,7 +19,7 @@ The ClinicalTrials.gov registry as sponsors and investigators submit it: protoco
 | Identifier | Comes from | Goes to |
 |:--|:--|:--|
 | NCT ID | clinicaltrials_search_studies and clinicaltrials_find_eligible results, or the user | clinicaltrials_get_study_record, clinicaltrials_get_study_results, `nctIds` on search, `clinicaltrials://{nctId}` |
-| Piece name (`LeadSponsorName`) | clinicaltrials_get_field_definitions `piece`: search mode by concept, drill mode by section. Copy it exactly as returned | `fields`, `sort`, clinicaltrials_get_field_values, and `AREA[…]` for leaf pieces only: `AREA[LeadSponsor]` is refused where `AREA[LeadSponsorName]` works |
+| Piece name (`LeadSponsorName`) | clinicaltrials_get_field_definitions `piece`: search mode by concept, drill mode by section. Copy it exactly as returned | Search `fields`: any piece, groups included. `AREA[…]` and clinicaltrials_get_field_values: leaf pieces only, so `LeadSponsor` is refused where `LeadSponsorName` works. `sort`: date and numeric leaves only (type `NormalizedDate`, `PartialDate`, `DateTimeMinutes`, `integer`, `long`, or `short`), or `@relevance`. In `fields` on either tool, the full path printed beside the piece (`protocolSection.statusModule.overallStatus`) works as the piece |
 | Enum value (`RECRUITING`, `PHASE3`, `OLDER_ADULT`) | clinicaltrials_get_field_values `topValues` | `statusFilter`, `phaseFilter`, `AREA[Piece]VALUE` |
 | `nextPageToken` | clinicaltrials_search_studies | `pageToken`, with the same criteria |
 | Results group ID (`OG000`, `EG001`, `FG000`, `BG002`) | the group list of the same results section | that section only (see Gates) |
@@ -56,10 +56,10 @@ The ClinicalTrials.gov registry as sponsors and investigators submit it: protoco
 | Expression | Matches |
 |:--|:--|
 | `AREA[Condition]breast cancer` | every word within that field, each widened by the registry's synonyms; quoting (`AREA[Condition]"breast cancer"`) keeps the words together but still matches synonyms such as Breast Neoplasms, and `AREA[Condition]EXPANSION[Term]"breast cancer"` drops them |
-| `AREA[StartDate]RANGE[2020-01-01, MAX]` | an inclusive range; `MIN` and `MAX` leave an end open; dates are yyyy-MM-dd |
+| `AREA[StartDate]RANGE[2020-01-01, MAX]` | an inclusive range; `MIN` and `MAX` leave an end open; dates are yyyy-MM-dd. RANGE takes date, numeric, and age fields only (`StartDate`, `EnrollmentCount`, `MinimumAge`), and every other field a value. NCT IDs follow first-posting order, so bound an ID range as a `StudyFirstPostDate` window |
 | `AREA[MaximumAge]RANGE[MIN, 2 years]` | ages compared across units: `24 months` matches the same studies |
 | `AREA[MaximumAge]MISSING` | studies that do not publish the field |
-| `SEARCH[Location](AREA[LocationCity]Seattle AND AREA[LocationStatus]RECRUITING)` | every term inside holding for the same site |
+| `SEARCH[Location](AREA[LocationCity]Seattle AND AREA[LocationStatus]RECRUITING)` | every term inside holding for the same site. Only a site's own fields go inside (`LocationFacility`, `LocationCity`, `LocationState`, `LocationZip`, `LocationCountry`, `LocationStatus`, the `LocationContact…` fields); a study-level field such as `OverallStatus` or `NumLocations` goes beside the wrapper, `AREA[OverallStatus]RECRUITING AND SEARCH[Location](…)`, and a search area such as `LocationSearch` is unknown inside it |
 | `AREA[OverallStatus]COMPLETED AND NOT AREA[HasResults]true` | AND, OR, NOT between whole expressions; parentheses group |
 
 ## Workflows

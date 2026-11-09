@@ -203,7 +203,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A requested field name is not a valid PascalCase piece name.',
+      when: 'A requested name is not a field, names a group of fields such as LeadSponsor or ConditionMesh instead of its leaf pieces, or names a leaf whose type ClinicalTrials.gov does not count, such as LocationGeoPoint.',
       recovery: RECOVERY_HINTS.field_invalid,
       thrownBy: 'service',
     },
@@ -217,8 +217,24 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
     {
       reason: 'rate_limited',
       code: JsonRpcErrorCode.RateLimited,
-      when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
+      when: 'ClinicalTrials.gov answered HTTP 429 on every attempt, or the call’s time budget ran out after a 429.',
       recovery: RECOVERY_HINTS.rate_limited,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'retry_deadline_exceeded',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov did not answer within the call’s time budget, which covers every request, retry, and wait the call makes.',
+      recovery: RECOVERY_HINTS.retry_deadline_exceeded,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) on every attempt.',
+      recovery: RECOVERY_HINTS.upstream_timeout,
       retryable: true,
       thrownBy: 'service',
     },
@@ -227,11 +243,13 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
   input: z.object({
     fields: z
       .union([
-        z.string().describe('A single PascalCase field name.'),
-        z.array(z.string()).describe('Multiple PascalCase field names (at least one required).'),
+        z.string().describe('A single PascalCase leaf piece name.'),
+        z
+          .array(z.string())
+          .describe('Multiple PascalCase leaf piece names (at least one required).'),
       ])
       .describe(
-        `PascalCase field name(s) to get value statistics for — an empty list is rejected, not treated as "every field". A comma- or pipe-joined string ("Phase,StudyType") is split into separate names. Examples: OverallStatus, Phase, StudyType, Sex, LeadSponsorClass. Use clinicaltrials_get_field_definitions with a query to find more field names.`,
+        `PascalCase leaf piece name(s) to get value statistics for — an empty list is rejected, not treated as "every field". A group of fields (LeadSponsor, ConditionMesh) is refused with its leaf pieces named (LeadSponsorName, ConditionMeshTerm), and a full path as clinicaltrials_get_field_definitions prints it ("protocolSection.statusModule.overallStatus") is read as its piece name. A comma- or pipe-joined string ("Phase,StudyType") is split into separate names. Examples: OverallStatus, Phase, StudyType, Sex, LeadSponsorClass. Use clinicaltrials_get_field_definitions with a query to find more field names.`,
       ),
   }),
 

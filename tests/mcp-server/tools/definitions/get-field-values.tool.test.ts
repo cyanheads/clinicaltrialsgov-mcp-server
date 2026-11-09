@@ -3,8 +3,8 @@
  * @module tests/mcp-server/tools/definitions/get-field-values.tool
  */
 
-import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment } from '@cyanheads/mcp-ts-core/testing';
+import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
+import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import MarkdownIt from 'markdown-it';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { missingLeaves } from '../../../helpers/format-parity.js';
@@ -181,6 +181,85 @@ describe('getFieldValues', () => {
         getFieldValues.handler(getFieldValues.input!.parse({ fields: ['Phase', '​'] }), ctx),
       ).rejects.toMatchObject({ data: { reason: 'blank_value', param: 'fields' } });
       expect(mockService.getFieldValues).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The service maps a metadata path to its piece and refuses a group of fields
+   * with its leaf pieces (#189, #191); the mechanism is tabled at the service
+   * seam. These cases prove the handler hands both to it as written and carries
+   * the refusal's data and the declared recovery on both surfaces.
+   */
+  describe('metadata paths and groups of fields (#189, #191)', () => {
+    const text = (result: { content: unknown }) =>
+      (result.content as Array<{ text?: string }>).map((b) => b.text).join('\n');
+
+    it('hands a metadata path to the service as written and renders its statistics', async () => {
+      const path = 'protocolSection.statusModule.overallStatus';
+      mockService.getFieldValues.mockResolvedValue([
+        {
+          field: path,
+          piece: 'OverallStatus',
+          type: 'ENUM',
+          uniqueValuesCount: 14,
+          topValues: [{ value: 'COMPLETED', studiesCount: 290_000 }],
+        },
+      ]);
+
+      const result = await runToolContract(getFieldValues, { fields: path });
+
+      expect(result.isError).toBeFalsy();
+      expect(mockService.getFieldValues).toHaveBeenCalledWith([path], expect.anything());
+      expect(result.structuredContent).toMatchObject({
+        fieldStats: [{ field: path, piece: 'OverallStatus' }],
+      });
+      expect(text(result)).toContain('OverallStatus');
+      expect(text(result)).toContain('COMPLETED');
+    });
+
+    it('carries a group refusal as field_invalid with its leaves and the recovery on both surfaces', async () => {
+      const message =
+        "'ConditionMesh' is a group of fields; ClinicalTrials.gov counts values in its leaf pieces only: 'ConditionMeshId', 'ConditionMeshTerm'.";
+      mockService.getFieldValues.mockRejectedValue(
+        validationError(message, {
+          reason: 'field_invalid',
+          invalid: ['ConditionMesh'],
+          suggestions: { ConditionMesh: ['ConditionMeshId', 'ConditionMeshTerm'] },
+        }),
+      );
+
+      const result = await runToolContract(
+        getFieldValues,
+        { fields: ['ConditionMesh'] },
+        { context: { errors: getFieldValues.errors } },
+      );
+      const { error } = result.structuredContent as {
+        error: { code: number; message: string; data: Record<string, unknown> };
+      };
+      const hint = getFieldValues.errors?.find((e) => e.reason === 'field_invalid')?.recovery;
+
+      expect(result.isError).toBe(true);
+      expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+      expect(error.message).toBe(message);
+      expect(error.data).toMatchObject({
+        reason: 'field_invalid',
+        invalid: ['ConditionMesh'],
+        suggestions: { ConditionMesh: ['ConditionMeshId', 'ConditionMeshTerm'] },
+        recovery: { hint },
+      });
+      expect(text(result)).toContain(message);
+      expect(text(result)).toContain(`Recovery: ${hint}`);
+      expect(hint).toContain('leaf pieces only');
+    });
+
+    it('describes leaf pieces, the group refusal, and paths on fields and field_invalid', () => {
+      const { description } = getFieldValues.input!.shape.fields;
+      expect(description).toContain('PascalCase leaf piece name(s)');
+      expect(description).toContain('is refused with its leaf pieces named');
+      expect(description).toContain('is read as its piece name');
+      const when = getFieldValues.errors?.find((e) => e.reason === 'field_invalid')?.when;
+      expect(when).toContain('a group of fields');
+      expect(when).toContain('LocationGeoPoint');
     });
   });
 

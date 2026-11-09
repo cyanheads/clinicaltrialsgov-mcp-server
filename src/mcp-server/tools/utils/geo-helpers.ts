@@ -13,6 +13,11 @@ export const EARTH_RADIUS_MI = 3958.7613;
 /** A study location annotated with its distance from a reference point. */
 export type LocationWithDistance = StudyLocation & { distanceMi?: number };
 
+/** A distance in miles to the one decimal content[] renders, so both surfaces carry the same value. */
+export function roundMi(distanceMi: number): number {
+  return Math.round(distanceMi * 10) / 10;
+}
+
 /** Great-circle distance in miles between two lat/lon points (Haversine). */
 export function haversineMi(
   a: { lat: number; lon: number },

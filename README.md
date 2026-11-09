@@ -67,54 +67,55 @@ Plugin installs load it from `skills/`; MCP clients that support the Skills exte
 
 ### `clinicaltrials_search_studies` <sub>tool</sub>
 
-- Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`, `statusFilter` / `phaseFilter` enums (case and spacing variants accepted), `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]`), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix); `pageSize` 1–1000 (default 10; above the server's per-page cap, 200 by default, a page is served at the cap with `truncated` / `shown` / `cap`), `pageToken` cursor, `sort` on up to 2 fields
-- Returns a compact per-study index by default (`nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `hasResults`, …); `fields` (PascalCase leaves) selects a full-fidelity projection — full records run ~70KB
+- Free-text `query` plus field-specific `conditionQuery` / `interventionQuery` / `locationQuery` / `sponsorQuery` / `titleQuery` / `outcomeQuery`, `statusFilter` / `phaseFilter` enums (case and spacing variants accepted), `advancedFilter` (`AREA[FieldName]value` / `RANGE[min, max]`), and `geoFilter` (`distance(lat,lon,radius)` with a `mi`/`km` suffix); `pageSize` (default 10, no upper bound; above the server's per-page cap, 200 by default, a page is served at the cap with `truncated` / `shown` / `cap`), `pageToken` cursor, `sort` on up to 2 date or numeric fields (or `@relevance`)
+- Each query and filter parameter also accepts its ClinicalTrials.gov REST name (`query.cond` or `query_cond`, `filter.overallStatus`, `filter.geo`, …), and `condition`, `intervention`, `sponsor`, `phase`, `limit`, and `max_results` work as aliases too
+- Returns a compact per-study index by default (`nctId`, `briefTitle`, `overallStatus`, `phases`, `enrollmentCount`, `hasResults`, …); `fields` (PascalCase piece names, or full paths as `clinicaltrials_get_field_definitions` prints them) selects a full-fidelity projection — full records run ~70KB
 - `nctIds` (up to 1000 entries, repeats collapsed) is served up to what fits one ClinicalTrials.gov request beside the other parameters — about 560 IDs on their own — with the rest returned unqueried in `deferredNctIds`, the same on every page of a walk
-- Typed errors: `blank_value`, `ids_not_found`, `field_invalid`, `enum_invalid`, `query_parse_error`, `geo_invalid`, `sort_invalid`, `page_token_invalid`, `request_too_long`, `rate_limited`
+- Typed errors: `blank_value`, `ids_not_found`, `field_invalid`, `enum_invalid`, `query_parse_error`, `geo_invalid`, `sort_invalid`, `page_token_invalid`, `request_too_long`, `rate_limited`, `retry_deadline_exceeded`, `upstream_timeout`
 
 ---
 
 ### `clinicaltrials_get_study_record` <sub>tool</sub>
 
-- Full protocol record by `nctId`, with optional `locationLimit`, `outcomeLimit` / `referenceLimit`, and `nearLocation` (`lat`, `lon`, `radiusMi`) to bound and sort locations — none has an upper bound; a value past the list returns all of it
-- `filtersApplied` reports upstream totals when a cap trims a list; `resultsSection` is replaced by `resultsSummary` counts. Typed errors: `study_not_found`, `rate_limited`
+- Full protocol record by `nctId`, with optional `locationLimit`, `outcomeLimit` / `referenceLimit`, and `nearLocation` (`lat`, `lon`, `radiusMi`) to bound and sort locations — none has an upper bound; a value past the list returns all of it, and `0` leaves that list out
+- `filtersApplied` reports upstream totals when a cap trims a list; `resultsSection` is replaced by `resultsSummary` counts. Typed errors: `study_not_found`, `rate_limited`, `retry_deadline_exceeded`, `upstream_timeout`
 
 ---
 
 ### `clinicaltrials_get_study_count` <sub>tool</sub>
 
 - Same query and filter surface as `clinicaltrials_search_studies`, returning only `totalCount` — no study data fetched
-- Typed errors: `blank_value`, `field_invalid`, `enum_invalid`, `query_parse_error`, `request_too_long`, `rate_limited`
+- Typed errors: `blank_value`, `field_invalid`, `enum_invalid`, `query_parse_error`, `request_too_long`, `rate_limited`, `retry_deadline_exceeded`, `upstream_timeout`
 
 ---
 
 ### `clinicaltrials_get_field_values` <sub>tool</sub>
 
-- One or more PascalCase `fields` (e.g. `OverallStatus`, `Phase`) — returns each field's type and top values with study counts (capped at 250 by the API), or `min` / `max` / `avg` for numeric and date fields and `trueCount` / `falseCount` for booleans
+- One or more PascalCase leaf `fields` (e.g. `OverallStatus`, `Phase`; a group such as `LeadSponsor` is refused with its leaf pieces named) — returns each field's type and top values with study counts (capped at 250 by the API), or `min` / `max` / `avg` for numeric and date fields and `trueCount` / `falseCount` for booleans
 - STRING fields add their `longest` value; past 2,000 characters it is a preview flagged `truncated`, with the full `length` and a notice naming the `clinicaltrials_search_studies` call that returns the whole text. Free-text fields the API does not count distinct values on carry `uniqueValuesCounted: false`, marking their `uniqueValuesCount` of 0 as no count
-- `multiValued` flags fields whose per-value counts can sum above the study total. Typed errors: `blank_value`, `field_invalid`, `request_too_long`, `rate_limited`
+- `multiValued` flags fields whose per-value counts can sum above the study total. Typed errors: `blank_value`, `field_invalid`, `request_too_long`, `rate_limited`, `retry_deadline_exceeded`, `upstream_timeout`
 
 ---
 
 ### `clinicaltrials_get_field_definitions` <sub>tool</sub>
 
-- `mode`: `search` (keyword `query`, `limit` default 20, no upper bound), `drill` (dot-notation `path`), or `overview` — resolves the PascalCase names accepted by `fields`, `advancedFilter`, `sort`, and `clinicaltrials_get_field_values`
-- Typed errors: `blank_value`, `mode_mismatch`, `mode_requires`, `path_not_found`, `rate_limited`
+- `mode`: `search` (keyword `query`, `limit` default 20, no upper bound), `drill` (dot-notation `path`), or `overview` — resolves the PascalCase names accepted by `fields`, `advancedFilter`, `sort` (date and numeric fields), and `clinicaltrials_get_field_values` (leaf fields)
+- Typed errors: `blank_value`, `mode_mismatch`, `mode_requires`, `path_not_found`, `rate_limited`, `retry_deadline_exceeded`, `upstream_timeout`
 
 ---
 
 ### `clinicaltrials_get_study_results` <sub>tool</sub>
 
 - Up to 20 distinct `nctIds` fetched per call, with any further IDs (up to 500 entries) returned in `deferredNctIds`; `sections` (`outcomes`, `adverseEvents`, `participantFlow`, `baseline`, `moreInfo`), `summary` to condense a result set that can exceed 500KB per study, and `outcomeLimit` / `adverseEventLimit` with resumable `outcomeOffset` / `seriousEventOffset` / `otherEventOffset`
-- Per-study `fetchErrors` / `studiesWithoutResults` instead of a whole-batch failure, and `canonicalNctId` when an alias ID resolves to another study. Typed errors: `blank_value`, `offset_not_applicable`, `rate_limited`
+- Per-study `fetchErrors` / `studiesWithoutResults` for IDs that fail on their own, while a failed batch request, a rate limit, the call's time budget, or a cancellation ends the call; `canonicalNctId` when an alias ID resolves to another study. Typed errors: `blank_value`, `offset_not_applicable`, `rate_limited`, `retry_deadline_exceeded`, `upstream_timeout`
 
 ---
 
 ### `clinicaltrials_find_eligible` <sub>tool</sub>
 
-- `age` (whole number 0–120) with optional `ageUnit` (`years` default, `months`, `weeks`, `days`) for infants and young children, `sex` (`FEMALE` / `MALE` / `ALL`), `conditions[]`, `location` (`country` required, `state` / `city` optional; country synonyms such as `USA`, `UK`, and `Czech Republic`, and US state abbreviations, rank sites as the registry's spelling does), `healthyVolunteer`, `recruitingOnly` (default true), `maxResults` (up to 1000; each call returns at most 50, disclosing the rest via `truncated` / `shown` / `cap` and a replayable `searchCriteria`), `locationLimit` (no upper bound; a value past the matched sites returns them all)
+- `age` (whole number 0–120) with optional `ageUnit` (`years` default, `months`, `weeks`, `days`) for infants and young children, `sex` (`FEMALE` / `MALE` / `ALL`), `conditions[]`, `location` (`country` required, `state` / `city` optional; country synonyms such as `USA`, `UK`, and `Czech Republic`, and US state abbreviations, rank sites as the registry's spelling does), `healthyVolunteer`, `recruitingOnly` (default true), `maxResults` (or `limit`; no upper bound, each call returns at most 50, disclosing the rest via `truncated` / `shown` / `cap` and a replayable `searchCriteria`), `locationLimit` (no upper bound; a value past the matched sites returns them all)
 - Matches on age, sex, location, recruitment status, and a fuzzy condition search; `funnel` reports match counts per filter stage, and a `notice` says inclusion/exclusion criteria were not checked (use `clinicaltrials_get_study_record` to review them)
-- Typed errors: `blank_value`, `field_invalid`, `query_parse_error`, `request_too_long`, `rate_limited`
+- Typed errors: `blank_value`, `field_invalid`, `enum_invalid`, `query_parse_error`, `request_too_long`, `rate_limited`, `retry_deadline_exceeded`, `upstream_timeout`
 
 ---
 
@@ -122,7 +123,7 @@ Plugin installs load it from `skills/`; MCP clients that support the Skills exte
 
 - Full protocol record as `application/json`, with locations, secondary/other outcomes, and references each capped at 50 — fixed server-side, no arguments
 - Results data is replaced by `resultsSummary` counts; `truncated` and `filtersApplied` disclose what was capped, with `retrieval` naming the tools that fetch the full data
-- Typed errors: `study_not_found`, `rate_limited`
+- Typed errors: `study_not_found`, `rate_limited`, `retry_deadline_exceeded`, `upstream_timeout`
 
 ---
 
@@ -138,15 +139,15 @@ Built on [`@cyanheads/mcp-ts-core`](https://github.com/cyanheads/mcp-ts-core): s
 ClinicalTrials.gov-specific:
 
 - Type-safe client for the [ClinicalTrials.gov REST API v2](https://clinicaltrials.gov/data-api/api) — public, no authentication or API keys required
-- Serialized request queue enforcing ClinicalTrials.gov's ~1 req/sec rate limit, with retry and exponential backoff on 429/5xx responses and HTML error pages
-- Auto-corrects field names passed to `fields`/`sort` (case, whitespace, legacy aliases like `RecruitmentStatus` → `OverallStatus`) and the case of `AREA[…]` field names in `advancedFilter` and the query parameters (`AREA[overallstatus]` → `AREA[OverallStatus]`), index-only pieces and search areas included (`AREA[numlocations]`, `AREA[conditionsearch]`; `sort` takes the index-only pieces too), and logs each correction
+- Serialized request queue enforcing ClinicalTrials.gov's ~1 req/sec rate limit, with retry and exponential backoff on 429/5xx responses and HTML error pages, all inside one 50-second budget per tool call or resource read — a hung upstream ends the call with a typed `retry_deadline_exceeded` error before an MCP client's 60-second request timeout
+- Auto-corrects field names passed to `fields`/`sort` (case, whitespace, legacy aliases like `RecruitmentStatus` → `OverallStatus`, a full path such as `protocolSection.statusModule.overallStatus` → `OverallStatus` in `fields`, a bare `relevance` → `@relevance` in `sort`) and the case of `AREA[…]` field names in `advancedFilter` and the query parameters (`AREA[overallstatus]` → `AREA[OverallStatus]`), index-only pieces and search areas included (`AREA[numlocations]`, `AREA[conditionsearch]`; `sort` takes the index-only counts such as `NumLocations` too), and logs each correction
 - Geographic proximity search and nearest-site re-ranking, with no geocoding dependency
 - Excludes the "unknown" enrollment sentinel (`99999999`) from searches and counts by default; `includeUnknownEnrollment` brings it back
 
 Agent-friendly output:
 
 - Provenance — search, count, and eligibility tools echo `searchCriteria`; `clinicaltrials_get_study_results` names `canonicalNctId` when an alias ID resolves to another study
-- Graceful partial failure — `clinicaltrials_get_study_results` returns per-study `fetchErrors` / `studiesWithoutResults` instead of failing the whole batch
+- Graceful partial failure — `clinicaltrials_get_study_results` returns per-study `fetchErrors` / `studiesWithoutResults` for IDs that fail on their own instead of failing the whole batch
 - Typed errors — each tool returns `reason` codes (`study_not_found`, `blank_value`, …), and bounded lists carry a `next*Offset` only when more remains
 - Response shaping — search and eligibility return a compact index by default instead of the ~70KB full record
 
@@ -228,7 +229,7 @@ MCP_TRANSPORT_TYPE=http MCP_HTTP_PORT=3010 bun run start:http
 
 ### Prerequisites
 
-- [Bun v1.4.0](https://bun.sh/) or higher (or Node.js v24+).
+- [Bun v1.4.4](https://bun.sh/) or higher (or Node.js v24+).
 
 ### Installation
 
@@ -257,7 +258,7 @@ All configuration is optional — the server works with defaults and no API keys
 | Variable | Description | Default |
 |:---|:---|:---|
 | `CT_API_BASE_URL` | ClinicalTrials.gov API base URL. | `https://clinicaltrials.gov/api/v2` |
-| `CT_REQUEST_TIMEOUT_MS` | Per-request timeout in milliseconds; a positive integer. | `30000` |
+| `CT_REQUEST_TIMEOUT_MS` | Timeout in milliseconds for each attempt at a ClinicalTrials.gov request; a positive integer. An attempt ends sooner when its tool call or resource read runs out of its 50-second budget, which covers every request, retry, and wait the call makes. | `30000` |
 | `CT_MAX_PAGE_SIZE` | Most studies one `clinicaltrials_search_studies` page returns; an integer ≥ 1, values above 1000 clamp to 1000. | `200` |
 | `MCP_TRANSPORT_TYPE` | Transport: `stdio` or `http`. | `stdio` |
 | `MCP_HTTP_PORT` | Port for HTTP server. | `3010` |

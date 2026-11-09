@@ -172,6 +172,18 @@ describe('invalidPhaseRejection (#144)', () => {
       'Use one of NA, EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4 per phaseFilter entry, and pass a list such as ["PHASE2","PHASE3"] to match any of several phases. Put every other criterion, including OR/NOT expressions, in advancedFilter.',
     );
   });
+
+  it('declares the values and the list form a caller sends back as literals', () => {
+    expect(invalidPhaseRejection('phase 7').literals).toEqual([
+      'NA',
+      'EARLY_PHASE1',
+      'PHASE1',
+      'PHASE2',
+      'PHASE3',
+      'PHASE4',
+      '["PHASE2","PHASE3"]',
+    ]);
+  });
 });
 
 describe('normalizeStatusFilter (#140)', () => {

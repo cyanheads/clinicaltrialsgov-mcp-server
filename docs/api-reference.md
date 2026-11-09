@@ -227,7 +227,7 @@ Per-variant fields:
 
 `NUMBER` is a documented variant with no live field at present — `types=NUMBER` answers `[]` against the current dataset.
 
-Errors: `400` (bad request), `404` (field not found)
+Errors: `400` (bad request), `404` (field not found). Only leaf pieces are counted: a group of fields answers `400 Unsupported field type: <type>` with its metadata `type`, `[]` stripped (`ConditionMesh` → `Mesh`, `LeadSponsor` → `Sponsor`, `protocolSection.statusModule` → `StatusModule`), and so does the leaf `LocationGeoPoint` (`GeoPoint`). The body names the type, never the field, and one such field fails the whole request (probed 2026-11-09).
 
 ### 8.3 `GET /stats/field/sizes` -- List Field Size Statistics
 
@@ -481,7 +481,7 @@ sort=LastUpdatePostDate:desc
 sort=EnrollmentCount:desc,LastUpdatePostDate:asc
 ```
 
-Sortable fields include any indexed field piece name, index-only pieces such as `NumLocations` among them. Names are case-sensitive: `sort=numlocations:desc` answers HTTP 400 `Unknown sort field`. Common sort fields:
+Only date and numeric fields sort: a piece whose metadata `type`, `[]` stripped, is `NormalizedDate`, `PartialDate`, `DateTimeMinutes`, `integer`, or `long`, or an index-only `short` piece such as `NumLocations`. Every other type — `text`, `markup`, `nct`, `boolean`, `NormalizedTime`, `GeoPoint`, `GeoName`, the enums (`Status`, `Phase`, `BrowseLeafRelevance`), index-only `keyword`, and every `STRUCT` (`StartDateStruct`, type `PartialDateStruct`) — answers HTTP 400 `Unsupported sort field type: <type>`, and a search area (`ConditionSearch`) answers `Unknown sort field` (probed 2026-11-09). The metadata carries no sortable flag. Names are case-sensitive: `sort=numlocations:desc` answers HTTP 400 `Unknown sort field`. Relevance is spelled `@relevance`, with `:asc` or `:desc` accepted; `relevance` answers `Unknown sort field`, and `@Relevance` answers ``Item 1 in parameter `sort` has incorrect format``. Common sort fields:
 
 | Sort Field           | Description                                                   |
 | :------------------- | :------------------------------------------------------------ |

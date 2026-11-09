@@ -20,6 +20,7 @@ import {
   haversineMi,
   type LocationWithDistance,
   parseGeoFilterCenter,
+  roundMi,
 } from '../utils/geo-helpers.js';
 import {
   blankValueMessage,
@@ -87,9 +88,11 @@ const SEARCH_RENDERED = new Set([
  * When a geoFilter is active, re-rank each study's `locations[]` by proximity to
  * the filter center so the matched site leads instead of the upstream-order first
  * entry — mirroring get_study_record's nearLocation → distanceMi annotation.
- * Sites with a geoPoint are sorted nearest-first and annotated with distanceMi;
- * sites without coordinates are preserved at the end (re-rank only, never filter).
- * Mutates each study's locations array in place.
+ * Sites with a geoPoint are sorted nearest-first and annotated with distanceMi,
+ * rounded to the one decimal content[] renders so both surfaces carry the same
+ * number; the exact distance decides the order. Sites without coordinates are
+ * preserved at the end (re-rank only, never filter). Mutates each study's
+ * locations array in place.
  */
 function reRankLocationsByProximity(
   studies: RawStudyShape[],
@@ -103,8 +106,9 @@ function reRankLocationsByProximity(
       .filter(
         (l): l is StudyLocation & { geoPoint: { lat: number; lon: number } } => l.geoPoint != null,
       )
-      .map((l) => ({ ...l, distanceMi: haversineMi(center, l.geoPoint) }))
-      .sort((a, b) => a.distanceMi - b.distanceMi);
+      .map((site) => ({ site, exactMi: haversineMi(center, site.geoPoint) }))
+      .sort((a, b) => a.exactMi - b.exactMi)
+      .map(({ site, exactMi }) => ({ ...site, distanceMi: roundMi(exactMi) }));
     const withoutGeo = locations.filter((l) => l.geoPoint == null);
     locationsModule.locations = [...withGeo, ...withoutGeo];
   }
@@ -354,7 +358,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A name in the fields parameter is not a field, or an AREA[] expression names a field ClinicalTrials.gov does not recognize or cannot search by value — often a module or group such as LeadSponsor instead of a leaf piece such as LeadSponsorName.',
+      when: 'A name in the fields parameter is not a field; an AREA[] expression names a field ClinicalTrials.gov does not recognize or cannot search by value — often a module or group such as LeadSponsor instead of a leaf piece such as LeadSponsorName; or a valid field sits where upstream refuses it: a study-level field or a search area inside SEARCH[Location](…), or RANGE[] on a field that is not a date, number, or age.',
       recovery: RECOVERY_HINTS.field_invalid,
       thrownBy: 'service',
     },
@@ -380,7 +384,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     {
       reason: 'sort_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'sort is not FieldName:asc / FieldName:desc, or names more than 2 fields.',
+      when: 'sort is not FieldName:asc / FieldName:desc, names more than 2 fields, or names a field ClinicalTrials.gov does not recognize or does not sort on — only date and numeric fields sort, plus @relevance.',
       recovery: RECOVERY_HINTS.sort_invalid,
       thrownBy: 'service',
     },
@@ -401,12 +405,62 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     {
       reason: 'rate_limited',
       code: JsonRpcErrorCode.RateLimited,
-      when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
+      when: 'ClinicalTrials.gov answered HTTP 429 on every attempt, or the call’s time budget ran out after a 429.',
       recovery: RECOVERY_HINTS.rate_limited,
       retryable: true,
       thrownBy: 'service',
     },
+    {
+      reason: 'retry_deadline_exceeded',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov did not answer within the call’s time budget, which covers every request, retry, and wait the call makes.',
+      recovery: RECOVERY_HINTS.retry_deadline_exceeded,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) on every attempt.',
+      recovery: RECOVERY_HINTS.upstream_timeout,
+      retryable: true,
+      thrownBy: 'service',
+    },
   ],
+
+  /**
+   * Each field's ClinicalTrials.gov REST parameter, dotted and with `_` for
+   * `.` (the case-style fold strips `-` and `_` only, so it reaches neither),
+   * beside the generic names callers reach for.
+   */
+  inputAliases: {
+    'query.term': 'query',
+    query_term: 'query',
+    'query.cond': 'conditionQuery',
+    query_cond: 'conditionQuery',
+    condition: 'conditionQuery',
+    'query.intr': 'interventionQuery',
+    query_intr: 'interventionQuery',
+    intervention: 'interventionQuery',
+    'query.locn': 'locationQuery',
+    query_locn: 'locationQuery',
+    'query.spons': 'sponsorQuery',
+    query_spons: 'sponsorQuery',
+    sponsor: 'sponsorQuery',
+    'query.titles': 'titleQuery',
+    query_titles: 'titleQuery',
+    'query.outc': 'outcomeQuery',
+    query_outc: 'outcomeQuery',
+    'filter.overallStatus': 'statusFilter',
+    filter_overallStatus: 'statusFilter',
+    'filter.advanced': 'advancedFilter',
+    filter_advanced: 'advancedFilter',
+    phase: 'phaseFilter',
+    'filter.geo': 'geoFilter',
+    filter_geo: 'geoFilter',
+    limit: 'pageSize',
+    max_results: 'pageSize',
+  },
 
   input: z
     .object({
@@ -510,22 +564,21 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         )
         .optional()
         .describe(
-          `PascalCase leaf names to return; strongly recommended since full records are ~70KB. Omit for the compact index projection — an empty list is rejected, not treated as omission. A comma- or pipe-joined entry ("NCTId,BriefTitle") is split into separate names. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept.`,
+          `PascalCase piece names to return, leaves or groups (a group such as StatusModule returns all of its fields); strongly recommended since full records are ~70KB. Omit for the compact index projection — an empty list is rejected, not treated as omission. A comma- or pipe-joined entry ("NCTId,BriefTitle") is split into separate names, and a full path as clinicaltrials_get_field_definitions prints it ("protocolSection.statusModule.overallStatus") is sent as its piece name. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept.`,
         ),
       sort: z
         .string()
         .optional()
         .describe(
-          `Sort order. Format: FieldName:asc or FieldName:desc. E.g., "LastUpdatePostDate:desc", "EnrollmentCount:desc". Max 2 fields comma-separated. For "largest trials" queries, pair EnrollmentCount:desc with advancedFilter "AREA[StudyType]INTERVENTIONAL" — the top enrollment counts are observational registry/claims studies enrolling tens of millions. Enrollment counts are sponsor-reported and not validated upstream beyond the unknown-enrollment sentinel exclusion. Use clinicaltrials_get_field_definitions to find sortable field names.`,
+          `Sort order. Format: FieldName:asc or FieldName:desc. E.g., "LastUpdatePostDate:desc", "EnrollmentCount:desc". Max 2 fields comma-separated. Only date and numeric fields sort — those whose clinicaltrials_get_field_definitions type is NormalizedDate, PartialDate, DateTimeMinutes, integer, long, or short — plus "@relevance", which ranks by match to the query; a bare "relevance" is sent as "@relevance". For "largest trials" queries, pair EnrollmentCount:desc with advancedFilter "AREA[StudyType]INTERVENTIONAL" — the top enrollment counts are observational registry/claims studies enrolling tens of millions. Enrollment counts are sponsor-reported and not validated upstream beyond the unknown-enrollment sentinel exclusion.`,
         ),
       pageSize: z
         .number()
         .int()
         .min(1)
-        .max(UPSTREAM_MAX_PAGE_SIZE)
         .default(10)
         .describe(
-          `Results per page, 1–${UPSTREAM_MAX_PAGE_SIZE}. A value above this server's per-page cap (200 unless the operator changed it) returns a page at the cap, reported in truncated/shown/cap with nextPageToken to continue.`,
+          `Results per page. Default 10; a larger value returns at most this server's per-page cap (200 unless the operator changed it) and says so in truncated/shown/cap, with nextPageToken to page the rest. The cap sits below ClinicalTrials.gov's own page maximum of ${UPSTREAM_MAX_PAGE_SIZE} because full study records run to tens of KB each.`,
         ),
       pageToken: z
         .string()
@@ -680,13 +733,18 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     // OR / NOT / AREA[] clause there widens the cohort instead of failing.
     const invalidPhase = firstInvalidPhase(phaseFilter);
     if (invalidPhase !== undefined) {
-      const { message, hint } = invalidPhaseRejection(invalidPhase);
-      throw ctx.fail('enum_invalid', message, {
-        param: 'phaseFilter',
-        value: invalidPhase,
-        validValues: [...PHASE_VALUES],
-        recovery: { hint },
-      });
+      const { message, hint, literals } = invalidPhaseRejection(invalidPhase);
+      throw ctx.fail(
+        'enum_invalid',
+        message,
+        {
+          param: 'phaseFilter',
+          value: invalidPhase,
+          validValues: [...PHASE_VALUES],
+          recovery: { hint },
+        },
+        { literals },
+      );
     }
 
     // Validate the geo expression before spending a round trip on it.
@@ -731,8 +789,8 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       () => service.getAreaIndex(ctx),
       ctx.log,
     );
-    // The per-call page cap applies to this caller-facing page only; the
-    // schema ceiling is ClinicalTrials.gov's own page maximum.
+    // The per-call page cap applies to this caller-facing page only, and is
+    // the one bound on pageSize: the schema sets no maximum above it.
     const pageCap = service.maxPageSize;
     // The service sends the leading IDs that fit one request and names the rest;
     // the same criteria fit the same IDs on every page of a walk.

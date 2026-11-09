@@ -1209,8 +1209,29 @@ describe('findEligible — injection and output safety', () => {
     expect(() => findEligible.input!.parse({ ...baseInput, sex: 'UNKNOWN' as never })).toThrow();
   });
 
-  it('rejects maxResults above its hard ceiling of 1000', () => {
-    expect(() => findEligible.input!.parse({ ...baseInput, maxResults: 1001 })).toThrow();
+  it.each([5000, Number.MAX_SAFE_INTEGER])(
+    'never asks upstream for more than the per-call cap, whatever maxResults says (%d)',
+    async (maxResults) => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: Array.from({ length: 50 }, (_, i) => ({
+          protocolSection: { identificationModule: { nctId: `NCT${String(i).padStart(8, '0')}` } },
+        })),
+        totalCount: 312,
+      });
+      const result = await runToolContract(findEligible, { ...baseInput, maxResults });
+
+      expect(result.isError).toBeFalsy();
+      expect(mockService.searchStudies).toHaveBeenCalledTimes(1);
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({ pageSize: 50 });
+      expect(result.structuredContent).toMatchObject({ truncated: true, shown: 50, cap: 50 });
+    },
+  );
+
+  it('rejects a maxResults past the safe-integer range before reaching the service', async () => {
+    const result = await runToolContract(findEligible, { ...baseInput, maxResults: 2 ** 53 });
+
+    expect(result.isError).toBe(true);
+    expect(mockService.searchStudies).not.toHaveBeenCalled();
   });
 
   it('names numbers, never an env var, in the maxResults cap disclosure', async () => {

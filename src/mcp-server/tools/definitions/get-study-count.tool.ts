@@ -40,7 +40,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'An AREA[] expression in advancedFilter or a query parameter names a field ClinicalTrials.gov does not recognize or cannot search by value — often a module or group such as LeadSponsor instead of a leaf piece such as LeadSponsorName.',
+      when: 'An AREA[] expression in advancedFilter or a query parameter names a field ClinicalTrials.gov does not recognize or cannot search by value — often a module or group such as LeadSponsor instead of a leaf piece such as LeadSponsorName — or puts a valid field where upstream refuses it: a study-level field or a search area inside SEARCH[Location](…), or RANGE[] on a field that is not a date, number, or age.',
       recovery: RECOVERY_HINTS.field_invalid,
       thrownBy: 'service',
     },
@@ -67,12 +67,59 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     {
       reason: 'rate_limited',
       code: JsonRpcErrorCode.RateLimited,
-      when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
+      when: 'ClinicalTrials.gov answered HTTP 429 on every attempt, or the call’s time budget ran out after a 429.',
       recovery: RECOVERY_HINTS.rate_limited,
       retryable: true,
       thrownBy: 'service',
     },
+    {
+      reason: 'retry_deadline_exceeded',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov did not answer within the call’s time budget, which covers every request, retry, and wait the call makes.',
+      recovery: RECOVERY_HINTS.retry_deadline_exceeded,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) on every attempt.',
+      recovery: RECOVERY_HINTS.upstream_timeout,
+      retryable: true,
+      thrownBy: 'service',
+    },
   ],
+
+  /**
+   * Each field's ClinicalTrials.gov REST parameter, dotted and with `_` for
+   * `.` (the case-style fold strips `-` and `_` only, so it reaches neither),
+   * beside the generic names callers reach for — clinicaltrials_search_studies'
+   * set, less the geoFilter and pageSize names this tool has no field for.
+   */
+  inputAliases: {
+    'query.term': 'query',
+    query_term: 'query',
+    'query.cond': 'conditionQuery',
+    query_cond: 'conditionQuery',
+    condition: 'conditionQuery',
+    'query.intr': 'interventionQuery',
+    query_intr: 'interventionQuery',
+    intervention: 'interventionQuery',
+    'query.locn': 'locationQuery',
+    query_locn: 'locationQuery',
+    'query.spons': 'sponsorQuery',
+    query_spons: 'sponsorQuery',
+    sponsor: 'sponsorQuery',
+    'query.titles': 'titleQuery',
+    query_titles: 'titleQuery',
+    'query.outc': 'outcomeQuery',
+    query_outc: 'outcomeQuery',
+    'filter.overallStatus': 'statusFilter',
+    filter_overallStatus: 'statusFilter',
+    'filter.advanced': 'advancedFilter',
+    filter_advanced: 'advancedFilter',
+    phase: 'phaseFilter',
+  },
 
   input: z.object({
     query: z
@@ -204,13 +251,18 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     // OR / NOT / AREA[] clause there widens the count instead of failing.
     const invalidPhase = firstInvalidPhase(phaseFilter);
     if (invalidPhase !== undefined) {
-      const { message, hint } = invalidPhaseRejection(invalidPhase);
-      throw ctx.fail('enum_invalid', message, {
-        param: 'phaseFilter',
-        value: invalidPhase,
-        validValues: [...PHASE_VALUES],
-        recovery: { hint },
-      });
+      const { message, hint, literals } = invalidPhaseRejection(invalidPhase);
+      throw ctx.fail(
+        'enum_invalid',
+        message,
+        {
+          param: 'phaseFilter',
+          value: invalidPhase,
+          validValues: [...PHASE_VALUES],
+          recovery: { hint },
+        },
+        { literals },
+      );
     }
 
     const service = getClinicalTrialsService();

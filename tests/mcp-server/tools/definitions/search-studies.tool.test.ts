@@ -138,13 +138,33 @@ describe('searchStudies', () => {
       expect(() => searchStudies.input!.parse({ pageSize: 0 })).toThrow();
     });
 
-    it("accepts pageSize up to ClinicalTrials.gov's page maximum of 1000 (#153)", () => {
-      expect(searchStudies.input!.parse({ pageSize: 999 }).pageSize).toBe(999);
-      expect(searchStudies.input!.parse({ pageSize: 1000 }).pageSize).toBe(1000);
+    it("accepts pageSize past ClinicalTrials.gov's page maximum of 1000 — the handler clamps it (#153)", () => {
+      for (const pageSize of [999, 1000, 1001, 5000]) {
+        expect(searchStudies.input!.parse({ pageSize }).pageSize).toBe(pageSize);
+      }
     });
 
-    it('rejects pageSize above 1000 (#153)', () => {
-      expect(() => searchStudies.input!.parse({ pageSize: 1001 })).toThrow();
+    it('rejects a fractional pageSize', () => {
+      expect(() => searchStudies.input!.parse({ pageSize: 1.5 })).toThrow();
+    });
+
+    it('advertises no maximum on pageSize, and its default and minimum', () => {
+      const pageSize = (
+        searchStudies.input!.toJSONSchema({ io: 'input' }) as {
+          properties: Record<string, { default?: number; maximum?: number; minimum?: number }>;
+        }
+      ).properties.pageSize!;
+      // `.int()` alone serializes Zod's safe-integer bound; nothing tighter.
+      expect(pageSize.maximum ?? Number.MAX_SAFE_INTEGER).toBe(Number.MAX_SAFE_INTEGER);
+      expect(pageSize).toMatchObject({ minimum: 1, default: 10 });
+    });
+
+    it('describes pageSize by its default and the cap, stated once, with why it sits below 1000', () => {
+      const { description } = searchStudies.input!.shape.pageSize;
+      expect(description).toMatch(/^Results per page\. Default 10; a larger value returns at most/);
+      expect(description?.match(/\b200\b/g)).toHaveLength(1);
+      expect(description).toContain('tens of KB');
+      expect(description).not.toContain('1–1000');
     });
 
     it('accepts valid pageSize', () => {
@@ -688,8 +708,8 @@ describe('searchStudies', () => {
     });
   });
 
-  // pageSize between the server's per-page cap and the upstream maximum is
-  // served at the cap and disclosed, rather than rejected.
+  // pageSize above the server's per-page cap is served at the cap and
+  // disclosed, rather than rejected; the schema sets no maximum above it.
   describe('per-page cap (#153, #157)', () => {
     const page = (count: number) =>
       Array.from({ length: count }, (_, i) => ({
@@ -822,8 +842,36 @@ describe('searchStudies', () => {
       expect(sc.nextPageToken).toBe('tok_page2');
     });
 
-    it('rejects pageSize 1001 before reaching the service', async () => {
-      const result = await runToolContract(searchStudies, { query: 'cancer', pageSize: 1001 });
+    it('serves pageSize far above the cap (5000) at the cap and discloses it on both surfaces', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: page(200),
+        totalCount: 4321,
+        nextPageToken: 'tok_page2',
+      });
+
+      const result = await runToolContract(searchStudies, { query: 'cancer', pageSize: 5000 });
+
+      expect(result.isError).toBeFalsy();
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({ pageSize: 200 });
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(sc).toMatchObject({
+        truncated: true,
+        shown: 200,
+        cap: 200,
+        nextPageToken: 'tok_page2',
+      });
+      const notice =
+        "Requested pageSize 5000 is above this server's per-page cap of 200, so this page holds 200 studies. Pass nextPageToken to continue.";
+      expect(sc.notice).toBe(notice);
+      const text = textOf(result);
+      expect(text).toContain(notice);
+      for (const line of ['**truncated:** true', '**shown:** 200', '**cap:** 200']) {
+        expect(text).toContain(line);
+      }
+    });
+
+    it('rejects pageSize 0 before reaching the service', async () => {
+      const result = await runToolContract(searchStudies, { query: 'cancer', pageSize: 0 });
 
       expect(result.isError).toBe(true);
       expect(mockService.searchStudies).not.toHaveBeenCalled();
@@ -1417,9 +1465,10 @@ describe('searchStudies', () => {
         searchStudies.input!.parse({ geoFilter: 'distance(47.6062,-122.3321,50mi)' }),
         ctx,
       );
+      // Rounded to the tenth content[] renders.
       expect(indexLocations(result)?.nearest?.distanceMi).toBeCloseTo(
         haversineMi(seattle, { lat: 47.674, lon: -122.1215 }),
-        4,
+        1,
       );
     });
 
@@ -1464,6 +1513,76 @@ describe('searchStudies', () => {
       expect(locs).toHaveLength(3);
       expect(locs[2]!.city).toBe('Unknown');
       expect(locs[2]!.distanceMi).toBeUndefined();
+    });
+
+    const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+      (result.content as { text: string }[]).map((b) => b.text).join('\n');
+    type FieldsStudy = {
+      protocolSection: {
+        contactsLocationsModule: { locations: Array<{ city?: string; distanceMi?: number }> };
+      };
+    };
+
+    it('carries distanceMi to one decimal on both surfaces, the value content[] renders', async () => {
+      // A fresh record per call: the re-rank rewrites locations[] in place.
+      for (const _call of [1, 2]) {
+        mockService.searchStudies.mockResolvedValueOnce({
+          studies: [studyWithLocations()],
+          totalCount: 1,
+        });
+      }
+      const geoFilter = 'distance(47.6062,-122.3321,50mi)';
+
+      // Redmond sits 10.865959… mi from the center, Phoenix 1114.480723… mi.
+      const index = await runToolContract(searchStudies, { geoFilter });
+      expect(indexLocations(index.structuredContent as { studies: unknown[] })?.nearest).toEqual(
+        expect.objectContaining({ city: 'Redmond', distanceMi: 10.9 }),
+      );
+      expect(textOf(index)).toContain('(10.9 mi from geoFilter center of 3 sites)');
+
+      const requested = await runToolContract(searchStudies, {
+        geoFilter,
+        fields: ['NCTId', 'LocationCity', 'LocationGeoPoint'],
+      });
+      const locs = (requested.structuredContent as { studies: FieldsStudy[] }).studies[0]!
+        .protocolSection.contactsLocationsModule.locations;
+      expect(locs.map((l) => [l.city, l.distanceMi])).toEqual([
+        ['Redmond', 10.9],
+        ['Phoenix', 1114.5],
+        ['Unknown', undefined],
+      ]);
+      const text = textOf(requested);
+      expect(text).toContain('Redmond, WA, United States (10.9 mi)');
+      expect(text).toContain('Phoenix, AZ, United States (1114.5 mi)');
+    });
+
+    it('orders sites by exact distance when both round to the same tenth', async () => {
+      const site = (city: string, lat: number) => ({ city, geoPoint: { lat, lon: -122.3321 } });
+      // 5.0369… mi registered first, 5.0093… mi second; both carry 5.
+      mockService.searchStudies.mockResolvedValue({
+        studies: [
+          {
+            protocolSection: {
+              identificationModule: { nctId: 'NCT00000001' },
+              contactsLocationsModule: {
+                locations: [site('Farther', 47.6791), site('Nearer', 47.6787)],
+              },
+            },
+          },
+        ],
+        totalCount: 1,
+      });
+
+      const result = await runToolContract(searchStudies, {
+        geoFilter: 'distance(47.6062,-122.3321,50mi)',
+        fields: ['NCTId', 'LocationCity', 'LocationGeoPoint'],
+      });
+      const locs = (result.structuredContent as { studies: FieldsStudy[] }).studies[0]!
+        .protocolSection.contactsLocationsModule.locations;
+      expect(locs.map((l) => [l.city, l.distanceMi])).toEqual([
+        ['Nearer', 5],
+        ['Farther', 5],
+      ]);
     });
 
     it('does not crash when a matched study carries no locations', async () => {
@@ -2516,10 +2635,8 @@ describe('searchStudies', () => {
           state: 'Washington',
           country: 'United States',
           status: 'NOT_YET_RECRUITING',
-          distanceMi: expect.closeTo(
-            haversineMi({ lat: 47.6062, lon: -122.3321 }, uwSite.geoPoint!),
-            6,
-          ),
+          // 0.0016 mi from the center, carried to the tenth the text renders.
+          distanceMi: 0,
         },
       });
       expect(siteLines(text)).toEqual([
@@ -3106,6 +3223,53 @@ describe('searchStudies', () => {
       const { description, ...shape } = props.fields!;
       expect(shape).toEqual({ type: 'array', items: { type: 'string' } });
       expect(description).toContain('comma- or pipe-joined');
+    });
+  });
+
+  /**
+   * The service maps a metadata path in `fields` to its piece and spells a
+   * relevance sort as upstream accepts it (#184, #189); the mechanism is tabled
+   * at the service seam. The handler passes both through as written.
+   */
+  describe('metadata paths in fields and relevance sorts (#184, #189)', () => {
+    const studyRow = { protocolSection: { identificationModule: { nctId: 'NCT00000001' } } };
+
+    beforeEach(() => {
+      mockService.searchStudies.mockResolvedValue({ studies: [studyRow], totalCount: 1 });
+    });
+
+    it('hands a fields path and a bare relevance sort to the service as written', async () => {
+      const paths = [
+        'protocolSection.identificationModule.nctId',
+        'protocolSection.statusModule.overallStatus',
+      ];
+      const result = await runToolContract(searchStudies, {
+        query: 'type 2 diabetes mobile app',
+        fields: paths,
+        sort: 'relevance',
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(mockService.searchStudies).toHaveBeenCalledWith(
+        expect.objectContaining({ fields: paths, sort: 'relevance' }),
+        expect.anything(),
+      );
+      expect(result.structuredContent).toMatchObject({ requestedFields: paths });
+      const text = (result.content as Array<{ text?: string }>).map((b) => b.text).join('\n');
+      expect(text.split('\n')).toContain(`Requested fields: ${paths.join(', ')}`);
+    });
+
+    it('describes the path in fields, what sorts, and the relevance spelling', () => {
+      const shape = searchStudies.input!.shape as Record<string, { description?: string }>;
+      expect(shape.fields?.description).toContain(
+        '("protocolSection.statusModule.overallStatus") is sent as its piece name',
+      );
+      expect(shape.sort?.description).toContain('Only date and numeric fields sort');
+      expect(shape.sort?.description).toContain('a bare "relevance" is sent as "@relevance"');
+      expect(shape.sort?.description).not.toContain('to find sortable field names');
+      expect(searchStudies.errors?.find((e) => e.reason === 'sort_invalid')?.when).toContain(
+        'does not sort on',
+      );
     });
   });
 

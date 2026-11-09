@@ -9,6 +9,8 @@ import {
   notFound,
   rateLimited,
   requestCancelled,
+  serviceUnavailable,
+  timeout,
 } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
 import { runToolContract } from '@cyanheads/mcp-ts-core/testing/vitest';
@@ -1148,7 +1150,9 @@ describe('getStudyResults', () => {
     it('falls back to per-ID fetches when batch rejects; valid IDs succeed', async () => {
       // Batch rejects because one ID is bad (API's all-or-nothing behavior).
       mockService.getStudiesBatch.mockRejectedValue(
-        new Error('Study ID(s) not found or rejected by API: NCT00000000'),
+        notFound('Study ID(s) not found or rejected by API: NCT00000000', {
+          reason: 'ids_not_found',
+        }),
       );
       // Per-ID fallback: two valid, one invalid.
       mockService.getStudy.mockImplementation(async (nctId: string) => {
@@ -1173,7 +1177,11 @@ describe('getStudyResults', () => {
     });
 
     it('returns fetchErrors for all IDs when both batch and per-ID fallback fail', async () => {
-      mockService.getStudiesBatch.mockRejectedValue(new Error('Batch rejected'));
+      mockService.getStudiesBatch.mockRejectedValue(
+        notFound('Study ID(s) not found or rejected by API: NCT99999999, NCT88888888', {
+          reason: 'ids_not_found',
+        }),
+      );
       mockService.getStudy.mockRejectedValue(new Error('Study not found'));
 
       const ctx = createMockContext({ errors: getStudyResults.errors });
@@ -2186,7 +2194,11 @@ describe('getStudyResults', () => {
     });
 
     it('walks only the processed IDs on the per-ID fallback path', async () => {
-      mockService.getStudiesBatch.mockRejectedValue(new Error('Bad request'));
+      mockService.getStudiesBatch.mockRejectedValue(
+        notFound('Study ID(s) not found or rejected by API: NCT00000000', {
+          reason: 'ids_not_found',
+        }),
+      );
       mockService.getStudy.mockImplementation((id: string) =>
         Promise.resolve(makeStudy(id, false)),
       );
@@ -2220,6 +2232,8 @@ describe('getStudyResults', () => {
         'blank_value',
         'offset_not_applicable',
         'rate_limited',
+        'retry_deadline_exceeded',
+        'upstream_timeout',
       ]);
     });
 
@@ -2320,6 +2334,101 @@ describe('getStudyResults', () => {
         code: JsonRpcErrorCode.RequestCancelled,
       });
       expect(mockService.getStudy).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * The per-ID fallback answers the one batch failure it can fix — a malformed
+   * ID rejecting the whole batch. An outage, the call's spent time budget, a
+   * rate limit, or the caller cancelling would fail every remaining request the
+   * same way, so each ends the call wherever it lands (#181).
+   */
+  describe('failures that end the call (#181)', () => {
+    const deadline = () =>
+      timeout(
+        "ClinicalTrials.gov did not answer within this call's 50000 ms time budget, which covers every request, retry, and wait the call makes.",
+        { reason: 'retry_deadline_exceeded', deadlineMs: 50_000, path: '/studies' },
+      );
+    const outage = () =>
+      serviceUnavailable('ClinicalTrials.gov API unavailable after retries', {
+        path: '/studies',
+        lastError: 'Error: HTTP 503',
+        lastStatus: 503,
+      });
+    const malformedBatch = () =>
+      notFound('Study ID(s) not found or rejected by API: NCT00000000', {
+        reason: 'ids_not_found',
+      });
+    const THREE = ['NCT03722472', 'NCT05956821', 'NCT02130466'];
+    const run = () =>
+      getStudyResults.handler(
+        getStudyResults.input!.parse({ nctIds: THREE }),
+        createMockContext({ errors: getStudyResults.errors }),
+      );
+
+    it.each([
+      ['an outage', outage],
+      ['the call budget running out', deadline],
+    ])('rethrows %s on the batch unchanged, sending no per-ID request', async (_label, error) => {
+      const thrown = error();
+      mockService.getStudiesBatch.mockRejectedValue(thrown);
+      mockService.getStudy.mockResolvedValue(makeStudy('NCT03722472', false));
+
+      await expect(run()).rejects.toBe(thrown);
+      expect(mockService.getStudy).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        'the call budget running out',
+        deadline,
+        {
+          code: JsonRpcErrorCode.Timeout,
+          data: { reason: 'retry_deadline_exceeded', deadlineMs: 50_000 },
+        },
+      ],
+      [
+        'the caller cancelling',
+        () => requestCancelled('Request cancelled by caller', { path: '/studies/NCT05956821' }),
+        { code: JsonRpcErrorCode.RequestCancelled, message: 'Request cancelled by caller' },
+      ],
+      [
+        'a rate limit',
+        () =>
+          rateLimited('Rate limited by ClinicalTrials.gov after 3 retries', {
+            path: '/studies/NCT05956821',
+            reason: 'rate_limited',
+          }),
+        {
+          code: JsonRpcErrorCode.RateLimited,
+          data: { reason: 'rate_limited', retryable: true },
+        },
+      ],
+    ])('ends the per-ID walk on %s, fetching no later ID', async (_label, error, expected) => {
+      mockService.getStudiesBatch.mockRejectedValue(malformedBatch());
+      mockService.getStudy.mockImplementation(async (nctId: string) => {
+        if (nctId === 'NCT05956821') throw error();
+        return makeStudy(nctId, false);
+      });
+
+      await expect(run()).rejects.toMatchObject(expected);
+      expect(mockService.getStudy.mock.calls.map((c) => c[0])).toEqual(THREE.slice(0, 2));
+    });
+
+    it('keeps a per-ID outage as that ID’s fetch error and fetches the rest', async () => {
+      mockService.getStudiesBatch.mockRejectedValue(malformedBatch());
+      mockService.getStudy.mockImplementation(async (nctId: string) => {
+        if (nctId === 'NCT05956821') throw outage();
+        return makeStudy(nctId, false);
+      });
+
+      const result = await run();
+
+      expect(mockService.getStudy.mock.calls.map((c) => c[0])).toEqual(THREE);
+      expect(result.results.map((r) => r.nctId)).toEqual(['NCT03722472', 'NCT02130466']);
+      expect(result.fetchErrors).toEqual([
+        { nctId: 'NCT05956821', error: 'ClinicalTrials.gov API unavailable after retries' },
+      ]);
     });
   });
 
@@ -3886,7 +3995,9 @@ describe('getStudyResults', () => {
 
     it('resolves an alias reached through the per-ID fallback path', async () => {
       mockService.getStudiesBatch.mockRejectedValue(
-        new Error('Study ID(s) not found or rejected by API: NCT00000000'),
+        notFound('Study ID(s) not found or rejected by API: NCT00000000', {
+          reason: 'ids_not_found',
+        }),
       );
       mockService.getStudy.mockImplementation(async (nctId: string) => {
         if (nctId === 'NCT00000000') throw new Error('Study NCT00000000 not found');
@@ -3957,7 +4068,9 @@ describe('getStudyResults', () => {
 
       it('passes the canonical ID to the per-ID fallback path', async () => {
         mockService.getStudiesBatch.mockRejectedValue(
-          new Error('Study ID(s) not found or rejected by API: NCT00000000'),
+          notFound('Study ID(s) not found or rejected by API: NCT00000000', {
+            reason: 'ids_not_found',
+          }),
         );
         mockService.getStudy.mockImplementation(async (nctId: string) => {
           if (nctId === 'NCT00000000') throw new Error('Study NCT00000000 not found');

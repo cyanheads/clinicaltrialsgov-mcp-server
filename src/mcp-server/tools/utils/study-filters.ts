@@ -9,7 +9,7 @@
 
 import { buildDocumentDownloadUrl } from '@/services/clinical-trials/document-url.js';
 import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
-import { haversineMi, type LocationWithDistance } from './geo-helpers.js';
+import { haversineMi, type LocationWithDistance, roundMi } from './geo-helpers.js';
 
 /** Caps and geo filter a caller (or a fixed resource default) can request. */
 export interface FilterInputs {
@@ -98,10 +98,13 @@ export function applyFilters(
       );
       const withoutGeo = origLocations.length - withGeo.length;
       if (withoutGeo > 0) meta.locationsWithoutGeo = withoutGeo;
+      // The exact distance decides inclusion and order; the site carries it
+      // rounded (roundMi). Rounding first would admit a site just past the radius.
       locations = withGeo
         .map((l) => ({ ...l, distanceMi: haversineMi({ lat, lon }, l.geoPoint) }))
         .filter((l) => l.distanceMi <= radiusMi)
-        .sort((a, b) => a.distanceMi - b.distanceMi);
+        .sort((a, b) => a.distanceMi - b.distanceMi)
+        .map((l) => ({ ...l, distanceMi: roundMi(l.distanceMi) }));
       // nearLocation always filters → always echo it.
       meta.nearLocation = input.nearLocation;
     }

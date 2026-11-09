@@ -63,7 +63,7 @@ const GATED_ARGS = [
 
 export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', {
   description:
-    'Resolve valid field names from the ClinicalTrials.gov data model — the canonical PascalCase identifiers (OverallStatus, EnrollmentCount, LeadSponsorName) accepted by the `fields`, `advancedFilter`, and `sort` parameters of other tools, and as input to clinicaltrials_get_field_values. Select a mode: `"search"` — keyword search returning ranked matches (pass `query`, e.g. "enrollment", "sponsor", "adverse events"); `"drill"` — drill into a specific section by dot-notation path (pass `path`, e.g. "protocolSection.designModule"); `"overview"` — top-level summary of all sections (no additional args).',
+    'Resolve valid field names from the ClinicalTrials.gov data model — the canonical PascalCase identifiers (OverallStatus, EnrollmentCount, LeadSponsorName) the other tools take. Every piece works in clinicaltrials_search_studies `fields`; a leaf piece (sourceType other than STRUCT) also works in `AREA[…]` expressions in `advancedFilter` and the query parameters, and as input to clinicaltrials_get_field_values (LocationGeoPoint aside); a leaf of a date or integer type (NormalizedDate, PartialDate, DateTimeMinutes, integer, long, short) also works in `sort`. Select a mode: `"search"` — keyword search returning ranked matches (pass `query`, e.g. "enrollment", "sponsor", "adverse events"); `"drill"` — drill into a specific section by dot-notation path (pass `path`, e.g. "protocolSection.designModule"); `"overview"` — top-level summary of all sections (no additional args).',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -98,8 +98,24 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
     {
       reason: 'rate_limited',
       code: JsonRpcErrorCode.RateLimited,
-      when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
+      when: 'ClinicalTrials.gov answered HTTP 429 on every attempt, or the call’s time budget ran out after a 429.',
       recovery: RECOVERY_HINTS.rate_limited,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'retry_deadline_exceeded',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov did not answer within the call’s time budget, which covers every request, retry, and wait the call makes.',
+      recovery: RECOVERY_HINTS.retry_deadline_exceeded,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) on every attempt.',
+      recovery: RECOVERY_HINTS.upstream_timeout,
       retryable: true,
       thrownBy: 'service',
     },
@@ -148,7 +164,9 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
             piece: z
               .string()
               .optional()
-              .describe('PascalCase identifier for use in `fields`/`AREA[]`/`sort` params.'),
+              .describe(
+                'PascalCase identifier. Any piece goes to search `fields`; a leaf (sourceType other than STRUCT) also to `AREA[]` and clinicaltrials_get_field_values; a date or integer leaf also to `sort`.',
+              ),
             sourceType: z.string().optional().describe('Data type in the model.'),
             type: z.string().optional().describe('Semantic type.'),
             isEnum: z.boolean().optional().describe('Whether the field is an enum type.'),

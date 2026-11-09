@@ -1,10 +1,12 @@
 /**
  * @fileoverview Indexing and ranked-search utilities over the ClinicalTrials.gov
  * field model. Flattens the metadata tree into a flat list of valid field
- * identifiers (PascalCase `piece` names), provides a scoring function used
- * for both keyword discovery and "did you mean" suggestions on validation, and
- * corrects the case of `AREA[…]` field names in caller expressions — record
- * pieces first, then the index-only pieces and search areas beyond them.
+ * identifiers (PascalCase `piece` names) and builds the field index over it,
+ * provides a scoring function used for both keyword discovery and "did you
+ * mean" suggestions on validation, the group and sortable-type tests that
+ * narrow those suggestions, and corrects the case of `AREA[…]` field names in
+ * caller expressions — record pieces first, then the index-only pieces and
+ * search areas beyond them.
  * @module services/clinical-trials/field-search
  */
 
@@ -34,11 +36,15 @@ export interface FieldIndexEntry {
   name: string;
   /** Full dot-notation path in the study record. */
   path: string;
-  /** PascalCase identifier used in `fields`, `AREA[]`, and `sort` parameters. */
+  /**
+   * PascalCase identifier. Every piece goes to a search's `fields`; a leaf
+   * (`sourceType` other than `STRUCT`) also to `AREA[]` and value statistics; a
+   * leaf whose `type` sorts (see isSortable) also to `sort`.
+   */
   piece: string;
-  /** Source data type from the upstream model. */
+  /** The model's value domain (`STRUCT` for a group of fields, `ENUM`, `TEXT`, …). */
   sourceType?: string;
-  /** Data type (STRING, INTEGER, DATE, ENUM, BOOLEAN, etc.). */
+  /** The metadata type as upstream names it (`NormalizedDate`, `integer`, `text`, `Status`, …; `[]` marks a repeated node). */
   type?: string;
 }
 
@@ -77,6 +83,39 @@ export function flattenMetadata(tree: FieldNode[]): FieldIndexEntry[] {
 /** Whether a metadata node's own declared type marks it as repeated (`Location[]`). */
 export function isArrayType(type: string | undefined): boolean {
   return type?.endsWith('[]') ?? false;
+}
+
+/**
+ * Whether an entry is a group of fields (`LeadSponsor`, `StatusModule`,
+ * `ConditionMesh`) rather than a leaf: its `sourceType` is `STRUCT`. AREA[]
+ * refuses one, and `/stats/field/values` cannot count one; a `fields`
+ * projection on a search returns it whole.
+ */
+export function isStruct(entry: FieldIndexEntry): boolean {
+  return entry.sourceType === 'STRUCT';
+}
+
+/**
+ * The metadata `type`s ClinicalTrials.gov sorts on, `[]` stripped: the three
+ * date types, the two integer types, and `short` (the index-only counts such as
+ * `NumLocations`). Every other type probed — text, markup, nct, boolean,
+ * NormalizedTime, GeoPoint, GeoName, the enums, keyword, and every STRUCT —
+ * answered HTTP 400 `Unsupported sort field type: <type>` (2026-11-09). The
+ * metadata carries no sortable flag, so this list is the only source; it
+ * narrows `sort` suggestions and never rejects a sort.
+ */
+const SORTABLE_TYPES = new Set([
+  'NormalizedDate',
+  'PartialDate',
+  'DateTimeMinutes',
+  'integer',
+  'long',
+  'short',
+]);
+
+/** Whether ClinicalTrials.gov sorts on a field of this metadata `type`. */
+export function isSortable(type: string | undefined): boolean {
+  return type !== undefined && SORTABLE_TYPES.has(type.replace(/\[\]$/, ''));
 }
 
 /** Tokenize a string into lowercase parts: splits CamelCase, digits, words. */
@@ -341,19 +380,53 @@ export interface AreaIndex extends NameFold {
 
 /** Build the AREA[] name index from the flattened field index. */
 export function buildAreaIndex(entries: FieldIndexEntry[]): AreaIndex {
-  const queryable = entries.filter((e) => e.sourceType !== 'STRUCT');
+  const queryable = entries.filter((e) => !isStruct(e));
   return {
     entries: queryable,
     ...foldNames(queryable.flatMap(entryNames)),
-    refused: new Set(entries.filter((e) => e.sourceType === 'STRUCT').map((e) => e.piece)),
+    refused: new Set(entries.filter(isStruct).map((e) => e.piece)),
+  };
+}
+
+/** The field index built once from /studies/metadata, with the lookups derived from it. */
+export interface FieldIndex {
+  /** The AREA[] name index — the pieces AREA[] accepts and their case fold. */
+  area: AreaIndex;
+  /** Each record piece's entry; its keys are every piece as written. */
+  byPiece: Map<string, FieldIndexEntry>;
+  /** Lowercased piece → piece, for each lowercased form exactly one piece has. */
+  caseFold: Map<string, string>;
+  entries: FieldIndexEntry[];
+  /**
+   * Each metadata path's piece (`protocolSection.statusModule.overallStatus` →
+   * `OverallStatus`): `exact` keyed by the path as written, `fold` by its
+   * lowercased form wherever exactly one path has it, so a fold never picks
+   * between two paths. Upstream takes a path wherever it takes the piece.
+   */
+  paths: { exact: Map<string, string>; fold: Map<string, string> };
+}
+
+/** Build the field index from a default `/studies/metadata` tree. */
+export function buildFieldIndex(tree: FieldNode[]): FieldIndex {
+  const entries = flattenMetadata(tree);
+  return {
+    area: buildAreaIndex(entries),
+    byPiece: new Map(entries.map((e) => [e.piece, e])),
+    caseFold: foldNames(entries.map(({ piece }) => [piece, piece] as const)).fold,
+    entries,
+    paths: {
+      exact: new Map(entries.map(({ path, piece }) => [path, piece])),
+      fold: foldNames(entries.map(({ path, piece }) => [path, piece] as const)).fold,
+    },
   };
 }
 
 /**
  * A name AREA[] resolves beyond the record pieces. `index-only`: a search-index
  * piece holding no record value (`NumLocations`, `StudyFirstPostYear`), which
- * `sort` takes too. `search-area`: a group of fields AREA[] searches under one
- * name (`ConditionSearch`), which `sort` refuses (`Unknown sort field`).
+ * `sort` takes too when its type sorts. `search-area`: a group of fields AREA[]
+ * searches under one name (`ConditionSearch`), which `sort` refuses (`Unknown
+ * sort field`).
  */
 export interface ExtendedName {
   kind: 'index-only' | 'search-area';
@@ -361,12 +434,19 @@ export interface ExtendedName {
   names: string[];
   /** The spelling a rewrite sends and a suggestion names. */
   piece: string;
+  /**
+   * An index-only piece's metadata `type` (`short` for the counts, `keyword`
+   * for LocationCountryCode), which decides whether `sort` takes it. Absent on
+   * a search area, and on a node that lists none.
+   */
+  type?: string;
 }
 
 /**
  * The index-only pieces in a `/studies/metadata?includeIndexedOnly=true` tree:
  * the nodes it flags `indexedOnly`, at whatever depth they sit, with their alt
- * names. Every other node is a record piece the default read already holds.
+ * names and type. Every other node is a record piece the default read already
+ * holds.
  */
 export function indexOnlyNames(tree: FieldNode[]): ExtendedName[] {
   const found: ExtendedName[] = [];
@@ -377,6 +457,7 @@ export function indexOnlyNames(tree: FieldNode[]): ExtendedName[] {
           kind: 'index-only',
           piece: node.piece,
           names: [node.piece, ...(node.altPieceNames ?? [])],
+          ...(node.type ? { type: node.type } : {}),
         });
       }
       if (node.children) walk(node.children);
@@ -417,10 +498,7 @@ export function buildExtendedIndex(
       .filter((e) => kind === undefined || e.kind === kind)
       .flatMap(({ piece, names }) => names.map((name) => [name, piece] as const));
   return {
-    area: foldNames([
-      ...entries.filter((e) => e.sourceType !== 'STRUCT').flatMap(entryNames),
-      ...extraNames(),
-    ]),
+    area: foldNames([...entries.filter((e) => !isStruct(e)).flatMap(entryNames), ...extraNames()]),
     extras,
     sort: foldNames([
       ...entries.map(({ piece }) => [piece, piece] as const),

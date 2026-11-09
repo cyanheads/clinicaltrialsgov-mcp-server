@@ -3,8 +3,10 @@
  * @module tests/mcp-server/resources/definitions/study.resource
  */
 
+import { JsonRpcErrorCode, timeout } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createWorkerHandler } from '@cyanheads/mcp-ts-core/worker';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const { mockGetService } = vi.hoisted(() => ({
   mockGetService: vi.fn(),
@@ -15,6 +17,7 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
 }));
 
 import { studyResource } from '@/mcp-server/resources/definitions/study.resource.js';
+import { RECOVERY_HINTS } from '@/mcp-server/tools/utils/recovery-hints.js';
 
 describe('studyResource', () => {
   const mockService = { getStudy: vi.fn() };
@@ -247,6 +250,98 @@ describe('studyResource', () => {
       const parsed = params.parse({ nctId: 'NCT03722472' });
 
       await expect(studyResource.handler(parsed, ctx)).rejects.toThrow('Not found');
+    });
+  });
+
+  /**
+   * A read runs inside the same per-call time budget as a tool call, and can
+   * meet ClinicalTrials.gov's own 504 on every attempt. Read through the
+   * framework's resource factory — the path that fills a declared reason's
+   * hint in as `data.recovery.hint` — so the error is the one a client
+   * receives (#181).
+   */
+  describe('timeouts through resources/read (#181)', () => {
+    const PROTOCOL_REVISION = '2026-07-28';
+    const URI = 'clinicaltrials://NCT03722472';
+
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    async function readThroughServer() {
+      const server = createWorkerHandler({
+        name: 'clinicaltrialsgov-mcp-server',
+        title: 'clinicaltrialsgov-mcp-server',
+        resources: [studyResource],
+      });
+      const response = await server.fetch(
+        new Request('http://localhost/mcp', {
+          method: 'POST',
+          headers: {
+            accept: 'application/json, text/event-stream',
+            'content-type': 'application/json',
+            'mcp-protocol-version': PROTOCOL_REVISION,
+            'mcp-method': 'resources/read',
+            'mcp-name': URI,
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: 1,
+            method: 'resources/read',
+            params: {
+              uri: URI,
+              _meta: {
+                'io.modelcontextprotocol/protocolVersion': PROTOCOL_REVISION,
+                'io.modelcontextprotocol/clientCapabilities': {},
+              },
+            },
+          }),
+        }) as never,
+        // Copied into `process.env.MCP_LOG_LEVEL`, which each test stubs so it is restored.
+        { LOG_LEVEL: 'error' } as never,
+        { waitUntil() {}, passThroughOnException() {} } as never,
+      );
+      const body = (await response.json()) as {
+        error?: { code: number; data?: Record<string, unknown>; message: string };
+      };
+      return body.error;
+    }
+
+    it.each([
+      [
+        'retry_deadline_exceeded',
+        () =>
+          timeout(
+            "ClinicalTrials.gov did not answer within this call's 50000 ms time budget, which covers every request, retry, and wait the call makes.",
+            {
+              reason: 'retry_deadline_exceeded',
+              deadlineMs: 50_000,
+              path: '/studies/NCT03722472',
+            },
+          ),
+      ],
+      [
+        'upstream_timeout',
+        () =>
+          timeout('ClinicalTrials.gov timed out (HTTP 504) on every attempt', {
+            path: '/studies/NCT03722472',
+            lastError: 'Error: HTTP 504',
+            lastStatus: 504,
+            reason: 'upstream_timeout',
+          }),
+      ],
+    ] as const)('answers %s with its code, data, and the declared hint', async (reason, error) => {
+      vi.stubEnv('MCP_LOG_LEVEL', 'error');
+      const thrown = error();
+      mockService.getStudy.mockRejectedValue(thrown);
+
+      const wire = await readThroughServer();
+
+      expect(wire).toMatchObject({
+        code: JsonRpcErrorCode.Timeout,
+        message: thrown.message,
+        data: { ...thrown.data, recovery: { hint: RECOVERY_HINTS[reason] } },
+      });
     });
   });
 

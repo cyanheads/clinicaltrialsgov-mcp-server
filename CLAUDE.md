@@ -2,8 +2,8 @@
 
 **Server:** clinicaltrialsgov-mcp-server
 **Version:** 2.11.1
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.18`
-**Engines:** Bun ≥1.4.0, Node ≥24.0.0
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.22`
+**Engines:** Bun ≥1.4.4, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.4.0
 **Zod:** ^4.6.7
 
@@ -79,7 +79,7 @@ Tailor suggestions to what's actually missing or stale — don't recite the full
 - **Use `ctx.log`** for request-scoped logging. No `console` calls.
 - **Read-only server.** No `ctx.state` needed — the ClinicalTrials.gov API is stateless and public.
 - **Secrets in env vars only** — never hardcoded. (This server has no secrets — public API, no auth.)
-- **Rate limit awareness.** The API allows ~1 req/sec. Service layer handles retry/backoff.
+- **Rate limit awareness.** The API allows ~1 req/sec. Service layer handles retry/backoff, inside one 50 s budget per tool call or resource read.
 - **Cut noise.** Add only what earns its place: no speculative generality, no guards for states the framework already prevents (Zod-validated params, classified errors), no abstraction until a third caller proves it, no option nothing sets.
 - **Close the loop on issues.** When implementing work tracked by a GitHub issue, comment on the issue with what landed and close it. Do both — a comment without a close leaves stale issues open; a close without a comment leaves no record of what shipped. The comment is for future readers — state the concrete changes, not the conversation that produced them.
 
@@ -106,9 +106,8 @@ export const searchStudies = tool("clinicaltrials_search_studies", {
       .number()
       .int()
       .min(1)
-      .max(1000)
       .default(10)
-      .describe("Results per page"),
+      .describe("Results per page. Default 10; a larger value returns at most the per-page cap and says so."),
   }),
   output: z.object({
     studies: z.array(z.record(z.unknown())).describe("Matching studies"),
@@ -198,7 +197,9 @@ const ServerConfigSchema = z.object({
     .int()
     .positive()
     .default(30000)
-    .describe("Per-request timeout in ms"),
+    .describe(
+      "Timeout per ClinicalTrials.gov request attempt in ms; an attempt ends sooner when its call’s 50 s budget runs out",
+    ),
   maxPageSize: z.coerce
     .number()
     .int()
@@ -431,7 +432,7 @@ When you complete a skill's checklist, check the boxes and add a completion time
 
 ## Bundling
 
-`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. `mcpb pack` reads `.mcpbignore`, not `.gitignore`, so every root path the bundle must not ship — source, tests, docs, caches, logs, agent docs, plugin manifests, gitignored local files — needs a root-anchored line there (`/docs/`, never `docs/`, which also strips `node_modules/*/docs/`); `lint:packaging` names each missing or unanchored line. Root `skills/` ships on purpose. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips four classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, and `.agents/` at a package's root, and any `SKILL.md`; a `skills/` directory deeper in a package is runtime code and stays, since the MCP SDK imports its `dist/ext/skills/` at startup); platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on; node-gyp build output beside a `binding.gyp` (`config.gypi`, Makefiles, `obj.target/`, `.deps/`, object files and debug symbols), which records the packing machine's paths — compiled `*.node` addons stay; and build-only package files — the framework's `changelog/`, `scripts/`, `templates/`, `CLAUDE.md`, `AGENTS.md`, and config bases (`biome.json`, `vitest.config.base.mjs`, `config/tsconfig.base.json`), and `better-sqlite3`'s `deps/` and `src/` C sources. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
+`bun run bundle` produces a `.mcpb` extension bundle for one-click install in Claude Desktop. `mcpb pack` reads `.mcpbignore`, not `.gitignore`, so every root path the bundle must not ship — source, tests, docs, caches, logs, agent docs, plugin manifests, gitignored local files — needs a root-anchored line there (`/docs/`, never `docs/`, which also strips `node_modules/*/docs/`); `lint:packaging` names each missing or unanchored line. Root `skills/` ships on purpose. The pack step is followed by `scripts/clean-mcpb.ts`, which prunes dev dependencies (`mcpb clean`) and strips four classes of `node_modules/**` content that root-anchored `.mcpbignore` patterns cannot reach: dependency-shipped agent docs (`framework-skills/`, `skills/`, `.claude/`, `.agents/`, `AGENTS.md`, and `CLAUDE.md` at a package's root, and any `SKILL.md`; a `skills/` directory deeper in a package is runtime code and stays, since the MCP SDK imports its `dist/ext/skills/` at startup); platform-specific native bindings, which would otherwise lock the bundle to the platform it was packed on; node-gyp build output beside a `binding.gyp` (`config.gypi`, Makefiles, `obj.target/`, `.deps/`, object files and debug symbols), which records the packing machine's paths — compiled `*.node` addons stay; and build-only package files — the framework's `changelog/`, `scripts/`, `templates/`, and config bases (`biome.json`, `vitest.config.base.mjs`, `config/tsconfig.base.json`), and `better-sqlite3`'s `deps/` and `src/` C sources. MCPB is stdio-only — HTTP and Cloudflare Workers deployments are unaffected. Consumers who don't need it can delete `manifest.json` and `.mcpbignore`; `lint:packaging` skips cleanly.
 
 **Adding an env var requires both files:** `server.json` (registry discovery, `environmentVariables[]`) and `manifest.json` (bundle install UX, `mcp_config.env` + `user_config`). `lint:packaging` (run by `devcheck`) verifies the env var names match, that every `user_config` option is wired into `mcp_config.env` as `"X": "${user_config.X}"` (the host substitutes nothing else — `"${X}"` reaches the server as that literal string), and that an optional string option carries `"default": ""`.
 
@@ -502,7 +503,7 @@ import { getServerConfig } from "@/config/server-config.js";
 | Env Var                      | Required | Default                             | Description                              |
 | :--------------------------- | :------- | :---------------------------------- | :--------------------------------------- |
 | `CT_API_BASE_URL`            | No       | `https://clinicaltrials.gov/api/v2` | API base URL override                    |
-| `CT_REQUEST_TIMEOUT_MS`      | No       | `30000`                             | Per-request timeout in ms; a positive integer |
+| `CT_REQUEST_TIMEOUT_MS`      | No       | `30000`                             | Timeout per request attempt in ms; a positive integer. An attempt ends sooner when its call's 50 s budget, shared by every request, retry, and wait the call makes, runs out |
 | `CT_MAX_PAGE_SIZE`           | No       | `200`                               | Most studies one `clinicaltrials_search_studies` page returns; an integer ≥ 1, values above 1000 clamp to 1000 |
 
 ---

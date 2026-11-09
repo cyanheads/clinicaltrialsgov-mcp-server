@@ -23,7 +23,9 @@ const ServerConfigSchema = z.object({
     .int()
     .positive()
     .default(30_000)
-    .describe('Per-request timeout in ms'),
+    .describe(
+      'Timeout per ClinicalTrials.gov request attempt in ms; an attempt ends sooner when its call’s 50 s budget runs out',
+    ),
   maxPageSize: z.coerce
     .number()
     .int()

@@ -83,11 +83,11 @@ describe('findEligible', () => {
       expect(input.maxResults).toBe(10);
     });
 
-    it('accepts maxResults 1-1000 and rejects values outside it (#153)', () => {
+    it('keeps the maxResults minimum of 1 and sets no maximum (#153)', () => {
       expect(() => findEligible.input!.parse({ ...baseInput, maxResults: 0 })).toThrow();
-      expect(() => findEligible.input!.parse({ ...baseInput, maxResults: 1001 })).toThrow();
-      for (const maxResults of [1, 50, 51, 1000]) {
-        expect(() => findEligible.input!.parse({ ...baseInput, maxResults })).not.toThrow();
+      expect(() => findEligible.input!.parse({ ...baseInput, maxResults: 1.5 })).toThrow();
+      for (const maxResults of [1, 50, 51, 1000, 1001, 5000]) {
+        expect(findEligible.input!.parse({ ...baseInput, maxResults }).maxResults).toBe(maxResults);
       }
     });
 
@@ -432,52 +432,157 @@ describe('findEligible', () => {
       expect(enrichment.notice).not.toBe('');
     });
 
-    it('hints about extreme age in enrichment notice', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext({ errors: findEligible.errors });
-      await findEligible.handler(findEligible.input!.parse({ ...baseInput, age: 120 }), ctx);
+    // Each hint is proven on the stage it widens: condition and location both
+    // match and the demographics stage is the one that collapsed (#50).
+    describe('hints on a demographics-stage collapse', () => {
+      beforeEach(() => {
+        mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+        mockService.countStudies.mockResolvedValue(5);
+      });
 
-      const enrichment = getEnrichment(ctx);
-      expect(enrichment.notice).toContain('extreme');
+      const noticeFor = async (overrides: Record<string, unknown>) => {
+        const ctx = createMockContext({ errors: findEligible.errors });
+        await findEligible.handler(findEligible.input!.parse({ ...baseInput, ...overrides }), ctx);
+        return getEnrichment(ctx).notice as string;
+      };
+
+      it('hints about extreme age in enrichment notice', async () => {
+        expect(await noticeFor({ age: 120 })).toContain('extreme');
+      });
+
+      it('hints about sex restriction in enrichment notice', async () => {
+        expect(await noticeFor({ sex: 'MALE' })).toContain('sex="ALL"');
+      });
+
+      it('hints about healthy volunteer restriction in enrichment notice', async () => {
+        expect(await noticeFor({ healthyVolunteer: true })).toContain('healthy volunteers');
+      });
+
+      it('hints about recruiting-only restriction in enrichment notice', async () => {
+        expect(await noticeFor({})).toContain('recruitingOnly=false');
+      });
+
+      it('words the demographics-stage notice as it always has', async () => {
+        expect(await noticeFor({ age: 120, sex: 'MALE', healthyVolunteer: true })).toBe(
+          'No studies found for "Type 2 Diabetes" matching the specified criteria. 5 studies match condition + location, but none pass the age/sex/status filters. Age 120 is at the extreme of typical trial ranges. Few trials enroll this age group. Try sex="ALL" to include studies not restricted by sex. Set recruitingOnly=false to include completed, active, and not-yet-recruiting studies. Many studies do not accept healthy volunteers. Set healthyVolunteer=false if the patient has a relevant condition.',
+        );
+      });
     });
 
-    it('hints about sex restriction in enrichment notice', async () => {
+    it('hints about widening the location in enrichment notice', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext({ errors: findEligible.errors });
-      await findEligible.handler(findEligible.input!.parse({ ...baseInput, sex: 'MALE' }), ctx);
-
-      const enrichment = getEnrichment(ctx);
-      expect(enrichment.notice).toContain('sex="ALL"');
-    });
-
-    it('hints about healthy volunteer restriction in enrichment notice', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext({ errors: findEligible.errors });
-      await findEligible.handler(
-        findEligible.input!.parse({ ...baseInput, healthyVolunteer: true }),
-        ctx,
+      mockService.countStudies.mockImplementation(async (params: { queryLocn?: string }) =>
+        params.queryLocn ? 0 : 40,
       );
-
-      const enrichment = getEnrichment(ctx);
-      expect(enrichment.notice).toContain('healthy volunteers');
-    });
-
-    it('hints about recruiting-only restriction in enrichment notice', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
       const ctx = createMockContext({ errors: findEligible.errors });
       await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
 
       const enrichment = getEnrichment(ctx);
-      expect(enrichment.notice).toContain('recruitingOnly=false');
+      expect(enrichment.notice).toContain('Remove city/state to search the whole country');
+      expect(enrichment.notice).toContain('geoFilter');
     });
 
-    it('hints about narrowing location in enrichment notice', async () => {
-      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
-      const ctx = createMockContext({ errors: findEligible.errors });
-      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+    // Every step the no-match notice names must widen the stage where the
+    // funnel collapsed: advice for a later stage cannot help, and advice that
+    // repeats the request sends the caller round in a circle (#185).
+    describe('no-match notice names only steps that widen the collapsed stage (#185)', () => {
+      const GEO_STEP =
+        "geocode the patient's location and replay searchCriteria through clinicaltrials_search_studies with geoFilter=distance(lat,lon,radius), the radius carrying a mi or km suffix (distance(47.6,-122.3,50mi)), in place of locationQuery and with includeUnknownEnrollment=true";
+      const occurrences = (text: string, needle: string) => text.split(needle).length - 1;
 
-      const enrichment = getEnrichment(ctx);
-      expect(enrichment.notice).toContain('just the country');
+      const run = async (input: z.input<typeof findEligible.input>) => {
+        const result = await runToolContract(findEligible, input);
+        const notice = (result.structuredContent as { notice: string }).notice;
+        const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+        return { notice, text };
+      };
+
+      beforeEach(() => {
+        mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      });
+
+      describe('location stage — the condition matches, the location does not', () => {
+        beforeEach(() => {
+          mockService.countStudies.mockImplementation(async (params: { queryLocn?: string }) =>
+            params.queryLocn ? 0 : 1224,
+          );
+        });
+
+        it('gives a country-only request the geoFilter replay and no country advice', async () => {
+          const { notice } = await run({
+            ...baseInput,
+            conditions: ['sickle cell'],
+            location: { country: 'Tuvalu' },
+          });
+
+          expect(notice).toBe(
+            `No studies found for "sickle cell" matching the specified criteria. 1224 studies match the condition, but none are in the specified location. To widen the search past the country, ${GEO_STEP}.`,
+          );
+          expect(notice).not.toContain('just the country');
+          expect(notice).not.toContain('Remove city/state');
+        });
+
+        it.each([
+          { shape: 'city', location: { country: 'United States', city: 'Nome' } },
+          { shape: 'state', location: { country: 'United States', state: 'Wyoming' } },
+          {
+            shape: 'city and state',
+            location: { country: 'United States', state: 'Alaska', city: 'Nome' },
+          },
+        ])(
+          'names removing city/state once for a $shape request, then the geoFilter replay',
+          async ({ location }) => {
+            const { notice } = await run({ ...baseInput, conditions: ['sickle cell'], location });
+
+            expect(notice).toBe(
+              `No studies found for "sickle cell" matching the specified criteria. 1224 studies match the condition, but none are in the specified location. Remove city/state to search the whole country, or ${GEO_STEP}.`,
+            );
+            expect(occurrences(notice, 'city/state')).toBe(1);
+            expect(notice).not.toContain('just the country');
+          },
+        );
+
+        it('reaches content[] once, through the enrichment trailer', async () => {
+          const { notice, text } = await run({ ...baseInput, location: { country: 'Tuvalu' } });
+
+          expect(occurrences(text, 'replay searchCriteria')).toBe(1);
+          expect(text).toContain('No candidate studies found.');
+          expect(notice).toContain('replay searchCriteria');
+        });
+      });
+
+      describe('condition stage — nothing matches the condition alone', () => {
+        // Every later-stage hint would fire here if the branch still offered them.
+        const everyLaterHint = {
+          ...baseInput,
+          conditions: ['qqzxvw nonexistent disorder'],
+          age: 120,
+          sex: 'MALE' as const,
+          healthyVolunteer: true,
+          recruitingOnly: true,
+        };
+
+        it('names only condition-level steps', async () => {
+          const { notice } = await run(everyLaterHint);
+
+          expect(notice).toBe(
+            'No studies found for "qqzxvw nonexistent disorder" matching the specified criteria. No study matches the condition alone, before any location, age, sex, healthy-volunteer, or status filter, so relaxing those cannot help. Add a synonym, a broader term, or a MeSH term as another conditions entry (entries are ORed), or use fewer words: an entry with spaces matches as a phrase.',
+          );
+        });
+
+        it.each([
+          'extreme',
+          'sex="ALL"',
+          'healthyVolunteer=false',
+          'recruitingOnly=false',
+          'just the country',
+          'city/state',
+          'geoFilter',
+        ])('offers no %s step', async (step) => {
+          const { notice } = await run(everyLaterHint);
+          expect(notice).not.toContain(step);
+        });
+      });
     });
 
     it('sets the candidate notice when studies are found (#147)', async () => {
@@ -520,6 +625,8 @@ describe('findEligible', () => {
     });
 
     it('names an extreme years age without a unit', async () => {
+      // The demographics stage collapsed: the one the age note can widen.
+      mockService.countStudies.mockResolvedValue(5);
       const result = await runToolContract(findEligible, { ...baseInput, age: 120 });
 
       expect((result.structuredContent as { notice: string }).notice).toContain(
@@ -627,27 +734,27 @@ describe('findEligible', () => {
       { age: 53, ageUnit: 'weeks', extreme: false },
       { age: 120, ageUnit: 'days', extreme: true },
     ])(
-      'judges $age $ageUnit extreme=$extreme on both no-match branches',
+      'judges $age $ageUnit extreme=$extreme on the demographics stage, never the condition stage',
       async ({ age, ageUnit, extreme }) => {
         const note = `Age ${age} ${ageUnit} is at the extreme of typical trial ranges. Few trials enroll this age group.`;
-        // Nothing matches the condition: the general-hints branch.
+        // Nothing matches the condition, so no age can widen it (#185).
         const none = await runToolContract(findEligible, { ...baseInput, age, ageUnit });
         // Condition + location match, demographics do not: the stage branch.
         mockService.countStudies.mockResolvedValue(5);
         const staged = await runToolContract(findEligible, { ...baseInput, age, ageUnit });
 
-        for (const result of [none, staged]) {
-          const notice = (result.structuredContent as { notice: string }).notice;
-          expect(notice.includes(note)).toBe(extreme);
-          expect(notice).not.toMatch(/Age \d+ is at the extreme/);
-          expect(textOf(result).includes(note)).toBe(extreme);
-        }
+        const noneNotice = (none.structuredContent as { notice: string }).notice;
+        expect(noneNotice).not.toContain('is at the extreme');
+        const notice = (staged.structuredContent as { notice: string }).notice;
+        expect(notice.includes(note)).toBe(extreme);
+        expect(notice).not.toMatch(/Age \d+ is at the extreme/);
+        expect(textOf(staged).includes(note)).toBe(extreme);
       },
     );
   });
 
-  // maxResults between the per-call cap and the hard ceiling is served at the
-  // cap and disclosed, rather than rejected.
+  // maxResults above the per-call cap is served at the cap and disclosed,
+  // rather than rejected; the schema sets no maximum above it.
   describe('maxResults cap (#153)', () => {
     const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
       (result.content as { text: string }[]).map((b) => b.text).join('\n');
@@ -708,14 +815,23 @@ describe('findEligible', () => {
       );
     });
 
-    it('serves the hard ceiling of 1000 at the cap', async () => {
+    it('serves maxResults far above the cap (5000) at the cap and discloses it on both surfaces', async () => {
       mockService.searchStudies.mockResolvedValue({ studies: candidates(50), totalCount: 4000 });
 
-      const result = await runToolContract(findEligible, { ...baseInput, maxResults: 1000 });
+      const result = await runToolContract(findEligible, { ...baseInput, maxResults: 5000 });
 
       expect(result.isError).toBeFalsy();
       expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({ pageSize: 50 });
-      expect(result.structuredContent).toMatchObject({ truncated: true, shown: 50, cap: 50 });
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(sc).toMatchObject({ truncated: true, shown: 50, cap: 50, totalCount: 4000 });
+      expect(sc.studies as unknown[]).toHaveLength(50);
+      const notice = `${CANDIDATE_NOTICE} ${capNotice(5000, 50, 4000)}`;
+      expect(sc.notice).toBe(notice);
+      const text = textOf(result);
+      expect(text).toContain(`> ${notice}`);
+      for (const line of ['**truncated:** true', '**shown:** 50', '**cap:** 50']) {
+        expect(text).toContain(line);
+      }
     });
 
     it('adds nothing when every match fits under the cap', async () => {
@@ -742,23 +858,31 @@ describe('findEligible', () => {
       expect(sc.notice).not.toContain('per-call cap');
     });
 
-    it.each([0, 1001, 50.5])('rejects maxResults %j before reaching the service', async (bad) => {
+    it.each([0, 50.5])('rejects maxResults %j before reaching the service', async (bad) => {
       const result = await runToolContract(findEligible, { ...baseInput, maxResults: bad });
 
       expect(result.isError).toBe(true);
       expect(mockService.searchStudies).not.toHaveBeenCalled();
     });
 
-    it('advertises the 1000 ceiling on maxResults and no maximum on locationLimit', () => {
-      type Bounds = { maximum?: number; minimum?: number };
+    it('advertises no maximum on maxResults or locationLimit', () => {
+      type Bounds = { default?: number; maximum?: number; minimum?: number };
       const props = (
         z.toJSONSchema(findEligible.input!) as unknown as { properties: Record<string, Bounds> }
       ).properties;
 
-      expect(props.maxResults).toMatchObject({ minimum: 1, maximum: 1000 });
-      // `.int()` alone serializes Zod's safe-integer bound; nothing tighter.
-      expect(props.locationLimit?.maximum ?? Number.MAX_SAFE_INTEGER).toBe(Number.MAX_SAFE_INTEGER);
-      expect(props.locationLimit?.minimum).toBe(1);
+      for (const key of ['maxResults', 'locationLimit']) {
+        // `.int()` alone serializes Zod's safe-integer bound; nothing tighter.
+        expect(props[key]?.maximum ?? Number.MAX_SAFE_INTEGER).toBe(Number.MAX_SAFE_INTEGER);
+        expect(props[key]).toMatchObject({ minimum: 1, default: 10 });
+      }
+    });
+
+    it('describes maxResults by its default and the cap, stated once', () => {
+      const { description } = findEligible.input!.shape.maxResults;
+      expect(description).toMatch(/^Maximum candidates to return\. Default 10; a larger value/);
+      expect(description?.match(/\b50\b/g)).toHaveLength(1);
+      expect(description).not.toContain('1000');
     });
   });
 
@@ -1390,17 +1514,23 @@ describe('findEligible', () => {
       );
     });
 
-    it('gives an unset city the omitted-city notice, without city/state advice', async () => {
-      // condition matches, location stage empty: the branch that advises
-      // removing city/state only when one was actually applied.
-      mockService.countStudies.mockImplementation(async (params: { queryLocn?: string }) =>
-        params.queryLocn ? 0 : 40,
-      );
-      const ctx = await run({ location: { country: 'United States', city: '" "' } });
-      const notice = getEnrichment(ctx).notice as string;
-      expect(notice).toContain('40 studies match the condition');
-      expect(notice).not.toContain('Remove city/state');
-    });
+    it.each([{ city: '" "' }, { state: '""' }, { city: ' ', state: ' ' }])(
+      'gives an unset city or state %j the omitted-city notice, without city/state advice',
+      async (parts) => {
+        // condition matches, location stage empty: the branch that advises
+        // removing city/state only when one was actually applied, and never
+        // the country-only request's own location back to it (#185).
+        mockService.countStudies.mockImplementation(async (params: { queryLocn?: string }) =>
+          params.queryLocn ? 0 : 40,
+        );
+        const ctx = await run({ location: { country: 'United States', ...parts } });
+        const notice = getEnrichment(ctx).notice as string;
+        expect(notice).toContain('40 studies match the condition');
+        expect(notice).not.toContain('Remove city/state');
+        expect(notice).not.toContain('just the country');
+        expect(notice).toContain('To widen the search past the country, geocode');
+      },
+    );
 
     it('keeps values with non-quote content on the #118 path', async () => {
       await run({

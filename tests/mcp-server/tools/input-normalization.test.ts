@@ -1,6 +1,6 @@
 /**
  * @fileoverview End-to-end input normalization for statusFilter, phaseFilter,
- * fields, NCT IDs, and AREA[] field names.
+ * fields, NCT IDs, AREA[] field names, and parameter-name aliases.
  * Each case runs a definition through its public contract boundary (input
  * parse → handler → output parse → format / error envelope) against the real
  * `ClinicalTrialsService` with `fetch` stubbed, and asserts the request URL the
@@ -13,7 +13,12 @@
 import { createMockContext, runToolContract } from '@cyanheads/mcp-ts-core/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ServerConfig } from '@/config/server-config.js';
-import { AREA_METADATA, INDEXED_METADATA, SEARCH_AREAS } from '../../helpers/area-metadata.js';
+import {
+  AREA_METADATA,
+  INDEXED_METADATA,
+  RECORD_METADATA,
+  SEARCH_AREAS,
+} from '../../helpers/area-metadata.js';
 import { readMarkdown } from '../../helpers/commonmark.js';
 import { nctIds as ids } from '../../helpers/nct-ids.js';
 
@@ -25,6 +30,7 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', async (importOr
 }));
 
 import { studyResource } from '@/mcp-server/resources/definitions/study.resource.js';
+import { findEligible } from '@/mcp-server/tools/definitions/find-eligible.tool.js';
 import { getFieldValues } from '@/mcp-server/tools/definitions/get-field-values.tool.js';
 import { getStudy } from '@/mcp-server/tools/definitions/get-study.tool.js';
 import { getStudyCount } from '@/mcp-server/tools/definitions/get-study-count.tool.js';
@@ -76,9 +82,21 @@ const text = (result: { content: unknown }) =>
 /** content[] as a CommonMark reader sees it — error and hint text arrive Markdown-encoded. */
 const seenText = (result: { content: unknown }) => readMarkdown(text(result));
 
+/** Run with fake timers standing in for the pacer's one-second gaps between request starts. */
+async function throttled<T>(run: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    const pending = run();
+    await vi.advanceTimersByTimeAsync(10_000);
+    return await pending;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
 beforeEach(() => {
   mockFetch.mockReset();
-  // A fresh instance per test keeps the 1 req/sec throttle from ever waiting:
+  // A fresh instance per test keeps its 1 req/sec pacer from ever waiting:
   // each test issues its first request against a zeroed clock.
   mockGetService.mockReturnValue(
     new ClinicalTrialsService(config, { maxRetries: 0, validateFieldsLocally: false }),
@@ -138,6 +156,9 @@ describe('statusFilter reaches upstream canonicalized', () => {
       expect(seenText(result)).toContain(
         'Recovery: Call clinicaltrials_get_field_values with fields=["OverallStatus"] to see valid values.',
       );
+      // The argument to send next arrives as a code span, never as `fields=\["OverallStatus"\]`.
+      expect(text(result)).toContain('with `fields=["OverallStatus"]` to see valid values.');
+      expect(text(result)).not.toContain('fields=\\[');
       expect(fetchedUrls()).toHaveLength(1);
       expect(fetchedUrls()[0]?.searchParams.get('filter.overallStatus')).toBe('PENDING_REVIEW');
     },
@@ -249,35 +270,83 @@ describe('phaseFilter reaches upstream as canonical AREA[Phase] values (#144)', 
         validValues: ['NA', 'EARLY_PHASE1', 'PHASE1', 'PHASE2', 'PHASE3', 'PHASE4'],
       });
       expect(text(result)).toContain('Put every other criterion');
+      // The values and the list form to send back arrive as code spans, not escaped text.
+      expect(text(result)).toContain('a list such as `["PHASE2","PHASE3"]` to match');
+      expect(text(result)).toContain('one of `NA`, `EARLY_PHASE1`, `PHASE1`, `PHASE2`');
+      expect(text(result)).not.toContain('\\["PHASE2"');
+      expect(seenText(result)).toContain('a list such as ["PHASE2","PHASE3"] to match');
       expect(mockFetch).not.toHaveBeenCalled();
     },
   );
 
-  it('an invalid AREA[Phase] value in advancedFilter names the expression, not phaseFilter', async () => {
-    mockFetch.mockResolvedValue({
-      ok: false,
-      status: 400,
-      statusText: 'HTTP 400',
-      headers: new Headers({ 'content-type': 'text/plain' }),
-      json: () => Promise.reject(new Error('Not JSON')),
-      text: () =>
-        Promise.resolve(
-          'Error parsing query in advanced filter: Allowed values for enum field `protocolSection.designModule.phases` are `NA`, `EARLY_PHASE1`, `PHASE1`, `PHASE2`, `PHASE3`, `PHASE4`',
-        ),
-    });
-    const result = await runToolContract(
-      getStudyCount,
-      { advancedFilter: 'AREA[Phase]PHASE5' },
-      { context: { errors: getStudyCount.errors } },
-    );
+  /** The Phase node of the live metadata tree (2026-11-09), where the enum rejection's path leads. */
+  const PHASE_METADATA: FieldNode[] = [
+    {
+      name: 'protocolSection',
+      piece: 'ProtocolSection',
+      sourceType: 'STRUCT',
+      type: 'ProtocolSection',
+      children: [
+        {
+          name: 'designModule',
+          piece: 'DesignModule',
+          sourceType: 'STRUCT',
+          type: 'DesignModule',
+          children: [
+            { name: 'phases', piece: 'Phase', sourceType: 'TEXT', type: 'Phase[]', isEnum: true },
+          ],
+        },
+      ],
+    },
+  ];
 
-    expect(result.isError).toBe(true);
-    const error = (result.structuredContent as { error: { data: Record<string, unknown> } }).error;
-    expect(error.data.reason).toBe('enum_invalid');
-    expect(error.data).not.toHaveProperty('param');
-    expect(seenText(result)).toContain('Invalid value in an `AREA[Phase]` expression.');
-    expect(seenText(result)).not.toContain('phaseFilter');
-  });
+  it.each([
+    ['search_studies', searchStudies],
+    ['get_study_count', getStudyCount],
+  ] as const)(
+    '%s names an invalid AREA[Phase] value by the expression, not phaseFilter, with the values as code spans',
+    async (_name, def) => {
+      mockGetService.mockReturnValue(new ClinicalTrialsService(config, { maxRetries: 0 }));
+      mockFetch.mockImplementation((url: URL | string) =>
+        Promise.resolve(
+          new URL(String(url)).pathname === '/v2/studies/metadata'
+            ? jsonResponse(PHASE_METADATA)
+            : {
+                ok: false,
+                status: 400,
+                statusText: 'HTTP 400',
+                headers: new Headers({ 'content-type': 'text/plain' }),
+                json: () => Promise.reject(new Error('Not JSON')),
+                text: () =>
+                  Promise.resolve(
+                    'Error parsing query in advanced filter: Allowed values for enum field `protocolSection.designModule.phases` are `NA`, `EARLY_PHASE1`, `PHASE1`, `PHASE2`, `PHASE3`, `PHASE4`',
+                  ),
+              },
+        ),
+      );
+      const result = await throttled(() =>
+        runToolContract(
+          def as typeof searchStudies,
+          { advancedFilter: 'AREA[Phase]PHASE5' },
+          { context: { errors: def.errors } },
+        ),
+      );
+
+      expect(result.isError).toBe(true);
+      const error = (result.structuredContent as { error: { data: Record<string, unknown> } })
+        .error;
+      expect(error.data.reason).toBe('enum_invalid');
+      expect(error.data).not.toHaveProperty('param');
+      expect(seenText(result)).toContain(
+        'Invalid value in an AREA[Phase] expression. Valid values: NA, EARLY_PHASE1, PHASE1, PHASE2, PHASE3, PHASE4.',
+      );
+      expect(seenText(result)).not.toContain('phaseFilter');
+      expect(text(result)).toContain(
+        'Use one of the valid values inside `AREA[Phase]`: `NA`, `EARLY_PHASE1`, `PHASE1`, `PHASE2`, `PHASE3`, `PHASE4`.',
+      );
+      expect(text(result)).not.toContain('AREA\\[');
+    },
+  );
 });
 
 /**
@@ -475,13 +544,231 @@ describe('get_study_results nctIds forms reach upstream canonicalized (#154, #15
 });
 
 /**
+ * The REST parameter each field is sent as (`query.cond`, and `query_cond` for
+ * callers that avoid dots) and the generic names callers reach for
+ * (`condition`, `limit`) are declared `inputAliases` (#190). Driven through
+ * the production argument path, since `input.parse()` skips the alias stage,
+ * and read back from the request the service builds: the upstream parameter
+ * carrying the value is the proof it reached its target.
+ */
+describe('REST and generic parameter names reach their targets as inputAliases (#190)', () => {
+  /** [alias, value sent, upstream parameter, value it carries upstream]. */
+  type Row = readonly [string, unknown, string, string];
+  const rest = (dotted: string, value: unknown, param: string, sent: string): Row[] => [
+    [dotted, value, param, sent],
+    [dotted.replace('.', '_'), value, param, sent],
+  ];
+  const COMMON: Row[] = [
+    ...rest('query.term', 'covid', 'query.term', 'covid'),
+    ...rest('query.cond', 'migraine', 'query.cond', 'migraine'),
+    ['condition', 'migraine', 'query.cond', 'migraine'],
+    ...rest('query.intr', 'erenumab', 'query.intr', 'erenumab'),
+    ['intervention', 'erenumab', 'query.intr', 'erenumab'],
+    ...rest('query.locn', 'Seattle', 'query.locn', 'Seattle'),
+    ...rest('query.spons', 'Pfizer', 'query.spons', 'Pfizer'),
+    ['sponsor', 'Pfizer', 'query.spons', 'Pfizer'],
+    ...rest('query.titles', 'headache', 'query.titles', 'headache'),
+    ...rest('query.outc', 'pain', 'query.outc', 'pain'),
+    // Canonicalized on the way, as statusFilter and phaseFilter values are.
+    ...rest(
+      'filter.overallStatus',
+      'recruiting|completed',
+      'filter.overallStatus',
+      'RECRUITING|COMPLETED',
+    ),
+    ...rest('filter.advanced', 'heart failure', 'filter.advanced', 'heart failure'),
+    ['phase', 'Phase 3', 'filter.advanced', 'AREA[Phase]PHASE3'],
+  ];
+  const geo = 'distance(47.6062,-122.3321,50mi)';
+  const SEARCH_ONLY: Row[] = [
+    ...rest('filter.geo', geo, 'filter.geo', geo),
+    ['limit', 5, 'pageSize', '5'],
+    ['max_results', 5, 'pageSize', '5'],
+  ];
+  const patient = {
+    age: 40,
+    sex: 'ALL' as const,
+    conditions: ['sickle cell'],
+    location: { country: 'United States', state: 'Washington', city: 'Seattle' },
+  };
+  type ErrorWire = { error: { code: number } };
+
+  it.each([
+    ...[...COMMON, ...SEARCH_ONLY].map((row) => ['search_studies', ...row, searchStudies] as const),
+    ...COMMON.map((row) => ['get_study_count', ...row, getStudyCount] as const),
+  ])('%s: %s reaches upstream', async (_name, alias, value, param, sent, definition) => {
+    mockFetch.mockResolvedValue(jsonResponse({ studies: [], totalCount: 0 }));
+    // The sentinel exclusion stays off, so filter.advanced carries the value alone.
+    const result = await runToolContract(
+      definition as typeof searchStudies,
+      {
+        [alias]: value,
+        includeUnknownEnrollment: true,
+      } as never,
+    );
+
+    expect(result.isError).toBeFalsy();
+    expect(fetchedUrls()).toHaveLength(1);
+    expect(fetchedUrls()[0]?.searchParams.get(param)).toBe(sent);
+  });
+
+  it('answers the call in REST and generic names with the canonical call’s request and page', async () => {
+    const page = {
+      studies: [study('NCT04592952'), study('NCT06150781')],
+      totalCount: 66,
+      nextPageToken: 'tok_page2',
+    };
+    mockFetch.mockResolvedValue(jsonResponse(page));
+    const aliased = await runToolContract(searchStudies, {
+      condition: 'migraine',
+      intervention: 'erenumab',
+      limit: 2,
+    } as never);
+    // A fresh service, so the second request never waits on the first one's pacer.
+    mockGetService.mockReturnValue(
+      new ClinicalTrialsService(config, { maxRetries: 0, validateFieldsLocally: false }),
+    );
+    const canonical = await runToolContract(searchStudies, {
+      conditionQuery: 'migraine',
+      interventionQuery: 'erenumab',
+      pageSize: 2,
+    });
+
+    expect(aliased.isError).toBeFalsy();
+    const [sentAliased, sentCanonical] = fetchedUrls();
+    expect(sentAliased?.searchParams.get('query.cond')).toBe('migraine');
+    expect(sentAliased?.href).toBe(sentCanonical?.href);
+    expect(aliased.structuredContent).toEqual(canonical.structuredContent);
+    expect(aliased.content).toEqual(canonical.content);
+  });
+
+  it('find_eligible reads limit as maxResults beside locationLimit', async () => {
+    const site = (facility: string) => ({
+      facility,
+      city: 'Seattle',
+      state: 'Washington',
+      country: 'United States',
+      status: 'RECRUITING',
+    });
+    mockFetch.mockResolvedValue(
+      jsonResponse({
+        studies: [
+          {
+            protocolSection: {
+              identificationModule: { nctId: 'NCT03722472' },
+              contactsLocationsModule: { locations: [site('A'), site('B'), site('C')] },
+            },
+          },
+        ],
+        totalCount: 1,
+      }),
+    );
+    const result = await throttled(() =>
+      runToolContract(findEligible, { ...patient, limit: 5, locationLimit: 2 } as never),
+    );
+
+    expect(result.isError).toBeFalsy();
+    // The main search goes first; the default maxResults would send 10.
+    expect(fetchedUrls()[0]?.searchParams.get('pageSize')).toBe('5');
+    const [candidate] = (
+      result.structuredContent as {
+        studies: Array<{ protocolSection: { contactsLocationsModule: { locations: unknown[] } } }>;
+      }
+    ).studies;
+    expect(candidate?.protocolSection.contactsLocationsModule.locations).toHaveLength(2);
+  });
+
+  it.each([
+    [
+      'search_studies',
+      'limit beside pageSize',
+      { limit: 2, pageSize: 3 },
+      'limit is an alias of pageSize; send one of them, not both.',
+      searchStudies,
+    ],
+    [
+      'search_studies',
+      'limit beside max_results',
+      { limit: 2, max_results: 3 },
+      'limit and max_results are aliases of pageSize; send one of them, not both.',
+      searchStudies,
+    ],
+    [
+      'get_study_count',
+      'query.cond beside conditionQuery',
+      { 'query.cond': 'migraine', conditionQuery: 'asthma' },
+      'query.cond is an alias of conditionQuery; send one of them, not both.',
+      getStudyCount,
+    ],
+    [
+      'find_eligible',
+      'limit beside maxResults',
+      { ...patient, limit: 5, maxResults: 3 },
+      'limit is an alias of maxResults; send one of them, not both.',
+      findEligible,
+    ],
+  ] as const)('%s rejects %s before any request', async (_name, _label, args, hint, definition) => {
+    const result = await runToolContract(definition as typeof searchStudies, args as never);
+
+    expect(result.isError).toBe(true);
+    // -32602 Invalid params: a strict-input rejection, raised before the handler.
+    expect((result.structuredContent as ErrorWire).error.code).toBe(-32602);
+    expect(seenText(result)).toContain(hint);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['get_study_count', 'limit, which has no page size there', 'limit', 2, getStudyCount],
+    ['search_studies', 'a case variant of an alias', 'Query.Term', 'covid', searchStudies],
+  ] as const)('%s keeps rejecting %s as an unknown key', async (_name, _label, key, value, def) => {
+    const result = await runToolContract(
+      def as typeof searchStudies,
+      {
+        conditionQuery: 'migraine',
+        [key]: value,
+      } as never,
+    );
+
+    expect(result.isError).toBe(true);
+    expect((result.structuredContent as ErrorWire).error.code).toBe(-32602);
+    expect(seenText(result)).toContain(`Unrecognized key: "${key}"`);
+    expect(seenText(result)).not.toContain('is an alias of');
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['search_studies', searchStudies],
+    ['get_study_count', getStudyCount],
+    ['find_eligible', findEligible],
+  ] as const)('%s advertises only its declared keys, none of its aliases', (_name, definition) => {
+    const advertised = (
+      definition.input['~standard'] as unknown as {
+        jsonSchema: {
+          input(o: { target: 'draft-2020-12' }): {
+            additionalProperties?: boolean;
+            properties: Record<string, unknown>;
+          };
+        };
+      }
+    ).jsonSchema.input({ target: 'draft-2020-12' });
+    const keys = Object.keys(advertised.properties);
+
+    expect(keys).toEqual(Object.keys(definition.input.shape));
+    expect(advertised.additionalProperties).toBe(false);
+    for (const alias of Object.keys(definition.inputAliases ?? {})) {
+      expect(keys).not.toContain(alias);
+    }
+  });
+});
+
+/**
  * ClinicalTrials.gov answers a request target past 8,177 bytes with HTTP 414
  * (#163). Driven through each tool's contract boundary against the real
  * service: an ID list is served up to what fits, and every other over-long
  * request fails typed, with the declaring tool's hint and no upstream body.
  */
 describe('over-long requests (#163)', () => {
-  /** A fresh instance per call, so a walk's next request never waits on the throttle. */
+  /** A fresh instance per call, so a walk's next request never waits on the previous one's pacer. */
   const freshService = () =>
     mockGetService.mockReturnValue(
       new ClinicalTrialsService(config, { maxRetries: 0, validateFieldsLocally: false }),
@@ -684,18 +971,6 @@ describe('AREA[] field names reach upstream in the spelling it accepts (#170)', 
     text: () => Promise.resolve(body),
   });
 
-  /** Run with fake timers standing in for the throttle's one-second gaps between requests. */
-  async function throttled<T>(run: () => Promise<T>): Promise<T> {
-    vi.useFakeTimers();
-    try {
-      const pending = run();
-      await vi.advanceTimersByTimeAsync(10_000);
-      return await pending;
-    } finally {
-      vi.useRealTimers();
-    }
-  }
-
   it.each(TOOLS)(
     '%s sends and echoes the canonical spelling in advancedFilter and a query parameter',
     async (_name, definition) => {
@@ -874,5 +1149,312 @@ describe('AREA[] field names reach upstream in the spelling it accepts (#170)', 
     expect((canonical.structuredContent as { deferredNctIds?: string[] }).deferredNctIds).toEqual(
       nctIds.slice(100),
     );
+  });
+});
+
+/**
+ * A valid field named where ClinicalTrials.gov refuses it — inside
+ * SEARCH[Location](…) when no site holds it (#183), under RANGE[] when its type
+ * takes no range (#187) — reaches the caller as field_invalid with the hint
+ * written for that refusal on both surfaces, through each tool's AREA[] name
+ * pass and the real service, with `fetch` answering the upstream body verbatim.
+ */
+describe('a valid field upstream refuses where it stands (#183, #187)', () => {
+  const TOOLS = [
+    ['search_studies', searchStudies],
+    ['get_study_count', getStudyCount],
+  ] as const;
+  type ErrorWire = { error: { data: Record<string, unknown>; message: string } };
+
+  /** A field-validating service whose /studies search answers HTTP 400 with `body`. */
+  const refusing = (body: string) => {
+    mockGetService.mockReturnValue(new ClinicalTrialsService(config, { maxRetries: 0 }));
+    mockFetch.mockImplementation((url: URL | string) => {
+      const { pathname, searchParams } = new URL(String(url));
+      if (pathname === '/v2/studies/metadata') {
+        const indexedOnly = searchParams.get('includeIndexedOnly') === 'true';
+        return Promise.resolve(jsonResponse(indexedOnly ? INDEXED_METADATA : RECORD_METADATA));
+      }
+      if (pathname === '/v2/studies/search-areas')
+        return Promise.resolve(jsonResponse(SEARCH_AREAS));
+      if (pathname === '/v2/studies') {
+        return Promise.resolve({
+          ok: false,
+          status: 400,
+          statusText: 'HTTP 400',
+          headers: new Headers({ 'content-type': 'text/plain' }),
+          json: () => Promise.reject(new Error('Not JSON')),
+          text: () => Promise.resolve(body),
+        });
+      }
+      return Promise.reject(new Error('unmocked fetch'));
+    });
+  };
+  const call = (definition: (typeof TOOLS)[number][1], input: Record<string, unknown>) =>
+    throttled(() =>
+      runToolContract(definition as typeof searchStudies, input, {
+        context: { errors: definition.errors },
+      }),
+    );
+  const wire = (result: { structuredContent?: unknown }) =>
+    (result.structuredContent as ErrorWire).error;
+
+  it.each(TOOLS)(
+    '%s answers a study-level field inside SEARCH[Location](…) with the site fields and the form beside it',
+    async (_name, definition) => {
+      refusing('Error parsing query in advanced filter: `OverallStatus` is outside Location scope');
+      const result = await call(definition, {
+        advancedFilter: 'SEARCH[Location](AREA[OverallStatus]RECRUITING)',
+      });
+      const { data, message } = wire(result);
+      const hint = (data.recovery as { hint: string }).hint;
+
+      expect(result.isError).toBe(true);
+      expect(data).toMatchObject({ reason: 'field_invalid', invalid: ['OverallStatus'] });
+      for (const surface of [message, hint]) {
+        expect(surface).toContain('LocationStatus');
+        expect(surface).toContain(
+          'AREA[OverallStatus]RECRUITING AND SEARCH[Location](AREA[LocationCity]Seattle)',
+        );
+      }
+      expect(hint).not.toBe(RECOVERY_HINTS.field_invalid);
+      expect(seenText(result)).toContain(`Recovery: ${hint}`);
+      expect(seenText(result)).not.toContain('Free-text');
+      expect(seenText(result)).not.toContain(RECOVERY_HINTS.query_parse_error);
+      // Each expression a caller copies arrives as a code span, never with escaped brackets.
+      expect(text(result)).toContain(
+        '`AREA[OverallStatus]RECRUITING AND SEARCH[Location](AREA[LocationCity]Seattle)`',
+      );
+      expect(text(result)).toContain('use `AREA[LocationStatus]` inside the wrapper');
+      expect(text(result)).not.toContain('AREA\\[');
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s reads the same refusal in locationQuery, naming the field upstream names',
+    async (_name, definition) => {
+      refusing('Error parsing query in Location terms: `Phase` is outside Location scope');
+      const result = await call(definition, {
+        locationQuery: 'SEARCH[Location](AREA[Phase]PHASE2)',
+      });
+
+      expect(wire(result).data).toMatchObject({ reason: 'field_invalid', invalid: ['Phase'] });
+      expect(seenText(result)).toContain('Error parsing query in Location terms:');
+      expect(seenText(result)).toContain('Move AREA[Phase] out of SEARCH[Location](…)');
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s answers a search area inside SEARCH[Location](…) with no did-you-mean',
+    async (_name, definition) => {
+      refusing('Error parsing query in advanced filter: Unknown area name: `LocationSearch`');
+      const result = await call(definition, {
+        advancedFilter: 'SEARCH[Location](AREA[LocationSearch]Seattle)',
+      });
+      const { data } = wire(result);
+
+      expect(data).toMatchObject({ reason: 'field_invalid', invalid: ['LocationSearch'] });
+      expect(data).not.toHaveProperty('suggestions');
+      expect(seenText(result)).toContain('search areas go outside SEARCH[Location](…)');
+      expect(seenText(result)).not.toContain('did you mean');
+      expect(text(result)).not.toContain('AREA\\[');
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s answers RANGE[] on NCTId with the StudyFirstPostDate window, not the bracket hint',
+    async (_name, definition) => {
+      refusing(
+        'Error parsing query in advanced filter: RANGE is not supported for nct field protocolSection.identificationModule.nctId',
+      );
+      const result = await call(definition, {
+        conditionQuery: 'tuberculosis',
+        advancedFilter: 'AREA[NCTId]RANGE[NCT03000000, NCT04000000]',
+      });
+      const { data, message } = wire(result);
+
+      expect(data).toMatchObject({ reason: 'field_invalid', invalid: ['NCTId'] });
+      expect(message).toContain('bound StudyFirstPostDate instead');
+      expect(message).not.toContain('Free-text');
+      expect(seenText(result)).not.toContain(RECOVERY_HINTS.query_parse_error);
+      expect(seenText(result)).toContain(
+        'Recovery: Bound the first posting date instead of the NCT ID, since NCT IDs are assigned in first-posting order: AREA[StudyFirstPostDate]RANGE[2017-01-01, 2018-12-31].',
+      );
+      expect(text(result)).toContain('`AREA[StudyFirstPostDate]RANGE[2017-01-01, 2018-12-31]`');
+      expect(text(result)).not.toContain('RANGE\\[');
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s names BriefTitle from the path of a RANGE[] on it',
+    async (_name, definition) => {
+      refusing(
+        'Error parsing query in advanced filter: RANGE is not supported for text field protocolSection.identificationModule.briefTitle',
+      );
+      const result = await call(definition, {
+        conditionQuery: 'tuberculosis',
+        advancedFilter: 'AREA[BriefTitle]RANGE[a, z]',
+      });
+
+      expect(wire(result).data).toMatchObject({ reason: 'field_invalid', invalid: ['BriefTitle'] });
+      expect(seenText(result)).toContain(
+        "Recovery: Match 'BriefTitle' by value instead of by range",
+      );
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s names LeadSponsor for a RANGE[] upstream refuses before the group refusal',
+    async (_name, definition) => {
+      refusing(
+        'Error parsing query in advanced filter: RANGE is not supported for Sponsor field protocolSection.sponsorCollaboratorsModule.leadSponsor',
+      );
+      const result = await call(definition, { advancedFilter: 'AREA[LeadSponsor]RANGE[a, z]' });
+
+      expect(wire(result).data).toMatchObject({
+        reason: 'field_invalid',
+        invalid: ['LeadSponsor'],
+      });
+      expect(seenText(result)).toContain("Name one of the leaf pieces of 'LeadSponsor' instead");
+    },
+  );
+
+  it.each(
+    TOOLS.flatMap(([name, definition]) => [
+      [
+        name,
+        'advanced filter',
+        definition,
+        { advancedFilter: 'AREA[ConditionSearch]RANGE[1, 2]' },
+      ] as const,
+      [name, 'Conditions or disease', definition, { conditionQuery: 'RANGE[1, 2]' }] as const,
+    ]),
+  )(
+    '%s answers a RANGE[] over several fields in %s with the AREA[Field] guidance and no field blamed',
+    async (_name, where, definition, input) => {
+      refusing(`Error parsing query in ${where}: RANGE is not supported for multiple (7) fields`);
+      const result = await call(definition, input);
+      const { data } = wire(result);
+
+      expect(data).toMatchObject({ reason: 'field_invalid' });
+      expect(data).not.toHaveProperty('invalid');
+      expect(seenText(result)).toContain('RANGE[] needs AREA[Field] naming one of the date');
+      expect(seenText(result)).toContain(
+        'Recovery: Name one field before the range with AREA[Field], as in AREA[StartDate]RANGE[2020-01-01, MAX];',
+      );
+      expect(text(result)).toContain('`AREA[StartDate]RANGE[2020-01-01, MAX]`');
+      expect(text(result)).not.toContain('RANGE\\[');
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s keeps a bad RANGE bound a query_parse_error, its declared hint’s expressions as code spans',
+    async (_name, definition) => {
+      refusing(
+        'Error parsing query in advanced filter: Cannot parse number for `protocolSection.designModule.enrollmentInfo.count` field',
+      );
+      const result = await call(definition, { advancedFilter: 'AREA[EnrollmentCount]RANGE[a, z]' });
+
+      expect(wire(result).data).toMatchObject({
+        reason: 'query_parse_error',
+        recovery: { hint: RECOVERY_HINTS.query_parse_error },
+      });
+      expect(seenText(result)).toContain(
+        'Query syntax error: Cannot parse number for `protocolSection.designModule.enrollmentInfo.count` field.',
+      );
+      expect(seenText(result)).toContain(`Recovery: ${RECOVERY_HINTS.query_parse_error}`);
+      expect(text(result)).toContain(
+        'Field-scoped search uses `AREA[FieldName]value`, which works',
+      );
+      expect(text(result)).toContain('outside an `AREA[…]` / `RANGE[…]` expression');
+      expect(text(result)).not.toContain('AREA\\[');
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s keeps an unknown name inside SEARCH[Location](…) today’s message and declared hint',
+    async (_name, definition) => {
+      refusing('Error parsing query in advanced filter: Unknown area name: `Bogus`');
+      const result = await call(definition, { advancedFilter: 'SEARCH[Location](AREA[Bogus]x)' });
+
+      expect(wire(result).data).toMatchObject({ reason: 'field_invalid', invalid: ['Bogus'] });
+      expect(seenText(result)).toContain(
+        "Unknown area name: `Bogus` 'Bogus' is not a recognized AREA[]-compatible field.",
+      );
+      expect(seenText(result)).toContain(`Recovery: ${RECOVERY_HINTS.field_invalid}`);
+    },
+  );
+
+  /**
+   * find_eligible runs no AREA[] name pass and takes no advancedFilter, but a
+   * conditions entry without whitespace reaches query.cond as written, so it can
+   * carry either refusal; the main search is the request upstream refuses. Its
+   * fields lie outside the AREA fixture, so its service skips the local field
+   * check, as this file's default service does, and neither refusal reads the
+   * field index.
+   */
+  describe('find_eligible, through a conditions entry', () => {
+    const patient = {
+      age: 40,
+      sex: 'ALL' as const,
+      location: { country: 'United States', state: 'Washington', city: 'Seattle' },
+    };
+    /** Upstream answers the main search HTTP 400 with `body`. */
+    const refusingSearch = (body: string) => {
+      refusing(body);
+      mockGetService.mockReturnValue(
+        new ClinicalTrialsService(config, { maxRetries: 0, validateFieldsLocally: false }),
+      );
+    };
+    const eligible = (conditions: string[]) =>
+      throttled(() =>
+        runToolContract(
+          findEligible,
+          { ...patient, conditions },
+          { context: { errors: findEligible.errors } },
+        ),
+      );
+    /** query.cond as the main search, the call's first request, sent it. */
+    const sentConditions = () => fetchedUrls()[0]?.searchParams.get('query.cond');
+
+    it('answers a study-level field inside SEARCH[Location](…) with the site fields and the form beside it', async () => {
+      refusingSearch(
+        'Error parsing query in Conditions or disease: `Phase` is outside Location scope',
+      );
+      const result = await eligible(['SEARCH[Location](AREA[Phase]PHASE2)']);
+      const { data, message } = wire(result);
+
+      expect(sentConditions()).toBe('SEARCH[Location](AREA[Phase]PHASE2)');
+      expect(data).toMatchObject({ reason: 'field_invalid', invalid: ['Phase'] });
+      expect(message).toContain('Error parsing query in Conditions or disease:');
+      expect(message).toContain('LocationStatus');
+      expect(seenText(result)).toContain(
+        'Recovery: Move AREA[Phase] out of SEARCH[Location](…) and join it beside the wrapper with AND',
+      );
+      expect(seenText(result)).not.toContain(RECOVERY_HINTS.field_invalid);
+      expect(seenText(result)).not.toContain('Free-text');
+      expect(text(result)).toContain('Move `AREA[Phase]` out of `SEARCH[Location](…)`');
+      expect(text(result)).not.toContain('AREA\\[');
+    });
+
+    it('answers a bare RANGE[] with the AREA[Field] guidance and no field blamed', async () => {
+      refusingSearch(
+        'Error parsing query in Conditions or disease: RANGE is not supported for multiple (7) fields',
+      );
+      const result = await eligible(['RANGE[1,2]']);
+      const { data } = wire(result);
+
+      expect(sentConditions()).toBe('RANGE[1,2]');
+      expect(data).toMatchObject({ reason: 'field_invalid' });
+      expect(data).not.toHaveProperty('invalid');
+      expect(seenText(result)).toContain('RANGE[] needs AREA[Field] naming one of the date');
+      expect(seenText(result)).toContain(
+        'Recovery: Name one field before the range with AREA[Field], as in AREA[StartDate]RANGE[2020-01-01, MAX];',
+      );
+      expect(seenText(result)).not.toContain(RECOVERY_HINTS.query_parse_error);
+      expect(seenText(result)).not.toContain('Free-text');
+      expect(text(result)).toContain('`AREA[StartDate]RANGE[2020-01-01, MAX]`');
+      expect(text(result)).not.toContain('RANGE\\[');
+    });
   });
 });

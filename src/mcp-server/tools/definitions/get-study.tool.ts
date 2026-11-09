@@ -120,8 +120,24 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     {
       reason: 'rate_limited',
       code: JsonRpcErrorCode.RateLimited,
-      when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
+      when: 'ClinicalTrials.gov answered HTTP 429 on every attempt, or the call’s time budget ran out after a 429.',
       recovery: RECOVERY_HINTS.rate_limited,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'retry_deadline_exceeded',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov did not answer within the call’s time budget, which covers every request, retry, and wait the call makes.',
+      recovery: RECOVERY_HINTS.retry_deadline_exceeded,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) on every attempt.',
+      recovery: RECOVERY_HINTS.upstream_timeout,
       retryable: true,
       thrownBy: 'service',
     },
@@ -134,26 +150,26 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     locationLimit: z
       .number()
       .int()
-      .min(1)
+      .min(0)
       .optional()
       .describe(
-        'Optional cap on the number of locations returned. Omit for no cap (full upstream list); a value at or past the list length also returns every location. Pairs naturally with nearLocation for narrowing a large multi-site trial. Original total preserved in filtersApplied.totalLocations only when the cap trims the list.',
+        'Optional cap on the number of locations returned. Omit for no cap (full upstream list); 0 leaves the locations out; a value at or past the list length also returns every location. Pairs naturally with nearLocation for narrowing a large multi-site trial. Original total preserved in filtersApplied.totalLocations only when the cap trims the list.',
       ),
     outcomeLimit: z
       .number()
       .int()
-      .min(1)
+      .min(0)
       .optional()
       .describe(
-        'Optional cap on the number of secondary and other outcomes returned. Omit for no cap (full upstream lists); a value at or past a list length also returns that whole list. Primary outcomes are never capped. Original totals preserved in filtersApplied.totalSecondaryOutcomes / totalOtherOutcomes only when the cap trims a list.',
+        'Optional cap on the number of secondary and other outcomes returned. Omit for no cap (full upstream lists); 0 leaves the secondary and other outcomes out; a value at or past a list length also returns that whole list. Primary outcomes are never capped. Original totals preserved in filtersApplied.totalSecondaryOutcomes / totalOtherOutcomes only when the cap trims a list.',
       ),
     referenceLimit: z
       .number()
       .int()
-      .min(1)
+      .min(0)
       .optional()
       .describe(
-        'Optional cap on the number of references returned. Omit for no cap (full upstream list); a value at or past the list length also returns every reference. Original total preserved in filtersApplied.totalReferences only when the cap trims the list. seeAlsoLinks are never capped.',
+        'Optional cap on the number of references returned. Omit for no cap (full upstream list); 0 leaves the references out; a value at or past the list length also returns every reference. Original total preserved in filtersApplied.totalReferences only when the cap trims the list. seeAlsoLinks are never capped.',
       ),
     nearLocation: z
       .object({
@@ -542,11 +558,17 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       }
     }
 
-    // Outcomes — render every item present in the (already filtered) study.
+    // Outcomes — render every item present in the (already filtered) study. A
+    // list outcomeLimit=0 emptied keeps its heading and total, and says so: a
+    // missing section would read as a study that registers no such outcomes.
     const renderOutcomeList = (heading: string, list: ProtocolOutcome[], total?: number) => {
       lines.push('');
       const suffix = total != null && total > list.length ? ` (${list.length} of ${total})` : '';
       lines.push(`## ${heading}${suffix}`);
+      if (list.length === 0 && total != null)
+        lines.push(
+          `Left out by outcomeLimit=${meta.outcomeLimit}. Omit outcomeLimit to see all ${total}.`,
+        );
       for (const o of list) {
         lines.push(oneLine(`- ${o.measure}${o.timeFrame ? ` [${o.timeFrame}]` : ''}`));
         if (o.description) lines.push(`  ${o.description.trim()}`);
@@ -554,14 +576,14 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     };
     if (outcomes.primaryOutcomes?.length)
       renderOutcomeList('Primary Outcomes', outcomes.primaryOutcomes);
-    if (outcomes.secondaryOutcomes?.length)
+    if (outcomes.secondaryOutcomes?.length || meta.totalSecondaryOutcomes != null)
       renderOutcomeList(
         'Secondary Outcomes',
-        outcomes.secondaryOutcomes,
+        outcomes.secondaryOutcomes ?? [],
         meta.totalSecondaryOutcomes,
       );
-    if (outcomes.otherOutcomes?.length)
-      renderOutcomeList('Other Outcomes', outcomes.otherOutcomes, meta.totalOtherOutcomes);
+    if (outcomes.otherOutcomes?.length || meta.totalOtherOutcomes != null)
+      renderOutcomeList('Other Outcomes', outcomes.otherOutcomes ?? [], meta.totalOtherOutcomes);
 
     // Results summary — compact counts mirrored from the resultsSummary output
     // field (the heavy resultsSection is omitted from this tool). Renders every
@@ -607,18 +629,26 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     }
 
     // Locations — render every site present in the (already filtered) study.
-    // A nearLocation filter that matched nothing still renders the header and the
-    // reason: omitting the section makes "sites exist, none within the radius"
-    // indistinguishable from "this study publishes no sites at all", which is the
-    // opposite conclusion (#96). A study with no upstream sites leaves meta.nearLocation
-    // unset (applyFilters never runs the filter), so it still renders nothing.
+    // A filter that left no site — a nearLocation radius, or locationLimit=0 —
+    // still renders the header and the reason: omitting the section makes "sites
+    // exist, none returned" indistinguishable from "this study publishes no sites
+    // at all", which is the opposite conclusion. Either filter records
+    // the upstream total when it drops a site, and a study with no upstream sites
+    // never runs one, so it still renders nothing.
     const locs = (contacts.locations ?? []) as LocationWithDistance[];
-    if (locs.length || meta.nearLocation) {
+    if (locs.length || meta.totalLocations != null) {
       const total = meta.totalLocations ?? locs.length;
       lines.push('');
       let header = `## Locations (${locs.length}`;
       if (meta.nearLocation) {
-        header += ` within ${meta.nearLocation.radiusMi} mi of ${meta.nearLocation.lat.toFixed(3)},${meta.nearLocation.lon.toFixed(3)} of ${total} total`;
+        const around = `${meta.nearLocation.radiusMi} mi of ${meta.nearLocation.lat.toFixed(3)},${meta.nearLocation.lon.toFixed(3)}`;
+        // A limit that trimmed the in-range sites makes the count the shown
+        // sites, not the in-range ones: "0 within 50 mi" would deny sites
+        // the limit only left out.
+        header +=
+          meta.locationLimit != null
+            ? ` shown by locationLimit=${meta.locationLimit} of the sites within ${around}; ${total} total`
+            : ` within ${around} of ${total} total`;
         if (meta.locationsWithoutGeo) {
           header += `, ${meta.locationsWithoutGeo} without coordinates skipped`;
         }
@@ -630,14 +660,22 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
       }
       lines.push(header);
       if (locs.length === 0) {
-        // All-sites-dropped-for-missing-coordinates and all-sites-too-far are
-        // different situations and get different recovery guidance.
+        // The limit, missing coordinates, and distance each empty the list for a
+        // different reason and get different recovery guidance. The limit is
+        // echoed only when sites reached it, so it is the cause whenever present.
         const noun = total === 1 ? 'site' : 'sites';
-        lines.push(
-          meta.locationsWithoutGeo === total
-            ? `No sites could be matched by distance — all ${total} published ${noun} lack coordinates. Omit nearLocation to see the full list.`
-            : `No sites within the requested radius. Widen radiusMi, or omit nearLocation to see all ${total} ${noun}.`,
-        );
+        if (meta.locationLimit != null)
+          lines.push(
+            meta.nearLocation
+              ? `Left out by locationLimit=${meta.locationLimit}. Omit locationLimit to see the sites within the radius.`
+              : `Left out by locationLimit=${meta.locationLimit}. Omit locationLimit to see all ${total} ${noun}.`,
+          );
+        else
+          lines.push(
+            meta.locationsWithoutGeo === total
+              ? `No sites could be matched by distance — all ${total} published ${noun} lack coordinates. Omit nearLocation to see the full list.`
+              : `No sites within the requested radius. Widen radiusMi, or omit nearLocation to see all ${total} ${noun}.`,
+          );
       }
       for (const loc of locs) {
         const parts = [loc.facility, loc.city, loc.state, loc.zip, loc.country].filter(Boolean);
@@ -701,11 +739,13 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
         if (detail.length) lines.push(`  ${oneLine(detail.join(' | '))}`);
       }
     }
-    // References
+    // References — a list referenceLimit=0 emptied keeps its heading, total, and
+    // the reason, whether or not seeAlsoLinks or availIpds would render it.
     if (
       references.references?.length ||
       references.seeAlsoLinks?.length ||
-      references.availIpds?.length
+      references.availIpds?.length ||
+      meta.totalReferences != null
     ) {
       lines.push('');
       const refCount = references.references?.length ?? 0;
@@ -714,6 +754,10 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
           ? ` (${refCount} of ${meta.totalReferences})`
           : '';
       lines.push(`## References${refSuffix}`);
+      if (refCount === 0 && meta.totalReferences != null)
+        lines.push(
+          `Left out by referenceLimit=${meta.referenceLimit}. Omit referenceLimit to see all ${meta.totalReferences}.`,
+        );
       for (const r of references.references ?? []) {
         const pmid = r.pmid ? ` (PMID: ${r.pmid})` : '';
         const type = r.type ? ` [${r.type}]` : '';

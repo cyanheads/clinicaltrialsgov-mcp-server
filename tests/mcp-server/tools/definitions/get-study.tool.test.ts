@@ -75,13 +75,25 @@ describe('getStudy', () => {
     });
 
     it.each([
-      { locationLimit: 0 },
-      { outcomeLimit: 0 },
-      { referenceLimit: 0 },
+      { locationLimit: -1 },
+      { outcomeLimit: -1 },
+      { referenceLimit: -1 },
       { locationLimit: 1.5 },
+      { outcomeLimit: 1.5 },
+      { referenceLimit: 1.5 },
       { nearLocation: { lat: 47.6, lon: -122.3, radiusMi: 0.5 } },
     ])('keeps the minimum: rejects %j', (bad) => {
       expect(() => getStudy.input!.parse({ nctId: 'NCT12345678', ...bad })).toThrow();
+    });
+
+    it('accepts 0 on each list limit, meaning leave that list out (#188)', () => {
+      const input = getStudy.input!.parse({
+        nctId: 'NCT12345678',
+        locationLimit: 0,
+        outcomeLimit: 0,
+        referenceLimit: 0,
+      });
+      expect(input).toMatchObject({ locationLimit: 0, outcomeLimit: 0, referenceLimit: 0 });
     });
 
     it('advertises no maximum on the output-only limits (#153)', () => {
@@ -92,9 +104,10 @@ describe('getStudy', () => {
         }
       ).properties;
       // `.int()` alone serializes Zod's safe-integer bound; nothing tighter.
+      // The floor is 0, which leaves that list out (#188).
       for (const key of ['locationLimit', 'outcomeLimit', 'referenceLimit']) {
         expect(props[key]?.maximum ?? Number.MAX_SAFE_INTEGER).toBe(Number.MAX_SAFE_INTEGER);
-        expect(props[key]?.minimum).toBe(1);
+        expect(props[key]?.minimum).toBe(0);
       }
       expect(props.nearLocation?.properties?.radiusMi).not.toHaveProperty('maximum');
       expect(props.nearLocation?.properties?.radiusMi?.minimum).toBe(1);
@@ -708,6 +721,368 @@ describe('getStudy', () => {
       expect(text).toContain('Site 0');
       expect(text).toContain('Site 2');
       expect(text).not.toContain('Site 3');
+    });
+
+    describe('a limit of 0 leaves that list out (#188)', () => {
+      type Sc = {
+        filtersApplied: Record<string, unknown>;
+        study: {
+          protocolSection: Record<string, Record<string, unknown[] | undefined> | undefined>;
+        };
+      };
+      const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+        (result.content as { text: string }[]).map((b) => b.text).join('\n');
+      const seattle = { lat: 47.6062, lon: -122.3321 };
+
+      it('locationLimit 0 returns no sites and keeps the heading, total, and limit on both surfaces', async () => {
+        mockService.getStudy.mockResolvedValue(
+          buildStudy({
+            contactsLocationsModule: {
+              locations: Array.from({ length: 175 }, (_, i) => ({ facility: `Site ${i}` })),
+            },
+          }),
+        );
+
+        const result = await runToolContract(getStudy, { nctId: 'NCT12345678', locationLimit: 0 });
+
+        expect(result.isError).toBeFalsy();
+        const sc = result.structuredContent as Sc;
+        expect(sc.study.protocolSection.contactsLocationsModule?.locations).toEqual([]);
+        expect(sc.filtersApplied).toEqual({ totalLocations: 175, locationLimit: 0 });
+        const text = textOf(result);
+        expect(text).toContain(
+          '## Locations (0 of 175 total)\nLeft out by locationLimit=0. Omit locationLimit to see all 175 sites.',
+        );
+        expect(text).not.toContain('Site 0');
+        expect(text).not.toContain('No sites within the requested radius');
+        expect(text).toContain('*Filters applied: locationLimit=0, totalLocations=175*');
+      });
+
+      it('outcomeLimit 0 keeps every primary outcome and leaves the secondary ones out', async () => {
+        mockService.getStudy.mockResolvedValue(
+          buildStudy({
+            outcomesModule: {
+              primaryOutcomes: Array.from({ length: 64 }, (_, i) => ({ measure: `Primary ${i}` })),
+              secondaryOutcomes: Array.from({ length: 31 }, (_, i) => ({
+                measure: `Secondary ${i}`,
+              })),
+            },
+          }),
+        );
+
+        const result = await runToolContract(getStudy, { nctId: 'NCT12345678', outcomeLimit: 0 });
+
+        const sc = result.structuredContent as Sc;
+        expect(sc.study.protocolSection.outcomesModule?.primaryOutcomes).toHaveLength(64);
+        expect(sc.study.protocolSection.outcomesModule?.secondaryOutcomes).toEqual([]);
+        expect(sc.filtersApplied).toEqual({ totalSecondaryOutcomes: 31, outcomeLimit: 0 });
+        const text = textOf(result);
+        expect(text).toContain('## Primary Outcomes\n- Primary 0');
+        expect(text).toContain('- Primary 63');
+        expect(text).toContain(
+          '## Secondary Outcomes (0 of 31)\nLeft out by outcomeLimit=0. Omit outcomeLimit to see all 31.',
+        );
+        expect(text).not.toContain('Secondary 0');
+      });
+
+      it('outcomeLimit 0 leaves the other outcomes out too, each list with its own total', async () => {
+        mockService.getStudy.mockResolvedValue(
+          buildStudy({
+            outcomesModule: {
+              secondaryOutcomes: [{ measure: 'S0' }, { measure: 'S1' }],
+              otherOutcomes: [{ measure: 'O0' }, { measure: 'O1' }, { measure: 'O2' }],
+            },
+          }),
+        );
+
+        const result = await runToolContract(getStudy, { nctId: 'NCT12345678', outcomeLimit: 0 });
+
+        const sc = result.structuredContent as Sc;
+        expect(sc.study.protocolSection.outcomesModule?.otherOutcomes).toEqual([]);
+        expect(sc.filtersApplied).toEqual({
+          totalSecondaryOutcomes: 2,
+          totalOtherOutcomes: 3,
+          outcomeLimit: 0,
+        });
+        const text = textOf(result);
+        expect(text).toContain('## Secondary Outcomes (0 of 2)\nLeft out by outcomeLimit=0.');
+        expect(text).toContain(
+          '## Other Outcomes (0 of 3)\nLeft out by outcomeLimit=0. Omit outcomeLimit to see all 3.',
+        );
+        expect(text).not.toMatch(/- [SO]\d/);
+      });
+
+      it.each([
+        {
+          shape: 'with a seeAlsoLink',
+          extra: { seeAlsoLinks: [{ label: 'Site', url: 'https://example.org/s' }] },
+        },
+        { shape: 'with no seeAlsoLinks or availIpds', extra: {} },
+      ])(
+        'referenceLimit 0 leaves the references out and keeps the heading $shape',
+        async ({ extra }) => {
+          mockService.getStudy.mockResolvedValue(
+            buildStudy({
+              referencesModule: {
+                references: Array.from({ length: 15 }, (_, i) => ({ citation: `Reference ${i}.` })),
+                ...extra,
+              },
+            }),
+          );
+
+          const result = await runToolContract(getStudy, {
+            nctId: 'NCT12345678',
+            referenceLimit: 0,
+          });
+
+          const sc = result.structuredContent as Sc;
+          expect(sc.study.protocolSection.referencesModule?.references).toEqual([]);
+          expect(sc.study.protocolSection.referencesModule?.seeAlsoLinks).toEqual(
+            extra.seeAlsoLinks,
+          );
+          expect(sc.filtersApplied).toEqual({ totalReferences: 15, referenceLimit: 0 });
+          const text = textOf(result);
+          expect(text).toContain(
+            '## References (0 of 15)\nLeft out by referenceLimit=0. Omit referenceLimit to see all 15.',
+          );
+          expect(text).not.toContain('Reference 0.');
+          if (extra.seeAlsoLinks) {
+            expect(text).toContain('- See also: Site — https://example.org/s');
+          }
+        },
+      );
+
+      it('locationLimit 0 with nearLocation names the limit, not the radius, when sites were in range', async () => {
+        mockService.getStudy.mockResolvedValue(
+          buildStudy({
+            contactsLocationsModule: {
+              locations: [
+                { facility: 'Seattle Med', geoPoint: seattle },
+                { facility: 'Bellevue Clinic', geoPoint: { lat: 47.6101, lon: -122.2015 } },
+                { facility: 'Boston General', geoPoint: { lat: 42.3601, lon: -71.0589 } },
+                { facility: 'No Coords' },
+              ],
+            },
+          }),
+        );
+
+        const result = await runToolContract(getStudy, {
+          nctId: 'NCT12345678',
+          nearLocation: { ...seattle, radiusMi: 50 },
+          locationLimit: 0,
+        });
+
+        const sc = result.structuredContent as Sc;
+        expect(sc.study.protocolSection.contactsLocationsModule?.locations).toEqual([]);
+        expect(sc.filtersApplied).toEqual({
+          locationsWithoutGeo: 1,
+          nearLocation: { ...seattle, radiusMi: 50 },
+          locationLimit: 0,
+          totalLocations: 4,
+        });
+        const text = textOf(result);
+        // Two sites are in range; the heading must not read as "none within 50 mi".
+        expect(text).toContain(
+          '## Locations (0 shown by locationLimit=0 of the sites within 50 mi of 47.606,-122.332; 4 total, 1 without coordinates skipped)\nLeft out by locationLimit=0. Omit locationLimit to see the sites within the radius.',
+        );
+        expect(text).not.toContain('0 within 50 mi');
+        expect(text).not.toContain('No sites within the requested radius');
+        expect(text).not.toContain('lack coordinates');
+      });
+
+      it('a locationLimit that trims the in-range sites heads the section with the shown count, not as the in-range count', async () => {
+        mockService.getStudy.mockResolvedValue(
+          buildStudy({
+            contactsLocationsModule: {
+              locations: [
+                { facility: 'Seattle Med', geoPoint: seattle },
+                { facility: 'Bellevue Clinic', geoPoint: { lat: 47.6101, lon: -122.2015 } },
+                { facility: 'Boston General', geoPoint: { lat: 42.3601, lon: -71.0589 } },
+              ],
+            },
+          }),
+        );
+
+        const result = await runToolContract(getStudy, {
+          nctId: 'NCT12345678',
+          nearLocation: { ...seattle, radiusMi: 50 },
+          locationLimit: 1,
+        });
+
+        const sc = result.structuredContent as Sc;
+        expect(sc.study.protocolSection.contactsLocationsModule?.locations).toHaveLength(1);
+        expect(sc.filtersApplied).toMatchObject({ locationLimit: 1, totalLocations: 3 });
+        const text = textOf(result);
+        expect(text).toContain(
+          '## Locations (1 shown by locationLimit=1 of the sites within 50 mi of 47.606,-122.332; 3 total)',
+        );
+        expect(text).toContain('- Seattle Med');
+      });
+
+      it.each([
+        {
+          cause: 'the radius',
+          locations: [{ facility: 'Boston General', geoPoint: { lat: 42.3601, lon: -71.0589 } }],
+          reason: 'No sites within the requested radius.',
+        },
+        {
+          cause: 'missing coordinates',
+          locations: [{ facility: 'No Coords A' }, { facility: 'No Coords B' }],
+          reason: 'lack coordinates',
+        },
+      ])(
+        'locationLimit 0 with nearLocation keeps the reason when $cause emptied the list',
+        async ({ locations, reason }) => {
+          mockService.getStudy.mockResolvedValue(
+            buildStudy({ contactsLocationsModule: { locations } }),
+          );
+
+          const result = await runToolContract(getStudy, {
+            nctId: 'NCT12345678',
+            nearLocation: { ...seattle, radiusMi: 50 },
+            locationLimit: 0,
+          });
+
+          const sc = result.structuredContent as Sc;
+          // Nothing was left for the limit to trim, so it is not echoed.
+          expect(sc.filtersApplied).not.toHaveProperty('locationLimit');
+          const text = textOf(result);
+          expect(text).toContain(reason);
+          expect(text).not.toContain('Left out by locationLimit');
+        },
+      );
+
+      it('0 on lists the study does not carry adds nothing and renders no section', async () => {
+        mockService.getStudy.mockResolvedValue(
+          buildStudy({
+            contactsLocationsModule: { locations: [] },
+            outcomesModule: { primaryOutcomes: [{ measure: 'Only Primary' }] },
+          }),
+        );
+
+        const result = await runToolContract(getStudy, {
+          nctId: 'NCT12345678',
+          locationLimit: 0,
+          outcomeLimit: 0,
+          referenceLimit: 0,
+        });
+
+        const sc = result.structuredContent as Sc;
+        expect(sc.filtersApplied).toEqual({});
+        const text = textOf(result);
+        expect(text).toContain('## Primary Outcomes\n- Only Primary');
+        for (const heading of [
+          '## Locations',
+          '## Secondary Outcomes',
+          '## Other Outcomes',
+          '## References',
+        ]) {
+          expect(text).not.toContain(heading);
+        }
+        expect(text).not.toContain('Left out by');
+        expect(text).not.toContain('Filters applied:');
+      });
+
+      it('keeps channel parity with every limit at 0 (NCT06323538)', async () => {
+        mockService.getStudy.mockResolvedValue(loadStudyFixture('nct06323538'));
+
+        const result = await runToolContract(getStudy, {
+          nctId: 'NCT06323538',
+          locationLimit: 0,
+          outcomeLimit: 0,
+          referenceLimit: 0,
+        });
+
+        const text = textOf(result);
+        expect(missingLeaves(result.structuredContent, text)).toEqual([]);
+        expect(text).toContain('## Locations (0 of 8 total)');
+        expect(text).toContain('## Secondary Outcomes (0 of 42)');
+        expect(text).toContain('## Other Outcomes (0 of 5)');
+      });
+    });
+
+    describe('distanceMi carries one decimal on both surfaces', () => {
+      /** Miles in one degree of latitude on the sphere the distances are measured on. */
+      const MI_PER_DEG_LAT = (3958.7613 * Math.PI) / 180;
+      const center = { lat: 47.6062, lon: -122.3321 };
+      /** A site due north of `center`, exactly `miles` away along the meridian. */
+      const north = (facility: string, miles: number) => ({
+        facility,
+        geoPoint: { lat: center.lat + miles / MI_PER_DEG_LAT, lon: center.lon },
+      });
+      const nearSites = async (locations: unknown[], radiusMi: number) => {
+        mockService.getStudy.mockResolvedValue(
+          buildStudy({ contactsLocationsModule: { locations } }),
+        );
+        const result = await runToolContract(getStudy, {
+          nctId: 'NCT12345678',
+          nearLocation: { ...center, radiusMi },
+        });
+        const sites = (
+          result.structuredContent as {
+            study: {
+              protocolSection: {
+                contactsLocationsModule: { locations: { distanceMi: number; facility: string }[] };
+              };
+            };
+          }
+        ).study.protocolSection.contactsLocationsModule.locations;
+        const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+        return { sites, text };
+      };
+
+      it('rounds distanceMi to one decimal, the value content[] renders', async () => {
+        // 0.1° of latitude is 6.909… mi.
+        const { sites, text } = await nearSites(
+          [{ facility: 'North Site', geoPoint: { lat: 47.7062, lon: center.lon } }],
+          50,
+        );
+        expect(sites.map((s) => s.distanceMi)).toEqual([6.9]);
+        expect(text).toContain('- North Site (47.7062, -122.3321) (6.9 mi)');
+      });
+
+      it('decides inclusion and order on the exact distance, not the rounded one', async () => {
+        // 10.06 mi rounds to 10.1, past a 10.07 mi radius, and still belongs inside it.
+        const inside = await nearSites(
+          [north('Just Outside', 10.09), north('Just Inside', 10.06)],
+          10.07,
+        );
+        expect(inside.sites.map((s) => [s.facility, s.distanceMi])).toEqual([
+          ['Just Inside', 10.1],
+        ]);
+        expect(inside.text).toContain('Just Inside');
+        expect(inside.text).not.toContain('Just Outside');
+
+        // 10.04 mi rounds to 10.0 and still lies outside a 10 mi radius.
+        const outside = await nearSites([north('Past The Edge', 10.04), north('Near', 3)], 10);
+        expect(outside.sites.map((s) => s.facility)).toEqual(['Near']);
+
+        // Both round to 3.0; the nearer one still leads.
+        const tie = await nearSites([north('Farther', 3.04), north('Nearer', 3.01)], 50);
+        expect(tie.sites.map((s) => [s.facility, s.distanceMi])).toEqual([
+          ['Nearer', 3],
+          ['Farther', 3],
+        ]);
+      });
+
+      it('keeps channel parity with nearLocation (NCT06323538)', async () => {
+        mockService.getStudy.mockResolvedValue(loadStudyFixture('nct06323538'));
+
+        // Berlin: the fixture's German and Austrian sites fall at a range of distances.
+        const result = await runToolContract(getStudy, {
+          nctId: 'NCT06323538',
+          nearLocation: { lat: 52.52, lon: 13.405, radiusMi: 400 },
+        });
+
+        const sc = result.structuredContent as {
+          study: { protocolSection: { contactsLocationsModule: { locations: unknown[] } } };
+        };
+        expect(sc.study.protocolSection.contactsLocationsModule.locations.length).toBeGreaterThan(
+          1,
+        );
+        const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+        expect(missingLeaves(result.structuredContent, text)).toEqual([]);
+      });
     });
   });
 

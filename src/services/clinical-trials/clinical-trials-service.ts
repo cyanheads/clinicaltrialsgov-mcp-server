@@ -12,21 +12,23 @@ import {
   rateLimited,
   requestCancelled,
   serviceUnavailable,
+  timeout,
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
-import { httpErrorFromResponse } from '@cyanheads/mcp-ts-core/utils';
+import { createPacer, httpErrorFromResponse, withRetry } from '@cyanheads/mcp-ts-core/utils';
 import { getServerConfig, type ServerConfig } from '@/config/server-config.js';
 import {
-  type AreaIndex,
   type AreaLookup,
-  buildAreaIndex,
   buildExtendedIndex,
+  buildFieldIndex,
   type ExtendedIndex,
   type ExtendedName,
+  type FieldIndex,
   type FieldIndexEntry,
-  flattenMetadata,
   indexOnlyNames,
   isArrayType,
+  isSortable,
+  isStruct,
   missesRecordTier,
   nearestPieces,
   resolveName,
@@ -48,17 +50,32 @@ const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_BACKOFF_MS = 1000;
 const DEFAULT_MAX_BACKOFF_MS = 30_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+/**
+ * Transport codes of a connection that dropped mid-request, retried like a 5xx.
+ * Bun's fetch carries the code on the rejection itself, Node's only on its
+ * `cause`. A refused connection (`ECONNREFUSED`) is not among them.
+ */
+const TRANSIENT_NETWORK_CODES = new Set(['ECONNRESET', 'ETIMEDOUT']);
+/** Least time between two request starts — ClinicalTrials.gov allows about one a second. */
 const MIN_INTERVAL_MS = 1000;
+/**
+ * Most time one tool call or resource read spends on ClinicalTrials.gov: every
+ * request it chains, each attempt, backoff, and wait for a request slot. Under
+ * the MCP SDK clients' 60 s default request timeout, so a hung upstream ends
+ * the call with this server's own `retry_deadline_exceeded` rather than the
+ * client's untyped timeout. Measured from the call's first reach into the
+ * service; each attempt also stops at `CT_REQUEST_TIMEOUT_MS`.
+ */
+const CALL_BUDGET_MS = 50_000;
 /**
  * Timeout for each read behind the second AREA[] and `sort` tier —
  * `/studies/metadata?includeIndexedOnly=true` (~198 KB) and
  * `/studies/search-areas` (~25 KB). Measured 2026-11-03 at 0.16–0.31 s and
  * 0.12–0.66 s; 5 s is several times the slowest. Each read gets one attempt;
- * the pacer starts the two a throttle gap apart and they are awaited together,
- * so a call that misses the record tier waits at most two throttle gaps plus
- * this before its own request, whose timeout and retry
- * budget are unchanged — a hung read cannot spend a client's 60 s request
- * timeout on a correction the call can do without.
+ * the pacer starts the two a gap apart and they are awaited together, so a
+ * call that misses the record tier waits at most two gaps plus this before its
+ * own request — a hung read cannot spend the call's budget on a correction the
+ * call can do without.
  */
 const EXTENDED_READ_TIMEOUT_MS = 5000;
 /**
@@ -77,17 +94,6 @@ const UPSTREAM_MAX_REQUEST_TARGET_BYTES = 8177;
  * date sort, and a walk's tokens kept one length from page to page.
  */
 const PAGING_RESERVE_BYTES = 256;
-/**
- * Maps the trailing segment of an Essie field path (lowercased) to the
- * PascalCase piece a caller writes inside AREA[]. Used to translate "Allowed
- * values for enum field `…path…`" errors into the AREA[Piece] expression the
- * caller wrote. Never a tool param: phaseFilter is validated in the tool
- * handlers before any request, so this rejection only answers an AREA[]
- * expression in advancedFilter or a query parameter.
- */
-const ESSIE_ENUM_AREA_PIECE: Record<string, string> = {
-  phases: 'Phase',
-};
 /**
  * ClinicalTrials.gov uses 99999999 as a sentinel for "unknown enrollment
  * count". The filter below excludes studies carrying the sentinel by
@@ -110,12 +116,13 @@ const ENROLLMENT_SENTINEL_FILTER = 'NOT AREA[EnrollmentCount]RANGE[99999999, MAX
  * "Recruitment Status" that aren't API v2 piece names, so models reach for them
  * by reflex. Applied in normalizeFields as an auto-correct (mirroring the
  * case/whitespace fix) so the call succeeds instead of erroring with a
- * did-you-mean. Keyed by lowercased, separator-stripped input.
+ * did-you-mean. Keyed by lowercased, separator-stripped input — a Map, since a
+ * caller's `constructor` would otherwise read an object literal's prototype.
  */
-const KNOWN_FIELD_RENAMES: Record<string, string> = {
-  recruitmentstatus: 'OverallStatus',
-  recruitingstatus: 'OverallStatus',
-};
+const KNOWN_FIELD_RENAMES = new Map([
+  ['recruitmentstatus', 'OverallStatus'],
+  ['recruitingstatus', 'OverallStatus'],
+]);
 
 /**
  * The bracket rule, stated once. `AREA[…]`/`RANGE[…]` expressions are accepted
@@ -127,6 +134,16 @@ const KNOWN_FIELD_RENAMES: Record<string, string> = {
  */
 const BRACKET_RULE =
   '`[ ]` are valid only as part of an AREA[FieldName]value or RANGE[min, max] expression, which the free-text params accept as well as advancedFilter; a stray bracket fails.';
+
+/**
+ * The expression forms a `query_parse_error` quotes — in its message
+ * (BRACKET_RULE, describeQueryParseError) and in the `query_parse_error`
+ * recovery hint the tools declare — passed as the throw's `literals`, which the
+ * declared hint keeps when the framework fills it. content[] renders each as a
+ * code span instead of `AREA\[FieldName\]value`, so a caller copying one
+ * carries no Markdown escape into its next call.
+ */
+const PARSE_ERROR_LITERALS = ['AREA[FieldName]value', 'RANGE[min, max]', 'AREA[…]', 'RANGE[…]'];
 
 /**
  * Reduce an upstream Essie/ANTLR parse-error body to one actionable sentence.
@@ -145,8 +162,8 @@ const BRACKET_RULE =
  * `<EOF>` is a position rather than a token, so it never makes a usable
  * offender. The `expecting {…}` grammar dump is dropped throughout — the token
  * list is noise to a caller. An unrecognized shape keeps the upstream
- * explanation (often specific, e.g. "RANGE is not supported for multiple (7)
- * fields") rather than being replaced by a content-free sentence.
+ * explanation (often specific, e.g. "Search scope must be `Study` or
+ * `Location`") rather than being replaced by a content-free sentence.
  */
 function describeQueryParseError(text: string): string {
   const tail = 'Free-text fields otherwise take plain words plus AND, OR, NOT.';
@@ -195,64 +212,272 @@ function describeQueryParseError(text: string): string {
     : 'Query syntax error: the upstream parser rejected the query. Free-text fields take plain words plus AND, OR, NOT.';
 }
 
-/** An AREA[] field name upstream rejected, and how. */
-export interface AreaRejection {
-  /** `unknown`: no field by that name. `unsearchable`: a field AREA[] cannot match a value in, such as LeadSponsor. */
-  kind: 'unknown' | 'unsearchable';
-  name: string;
-}
+/** An AREA[] or RANGE[] term upstream refused for the field it names, and how. */
+export type AreaRejection =
+  /** No field by that name. */
+  | { kind: 'unknown'; name: string }
+  /** A field AREA[] cannot match a value in, such as the group LeadSponsor. */
+  | { kind: 'unsearchable'; name: string }
+  /** A field named inside `SEARCH[Location](…)` that is not a field of a site, such as OverallStatus. */
+  | { kind: 'location-scope'; name: string }
+  /** RANGE[] on one field whose type takes no range, named by its metadata path. */
+  | { kind: 'range-type'; path: string }
+  /** RANGE[] spanning several fields: a bare RANGE[], or one after a search area. */
+  | { kind: 'range-fields' };
 
 /**
- * Read an upstream rejection of an AREA[] field name out of a 400 body:
- * `Unknown area name: \`X\`` for a name upstream does not know, and `This type
- * of query is not allowed for X` for one it knows but refuses there — every
- * `STRUCT` piece probed (LeadSponsor, SponsorCollaboratorsModule, DesignInfo).
- * Undefined for any other body.
+ * Read an upstream refusal of the field an AREA[] or RANGE[] term names out of
+ * a 400 body, whatever parameter's `Error parsing query in <where>:` leads it:
+ *
+ * | Body | Kind |
+ * |:--|:--|
+ * | `Unknown area name: \`X\`` | `unknown` — no field X; inside `SEARCH[Location](…)` also a search area such as LocationSearch |
+ * | `This type of query is not allowed for X` | `unsearchable` — every `STRUCT` piece probed (LeadSponsor, SponsorCollaboratorsModule, DesignInfo) |
+ * | `` `X` is outside Location scope `` | `location-scope` — the first field inside the wrapper that no site holds (OverallStatus, Phase, NumLocations) |
+ * | `RANGE is not supported for <type> field <path>` | `range-type` — a field neither date, number, nor age (`nct`, `text`, `boolean`, an enum's own type such as `Phase`, the group `Sponsor`) |
+ * | `RANGE is not supported for multiple (N) fields` | `range-fields` |
+ *
+ * Undefined for any other body: `Search scope must be \`Study\` or \`Location\``
+ * and `Cannot parse number for \`…\` field` (a RANGE bound, not its field) stay
+ * the parse error they are.
  */
 export function parseAreaRejection(text: string): AreaRejection | undefined {
   const unknown = text.match(/Unknown area name:\s*`([^`]+)`/)?.[1];
   if (unknown) return { kind: 'unknown', name: unknown };
   const unsearchable = text.match(/This type of query is not allowed for ([\w-]+)/)?.[1];
-  return unsearchable ? { kind: 'unsearchable', name: unsearchable } : undefined;
+  if (unsearchable) return { kind: 'unsearchable', name: unsearchable };
+  const outside = text.match(/`([^`]+)` is outside Location scope/)?.[1];
+  if (outside) return { kind: 'location-scope', name: outside };
+  if (/RANGE is not supported for multiple \(\d+\) fields/.test(text))
+    return { kind: 'range-fields' };
+  const rangePath = text.match(/RANGE is not supported for \S+ field (\S+)/)?.[1];
+  return rangePath ? { kind: 'range-type', path: rangePath } : undefined;
 }
 
 /**
- * The message for a rejected AREA[] name, carrying the nearest searchable
- * pieces in the same `'X' — did you mean …?` form an invalid `fields` entry gets.
+ * Read the metadata type out of `/stats/field/values`' refusal to count a field,
+ * `Unsupported field type: <T>` (`Mesh` for ConditionMesh, `GeoPoint` for
+ * LocationGeoPoint), which names the type and never the field. Undefined for
+ * any other body.
+ */
+export function parseUnsupportedFieldType(text: string): string | undefined {
+  return text.match(/Unsupported field type:\s*(\w+)/)?.[1];
+}
+
+/** `text` closed with a full stop, so a sentence can follow it. */
+function closed(text: string): string {
+  return text.endsWith('.') ? text : `${text}.`;
+}
+
+/** Names single-quoted and comma-joined, as every field-name message lists them. */
+function quoted(names: readonly string[]): string {
+  return names.map((n) => `'${n}'`).join(', ');
+}
+
+/** The `'X' — did you mean …?` clause a rejected name carries beside its nearest pieces. */
+function didYouMean(name: string, near: readonly string[]): string {
+  return `'${name}' — did you mean ${quoted(near)}?`;
+}
+
+/**
+ * The message for an AREA[] name upstream does not know or refuses, carrying
+ * the nearest searchable pieces in the same `'X' — did you mean …?` form an
+ * invalid `fields` entry gets. It sets no hint: the `field_invalid` hint each
+ * tool declares, to look the name up, fits this kind alone.
  */
 function describeAreaRejection(
-  { kind, name }: AreaRejection,
-  text: string,
+  { kind, name }: Extract<AreaRejection, { kind: 'unknown' | 'unsearchable' }>,
+  upstream: string,
   near: string[],
 ): string {
-  const upstream = text.trim();
   const lead =
     kind === 'unknown'
       ? `${upstream} '${name}' is not a recognized AREA[]-compatible field.`
-      : `${upstream}${upstream.endsWith('.') ? '' : '.'} '${name}' cannot be searched by value with AREA[].`;
-  const didYouMean =
-    near.length > 0 ? ` '${name}' — did you mean ${near.map((p) => `'${p}'`).join(', ')}?` : '';
-  return `${lead}${didYouMean} Call clinicaltrials_get_field_definitions to look up valid PascalCase piece names.`;
+      : `${closed(upstream)} '${name}' cannot be searched by value with AREA[].`;
+  const suggestion = near.length > 0 ? ` ${didYouMean(name, near)}` : '';
+  return `${lead}${suggestion} Call clinicaltrials_get_field_definitions to look up valid PascalCase piece names.`;
+}
+
+/**
+ * The fields `SEARCH[Location](…)` holds: those of one site, every piece under
+ * the record's `Location[]` node. Upstream decides by that place in the record,
+ * not by the name — NumLocations is refused, the index-only LocationCountryCode
+ * accepted — so a refusal lists these rather than ranking a did-you-mean, which
+ * would offer site fields for a study-level count whose name shares their token.
+ */
+const SITE_FIELDS =
+  'LocationFacility, LocationCity, LocationState, LocationZip, LocationCountry, LocationStatus, and the LocationContact… fields';
+const LOCATION_WRAPPER = 'SEARCH[Location](…)';
+/** A study-level term joined beside the site wrapper, where it applies to the whole study. */
+const BESIDE_LOCATION_WRAPPER =
+  'AREA[OverallStatus]RECRUITING AND SEARCH[Location](AREA[LocationCity]Seattle)';
+
+/**
+ * A field named inside `SEARCH[Location](…)` that no site holds. The explicit
+ * hint replaces the declared `field_invalid` one, which sends the caller to
+ * look up a name it already has right.
+ */
+function outsideLocationScope(name: string, upstream: string): McpError {
+  const area = `AREA[${name}]`;
+  return validationError(
+    `${closed(upstream)} ${LOCATION_WRAPPER} holds only the fields of one site — ${SITE_FIELDS} — so '${name}', a field of the study, goes beside it, joined with AND: ${BESIDE_LOCATION_WRAPPER}.`,
+    {
+      reason: 'field_invalid',
+      invalid: [name],
+      recovery: {
+        hint: `Move ${area} out of ${LOCATION_WRAPPER} and join it beside the wrapper with AND, as in ${BESIDE_LOCATION_WRAPPER}. For one site's own recruiting status, use AREA[LocationStatus] inside the wrapper.`,
+      },
+    },
+    { literals: [area, LOCATION_WRAPPER, BESIDE_LOCATION_WRAPPER, 'AREA[LocationStatus]'] },
+  );
+}
+
+/**
+ * A search area named inside `SEARCH[Location](…)`, which upstream answers
+ * `Unknown area name` there though the name works outside the wrapper — so
+ * no did-you-mean applies.
+ */
+function searchAreaInLocationScope(name: string, upstream: string): McpError {
+  const area = `AREA[${name}]`;
+  return validationError(
+    `${closed(upstream)} '${name}' is a search area, and search areas go outside ${LOCATION_WRAPPER}, which holds only the fields of one site: ${SITE_FIELDS}.`,
+    {
+      reason: 'field_invalid',
+      invalid: [name],
+      recovery: {
+        hint: `Move ${area} out of ${LOCATION_WRAPPER} and join it beside the wrapper with AND, or name a site field such as AREA[LocationCity] inside the wrapper.`,
+      },
+    },
+    { literals: [area, LOCATION_WRAPPER, 'AREA[LocationCity]'] },
+  );
+}
+
+/**
+ * The field types RANGE[] takes, one field of each: every date, integer, and
+ * age (`NormalizedTime`) type, whatever its `sourceType`; every other type is
+ * refused with `RANGE is not supported for <type> field` (probed 2026-11-09).
+ */
+const RANGE_FIELD_TYPES = 'date, numeric, and age fields (StartDate, EnrollmentCount, MinimumAge)';
+const ENUM_VALUES_OR = 'AREA[Phase]PHASE2 OR AREA[Phase]PHASE3';
+const DATE_RANGE = 'AREA[StartDate]RANGE[2020-01-01, MAX]';
+/**
+ * NCT IDs are assigned in first-posting order, not first-submission order, so
+ * a range of IDs stands for a StudyFirstPostDate window.
+ */
+const NCT_ID_PATH = 'protocolSection.identificationModule.nctId';
+const FIRST_POSTED_RANGE = 'AREA[StudyFirstPostDate]RANGE[2017-01-01, 2018-12-31]';
+
+/**
+ * RANGE[] on one field whose type takes no range. `entry` is the field the
+ * upstream path names, `STRUCT` groups included; without it the path stands in
+ * for the piece. A group takes no value either, since AREA[] refuses it.
+ */
+function rangeTypeUnsupported(
+  path: string,
+  entry: FieldIndexEntry | undefined,
+  upstream: string,
+): McpError {
+  const piece = entry?.piece ?? path;
+  const valueRule = `Any other field takes a value, and an enum several values OR-joined: ${ENUM_VALUES_OR}.`;
+  const { tail, hint } =
+    path === NCT_ID_PATH
+      ? {
+          tail: `${valueRule} NCT IDs follow first-posting order, so bound StudyFirstPostDate instead: ${FIRST_POSTED_RANGE}.`,
+          hint: `Bound the first posting date instead of the NCT ID, since NCT IDs are assigned in first-posting order: ${FIRST_POSTED_RANGE}.`,
+        }
+      : entry && isStruct(entry)
+        ? {
+            tail: `'${piece}' is a group of fields, which AREA[] refuses whatever follows it.`,
+            hint: `Name one of the leaf pieces of '${piece}' instead; clinicaltrials_get_field_definitions with mode="drill" and path="${path}" lists them.`,
+          }
+        : {
+            tail: valueRule,
+            hint: `Match '${piece}' by value instead of by range, OR-joining several values of an enum as in ${ENUM_VALUES_OR}; keep RANGE[] for ${RANGE_FIELD_TYPES}.`,
+          };
+  return validationError(
+    `${closed(upstream)} '${piece}' takes no RANGE[]: RANGE[] takes ${RANGE_FIELD_TYPES}. ${tail}`,
+    { reason: 'field_invalid', invalid: [piece], recovery: { hint } },
+    { literals: ['RANGE[]', 'AREA[]', ENUM_VALUES_OR, FIRST_POSTED_RANGE] },
+  );
+}
+
+/** RANGE[] spanning several fields, which names no one field to blame. */
+function rangeOnSeveralFields(upstream: string): McpError {
+  return validationError(
+    `${closed(upstream)} A bare RANGE[], or one after a search area, spans several fields; RANGE[] needs AREA[Field] naming one of the ${RANGE_FIELD_TYPES}.`,
+    {
+      reason: 'field_invalid',
+      recovery: {
+        hint: `Name one field before the range with AREA[Field], as in ${DATE_RANGE}; RANGE[] takes ${RANGE_FIELD_TYPES}.`,
+      },
+    },
+    { literals: ['RANGE[]', 'AREA[Field]', DATE_RANGE] },
+  );
 }
 
 /** The shape and cap ClinicalTrials.gov enforces on `sort`, stated once. */
 const SORT_SHAPE =
   'Format must be FieldName:asc or FieldName:desc (e.g. "LastUpdatePostDate:desc", "EnrollmentCount:asc"). Max 2 fields comma-separated.';
 
+/** What ClinicalTrials.gov sorts on (see isSortable), stated once for both rejections that name a field. */
+const SORTABLE_GUIDANCE =
+  'Sort on a date or numeric field (e.g. LastUpdatePostDate, EnrollmentCount), or use "@relevance".';
+
+/** One sort item as the caller wrote it, and as it is sent. */
+interface SortCorrection {
+  from: string;
+  to: string;
+}
+
 /**
- * Split a `sort` value into its comma-separated items, each as the field name
- * and its direction suffix (`:asc` / `:desc`, empty when the caller gave none).
- * `@relevance` names no field, so it lands in `name` and normalization leaves
- * it alone — no lookup matches it.
+ * Split one `sort` item into its field name and direction suffix (`:asc` /
+ * `:desc`, empty when the caller gave none), surrounding whitespace trimmed.
+ */
+function parseSortItem(item: string): { name: string; suffix: string } {
+  const trimmed = item.trim();
+  const colon = trimmed.indexOf(':');
+  return colon === -1
+    ? { name: trimmed, suffix: '' }
+    : { name: trimmed.slice(0, colon), suffix: trimmed.slice(colon) };
+}
+
+/**
+ * Split a `sort` value into its comma-separated items (see parseSortItem).
+ * `@relevance` names no field, so it lands in `name` and the field-name fold
+ * leaves it alone — no lookup matches it.
  */
 function parseSortItems(sort: string): Array<{ name: string; suffix: string }> {
-  return sort.split(',').map((item) => {
-    const trimmed = item.trim();
-    const colon = trimmed.indexOf(':');
-    return colon === -1
-      ? { name: trimmed, suffix: '' }
-      : { name: trimmed.slice(0, colon), suffix: trimmed.slice(colon) };
+  return sort.split(',').map(parseSortItem);
+}
+
+/** An `asc`/`desc` suffix lowercased, the only case upstream accepts; any other suffix as written. */
+function sortDirection(suffix: string): string {
+  const lowered = suffix.toLowerCase();
+  return lowered === ':asc' || lowered === ':desc' ? lowered : suffix;
+}
+
+/**
+ * Rewrite each sort item that names relevance in another spelling —
+ * `relevance`, `Relevance:desc`, `@Relevance` — to `@relevance`, the only one
+ * upstream accepts, with its direction lowercased. Upstream answers a bare
+ * `relevance` with `Unknown sort field` and `@Relevance` with `incorrect
+ * format`, and no record piece, index-only piece, or search area is named
+ * relevance in any case, so the rewrite has one reading. It reads no metadata,
+ * so it also runs with the field index unavailable or disabled, and it runs
+ * ahead of the `filterIds` fit: `@` encodes as `%40`, so `relevance` grows from
+ * 9 bytes to 12, and the fit must measure what goes out. Every other item is
+ * left byte-identical.
+ */
+function rewriteRelevance(sort: string): { corrections: SortCorrection[]; sort: string } {
+  const corrections: SortCorrection[] = [];
+  const items = sort.split(',').map((raw) => {
+    const { name, suffix } = parseSortItem(raw);
+    if ((name.startsWith('@') ? name.slice(1) : name).toLowerCase() !== 'relevance') return raw;
+    const item = `@relevance${sortDirection(suffix)}`;
+    if (item !== `${name}${suffix}`) corrections.push({ from: `${name}${suffix}`, to: item });
+    return item;
   });
+  return { corrections, sort: items.join(',') };
 }
 
 /**
@@ -269,32 +494,131 @@ function queryEncodedBytes(value: string): number {
 }
 
 /**
- * `work`'s outcome, or the caller's cancellation as soon as `signal` aborts.
- * Only the wait ends: `work` runs on, since other callers may be awaiting it.
+ * The call's budget ran out. `data.deadlineMs` is the whole call's budget,
+ * never the share one request had left; `path` names the request it cut off.
  */
-function untilCancelled<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
-  if (signal.aborted) return Promise.reject(requestCancelled('Request cancelled by caller'));
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => reject(requestCancelled('Request cancelled by caller'));
-    signal.addEventListener('abort', onAbort, { once: true });
-    work.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+function deadlineExceeded(path?: string, cause?: unknown): McpError {
+  return timeout(
+    `ClinicalTrials.gov did not answer within this call's ${CALL_BUDGET_MS} ms time budget, which covers every request, retry, and wait the call makes.`,
+    { reason: 'retry_deadline_exceeded', deadlineMs: CALL_BUDGET_MS, ...(path ? { path } : {}) },
+    cause === undefined ? undefined : { cause },
+  );
+}
+
+/** Whether `err` is the framework retry ladder's own deadline expiry. */
+function isRetryDeadline(err: unknown): err is McpError {
+  return (
+    err instanceof McpError &&
+    err.code === JsonRpcErrorCode.Timeout &&
+    err.data?.reason === 'retry_deadline_exceeded'
+  );
+}
+
+/**
+ * The error a request ends with once every attempt failed in a way a retry may
+ * clear, built from the last of them: a 429 is a rate limit, a 504 an upstream
+ * timeout, and anything else — another 5xx, an HTML page in place of JSON, a
+ * dropped or timed-out connection — an outage. `status` is undefined for a
+ * failure that carried no HTTP status.
+ */
+function exhausted(
+  path: string,
+  lastError: string,
+  status: number | undefined,
+  retries: number,
+): McpError {
+  if (status === 429) {
+    return rateLimited(`Rate limited by ClinicalTrials.gov after ${retries} retries`, {
+      path,
+      lastError,
+      reason: 'rate_limited',
+    });
+  }
+  if (status === 504) {
+    return timeout('ClinicalTrials.gov timed out (HTTP 504) on every attempt', {
+      path,
+      lastError,
+      lastStatus: status,
+      reason: 'upstream_timeout',
+    });
+  }
+  return serviceUnavailable('ClinicalTrials.gov API unavailable after retries', {
+    path,
+    lastError,
+    ...(status !== undefined ? { lastStatus: status } : {}),
   });
+}
+
+/**
+ * A fetch rejection a retry may clear: a timeout or abort that neither the
+ * caller nor the call's budget raised, or a connection that dropped. Anything
+ * else a fetch throws — an invalid URL, a refused connection — fails the same
+ * way on every attempt.
+ */
+function isTransientFetchError(err: unknown): boolean {
+  if (typeof err !== 'object' || err === null) return false;
+  const { name, code, cause } = err as {
+    cause?: { code?: unknown };
+    code?: unknown;
+    name?: unknown;
+  };
+  if (name === 'AbortError' || name === 'TimeoutError') return true;
+  const transport = code ?? cause?.code;
+  return typeof transport === 'string' && TRANSIENT_NETWORK_CODES.has(transport);
+}
+
+/**
+ * One attempt's outcome: the parsed body, or a failure a retry may clear,
+ * already shaped as the error the request ends with should it be the last.
+ * Every other failure is thrown.
+ */
+type AttemptOutcome<T> = { ok: true; value: T } | { failure: McpError; ok: false };
+
+/**
+ * Mark each stat as multi-valued by checking the metadata tree for an array
+ * marker (`[]`, e.g. `Phase[]`, `Location[]`) — the durable source of
+ * cardinality. Two shapes qualify: the leaf's own node type is array-typed,
+ * or an ancestor object on its path is (`LocationCountry` is scalar `text`,
+ * but sits under `locations: Location[]`, so a study carries one per site).
+ * Note: the stat's own `type` (`ENUM`/`STRING`) is the value domain, not the
+ * array marker, so the metadata tree is the only signal.
+ */
+function annotateMultiValued(stats: FieldValueStats[], { byPiece }: FieldIndex): void {
+  for (const stat of stats) {
+    const entry = byPiece.get(stat.piece);
+    if (entry && (isArrayType(entry.type) || entry.hasArrayAncestor)) stat.multiValued = true;
+  }
+}
+
+/**
+ * The `field_invalid` for `/stats/field/values`' `Unsupported field type: <T>`,
+ * which names the type and never the field. The requested pieces whose
+ * metadata `type`, `[]` stripped, is T are the ones named (`GeoPoint` →
+ * LocationGeoPoint); without an index, a lone requested field is the one.
+ */
+function describeUnsupportedType(
+  type: string,
+  fields: string[],
+  index: FieldIndex | undefined,
+  cause: unknown,
+): McpError {
+  const typed = fields.filter((f) => index?.byPiece.get(f)?.type?.replace(/\[\]$/, '') === type);
+  const invalid = typed.length > 0 ? typed : fields.length === 1 ? fields : [];
+  const lead =
+    invalid.length > 0
+      ? `Invalid field for value statistics: ${quoted(invalid)} ${invalid.length === 1 ? 'has' : 'have'} type ${type}, which ClinicalTrials.gov does not count.`
+      : `Invalid field for value statistics: ClinicalTrials.gov does not count fields of type ${type}, and does not say which of ${quoted(fields)} has it.`;
+  return validationError(
+    `${lead} It counts values in leaf pieces of other types: a group of fields such as LeadSponsor or ConditionMesh is refused the same way, and its leaf pieces (LeadSponsorName, ConditionMeshTerm) are counted.`,
+    { reason: 'field_invalid', ...(invalid.length > 0 ? { invalid } : {}) },
+    { cause },
+  );
 }
 
 /** A search page, plus the `filterIds` its request had no room for. */
 export interface SearchStudiesResult extends PagedStudiesResponse {
   /** Trailing `filterIds` left out of the request, in order. Absent when every ID went out. */
   deferredIds?: string[];
-}
-
-/** The field index built once from /studies/metadata, with the lookups derived from it. */
-interface FieldIndex {
-  /** The AREA[] name index — the pieces AREA[] accepts and their case fold. */
-  area: AreaIndex;
-  /** Lowercased piece → piece, for each lowercased form exactly one piece has. */
-  caseFold: Map<string, string>;
-  entries: FieldIndexEntry[];
-  pieceSet: Set<string>;
 }
 
 /** Constructor options for overriding retry/backoff/validation behavior (primarily for tests). */
@@ -330,14 +654,24 @@ export class ClinicalTrialsService {
   private readonly maxBackoffMs: number;
   private readonly extendedReadTimeoutMs: number;
   private readonly validateFieldsLocally: boolean;
-  private lastRequestAt = 0;
   /**
-   * Tail of the throttle queue. Each caller chains onto it, so concurrent
-   * callers reserve distinct slots instead of all sleeping against the same
-   * `lastRequestAt` and firing together. See `throttle()`.
+   * Every request's slot: starts at least MIN_INTERVAL_MS apart, in arrival
+   * order, whichever call or retry they belong to. A request that leaves the
+   * queue — its call cancelled or out of budget — spends no gap.
    */
-  private throttleQueue: Promise<void> = Promise.resolve();
-  private fieldIndexPromise: Promise<FieldIndex> | undefined;
+  private readonly pacer = createPacer({
+    name: 'clinicaltrials.gov',
+    minStartGapMs: MIN_INTERVAL_MS,
+  });
+  /** When each call's budget runs out, set the first time the call reaches the service. */
+  private readonly deadlineByCall = new WeakMap<Context, number>();
+  /**
+   * The field index, loaded once for the process and kept: the load in flight
+   * or its success, cleared when it fails so the next call loads afresh.
+   */
+  private fieldIndexLoad: Promise<FieldIndex> | undefined;
+  /** Each call's one attempt at the field index, shared by every consumer in that call. */
+  private readonly fieldIndexByCall = new WeakMap<Context, Promise<FieldIndex>>();
   /**
    * The two reads behind the second tier, each kept once it succeeds and
    * cleared when it fails, so a source that is down costs only its own re-read.
@@ -362,9 +696,17 @@ export class ClinicalTrialsService {
    * Search studies with query, filters, pagination, and field selection. A
    * `filterIds` list is fitted to one request first: the leading IDs that fit
    * beside every other parameter go out, and the rest come back unqueried in
-   * `deferredIds` (see fitFilterIds).
+   * `deferredIds` (see fitFilterIds). A relevance sort is spelled as upstream
+   * accepts it before the fit (rewriteRelevance); every other correction comes
+   * after it and never lengthens the request.
    */
   async searchStudies(params: SearchParams, ctx: Context): Promise<SearchStudiesResult> {
+    const sortCorrections: SortCorrection[] = [];
+    if (params.sort) {
+      const relevance = rewriteRelevance(params.sort);
+      sortCorrections.push(...relevance.corrections);
+      params = { ...params, sort: relevance.sort };
+    }
     let deferredIds: string[] = [];
     if (params.filterIds?.length) {
       const fit = this.fitFilterIds(params.filterIds, params);
@@ -373,11 +715,16 @@ export class ClinicalTrialsService {
     }
     if (this.validateFieldsLocally && params.fields?.length) {
       const normalized = await this.normalizeFields(params.fields, ctx);
-      await this.validateFields(normalized, ctx);
+      await this.validateFields(normalized, ctx, 'projection');
       params = { ...params, fields: normalized };
     }
     if (this.validateFieldsLocally && params.sort) {
-      params = { ...params, sort: await this.normalizeSort(params.sort, ctx) };
+      const folded = await this.normalizeSort(params.sort, ctx);
+      sortCorrections.push(...folded.corrections);
+      params = { ...params, sort: folded.sort };
+    }
+    if (sortCorrections.length > 0) {
+      ctx.log.notice('Sort field auto-corrected', { corrections: sortCorrections });
     }
     const q = this.buildSearchQuery(params);
     ctx.log.debug('searchStudies', { paramKeys: Object.keys(q), deferred: deferredIds.length });
@@ -448,12 +795,19 @@ export class ClinicalTrialsService {
     return this.fetchJson<FieldNode[]>('/studies/metadata', params, ctx, { jsonFormat: false });
   }
 
-  /** Get field value statistics for the specified fields. */
+  /**
+   * Get field value statistics for the specified fields. Upstream counts leaf
+   * pieces only, so validateFields refuses a group of fields locally, naming its
+   * leaves. The 400 upstream answers any other type it cannot count with — a
+   * leaf such as LocationGeoPoint, or a group when no index checked the call —
+   * is translated to the same `field_invalid` (describeUnsupportedType).
+   */
   async getFieldValues(fields: string[], ctx: Context): Promise<FieldValueStats[]> {
     ctx.log.debug('getFieldValues', { fields });
+    let index: FieldIndex | undefined;
     if (this.validateFieldsLocally) {
       fields = await this.normalizeFields(fields, ctx);
-      await this.validateFields(fields, ctx);
+      index = await this.validateFields(fields, ctx, 'statistics');
     }
     try {
       const stats = await this.fetchJson<FieldValueStats[]>(
@@ -464,14 +818,17 @@ export class ClinicalTrialsService {
       );
       // Flag multi-valued fields so callers can read the per-value counts
       // correctly — array-type fields (e.g. Phase, Condition) let one study carry
-      // several values, so buckets sum above the study total. The metadata index
-      // is already cached by validateFields above, so this adds no round-trip;
-      // skipped when local validation is disabled (no metadata available).
-      if (this.validateFieldsLocally) {
-        await this.annotateMultiValued(stats, ctx);
-      }
+      // several values, so buckets sum above the study total. Reads the index
+      // validateFields checked the call against, so this adds no round-trip;
+      // skipped without one (local validation disabled or metadata unavailable).
+      if (index) annotateMultiValued(stats, index);
       return stats;
     } catch (err) {
+      const unsupportedType =
+        err instanceof McpError ? parseUnsupportedFieldType(err.message) : undefined;
+      if (unsupportedType) {
+        throw describeUnsupportedType(unsupportedType, fields, index, err);
+      }
       if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
         // Upstream reports only the first bad name ("Unknown piece name of field
         // path: X"); extract X so we blame only that field. When multi-field
@@ -494,32 +851,6 @@ export class ClinicalTrialsService {
         );
       }
       throw err;
-    }
-  }
-
-  /**
-   * Mark each stat as multi-valued by checking the metadata tree for an array
-   * marker (`[]`, e.g. `Phase[]`, `Location[]`) — the durable source of
-   * cardinality. Two shapes qualify: the leaf's own node type is array-typed,
-   * or an ancestor object on its path is (`LocationCountry` is scalar `text`,
-   * but sits under `locations: Location[]`, so a study carries one per site).
-   * Note: the stat's own `type` (`ENUM`/`STRING`) is the value domain, not the
-   * array marker, so the metadata tree is the only signal. Reuses the cached
-   * field index (no round-trip); fails open silently if the metadata index is
-   * unavailable.
-   */
-  private async annotateMultiValued(stats: FieldValueStats[], ctx: Context): Promise<void> {
-    let entries: FieldIndexEntry[];
-    try {
-      ({ entries } = await this.getFieldIndex(ctx));
-    } catch {
-      return;
-    }
-    const repeatedPieces = new Set(
-      entries.filter((e) => isArrayType(e.type) || e.hasArrayAncestor).map((e) => e.piece),
-    );
-    for (const stat of stats) {
-      if (repeatedPieces.has(stat.piece)) stat.multiValued = true;
     }
   }
 
@@ -547,10 +878,25 @@ export class ClinicalTrialsService {
    * @throws the caller's cancellation, which never passes for an unavailable index.
    */
   async getAreaIndex(ctx: Context): Promise<AreaLookup | undefined> {
+    const index = await this.areaFieldIndex(ctx);
+    return index && { ...index.area, extended: () => this.getExtendedIndex(index, ctx) };
+  }
+
+  /* ------------------------------------------------------------------ */
+  /*  Internal                                                           */
+  /* ------------------------------------------------------------------ */
+
+  /**
+   * The field index for the AREA[] lookups — the name rewrite, and the names
+   * and suggestions on an upstream rejection — or undefined, with a warning,
+   * when local validation is disabled or /studies/metadata cannot be fetched.
+   *
+   * @throws the caller's cancellation, which never passes for an unavailable index.
+   */
+  private async areaFieldIndex(ctx: Context): Promise<FieldIndex | undefined> {
     if (!this.validateFieldsLocally) return undefined;
-    let index: FieldIndex;
     try {
-      index = await this.getFieldIndex(ctx);
+      return await this.getFieldIndex(ctx);
     } catch (err) {
       if (ctx.signal.aborted) throw err;
       ctx.log.warning('AREA[] field-name lookup skipped — metadata unavailable', {
@@ -558,12 +904,24 @@ export class ClinicalTrialsService {
       });
       return undefined;
     }
-    return { ...index.area, extended: () => this.getExtendedIndex(index, ctx) };
   }
 
-  /* ------------------------------------------------------------------ */
-  /*  Internal                                                           */
-  /* ------------------------------------------------------------------ */
+  /**
+   * The record entry at a metadata path as upstream names it in a rejection
+   * (`protocolSection.designModule.phases` → Phase, `hasResults` → HasResults),
+   * `STRUCT` groups included (LeadSponsor). Undefined when the index is
+   * unavailable or holds no such path, such as an index-only piece's. Runs on
+   * the error path of a call whose AREA[] text already loaded the index, so it
+   * normally costs no request, and it fails open: a metadata failure never
+   * replaces the rejection being described.
+   *
+   * @throws the caller's cancellation.
+   */
+  private async entryAtPath(path: string, ctx: Context): Promise<FieldIndexEntry | undefined> {
+    const index = await this.areaFieldIndex(ctx);
+    const piece = index?.paths.exact.get(path);
+    return piece === undefined ? undefined : index?.byPiece.get(piece);
+  }
 
   /**
    * The second tier for this call, read when a name misses the record tier:
@@ -584,15 +942,20 @@ export class ClinicalTrialsService {
     return attempt;
   }
 
+  /**
+   * The reads run on their own signal and timeout (readReference); this call's
+   * wait on them ends with its cancellation or its budget, and a call with no
+   * budget left starts neither. A budget that ends the wait degrades the call
+   * like a failed read, and its next request reports the expiry.
+   */
   private async loadExtendedIndex(
     index: FieldIndex,
     ctx: Context,
   ): Promise<ExtendedIndex | undefined> {
-    if (ctx.signal.aborted) throw requestCancelled('Request cancelled by caller');
     try {
-      const [indexOnly, areas] = await untilCancelled(
-        Promise.all([this.readIndexOnly(ctx), this.readSearchAreas(ctx)]),
-        ctx.signal,
+      const [indexOnly, areas] = await this.untilCallEnds(
+        () => Promise.all([this.readIndexOnly(ctx), this.readSearchAreas(ctx)]),
+        ctx,
       );
       return buildExtendedIndex(index.entries, [...indexOnly, ...areas]);
     } catch (err) {
@@ -630,10 +993,11 @@ export class ClinicalTrialsService {
 
   /**
    * One attempt at a reference read behind the second tier, under its own short
-   * timeout. It runs on a signal of its own, never the caller's: concurrent
-   * callers await the same read, so one caller cancelling must not fail it for
-   * the rest — each caller's wait ends on its own cancellation instead
-   * (untilCancelled), and the read stays bounded by its timeout.
+   * timeout. It runs on a context of its own — its own signal and budget, never
+   * the caller's: concurrent callers await the same read, so one caller
+   * cancelling or running out of time must not fail it for the rest. Each
+   * caller's wait ends on its own instead (untilCallEnds), and the read stays
+   * bounded by its timeout.
    */
   private readReference<T>(path: string, params: Record<string, string>, ctx: Context): Promise<T> {
     return this.fetchJson<T>(
@@ -644,75 +1008,151 @@ export class ClinicalTrialsService {
     );
   }
 
-  /** Lazy-load and memoize the flattened field index from /studies/metadata. */
+  /**
+   * The field index for this call: one attempt per call, shared by every
+   * consumer in it — field normalization and validation, the sort fold, the
+   * AREA[] lookup, the multi-value flags — so a load that failed is not retried
+   * before the call ends, and the next call loads afresh.
+   */
   private getFieldIndex(ctx: Context): Promise<FieldIndex> {
-    if (!this.fieldIndexPromise) {
-      this.fieldIndexPromise = (async () => {
-        const tree = await this.getMetadata(false, ctx);
-        const entries = flattenMetadata(tree);
-        const pieceSet = new Set(entries.map((e) => e.piece));
-        // Case-fold index — skip any lowered form that collides across canonicals
-        // so normalization stays ambiguity-free.
-        const lowerCounts = new Map<string, number>();
-        for (const p of pieceSet) {
-          const lp = p.toLowerCase();
-          lowerCounts.set(lp, (lowerCounts.get(lp) ?? 0) + 1);
-        }
-        const caseFold = new Map<string, string>();
-        for (const p of pieceSet) {
-          const lp = p.toLowerCase();
-          if (lowerCounts.get(lp) === 1) caseFold.set(lp, p);
-        }
-        const area = buildAreaIndex(entries);
-        ctx.log.debug('Field index built', {
-          entryCount: entries.length,
-          caseFoldable: caseFold.size,
-          areaNames: area.names.size,
-        });
-        return { area, entries, pieceSet, caseFold };
-      })().catch((err) => {
-        // Reset on failure so the next call can retry the metadata fetch
-        this.fieldIndexPromise = undefined;
-        throw err;
-      });
+    let attempt = this.fieldIndexByCall.get(ctx);
+    if (!attempt) {
+      attempt = this.awaitFieldIndex(ctx);
+      this.fieldIndexByCall.set(ctx, attempt);
     }
-    return this.fieldIndexPromise;
+    return attempt;
   }
 
   /**
-   * Apply unambiguous fixes (whitespace, case-only) to field names before
-   * validation. Returns the corrected list — anything still invalid falls
-   * through to validateFields and surfaces the structured did-you-mean error.
-   * Logs corrections via ctx.log.notice so operators can spot recurring LLM
-   * mistakes without forcing a tool-call round-trip.
+   * Wait on the process-wide field index. The first call to need it loads it on
+   * its own context — its signal and its budget — and every other call waits
+   * on that load until the load settles or the waiting call ends. A load that
+   * ended with the call running it — cancelled, or out of budget — is no answer
+   * for a call still live and within its own budget, which starts the load
+   * again on its own.
+   */
+  private async awaitFieldIndex(ctx: Context): Promise<FieldIndex> {
+    for (;;) {
+      try {
+        return await this.untilCallEnds(
+          () => (this.fieldIndexLoad ??= this.loadFieldIndex(ctx)),
+          ctx,
+        );
+      } catch (err) {
+        const othersEnd =
+          !ctx.signal.aborted &&
+          err instanceof McpError &&
+          (err.code === JsonRpcErrorCode.RequestCancelled ||
+            (isRetryDeadline(err) && this.remainingMs(ctx) > 0));
+        if (!othersEnd) throw err;
+      }
+    }
+  }
+
+  /** Fetch /studies/metadata and build the field index from it, dropping a failed load. */
+  private async loadFieldIndex(ctx: Context): Promise<FieldIndex> {
+    try {
+      const index = buildFieldIndex(await this.getMetadata(false, ctx));
+      ctx.log.debug('Field index built', {
+        entryCount: index.entries.length,
+        caseFoldable: index.caseFold.size,
+        areaNames: index.area.names.size,
+      });
+      return index;
+    } catch (err) {
+      this.fieldIndexLoad = undefined;
+      throw err;
+    }
+  }
+
+  /** Milliseconds left of `ctx`'s budget, starting it on the call's first reach into the service. */
+  private remainingMs(ctx: Context): number {
+    let deadlineAt = this.deadlineByCall.get(ctx);
+    if (deadlineAt === undefined) {
+      deadlineAt = Date.now() + CALL_BUDGET_MS;
+      this.deadlineByCall.set(ctx, deadlineAt);
+    }
+    return Math.max(0, deadlineAt - Date.now());
+  }
+
+  /**
+   * `start()`'s outcome, or the end of the call waiting on it — its caller
+   * cancelling, or its budget running out — whichever comes first. Only the
+   * wait ends: the work runs on, since other calls may be awaiting it. A call
+   * already over never calls `start`, so nothing is sent on its behalf.
+   */
+  private untilCallEnds<T>(start: () => Promise<T>, ctx: Context): Promise<T> {
+    const { signal } = ctx;
+    if (signal.aborted) return Promise.reject(requestCancelled('Request cancelled by caller'));
+    const remainingMs = this.remainingMs(ctx);
+    if (remainingMs === 0) return Promise.reject(deadlineExceeded());
+    const work = start();
+    return new Promise<T>((resolve, reject) => {
+      const done = () => {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', onAbort);
+      };
+      const onAbort = () => {
+        done();
+        reject(requestCancelled('Request cancelled by caller'));
+      };
+      const timer = setTimeout(() => {
+        done();
+        reject(deadlineExceeded());
+      }, remainingMs);
+      signal.addEventListener('abort', onAbort, { once: true });
+      work.then(
+        (value) => {
+          done();
+          resolve(value);
+        },
+        (err: unknown) => {
+          done();
+          reject(err);
+        },
+      );
+    });
+  }
+
+  /**
+   * Apply unambiguous fixes to field names before validation: trim the
+   * surrounding whitespace, fold a case-only miss to its piece, map a metadata
+   * path — as clinicaltrials_get_field_definitions prints it, or in another
+   * case — to its piece (`protocolSection.statusModule.overallStatus` →
+   * `OverallStatus`), and apply the legacy renames. Each yields a name no longer
+   * than the one it replaces. Returns the corrected list — anything still
+   * invalid falls through to validateFields and surfaces the structured
+   * did-you-mean error. Logs corrections via ctx.log.notice so operators can
+   * spot recurring LLM mistakes without forcing a tool-call round-trip.
    */
   private async normalizeFields(fields: string[], ctx: Context): Promise<string[]> {
-    let pieceSet: Set<string>;
-    let caseFold: Map<string, string>;
+    let index: FieldIndex;
     try {
-      ({ pieceSet, caseFold } = await this.getFieldIndex(ctx));
-    } catch {
+      index = await this.getFieldIndex(ctx);
+    } catch (err) {
+      if (ctx.signal.aborted) throw err;
       // Fall through silently — validateFields runs next and emits the
       // metadata-unavailable warning + fail-open behavior on the same failure.
       return fields;
     }
+    const { byPiece, caseFold, paths } = index;
     const corrections: Array<{ from: string; to: string }> = [];
     const normalized = fields.map((f) => {
-      if (pieceSet.has(f)) return f;
+      if (byPiece.has(f)) return f;
       const trimmed = f.trim();
-      if (trimmed !== f && pieceSet.has(trimmed)) {
+      if (trimmed !== f && byPiece.has(trimmed)) {
         corrections.push({ from: f, to: trimmed });
         return trimmed;
       }
-      const folded = caseFold.get(trimmed.toLowerCase());
-      if (folded) {
-        corrections.push({ from: f, to: folded });
-        return folded;
-      }
-      const renamed = KNOWN_FIELD_RENAMES[trimmed.toLowerCase().replace(/[\s_]+/g, '')];
-      if (renamed) {
-        corrections.push({ from: f, to: renamed });
-        return renamed;
+      const lowered = trimmed.toLowerCase();
+      const corrected =
+        caseFold.get(lowered) ??
+        paths.exact.get(trimmed) ??
+        paths.fold.get(lowered) ??
+        KNOWN_FIELD_RENAMES.get(lowered.replace(/[\s_]+/g, ''));
+      if (corrected) {
+        corrections.push({ from: f, to: corrected });
+        return corrected;
       }
       return f;
     });
@@ -736,55 +1176,61 @@ export class ClinicalTrialsService {
    * which it refuses to sort on.
    *
    * Normalization never rejects. The metadata index knows which pieces exist,
-   * not which upstream will sort on (`BriefTitle` is a valid piece that upstream
-   * refuses to sort), so an unrecognized name is left for upstream to judge and
-   * its rejection is translated in the 400 handler. `@relevance` matches no
-   * entry and passes through untouched.
+   * and isSortable which types upstream sorts on, but a type list drifts, so an
+   * unsortable name (`BriefTitle`) is left for upstream to judge and its
+   * rejection is translated in the 400 handler. `@relevance` matches no entry
+   * and passes through untouched; rewriteRelevance has already spelled it.
+   * Returns the corrections for searchStudies to log beside the relevance ones.
    */
-  private async normalizeSort(sort: string, ctx: Context): Promise<string> {
+  private async normalizeSort(
+    sort: string,
+    ctx: Context,
+  ): Promise<{ corrections: SortCorrection[]; sort: string }> {
     let index: FieldIndex;
     try {
       index = await this.getFieldIndex(ctx);
-    } catch {
+    } catch (err) {
+      if (ctx.signal.aborted) throw err;
       // Same fail-open as normalizeFields — the request still reaches upstream.
-      return sort;
+      return { corrections: [], sort };
     }
-    const record = { names: index.pieceSet, fold: index.caseFold };
+    /** The record tier: a piece as written, else the piece its case fold names. */
+    const record = (name: string) =>
+      index.byPiece.has(name) ? name : index.caseFold.get(name.toLowerCase());
     const items = parseSortItems(sort);
-    const missed = items.some(
-      ({ name }) => name !== '' && !name.startsWith('@') && !resolveName(name, record),
-    );
+    const missed = items.some(({ name }) => name !== '' && !name.startsWith('@') && !record(name));
     const extended = missed ? (await this.getExtendedIndex(index, ctx))?.sort : undefined;
-    const corrections: Array<{ from: string; to: string }> = [];
+    const corrections: SortCorrection[] = [];
     const normalized = items
       .map(({ name, suffix }) => {
-        const folded = resolveName(name, record, extended) ?? name;
-        const lowered = suffix.toLowerCase();
-        const direction = lowered === ':asc' || lowered === ':desc' ? lowered : suffix;
+        const folded = record(name) ?? (extended && resolveName(name, extended)) ?? name;
         const original = `${name}${suffix}`;
-        const item = `${folded}${direction}`;
+        const item = `${folded}${sortDirection(suffix)}`;
         if (item !== original) corrections.push({ from: original, to: item });
         return item;
       })
       .join(',');
-    if (corrections.length > 0) {
-      ctx.log.notice('Sort field auto-corrected', { corrections });
-    }
-    return normalized;
+    return { corrections, sort: normalized };
   }
 
   /**
-   * Name the sort items whose field name is absent from the metadata index and
-   * from the index-only pieces, each with its nearest valid pieces — the
-   * did-you-mean treatment an invalid `fields` entry already gets, led by any
-   * index-only piece the name is a near miss of. Fails open to none: this runs
-   * on an error path where the index may be unavailable or disabled, and no
-   * suggestion is better than a metadata fetch that throws over the real error.
+   * The sort items upstream refused, each with its nearest pieces that sort —
+   * record pieces and index-only pieces alike filtered by isSortable, so
+   * following a suggestion never draws `Unsupported sort field type` in turn,
+   * led by any index-only piece the name is a near miss of. `unknown` blames
+   * the items absent from the record pieces and the index-only names;
+   * `unsortable` the items the index knows and marks unsortable
+   * (`StartDateStruct`). The second tier is read only when an item misses the
+   * record tier, and once per call, so it is already loaded by the sort fold.
+   * Fails open to none: this runs on an error path where the index may be
+   * unavailable or disabled, and no suggestion is better than a metadata fetch
+   * that throws over the real error.
    *
    * @throws the caller's cancellation.
    */
   private async suggestSortFields(
     sort: string,
+    rejected: 'unknown' | 'unsortable',
     ctx: Context,
   ): Promise<Array<{ name: string; near: string[] }>> {
     if (!this.validateFieldsLocally) return [];
@@ -794,32 +1240,84 @@ export class ClinicalTrialsService {
     } catch {
       return [];
     }
-    const unknown = parseSortItems(sort).filter(
-      ({ name }) => name.length > 0 && !name.startsWith('@') && !index.pieceSet.has(name),
-    );
-    if (unknown.length === 0) return [];
-    const extended = await this.getExtendedIndex(index, ctx);
-    const indexOnly = extended?.extras.filter((e) => e.kind === 'index-only');
-    return unknown
-      .filter(({ name }) => !extended?.sort.names.has(name))
-      .map(({ name }) => ({ name, near: nearestPieces(name, index.entries, 3, indexOnly) }))
+    const names = parseSortItems(sort)
+      .map(({ name }) => name)
+      .filter((name) => name.length > 0 && !name.startsWith('@'));
+    const extended = names.some((name) => !index.byPiece.has(name))
+      ? await this.getExtendedIndex(index, ctx)
+      : undefined;
+    const indexOnly = extended?.extras.filter((e) => e.kind === 'index-only') ?? [];
+    const blamed = names.filter((name) => {
+      if (rejected === 'unknown') {
+        return !index.byPiece.has(name) && !extended?.sort.names.has(name);
+      }
+      const type =
+        index.byPiece.get(name)?.type ?? indexOnly.find((e) => e.names.includes(name))?.type;
+      return type !== undefined && !isSortable(type);
+    });
+    if (blamed.length === 0) return [];
+    const entries = index.entries.filter((e) => isSortable(e.type));
+    const extras = indexOnly.filter((e) => isSortable(e.type));
+    return blamed
+      .map((name) => ({ name, near: nearestPieces(name, entries, 3, extras) }))
       .filter(({ near }) => near.length > 0);
   }
 
   /**
-   * Up to three AREA[]-searchable pieces nearest a rejected AREA[] name, led by
-   * any index-only piece or search area it is a near miss of when the record
-   * tier misses it. Drawn from the AREA index, so no suggestion is a `STRUCT`
-   * piece upstream would refuse in turn. None when the index is unavailable —
-   * this runs on an error path, where a metadata failure must not replace the
-   * real error.
+   * The `field_invalid` for an AREA[] or RANGE[] term upstream refused (see
+   * parseAreaRejection).
+   *
+   * A name upstream does not know, or refuses as a group, keeps the declared
+   * hint and gets up to three AREA[]-searchable pieces nearest it, led by any
+   * index-only piece or search area it is a near miss of when the record tier
+   * misses it — drawn from the AREA index, so no suggestion is a `STRUCT` piece
+   * upstream would refuse in turn. A listed search area upstream does not know
+   * was named inside `SEARCH[Location](…)`, the one place it is unknown, and is
+   * told so with no did-you-mean. Every other kind is a valid field in the
+   * wrong place, which the declared hint (look the name up) misdirects, so each
+   * carries a hint of its own. The lookups read the index the caller's AREA[]
+   * text already loaded and fail open: this runs on an error path, where a
+   * metadata failure must not replace the real error.
+   *
+   * @throws the caller's cancellation.
    */
-  private async suggestAreaPieces(name: string, ctx: Context): Promise<string[]> {
-    const area = await this.getAreaIndex(ctx);
-    if (!area) return [];
-    const extended =
-      area.extended && missesRecordTier(name, area) ? await area.extended() : undefined;
-    return nearestPieces(name, area.entries, 3, extended?.extras);
+  private async describeRejectedTerm(
+    rejection: AreaRejection,
+    text: string,
+    ctx: Context,
+  ): Promise<McpError> {
+    const upstream = text.trim();
+    switch (rejection.kind) {
+      case 'location-scope':
+        return outsideLocationScope(rejection.name, upstream);
+      case 'range-type':
+        return rangeTypeUnsupported(
+          rejection.path,
+          await this.entryAtPath(rejection.path, ctx),
+          upstream,
+        );
+      case 'range-fields':
+        return rangeOnSeveralFields(upstream);
+      case 'unknown':
+      case 'unsearchable': {
+        const { name } = rejection;
+        const area = await this.getAreaIndex(ctx);
+        const extended =
+          area?.extended && missesRecordTier(name, area) ? await area.extended() : undefined;
+        const searchArea = extended?.extras.some(
+          (e) => e.kind === 'search-area' && e.names.includes(name),
+        );
+        if (rejection.kind === 'unknown' && searchArea) {
+          return searchAreaInLocationScope(name, upstream);
+        }
+        const near = area ? nearestPieces(name, area.entries, 3, extended?.extras) : [];
+        return validationError(describeAreaRejection(rejection, upstream, near), {
+          reason: 'field_invalid',
+          invalid: [name],
+          ...(near.length > 0 ? { suggestions: Object.fromEntries([[name, near]]) } : {}),
+        });
+      }
+    }
   }
 
   /**
@@ -836,57 +1334,108 @@ export class ClinicalTrialsService {
       return `${lead} It names ${sort.split(',').length} fields; ClinicalTrials.gov accepts at most ${cap}. ${SORT_SHAPE}`;
     }
 
-    // The field exists but its data type is not sortable — no field-name index
-    // can catch this ahead of the call, so say what to sort on instead.
+    const blame = async (rejected: 'unknown' | 'unsortable') =>
+      (await this.suggestSortFields(sort, rejected, ctx))
+        .map(({ name, near }) => ` ${didYouMean(name, near)}`)
+        .join('');
+
+    // The field exists but its data type is not sortable — say what to sort on
+    // instead, and which sortable pieces sit nearest the one sent.
     const unsortableType = text.match(/Unsupported sort field type:\s*(\S+)/i)?.[1];
     if (unsortableType) {
-      return `${lead} ClinicalTrials.gov does not sort on ${unsortableType} fields. Sort on a date or numeric field (e.g. LastUpdatePostDate, EnrollmentCount), or use "@relevance". ${SORT_SHAPE}`;
+      return `${lead} ClinicalTrials.gov does not sort on ${unsortableType} fields.${await blame('unsortable')} ${SORTABLE_GUIDANCE} ${SORT_SHAPE}`;
     }
 
-    const suggestions = await this.suggestSortFields(sort, ctx);
-    const blame = suggestions
-      .map(({ name, near }) => `'${name}' — did you mean ${near.map((p) => `'${p}'`).join(', ')}?`)
-      .join(' ');
-    const named = blame ? ` ${blame}` : '';
-    return `${lead} ClinicalTrials.gov does not recognize the sort field name.${named} ${SORT_SHAPE} Call clinicaltrials_get_field_definitions to look up sortable PascalCase field names.`;
+    return `${lead} ClinicalTrials.gov does not recognize the sort field name.${await blame('unknown')} ${SORTABLE_GUIDANCE} ${SORT_SHAPE} Call clinicaltrials_get_field_definitions to look up sortable PascalCase field names.`;
   }
 
-  /** Reject invalid field names locally with did-you-mean suggestions. */
-  private async validateFields(fields: string[], ctx: Context): Promise<void> {
-    let entries: FieldIndexEntry[];
-    let pieceSet: Set<string>;
+  /**
+   * Reject invalid field names locally with did-you-mean suggestions, and
+   * return the index the call was checked against — undefined when it cannot
+   * be loaded, which lets the request through unchecked. A dotted name no
+   * metadata path matches is ranked on its last segment
+   * (`protocolSection.designModule.phase` → `Phase`): ranked whole, its
+   * enclosing module and section outrank the leaf.
+   *
+   * `projection` is a search's `fields`, which takes every piece, groups
+   * included. `statistics` is clinicaltrials_get_field_values, which upstream
+   * answers for leaf pieces only (`Unsupported field type`): a requested group
+   * is refused with its direct leaf pieces as its suggestions — or, when it
+   * holds only groups, with its clinicaltrials_get_field_definitions drill
+   * path — and no did-you-mean there names a group.
+   *
+   * @throws the caller's cancellation, never logged as unavailable metadata.
+   */
+  private async validateFields(
+    fields: string[],
+    ctx: Context,
+    use: 'projection' | 'statistics',
+  ): Promise<FieldIndex | undefined> {
+    let index: FieldIndex;
     try {
-      ({ entries, pieceSet } = await this.getFieldIndex(ctx));
+      index = await this.getFieldIndex(ctx);
     } catch (err) {
+      if (ctx.signal.aborted) throw err;
       // Fail open — if the metadata index can't be built, fall through to the
       // upstream API and let its error handling surface any problem. Worst case,
       // the agent gets the same error it would have without pre-validation.
       ctx.log.warning('Field validation skipped — metadata unavailable', {
         error: err instanceof Error ? err.message : String(err),
       });
-      return;
+      return undefined;
     }
-    const invalid = fields.filter((f) => !pieceSet.has(f));
-    if (invalid.length === 0) return;
+    const unknown = fields.filter((f) => !index.byPiece.has(f));
+    const groups =
+      use === 'statistics'
+        ? fields.flatMap((f) => {
+            const entry = index.byPiece.get(f);
+            return entry && isStruct(entry) ? [entry] : [];
+          })
+        : [];
+    if (unknown.length === 0 && groups.length === 0) return index;
 
-    const suggestions: Record<string, string[]> = {};
-    for (const f of invalid) {
-      const near = nearestPieces(f, entries, 3);
-      if (near.length > 0) suggestions[f] = near;
-    }
-
-    const header =
-      invalid.length === 1
-        ? `Invalid field name: '${invalid[0]}'.`
-        : `Invalid field names: ${invalid.map((f) => `'${f}'`).join(', ')}.`;
-    const hintParts = Object.entries(suggestions).map(
-      ([f, near]) => `'${f}' — did you mean ${near.map((p) => `'${p}'`).join(', ')}?`,
+    const pool = use === 'statistics' ? index.area.entries : index.entries;
+    const near = unknown.map(
+      (f) => [f, nearestPieces(f.split('.').filter(Boolean).pop() ?? f, pool, 3)] as const,
     );
-    const message = hintParts.length > 0 ? `${header} ${hintParts.join(' ')}` : header;
+    const leaves = groups.map(
+      (group) =>
+        [
+          group,
+          index.entries
+            .filter((e) => !isStruct(e) && e.path === `${group.path}.${e.name}`)
+            .map((e) => e.piece),
+        ] as const,
+    );
 
-    throw validationError(message, {
+    const parts: string[] = [];
+    if (unknown.length > 0) {
+      parts.push(
+        unknown.length === 1
+          ? `Invalid field name: '${unknown[0]}'.`
+          : `Invalid field names: ${quoted(unknown)}.`,
+      );
+      for (const [f, pieces] of near) {
+        if (pieces.length > 0) parts.push(didYouMean(f, pieces));
+      }
+    }
+    for (const [{ piece, path }, pieces] of leaves) {
+      parts.push(
+        pieces.length > 0
+          ? `'${piece}' is a group of fields; ClinicalTrials.gov counts values in its leaf pieces only: ${quoted(pieces)}.`
+          : `'${piece}' holds only groups of fields; call clinicaltrials_get_field_definitions with mode="drill" and path="${path}" to find its leaf pieces.`,
+      );
+    }
+    const refused = new Set([...unknown, ...groups.map((g) => g.piece)]);
+    const suggestions = Object.fromEntries(
+      [...near, ...leaves.map(([group, pieces]) => [group.piece, pieces] as const)].filter(
+        ([, pieces]) => pieces.length > 0,
+      ),
+    );
+
+    throw validationError(parts.join(' '), {
       reason: 'field_invalid',
-      invalid,
+      invalid: fields.filter((f) => refused.has(f)),
       ...(Object.keys(suggestions).length > 0 ? { suggestions } : {}),
     });
   }
@@ -925,9 +1474,11 @@ export class ClinicalTrialsService {
    * Split an ID list into the leading run one request carries and the rest.
    *
    * Measured on the request as it is built and encoded, from the params as
-   * given — before field and sort normalization, which only trims, case-folds,
-   * and applies the legacy field renames, each to an equal or shorter name, so
-   * the request sent is never longer than the one measured, and
+   * given — after the relevance rewrite, the one correction that lengthens a
+   * request (`relevance` → `@relevance`, see rewriteRelevance), and before
+   * field and sort normalization, which only trims, case-folds, maps a metadata
+   * path to its piece, and applies the legacy field renames, each to an equal or
+   * shorter name, so the request sent is never longer than the one measured, and
    * the fit does not shift between pages when the metadata index is reachable
    * for one page and not the next. The paging parameters stay out of the
    * measurement, covered by PAGING_RESERVE_BYTES: upstream accepts a pageToken
@@ -997,29 +1548,18 @@ export class ClinicalTrialsService {
   }
 
   /**
-   * Hold each caller until at least MIN_INTERVAL_MS has passed since the
-   * previous request left. Serialization is the point: reading `lastRequestAt`
-   * and sleeping against it is not enough, because concurrent callers all read
-   * the same value, compute the same wait, and collapse onto one instant. Each
-   * caller instead appends to `throttleQueue`, claiming its slot synchronously
-   * before it yields, so N callers spread over N intervals no matter how they
-   * were initiated (`Promise.all`, separate HTTP sessions, a retry).
-   */
-  private throttle(): Promise<void> {
-    const slot = this.throttleQueue.then(async () => {
-      const wait = MIN_INTERVAL_MS - (Date.now() - this.lastRequestAt);
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
-      this.lastRequestAt = Date.now();
-    });
-    this.throttleQueue = slot;
-    return slot;
-  }
-
-  /**
    * GET `path` and parse its JSON, retrying transient failures and translating
    * upstream rejections into typed errors. `studyId` marks the single-study
    * route, the only one whose 404 means a study is missing; `maxRetries` and
    * `timeoutMs` override the service's own for a read that must stay short.
+   *
+   * Each attempt waits its turn in the pacer and stops at `timeoutMs`; the
+   * whole request — attempts, backoffs, and waits — stops when the call's
+   * budget does, and a call with none left sends nothing. A 429, a 5xx, HTML in
+   * place of JSON, and a dropped or timed-out connection are retried, and the
+   * last attempt that ran to an outcome decides the error the request ends
+   * with: a budget that runs out after a 429 reports the rate limit, any other
+   * expiry `retry_deadline_exceeded`. The caller's cancellation outranks both.
    */
   private async fetchJson<T>(
     path: string,
@@ -1033,31 +1573,27 @@ export class ClinicalTrialsService {
     }: { jsonFormat?: boolean; maxRetries?: number; studyId?: string; timeoutMs?: number } = {},
   ): Promise<T> {
     const url = this.buildUrl(path, params, jsonFormat);
+    if (ctx.signal.aborted) throw requestCancelled('Request cancelled by caller', { path });
+    const deadlineMs = this.remainingMs(ctx);
+    if (deadlineMs === 0) throw deadlineExceeded(path);
 
-    let lastError: unknown;
-    let lastStatus: number | undefined;
+    /** The failure of the last attempt that ran to an outcome; one the deadline cut off leaves it. */
+    let lastFailure: McpError | undefined;
 
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-      if (ctx.signal.aborted) throw requestCancelled('Request cancelled by caller', { path });
-
-      if (attempt > 0) {
-        const base = Math.min(this.baseBackoffMs * 2 ** (attempt - 1), this.maxBackoffMs);
-        const delay = base * (0.75 + 0.5 * Math.random());
-        ctx.log.debug('Retrying', {
-          attempt,
-          delay: Math.round(delay),
-          path,
-          lastStatus,
-        });
-        await new Promise((r) => setTimeout(r, delay));
-      }
-
-      await this.throttle();
-
+    /**
+     * One request, already holding its pacer slot. `signal` aborts for the
+     * caller or the call's budget, which the retry ladder tells apart; the
+     * attempt's own timeout is the only abort it reports as its outcome.
+     */
+    const attempt = async (signal: AbortSignal): Promise<AttemptOutcome<T>> => {
+      const attemptTimeout = new AbortController();
+      const timer = setTimeout(
+        () => attemptTimeout.abort(new DOMException('The operation timed out.', 'TimeoutError')),
+        timeoutMs,
+      );
       try {
-        const signal = AbortSignal.any([ctx.signal, AbortSignal.timeout(timeoutMs)]);
         const res = await fetch(url, {
-          signal,
+          signal: AbortSignal.any([signal, attemptTimeout.signal]),
           headers: { Accept: 'application/json' },
         });
 
@@ -1066,12 +1602,12 @@ export class ClinicalTrialsService {
           if (!ct.includes('json')) {
             const text = await res.text();
             if (text.includes('<html') || text.includes('<!DOCTYPE')) {
-              lastError = new Error('API returned HTML instead of JSON');
-              continue;
+              const lastError = 'Error: API returned HTML instead of JSON';
+              return { ok: false, failure: exhausted(path, lastError, undefined, maxRetries) };
             }
-            return JSON.parse(text) as T;
+            return { ok: true, value: JSON.parse(text) as T };
           }
-          return (await res.json()) as T;
+          return { ok: true, value: (await res.json()) as T };
         }
 
         if (res.status === 404) {
@@ -1094,26 +1630,31 @@ export class ClinicalTrialsService {
             // Maps upstream filter.* param name → { toolParam, pieceName for clinicaltrials_get_field_values }
             // Note: `phase` is intentionally absent — phaseFilter routes through filter.advanced
             // (AREA[Phase]value) so the API never emits "Invalid value in parameter `phase`".
-            const upstreamParamInfo: Record<string, { toolParam: string; pieceName: string }> = {
-              overallStatus: { toolParam: 'statusFilter', pieceName: 'OverallStatus' },
-            };
+            // A Map, since the name comes from the body and `constructor` would
+            // otherwise read an object literal's prototype.
+            const upstreamParamInfo = new Map([
+              ['overallStatus', { toolParam: 'statusFilter', pieceName: 'OverallStatus' }],
+            ]);
             const match = text.match(/Invalid value in parameter\s+`([^`]+)`:\s*`([^`]+)`/i);
             const upstreamParam = match?.[1];
             const badValue = match?.[2];
-            const info = upstreamParam ? upstreamParamInfo[upstreamParam] : undefined;
+            const info = upstreamParam ? upstreamParamInfo.get(upstreamParam) : undefined;
             const paramRef = info ? `\`${info.toolParam}\`` : 'the filter parameter';
             const pieceName = info?.pieceName ?? 'OverallStatus';
             const valueRef = badValue ? ` '${badValue}' is not a valid value.` : '';
+            // The argument the caller sends next, a code span in content[] rather than `fields=\["…"\]`.
+            const valuesCall = `fields=["${pieceName}"]`;
             throw validationError(
-              `Invalid value for ${paramRef}.${valueRef} Call clinicaltrials_get_field_values with fields=["${pieceName}"] to discover valid enum values.`,
+              `Invalid value for ${paramRef}.${valueRef} Call clinicaltrials_get_field_values with ${valuesCall} to discover valid enum values.`,
               {
                 reason: 'enum_invalid',
                 recovery: {
-                  hint: `Call clinicaltrials_get_field_values with fields=["${pieceName}"] to see valid values.`,
+                  hint: `Call clinicaltrials_get_field_values with ${valuesCall} to see valid values.`,
                 },
                 ...(info ? { param: info.toolParam } : {}),
                 ...(badValue ? { value: badValue } : {}),
               },
+              { literals: [valuesCall] },
             );
           }
           if (text.includes('contains invalid field name')) {
@@ -1208,58 +1749,62 @@ export class ClinicalTrialsService {
               value: params.sort,
             });
           }
-          // Essie parser errors share the `Error parsing query in <where>: …` prefix.
+          // Essie parser errors share the `Error parsing query in <where>: …` prefix,
+          // where <where> names the parameter (`advanced filter`, `Conditions or
+          // disease`, `Other terms`) and is the only part that varies with it.
           // Several shapes show up:
-          //   1. `Unknown area name: \`X\`` — no field X for AREA[X]; and `This type
-          //      of query is not allowed for X` — a field AREA[X] refuses (a STRUCT
-          //      piece). Both are a field-name mistake, not a syntax error.
+          //   1. A refusal of the field an AREA[] or RANGE[] term names, read by
+          //      parseAreaRejection: `Unknown area name: \`X\``; `This type of
+          //      query is not allowed for X` (a STRUCT piece); `\`X\` is outside
+          //      Location scope` (a study-level field inside SEARCH[Location](…));
+          //      `RANGE is not supported for <type> field <path>` and `… for
+          //      multiple (N) fields`. Each is a field mistake, not a syntax error.
           //   2. `Allowed values for enum field \`<path>\` are \`V1\`, \`V2\`, …` — invalid enum
           //      value in a caller's AREA[] expression (advancedFilter or a query parameter;
           //      phaseFilter entries are validated in the tool handlers before any request)
           //   3. ANTLR syntax errors from a stray bracket, unbalanced parens, or an
           //      unterminated quote in a free-text field — several distinct shapes,
-          //      each read by describeQueryParseError (the catch-all below).
+          //      each read by describeQueryParseError (the catch-all below), which
+          //      keeps any other upstream sentence (`Search scope must be …`).
           // Only the search route parses a query. Read elsewhere, the shape would
           // send a second-tier read's own failure back into the suggestion path
           // that awaits it.
           if (path === '/studies' && text.startsWith('Error parsing query in')) {
             const rejected = parseAreaRejection(text);
-            if (rejected) {
-              const near = await this.suggestAreaPieces(rejected.name, ctx);
-              throw validationError(describeAreaRejection(rejected, text, near), {
-                reason: 'field_invalid',
-                invalid: [rejected.name],
-                ...(near.length > 0
-                  ? { suggestions: Object.fromEntries([[rejected.name, near]]) }
-                  : {}),
-              });
-            }
+            if (rejected) throw await this.describeRejectedTerm(rejected, text, ctx);
             const enumMatch = text.match(/Allowed values for enum field\s+`([^`]+)`\s+are\s+(.+)/i);
             if (enumMatch) {
               const fieldPath = enumMatch[1] ?? '';
               const rawValues = enumMatch[2] ?? '';
               // Extract backtick-quoted values: `NA`, `EARLY_PHASE1`, …
-              const validValues = [...rawValues.matchAll(/`([^`]+)`/g)].map((m) => m[1]);
-              const piece = ESSIE_ENUM_AREA_PIECE[fieldPath.split('.').pop()?.toLowerCase() ?? ''];
+              const validValues = [...rawValues.matchAll(/`([^`]+)`/g)].flatMap((m) => m[1] ?? []);
+              const piece = (await this.entryAtPath(fieldPath, ctx))?.piece;
+              const area = piece && `AREA[${piece}]`;
               const valuesStr = validValues.length > 0 ? validValues.join(', ') : rawValues.trim();
               throw validationError(
-                piece
-                  ? `Invalid value in an \`AREA[${piece}]\` expression. Valid values: ${valuesStr}.`
+                area
+                  ? `Invalid value in an ${area} expression. Valid values: ${valuesStr}.`
                   : `Invalid value in an AREA[] expression for enum field \`${fieldPath}\`. Valid values: ${valuesStr}.`,
                 {
                   reason: 'enum_invalid',
                   recovery: {
-                    hint: piece
-                      ? `Use one of the valid values inside AREA[${piece}]: ${valuesStr}.`
+                    hint: area
+                      ? `Use one of the valid values inside ${area}: ${valuesStr}.`
                       : `Use one of the valid values: ${valuesStr}.`,
                   },
                   validValues,
                 },
+                // The values to send back, and the expression they go in.
+                { literals: area ? [area, ...validValues] : validValues },
               );
             }
             // ANTLR catch-all — see describeQueryParseError for why each shape
             // needs its own reading of the quoted token.
-            throw validationError(describeQueryParseError(text), { reason: 'query_parse_error' });
+            throw validationError(
+              describeQueryParseError(text),
+              { reason: 'query_parse_error' },
+              { literals: PARSE_ERROR_LITERALS },
+            );
           }
           throw validationError(text || `Bad request: ${path}`);
         }
@@ -1280,47 +1825,63 @@ export class ClinicalTrialsService {
         }
 
         if (RETRYABLE_STATUS.has(res.status)) {
-          lastError = new Error(`HTTP ${res.status}`);
-          lastStatus = res.status;
-          continue;
+          const lastError = `Error: HTTP ${res.status}`;
+          return { ok: false, failure: exhausted(path, lastError, res.status, maxRetries) };
         }
 
         throw await httpErrorFromResponse(res, { service: 'ClinicalTrials.gov' });
       } catch (err) {
-        if (err instanceof McpError) throw err;
-        // The request signal merges the caller's signal with the per-attempt
-        // timeout, so an abort means one of two opposite things. A caller that
-        // went away is terminal — retrying spends the budget answering nobody —
-        // while a timeout is the transient case the loop exists for.
-        if (ctx.signal.aborted)
-          throw requestCancelled('Request cancelled by caller', { path }, { cause: err });
-        const name = (err as Error).name ?? '';
-        const code = (err as NodeJS.ErrnoException).code;
-        if (
-          name === 'AbortError' ||
-          name === 'TimeoutError' ||
-          code === 'ECONNRESET' ||
-          code === 'ETIMEDOUT'
-        ) {
-          lastError = err;
-          continue;
-        }
-        throw err;
+        // An abort on `signal` is the caller's or the budget's, for the ladder
+        // to classify; any other failure a retry cannot clear is final.
+        if (err instanceof McpError || signal.aborted || !isTransientFetchError(err)) throw err;
+        return { ok: false, failure: exhausted(path, String(err), undefined, maxRetries) };
+      } finally {
+        clearTimeout(timer);
       }
-    }
+    };
 
-    if (lastStatus === 429) {
-      throw rateLimited(`Rate limited by ClinicalTrials.gov after ${maxRetries} retries`, {
-        path,
-        lastError: String(lastError),
-        reason: 'rate_limited',
-      });
+    try {
+      return await withRetry(
+        async ({ signal }) => {
+          const outcome = await this.pacer.run(attempt, { signal });
+          if (outcome.ok) return outcome.value;
+          lastFailure = outcome.failure;
+          throw outcome.failure;
+        },
+        {
+          maxRetries,
+          baseDelayMs: this.baseBackoffMs,
+          maxDelayMs: this.maxBackoffMs,
+          deadlineMs,
+          signal: ctx.signal,
+          context: ctx,
+          operation: `ClinicalTrials.gov ${path}`,
+          isTransient: (err) => err === lastFailure,
+        },
+      );
+    } catch (err) {
+      if (ctx.signal.aborted) {
+        throw requestCancelled('Request cancelled by caller', { path }, { cause: err });
+      }
+      if (isRetryDeadline(err)) {
+        // An answer that arrived as the budget ran out is still the answer.
+        if (err.cause instanceof McpError && err.cause !== lastFailure) throw err.cause;
+        if (lastFailure?.data?.reason === 'rate_limited') {
+          throw rateLimited(
+            `Rate limited by ClinicalTrials.gov until this call's ${CALL_BUDGET_MS} ms time budget ran out`,
+            lastFailure.data,
+            { cause: err },
+          );
+        }
+        throw deadlineExceeded(path, err);
+      }
+      // Retries spent: the last failure as this server words it, not the retry
+      // helper's rewrap of it with an attempt count.
+      if (lastFailure !== undefined && err instanceof Error && err.cause === lastFailure) {
+        throw lastFailure;
+      }
+      throw err;
     }
-    throw serviceUnavailable('ClinicalTrials.gov API unavailable after retries', {
-      path,
-      lastError: String(lastError),
-      ...(lastStatus != null ? { lastStatus } : {}),
-    });
   }
 }
 

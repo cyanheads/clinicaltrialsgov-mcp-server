@@ -11,7 +11,7 @@ import { escapeMarkdownInline } from '@cyanheads/mcp-ts-core/utils';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
 import { formatEchoValue, formatRemainingStudyFields, oneLine } from '../utils/format-helpers.js';
-import { haversineMi, type LocationWithDistance } from '../utils/geo-helpers.js';
+import { haversineMi, type LocationWithDistance, roundMi } from '../utils/geo-helpers.js';
 import { foldedWords, registryCountry, registryState } from '../utils/place-names.js';
 import {
   blankValueMessage,
@@ -231,8 +231,7 @@ function admitRecruitingSite(
     }
   }
   if (!nearest) return candidates[0];
-  // One decimal, as rendered — both channels then carry the identical value.
-  return { ...nearest.loc, distanceMi: Math.round(nearest.distanceMi * 10) / 10 };
+  return { ...nearest.loc, distanceMi: roundMi(nearest.distanceMi) };
 }
 
 /** What a candidate's site list was bounded to, and how to retrieve the rest. */
@@ -464,8 +463,15 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A conditions entry carries an AREA[] expression naming a field ClinicalTrials.gov does not recognize or cannot search by value.',
+      when: 'A conditions entry carries an AREA[] expression naming a field ClinicalTrials.gov does not recognize or cannot search by value, or putting a valid field where upstream refuses it: a study-level field inside SEARCH[Location](…), or RANGE[] on a field that is not a date, number, or age.',
       recovery: RECOVERY_HINTS.field_invalid,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'enum_invalid',
+      code: JsonRpcErrorCode.ValidationError,
+      when: 'A conditions entry carries an AREA[] expression with a value ClinicalTrials.gov does not accept for that enum field, such as AREA[Phase]PHASE9.',
+      recovery: RECOVERY_HINTS.enum_invalid,
       thrownBy: 'service',
     },
     {
@@ -485,12 +491,31 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     {
       reason: 'rate_limited',
       code: JsonRpcErrorCode.RateLimited,
-      when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
+      when: 'ClinicalTrials.gov answered HTTP 429 on every attempt, or the call’s time budget ran out after a 429.',
       recovery: RECOVERY_HINTS.rate_limited,
       retryable: true,
       thrownBy: 'service',
     },
+    {
+      reason: 'retry_deadline_exceeded',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov did not answer within the call’s time budget, which covers every request, retry, and wait the call makes — the search and both funnel counts share it.',
+      recovery: RECOVERY_HINTS.retry_deadline_exceeded,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) on every attempt.',
+      recovery: RECOVERY_HINTS.upstream_timeout,
+      retryable: true,
+      thrownBy: 'service',
+    },
   ],
+
+  // The result count's generic name, as on clinicaltrials_search_studies; max_results already folds onto maxResults.
+  inputAliases: { limit: 'maxResults' },
 
   input: z.object({
     age: z
@@ -544,10 +569,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       .number()
       .int()
       .min(1)
-      .max(1000)
       .default(10)
       .describe(
-        `Maximum candidates to return, 1–1000. Each call returns at most ${MAX_RESULTS_PER_CALL}; a larger value returns ${MAX_RESULTS_PER_CALL}, reported in truncated/shown/cap when more studies match, and the searchCriteria replay through clinicaltrials_search_studies pages the rest.`,
+        `Maximum candidates to return. Default 10; a larger value returns at most ${MAX_RESULTS_PER_CALL} and says so in truncated/shown/cap when more studies match, and the searchCriteria replay through clinicaltrials_search_studies pages the rest.`,
       ),
     locationLimit: z
       .number()
@@ -957,28 +981,39 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     });
 
     if (result.studies.length === 0) {
+      // The notice follows the funnel stage that collapsed and names only steps
+      // that widen that stage: a later stage's filter cannot help, and a step
+      // the request already takes sends the caller round in a circle.
       const noticeParts: string[] = [
         `No studies found for "${input.conditions.join(', ')}" matching the specified criteria.`,
       ];
-      // Judged in years whatever unit the age came in; a years age keeps its
-      // bare number in the note.
-      const ageYears = (input.age * DAYS_PER_AGE_UNIT[ageUnit]) / DAYS_PER_AGE_UNIT.years;
-      const extremeAgeNote =
-        ageYears <= 1 || ageYears >= 100
-          ? `Age ${ageUnit === 'years' ? input.age : ageTerm} is at the extreme of typical trial ranges. Few trials enroll this age group.`
-          : undefined;
 
-      if (conditionMatched > 0 && locationMatched === 0) {
+      if (conditionMatched === 0) {
+        // The condition-only count applies no other filter.
         noticeParts.push(
-          `${conditionMatched} studies match the condition, but none are in the specified location. Try broadening the location: search with just the country, or use clinicaltrials_search_studies with geoFilter for radius-based matching.`,
+          'No study matches the condition alone, before any location, age, sex, healthy-volunteer, or status filter, so relaxing those cannot help. Add a synonym, a broader term, or a MeSH term as another conditions entry (entries are ORed), or use fewer words: an entry with spaces matches as a phrase.',
         );
-        if (location.city || location.state)
-          noticeParts.push('Remove city/state to widen the location search to the full country.');
-      } else if (locationMatched > 0 && demographicsMatched === 0) {
+      } else if (locationMatched === 0) {
+        // The country is this tool's widest location; a radius reaches past it
+        // and across its borders. Nothing here geocodes, so the caller does.
+        const geoStep = `geocode the patient's location and replay searchCriteria through clinicaltrials_search_studies with geoFilter=distance(lat,lon,radius), the radius carrying a mi or km suffix (distance(47.6,-122.3,50mi)), in place of locationQuery and with includeUnknownEnrollment=true`;
+        noticeParts.push(
+          `${conditionMatched} studies match the condition, but none are in the specified location.`,
+          location.city || location.state
+            ? `Remove city/state to search the whole country, or ${geoStep}.`
+            : `To widen the search past the country, ${geoStep}.`,
+        );
+      } else {
         noticeParts.push(
           `${locationMatched} studies match condition + location, but none pass the age/sex/status filters.`,
         );
-        if (extremeAgeNote) noticeParts.push(extremeAgeNote);
+        // Judged in years whatever unit the age came in; a years age keeps its
+        // bare number in the note.
+        const ageYears = (input.age * DAYS_PER_AGE_UNIT[ageUnit]) / DAYS_PER_AGE_UNIT.years;
+        if (ageYears <= 1 || ageYears >= 100)
+          noticeParts.push(
+            `Age ${ageUnit === 'years' ? input.age : ageTerm} is at the extreme of typical trial ranges. Few trials enroll this age group.`,
+          );
         if (input.sex !== 'ALL')
           noticeParts.push('Try sex="ALL" to include studies not restricted by sex.');
         if (input.recruitingOnly)
@@ -988,22 +1023,6 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         if (input.healthyVolunteer)
           noticeParts.push(
             'Many studies do not accept healthy volunteers. Set healthyVolunteer=false if the patient has a relevant condition.',
-          );
-      } else {
-        if (extremeAgeNote) noticeParts.push(extremeAgeNote);
-        if (input.sex !== 'ALL')
-          noticeParts.push('Try sex="ALL" to include studies not restricted by sex.');
-        if (input.healthyVolunteer)
-          noticeParts.push(
-            'Many studies do not accept healthy volunteers. Set healthyVolunteer=false if the patient has a relevant condition.',
-          );
-        if (input.recruitingOnly)
-          noticeParts.push(
-            'Set recruitingOnly=false to include completed, active, and not-yet-recruiting studies.',
-          );
-        if (location.city || location.state)
-          noticeParts.push(
-            'Try searching with just the country to find studies in other cities/states.',
           );
       }
       ctx.enrich.notice(noticeParts.join(' '));

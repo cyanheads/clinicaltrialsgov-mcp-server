@@ -45,8 +45,8 @@
       "default": "https://clinicaltrials.gov/api/v2"
     },
     "CT_REQUEST_TIMEOUT_MS": {
-      "title": "Request timeout (ms)",
-      "description": "Per-request timeout in milliseconds; a positive integer.",
+      "title": "Request attempt timeout (ms)",
+      "description": "Timeout in milliseconds for each attempt at a ClinicalTrials.gov request; a positive integer. An attempt ends sooner when its tool call or resource read runs out of its 50-second budget, which covers every request, retry, and wait the call makes.",
       "type": "string",
       "required": false,
       "default": "30000"

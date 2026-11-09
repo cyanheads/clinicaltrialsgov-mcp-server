@@ -14,6 +14,7 @@ import {
   JsonRpcErrorCode,
   notFound,
   rateLimited,
+  timeout,
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
 import { runToolContract, toolContractSuite } from '@cyanheads/mcp-ts-core/testing/vitest';
@@ -739,6 +740,19 @@ describe('service-thrown reasons carry the declaring tool hint on the wire', () 
       run: () => runToolContract(findEligible, { ...eligibleInput, conditions: ['AREA[FooBar]x'] }),
     },
     {
+      name: 'find_eligible enum_invalid from an AREA[] value in a condition',
+      reason: 'enum_invalid' as const,
+      arrange: () =>
+        mockService.countStudies.mockRejectedValue(
+          validationError('Invalid value in an AREA[Phase] expression.', {
+            reason: 'enum_invalid',
+            validValues: ['NA', 'EARLY_PHASE1', 'PHASE1', 'PHASE2', 'PHASE3', 'PHASE4'],
+          }),
+        ),
+      run: () =>
+        runToolContract(findEligible, { ...eligibleInput, conditions: ['AREA[Phase]PHASE9'] }),
+    },
+    {
       name: 'find_eligible query_parse_error from a condition',
       reason: 'query_parse_error' as const,
       arrange: () =>
@@ -761,6 +775,169 @@ describe('service-thrown reasons carry the declaring tool hint on the wire', () 
     expect(error.data.reason).toBe(reason);
     expect(error.data.recovery).toEqual({ hint: RECOVERY_HINTS[reason] });
     expect(text).toContain(`Recovery: ${RECOVERY_HINTS[reason]}`);
+  });
+});
+
+/**
+ * A valid field upstream refuses where it stands — a study-level field inside
+ * SEARCH[Location](…) (#183), RANGE[] on a field that takes none (#187) — is
+ * thrown with a hint of its own, since the declared `field_invalid` hint (look
+ * the name up) misdirects for a name that is right, and with the expressions it
+ * quotes as `literals`. The framework fills the declared hint only when a throw
+ * carries none, so the explicit one reaches both surfaces, every expression a
+ * code span a caller copies without Markdown escapes. The kinds are tabled at
+ * the service seam; these prove each declaring tool's wiring.
+ */
+describe('an explicit field_invalid hint outranks the declared one on the wire (#183, #187)', () => {
+  const BESIDE = 'AREA[OverallStatus]RECRUITING AND SEARCH[Location](AREA[LocationCity]Seattle)';
+  const hint = `Move AREA[OverallStatus] out of SEARCH[Location](…) and join it beside the wrapper with AND, as in ${BESIDE}. For one site's own recruiting status, use AREA[LocationStatus] inside the wrapper.`;
+  const literals = ['AREA[OverallStatus]', 'SEARCH[Location](…)', BESIDE, 'AREA[LocationStatus]'];
+  /** The refusal as the service raises it, for the parameter upstream names as `where`. */
+  const outsideLocationScope = (where: string) =>
+    validationError(
+      `Error parsing query in ${where}: \`OverallStatus\` is outside Location scope. SEARCH[Location](…) holds only the fields of one site, so 'OverallStatus', a field of the study, goes beside it, joined with AND: ${BESIDE}.`,
+      { reason: 'field_invalid', invalid: ['OverallStatus'], recovery: { hint } },
+      { literals },
+    );
+  const misplaced = 'SEARCH[Location](AREA[OverallStatus]RECRUITING)';
+  const cases = [
+    {
+      name: 'search_studies',
+      arrange: () =>
+        mockService.searchStudies.mockRejectedValue(outsideLocationScope('advanced filter')),
+      run: () => runToolContract(searchStudies, { advancedFilter: misplaced }),
+    },
+    {
+      name: 'get_study_count',
+      arrange: () =>
+        mockService.countStudies.mockRejectedValue(outsideLocationScope('Location terms')),
+      run: () => runToolContract(getStudyCount, { locationQuery: misplaced }),
+    },
+    {
+      name: 'find_eligible',
+      arrange: () =>
+        mockService.searchStudies.mockRejectedValue(outsideLocationScope('Conditions or disease')),
+      run: () => runToolContract(findEligible, { ...eligibleInput, conditions: [misplaced] }),
+    },
+  ];
+
+  it.each(cases)('$name', async ({ arrange, run }) => {
+    arrange();
+    const result = await run();
+    const raw = (result.content as { text: string }[])[0]!.text;
+    const error = (result.structuredContent as { error: { data: Record<string, unknown> } }).error;
+
+    expect(result.isError).toBe(true);
+    expect(error.data).toMatchObject({ reason: 'field_invalid', invalid: ['OverallStatus'] });
+    expect(error.data.recovery).toEqual({ hint });
+    expect(readMarkdown(raw)).toContain(`Recovery: ${hint}`);
+    expect(readMarkdown(raw)).not.toContain(RECOVERY_HINTS.field_invalid);
+    expect(raw).toContain('Recovery: Move `AREA[OverallStatus]` out of `SEARCH[Location](…)`');
+    for (const literal of literals) expect(raw).toContain(`\`${literal}\``);
+    expect(raw).not.toContain('\\[');
+  });
+});
+
+/**
+ * Every request a call makes runs inside one time budget the service holds per
+ * call, and a 504 on every attempt is ClinicalTrials.gov's own timeout. Any
+ * tool can end either way, so each declares both reasons with the shared hint;
+ * the wire cases prove one service throw per reason reaches both surfaces
+ * with its code, its data, and that hint (#181).
+ */
+describe('call budget and upstream timeout contracts (#181)', () => {
+  interface Declared {
+    code: number;
+    reason: string;
+    recovery: string;
+    retryable?: boolean;
+    thrownBy?: string;
+  }
+  const definitions = [
+    searchStudies,
+    getStudy,
+    getStudyResults,
+    getFieldValues,
+    getFieldDefinitions,
+    getStudyCount,
+    findEligible,
+  ];
+
+  it.each(definitions)('$name declares both timeout reasons', (definition) => {
+    const declared = ((definition.errors ?? []) as readonly Declared[]).filter(
+      (e) => e.reason === 'retry_deadline_exceeded' || e.reason === 'upstream_timeout',
+    );
+
+    expect(declared).toEqual([
+      {
+        reason: 'retry_deadline_exceeded',
+        code: JsonRpcErrorCode.Timeout,
+        when: expect.any(String),
+        recovery: RECOVERY_HINTS.retry_deadline_exceeded,
+        retryable: true,
+        thrownBy: 'service',
+      },
+      {
+        reason: 'upstream_timeout',
+        code: JsonRpcErrorCode.Timeout,
+        when: expect.any(String),
+        recovery: RECOVERY_HINTS.upstream_timeout,
+        retryable: true,
+        thrownBy: 'service',
+      },
+    ]);
+  });
+
+  /** The two throws as the service raises them: reason and context, never a hint. */
+  const deadline = () =>
+    timeout(
+      "ClinicalTrials.gov did not answer within this call's 50000 ms time budget, which covers every request, retry, and wait the call makes.",
+      { reason: 'retry_deadline_exceeded', deadlineMs: 50_000, path: '/studies' },
+    );
+  const gatewayTimeout = () =>
+    timeout('ClinicalTrials.gov timed out (HTTP 504) on every attempt', {
+      path: '/studies',
+      lastError: 'Error: HTTP 504',
+      lastStatus: 504,
+      reason: 'upstream_timeout',
+    });
+
+  it.each([
+    {
+      name: 'get_study_results retry_deadline_exceeded from the batch',
+      reason: 'retry_deadline_exceeded' as const,
+      error: deadline,
+      arrange: (err: Error) => mockService.getStudiesBatch.mockRejectedValue(err),
+      run: () => runToolContract(getStudyResults, { nctIds: ['NCT03722472', 'NCT05956821'] }),
+    },
+    {
+      name: 'get_study_count upstream_timeout',
+      reason: 'upstream_timeout' as const,
+      error: gatewayTimeout,
+      arrange: (err: Error) => mockService.countStudies.mockRejectedValue(err),
+      run: () => runToolContract(getStudyCount, { conditionQuery: 'diabetes' }),
+    },
+  ])('$name reaches both surfaces with its code, data, and hint', async (c) => {
+    const thrown = c.error();
+    c.arrange(thrown);
+    const result = await c.run();
+    const text = readMarkdown((result.content as { text: string }[])[0]!.text);
+    const error = (
+      result.structuredContent as {
+        error: { code: number; data: Record<string, unknown>; message: string };
+      }
+    ).error;
+
+    expect(result.isError).toBe(true);
+    expect(error.code).toBe(JsonRpcErrorCode.Timeout);
+    expect(error.message).toBe(thrown.message);
+    expect(error.data).toMatchObject({
+      ...thrown.data,
+      recovery: { hint: RECOVERY_HINTS[c.reason] },
+    });
+    expect(text).toContain(thrown.message);
+    expect(text).toContain(`Recovery: ${RECOVERY_HINTS[c.reason]}`);
+    expect(text).toContain(c.reason);
   });
 });
 

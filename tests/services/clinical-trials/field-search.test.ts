@@ -12,10 +12,13 @@ import {
   type AreaLookup,
   buildAreaIndex,
   buildExtendedIndex,
+  buildFieldIndex,
   type ExtendedName,
   type FieldIndexEntry,
   flattenMetadata,
   indexOnlyNames,
+  isSortable,
+  isStruct,
   missesRecordTier,
   type NameFold,
   nearestPieces,
@@ -599,6 +602,137 @@ describe('buildAreaIndex (#170)', () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// The field index (#184, #189, #191)
+// ---------------------------------------------------------------------------
+
+describe('buildFieldIndex', () => {
+  const entries = flattenMetadata(AREA_METADATA);
+  const index = buildFieldIndex(AREA_METADATA);
+  /** Two pieces and two paths that differ only by case, under one section. */
+  const caseTwins: FieldNode[] = [
+    {
+      name: 'section',
+      piece: 'Section',
+      sourceType: 'STRUCT',
+      children: [
+        { name: 'item', piece: 'NctItem', sourceType: 'TEXT', type: 'text' },
+        { name: 'Item', piece: 'NCTItem', sourceType: 'TEXT', type: 'text' },
+      ],
+    },
+  ];
+
+  it('holds the flattened entries and the AREA index built from them', () => {
+    expect(index.entries).toEqual(entries);
+    expect(index.area).toEqual(buildAreaIndex(entries));
+  });
+
+  it('folds each lowered piece to its piece, and a lowered form two pieces share to neither', () => {
+    expect(index.caseFold.get('overallstatus')).toBe('OverallStatus');
+    expect(index.caseFold.get('leadsponsor')).toBe('LeadSponsor');
+    expect(index.caseFold.size).toBe(entries.length);
+    const twins = buildFieldIndex(caseTwins).caseFold;
+    expect(twins.has('nctitem')).toBe(false);
+    expect(twins.get('section')).toBe('Section');
+  });
+
+  it('keys every record piece to its own entry, STRUCT groups included', () => {
+    expect([...index.byPiece.keys()]).toEqual(entries.map((e) => e.piece));
+    for (const entry of index.entries) expect(index.byPiece.get(entry.piece)).toBe(entry);
+    expect(index.byPiece.has('NumLocations')).toBe(false);
+  });
+
+  it('maps every metadata path to its piece, as written and in any case (#189)', () => {
+    for (const { path, piece } of entries) {
+      expect(index.paths.exact.get(path), path).toBe(piece);
+      expect(index.paths.fold.get(path.toLowerCase()), path).toBe(piece);
+    }
+    expect(index.paths.exact.get('protocolSection.statusModule.overallStatus')).toBe(
+      'OverallStatus',
+    );
+    expect(index.paths.exact.has('protocolSection.statusModule.OverallStatus')).toBe(false);
+    expect(index.paths.fold.get('protocolsection.statusmodule.overallstatus')).toBe(
+      'OverallStatus',
+    );
+    expect(index.paths.exact.has('protocolSection.statusModule.nope')).toBe(false);
+    expect(index.paths.exact.has('OverallStatus')).toBe(false);
+  });
+
+  it('folds a lowered path two paths share to neither, while each still resolves as written (#189)', () => {
+    const { paths } = buildFieldIndex(caseTwins);
+    expect(paths.exact.get('section.item')).toBe('NctItem');
+    expect(paths.exact.get('section.Item')).toBe('NCTItem');
+    expect(paths.fold.has('section.item')).toBe(false);
+    expect(paths.fold.get('section')).toBe('Section');
+  });
+
+  it('maps no piece to a path longer than the piece, so the mapping never lengthens a request', () => {
+    for (const [path, piece] of index.paths.exact) {
+      expect(piece.length, path).toBeLessThanOrEqual(path.length);
+    }
+  });
+
+  it('builds an empty index from an empty tree', () => {
+    const empty = buildFieldIndex([]);
+    expect([empty.entries, [...empty.byPiece], [...empty.caseFold]]).toEqual([[], [], []]);
+    expect([[...empty.paths.exact], [...empty.paths.fold]]).toEqual([[], []]);
+  });
+});
+
+describe('isSortable (#184)', () => {
+  it('accepts the date and numeric types upstream sorts on, with or without []', () => {
+    for (const type of [
+      'NormalizedDate',
+      'PartialDate',
+      'DateTimeMinutes',
+      'integer',
+      'long',
+      'short',
+      'integer[]',
+      'NormalizedDate[]',
+    ]) {
+      expect(isSortable(type), type).toBe(true);
+    }
+  });
+
+  it('refuses every type upstream answers with Unsupported sort field type, and an absent type', () => {
+    // Each answered `Unsupported sort field type: <type>` when probed (2026-11-09).
+    for (const type of [
+      'text',
+      'text[]',
+      'markup',
+      'nct',
+      'nct[]',
+      'boolean',
+      'NormalizedTime',
+      'GeoPoint',
+      'GeoName',
+      'Status',
+      'Phase[]',
+      'BrowseLeafRelevance',
+      'keyword',
+      'Sponsor',
+      'PartialDateStruct',
+      'DateStruct',
+      'INTEGER',
+      '',
+      undefined,
+    ]) {
+      expect(isSortable(type), String(type)).toBe(false);
+    }
+  });
+});
+
+describe('isStruct (#191)', () => {
+  it('marks the STRUCT groups and nothing else', () => {
+    const marked = flattenMetadata(AREA_METADATA).filter(isStruct);
+    expect(new Set(marked.map((e) => e.piece))).toEqual(STRUCT_PIECES);
+    expect(marked.length).toBeGreaterThan(0);
+    expect(isStruct({ piece: 'X', path: 'x', name: 'x' })).toBe(false);
+    expect(isStruct({ piece: 'X', path: 'x', name: 'x', sourceType: 'TEXT' })).toBe(false);
+  });
+});
+
 describe('rewriteAreaNames (#170)', () => {
   const index = areaIndex();
   const rewrite = (expression: string) => rewriteAreaNames(expression, index).text;
@@ -819,6 +953,8 @@ describe('index-only pieces and search areas (#179)', () => {
     piece,
     names: [piece, ...alts],
   });
+  /** The same piece from a node that lists its metadata `type` (#184). */
+  const typed = (type: string, name: ExtendedName): ExtendedName => ({ ...name, type });
   /** A search area as searchAreaNames emits it. */
   const searchArea = (piece: string): ExtendedName => ({
     kind: 'search-area',
@@ -851,13 +987,13 @@ describe('index-only pieces and search areas (#179)', () => {
     it('finds every indexedOnly node with its alt names, two and three levels below a section, in tree order', () => {
       expect(indexOnlyNames(INDEXED_METADATA)).toEqual([
         // protocolSection.statusModule.lastUpdatePostDateStruct.lastUpdatePostYear
-        indexOnly('LastUpdatePostYear'),
+        typed('short', indexOnly('LastUpdatePostYear')),
         // protocolSection.contactsLocationsModule.locations.countryCode
-        indexOnly('LocationCountryCode'),
+        typed('keyword', indexOnly('LocationCountryCode')),
         // protocolSection.contactsLocationsModule.numLocations
-        indexOnly('NumLocations', 'NUMBER-OF-LOCATIONS'),
+        typed('short', indexOnly('NumLocations', 'NUMBER-OF-LOCATIONS')),
         // protocolSection.conditionsModule.numConditions
-        indexOnly('NumConditions', 'NUMBER-OF-CONDITIONS'),
+        typed('short', indexOnly('NumConditions', 'NUMBER-OF-CONDITIONS')),
       ]);
     });
 
@@ -954,10 +1090,10 @@ describe('index-only pieces and search areas (#179)', () => {
 
     it('keeps the extended names it was built from as the suggestion pool', () => {
       expect(extended.extras).toEqual([
-        indexOnly('LastUpdatePostYear'),
-        indexOnly('LocationCountryCode'),
-        indexOnly('NumLocations', 'NUMBER-OF-LOCATIONS'),
-        indexOnly('NumConditions', 'NUMBER-OF-CONDITIONS'),
+        typed('short', indexOnly('LastUpdatePostYear')),
+        typed('keyword', indexOnly('LocationCountryCode')),
+        typed('short', indexOnly('NumLocations', 'NUMBER-OF-LOCATIONS')),
+        typed('short', indexOnly('NumConditions', 'NUMBER-OF-CONDITIONS')),
         searchArea('BasicSearch'),
         searchArea('ConditionSearch'),
         searchArea('LocationSearch'),

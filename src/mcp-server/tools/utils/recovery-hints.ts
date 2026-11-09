@@ -15,7 +15,7 @@ export const RECOVERY_HINTS = {
   ids_not_found:
     'Verify each NCT ID exists at clinicaltrials.gov, or call clinicaltrials_search_studies first to discover valid identifiers.',
   field_invalid:
-    'Call clinicaltrials_get_field_definitions to browse the field tree; use PascalCase piece names like OverallStatus, Phase, or StudyType.',
+    'Call clinicaltrials_get_field_definitions to browse the field tree; use PascalCase piece names like OverallStatus, Phase, or StudyType. AREA expressions and clinicaltrials_get_field_values take leaf pieces only: LeadSponsorName, not the group LeadSponsor.',
   enum_invalid:
     'Call clinicaltrials_get_field_values with fields=["OverallStatus"] or fields=["Phase"] to see the valid enum values the filter accepts.',
   query_parse_error:
@@ -23,7 +23,7 @@ export const RECOVERY_HINTS = {
   geo_invalid:
     'Build geoFilter as distance(lat,lon,radius) with a `mi` or `km` suffix on the radius, e.g. distance(47.6062,-122.3321,50mi) — a bare radius is rejected, since upstream would read it as meters. Keep latitude within [-90, 90], longitude within [-180, 180], and the radius above 0. Look up the city coordinates first.',
   sort_invalid:
-    'Set sort to FieldName:asc or FieldName:desc, e.g. LastUpdatePostDate:desc — at most 2 fields, comma-separated. Call clinicaltrials_get_field_definitions to confirm the PascalCase field name.',
+    'Set sort to FieldName:asc or FieldName:desc on a date or numeric field, e.g. LastUpdatePostDate:desc or EnrollmentCount:desc, or to @relevance — at most 2 fields, comma-separated. Call clinicaltrials_get_field_definitions to confirm the PascalCase field name and its type.',
   page_token_invalid:
     'Re-run the same search criteria without pageToken to restart from the first page, then pass each nextPageToken back unchanged. Tokens expire when ClinicalTrials.gov refreshes its data, so continue a walk promptly rather than storing a token for later.',
   path_not_found:
@@ -36,4 +36,8 @@ export const RECOVERY_HINTS = {
     'Shorten the longest inputs — a free-text query, advancedFilter, or a long fields or conditions list — or split a long list across several calls with fewer entries each, so the request URL fits within the length ClinicalTrials.gov accepts.',
   rate_limited:
     'ClinicalTrials.gov rate-limited the request after several retries; wait about a minute before trying again.',
+  retry_deadline_exceeded:
+    'Retry after a minute or two. If the call asked for a lot at once — a large pageSize, many fields, or many nctIds — ask for less per call, or split the request across several calls.',
+  upstream_timeout:
+    'Retry after a few minutes. If it fails again, narrow the request — a more specific query or filter, a smaller pageSize, or fewer fields or nctIds — so ClinicalTrials.gov has less to compute and return.',
 } as const;

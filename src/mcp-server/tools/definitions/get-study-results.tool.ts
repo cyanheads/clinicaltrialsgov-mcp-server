@@ -1158,9 +1158,25 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     {
       reason: 'rate_limited',
       code: JsonRpcErrorCode.RateLimited,
-      when: 'ClinicalTrials.gov returned 429 after retry budget exhausted.',
+      when: 'ClinicalTrials.gov answered HTTP 429 on every attempt, or the call’s time budget ran out after a 429.',
       recovery: RECOVERY_HINTS.rate_limited,
       retryable: true,
+    },
+    {
+      reason: 'retry_deadline_exceeded',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov did not answer within the call’s time budget, which covers every request, retry, and wait the call makes — the batch and any per-ID fetches share it.',
+      recovery: RECOVERY_HINTS.retry_deadline_exceeded,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_timeout',
+      code: JsonRpcErrorCode.Timeout,
+      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) on every attempt of the batch request.',
+      recovery: RECOVERY_HINTS.upstream_timeout,
+      retryable: true,
+      thrownBy: 'service',
     },
   ],
 
@@ -1490,40 +1506,53 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     const fetchErrors: Array<{ nctId: string; error: string }> = [];
     const erroredIds = new Set<string>();
 
+    /**
+     * The error a failed fetch ends the whole call with, or undefined when the
+     * failure is one ID's own. A rate limit, the call's spent time budget, and
+     * the caller's cancellation would fail every request still to come the
+     * same way, so answering one with more sequential requests only delays the
+     * same failure. A rate limit leaves as this tool's declared retryable
+     * contract, keyed on the service's typed `data.reason` — the tag it sets
+     * once its retries are spent against a 429 — never on upstream message
+     * text; the other two keep their own code.
+     */
+    const callEnding = (err: unknown): McpError | undefined => {
+      if (!(err instanceof McpError)) return;
+      if (err.data?.reason === 'rate_limited') {
+        return ctx.fail('rate_limited', err.message, undefined, { cause: err });
+      }
+      const ends =
+        err.data?.reason === 'retry_deadline_exceeded' ||
+        err.code === JsonRpcErrorCode.RequestCancelled;
+      return ends ? err : undefined;
+    };
+
     let fetched: RawStudyShape[];
     try {
       fetched = (await service.getStudiesBatch(nctIds, ctx)) as RawStudyShape[];
     } catch (err) {
-      // A rate limit is a whole-request failure, not a per-ID one: every
-      // fallback request would hit the same limit, so answering a 429 with up
-      // to 20 more sequential requests is the worst possible response. Surface
-      // the declared retryable contract instead and issue nothing further.
-      // Keyed on the service's typed `data.reason` — the tag it sets once its
-      // retry budget is spent against a 429 — never on upstream message text.
-      if (err instanceof McpError && err.data?.reason === 'rate_limited') {
-        throw ctx.fail('rate_limited', err.message, undefined, { cause: err });
-      }
-      // A cancelled caller is the same shape of whole-request failure: the
-      // fallback would walk every ID only to record the same cancellation
-      // against each one, returning a result nobody is waiting for. Rethrow so
-      // the baseline RequestCancelled code reaches the transport intact.
-      if (err instanceof McpError && err.code === JsonRpcErrorCode.RequestCancelled) throw err;
       // The batch endpoint rejects the whole request when a single ID is
       // malformed — an ordinary nonexistent-but-well-formed ID is answered 200
-      // with the record simply absent, so only a format rejection reaches here.
-      // Fall back to per-ID fetches so valid IDs still succeed and only failing
-      // IDs land in fetchErrors. Sequential to honor the service's rate limit
-      // (~1 req/sec).
-      const batchMessage = err instanceof Error ? err.message : String(err);
+      // with the record simply absent — and that rejection is the one failure
+      // the per-ID fallback can answer: valid IDs still succeed and only the
+      // failing ones land in fetchErrors. Anything else — an outage, the
+      // call's spent budget, a rate limit, a cancellation — would fail each
+      // per-ID request the same way, so it ends the call.
+      if (!(err instanceof McpError && err.data?.reason === 'ids_not_found')) {
+        throw callEnding(err) ?? err;
+      }
       ctx.log.warning('Batch fetch rejected; falling back to per-ID fetches', {
         count: nctIds.length,
-        error: batchMessage,
+        error: err.message,
       });
       fetched = [];
+      // Sequential to honor the service's rate limit (~1 req/sec).
       for (const nctId of nctIds) {
         try {
           fetched.push((await service.getStudy(nctId, ctx)) as RawStudyShape);
         } catch (perIdErr) {
+          const ending = callEnding(perIdErr);
+          if (ending) throw ending;
           const perIdMessage = perIdErr instanceof Error ? perIdErr.message : String(perIdErr);
           fetchErrors.push({ nctId, error: perIdMessage });
           erroredIds.add(nctId);

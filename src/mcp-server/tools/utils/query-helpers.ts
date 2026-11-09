@@ -149,12 +149,23 @@ export function firstInvalidPhase(phases: string[] | undefined): string | undefi
   return phases?.find((p) => !(PHASE_VALUES as readonly string[]).includes(p));
 }
 
-/** Message and recovery hint for a `phaseFilter` entry that names no phase. */
-export function invalidPhaseRejection(value: string): { message: string; hint: string } {
+/**
+ * Message, recovery hint, and `literals` for a `phaseFilter` entry that names
+ * no phase. The literals are what the caller sends back — the six values and
+ * the list form — so content[] renders each as a code span rather than
+ * Markdown-escaped text (`\["PHASE2","PHASE3"\]`).
+ */
+export function invalidPhaseRejection(value: string): {
+  hint: string;
+  literals: string[];
+  message: string;
+} {
   const values = PHASE_VALUES.join(', ');
+  const list = '["PHASE2","PHASE3"]';
   return {
     message: `Invalid value for \`phaseFilter\`: '${value}' is not a trial phase. Each phaseFilter entry must be one of ${values} — search expressions are not accepted here.`,
-    hint: `Use one of ${values} per phaseFilter entry, and pass a list such as ["PHASE2","PHASE3"] to match any of several phases. Put every other criterion, including OR/NOT expressions, in advancedFilter.`,
+    hint: `Use one of ${values} per phaseFilter entry, and pass a list such as ${list} to match any of several phases. Put every other criterion, including OR/NOT expressions, in advancedFilter.`,
+    literals: [...PHASE_VALUES, list],
   };
 }
 

@@ -1365,6 +1365,8 @@ describe('ClinicalTrialsService', () => {
       ["Bun's connection reset (code on the TypeError)", bunFetchError('ECONNRESET')],
       ["Node's connection reset (code on its cause)", nodeFetchError('ECONNRESET')],
       ["Node's ETIMEDOUT (code on its cause)", nodeFetchError('ETIMEDOUT')],
+      ["Node's socket the other side closed (code on its cause)", nodeFetchError('UND_ERR_SOCKET')],
+      ["Node's connect timeout (code on its cause)", nodeFetchError('UND_ERR_CONNECT_TIMEOUT')],
     ])('retries a fetch that fails with %s', async (_label, error) => {
       const starts = answerInTurn(error, jsonResponse({ ok: true }));
 

@@ -545,7 +545,7 @@ Single service wrapping all API interactions. Init/accessor pattern.
 | :------------------ | :------------------------------------------------------------------------------------- |
 | Retry boundary      | The framework's `withRetry` around one paced attempt (fetch + JSON parse).             |
 | Backoff calibration | Base: 1s (rate-limited API). Max 3 retries, 30 s cap, ±25% jitter.                     |
-| Retryable errors    | HTTP 429, 500, 502, 503, 504; HTML in place of JSON; a dropped connection (`ECONNRESET`, `ETIMEDOUT`, on the rejection or its `cause`); an attempt's own timeout. Once retries are spent, a 429 ends as `rate_limited`, a 504 as `upstream_timeout` (`Timeout`), anything else as `ServiceUnavailable`. |
+| Retryable errors    | HTTP 429, 500, 502, 503, 504; HTML in place of JSON; a dropped or timed-out connection (`ECONNRESET`, `ETIMEDOUT`, on the rejection or its `cause`; on Node also `UND_ERR_SOCKET`, a socket the other side closed, and `UND_ERR_CONNECT_TIMEOUT`, undici's 10 s connect timeout); an attempt's own timeout. Once retries are spent, a 429 ends as `rate_limited`, a 504 as `upstream_timeout` (`Timeout`), anything else as `ServiceUnavailable`. |
 | Non-retryable       | HTTP 400 (bad request), 404 (not found), 414 (request target past 8,177 bytes → `request_too_long`). |
 | Rate limiting       | `createPacer` with `minStartGapMs: 1000`: request starts at least 1 s apart, FIFO across concurrent calls; a waiter cancelled or out of budget leaves the queue without spending a gap. |
 | Request timeout     | `CT_REQUEST_TIMEOUT_MS` per attempt (30 s default), cut short when the call's budget runs out. |

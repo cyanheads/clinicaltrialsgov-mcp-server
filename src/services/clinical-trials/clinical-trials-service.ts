@@ -51,11 +51,20 @@ const DEFAULT_BASE_BACKOFF_MS = 1000;
 const DEFAULT_MAX_BACKOFF_MS = 30_000;
 const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
 /**
- * Transport codes of a connection that dropped mid-request, retried like a 5xx.
- * Bun's fetch carries the code on the rejection itself, Node's only on its
- * `cause`. A refused connection (`ECONNREFUSED`) is not among them.
+ * Transport codes of a connection that dropped or timed out mid-request,
+ * retried like a 5xx. Bun's fetch carries the code on the rejection itself and
+ * reports every dropped connection as `ECONNRESET`; Node's carries it only on
+ * its `cause`, as `ECONNRESET` for a reset, `UND_ERR_SOCKET` for a socket the
+ * other side closed before or during the response, and
+ * `UND_ERR_CONNECT_TIMEOUT` for undici's 10 s connect timeout (measured on
+ * Node 26). A refused connection (`ECONNREFUSED`) is not among them.
  */
-const TRANSIENT_NETWORK_CODES = new Set(['ECONNRESET', 'ETIMEDOUT']);
+const TRANSIENT_NETWORK_CODES = new Set([
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'UND_ERR_SOCKET',
+  'UND_ERR_CONNECT_TIMEOUT',
+]);
 /** Least time between two request starts — ClinicalTrials.gov allows about one a second. */
 const MIN_INTERVAL_MS = 1000;
 /**

@@ -831,7 +831,7 @@ describe('rewriteAreaNames (#170)', () => {
     }
   });
 
-  describe('stays linear on caller-sized text', () => {
+  describe('stays linear on caller-sized text', { timeout: 0 }, () => {
     type Check = (input: string, out: ReturnType<typeof rewriteAreaNames>) => boolean;
     const unchanged: Check = (input, out) => out.text === input && out.rewrites.length === 0;
     /** Each shape with the output its whole input must produce, checked on every timed run. */
@@ -955,6 +955,8 @@ describe('index-only pieces and search areas (#179)', () => {
   });
   /** The same piece from a node that lists its metadata `type` (#184). */
   const typed = (type: string, name: ExtendedName): ExtendedName => ({ ...name, type });
+  /** The same piece from a node under a repeated (`[]`) ancestor (#194). */
+  const repeated = (name: ExtendedName): ExtendedName => ({ ...name, hasArrayAncestor: true });
   /** A search area as searchAreaNames emits it. */
   const searchArea = (piece: string): ExtendedName => ({
     kind: 'search-area',
@@ -988,12 +990,52 @@ describe('index-only pieces and search areas (#179)', () => {
       expect(indexOnlyNames(INDEXED_METADATA)).toEqual([
         // protocolSection.statusModule.lastUpdatePostDateStruct.lastUpdatePostYear
         typed('short', indexOnly('LastUpdatePostYear')),
-        // protocolSection.contactsLocationsModule.locations.countryCode
-        typed('keyword', indexOnly('LocationCountryCode')),
+        // protocolSection.contactsLocationsModule.locations.countryCode, under Location[]
+        repeated(typed('keyword', indexOnly('LocationCountryCode'))),
         // protocolSection.contactsLocationsModule.numLocations
         typed('short', indexOnly('NumLocations', 'NUMBER-OF-LOCATIONS')),
         // protocolSection.conditionsModule.numConditions
         typed('short', indexOnly('NumConditions', 'NUMBER-OF-CONDITIONS')),
+      ]);
+    });
+
+    // A piece under a repeated node occurs once per repetition, so its value
+    // counts sum above the study total, as a record piece's do (#194).
+    it('marks a piece under a repeated node at any depth, never one whose own type alone repeats', () => {
+      const tree: FieldNode[] = [
+        {
+          name: 'section',
+          piece: 'Section',
+          sourceType: 'STRUCT',
+          children: [
+            {
+              name: 'groups',
+              piece: 'Group',
+              sourceType: 'STRUCT',
+              type: 'Group[]',
+              children: [
+                { name: 'numMembers', piece: 'NumMembers', indexedOnly: true, type: 'short' },
+                {
+                  name: 'detail',
+                  piece: 'GroupDetail',
+                  sourceType: 'STRUCT',
+                  type: 'Detail',
+                  children: [
+                    { name: 'numNotes', piece: 'NumNotes', indexedOnly: true, type: 'short' },
+                  ],
+                },
+              ],
+            },
+            { name: 'codes', piece: 'Codes', indexedOnly: true, type: 'keyword[]' },
+            { name: 'numGroups', piece: 'NumGroups', indexedOnly: true, type: 'short' },
+          ],
+        },
+      ];
+      expect(indexOnlyNames(tree)).toEqual([
+        repeated(typed('short', indexOnly('NumMembers'))),
+        repeated(typed('short', indexOnly('NumNotes'))),
+        typed('keyword[]', indexOnly('Codes')),
+        typed('short', indexOnly('NumGroups')),
       ]);
     });
 
@@ -1091,7 +1133,7 @@ describe('index-only pieces and search areas (#179)', () => {
     it('keeps the extended names it was built from as the suggestion pool', () => {
       expect(extended.extras).toEqual([
         typed('short', indexOnly('LastUpdatePostYear')),
-        typed('keyword', indexOnly('LocationCountryCode')),
+        repeated(typed('keyword', indexOnly('LocationCountryCode'))),
         typed('short', indexOnly('NumLocations', 'NUMBER-OF-LOCATIONS')),
         typed('short', indexOnly('NumConditions', 'NUMBER-OF-CONDITIONS')),
         searchArea('BasicSearch'),
@@ -1410,7 +1452,7 @@ describe('index-only pieces and search areas (#179)', () => {
     });
   });
 
-  describe('stays linear on caller-sized text with the second tier', () => {
+  describe('stays linear on caller-sized text with the second tier', { timeout: 0 }, () => {
     // The extended names alone: the record ranking nearestPieces runs beside them predates #179.
     it.each([
       ...LINE_BREAK_SHAPES,

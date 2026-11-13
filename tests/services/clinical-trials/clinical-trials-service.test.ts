@@ -361,11 +361,33 @@ describe('ClinicalTrialsService', () => {
       await expect(service.countStudies({ queryCond: 'zzqxnomatch' }, ctx)).resolves.toBe(0);
     });
 
-    it('defaults to 0 when upstream omits totalCount', async () => {
+    it('retries a count answered without totalCount, then ends upstream_unavailable — never a false 0 (#196)', async () => {
+      // A count page always carries the total; one without it is a fault, not
+      // zero matches. A search page may omit it, so only the count requires it.
       mockFetch.mockResolvedValue(jsonResponse({ studies: [] }));
-      const ctx = createMockContext();
 
-      await expect(service.countStudies({}, ctx)).resolves.toBe(0);
+      const err = await advanceUntilSettled(service.countStudies({}, createMockContext())).catch(
+        (e: unknown) => e,
+      );
+
+      expect(err).toMatchObject({
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'upstream_unavailable', path: '/studies' },
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+    });
+
+    it.each([
+      ['a string', { totalCount: '7495', studies: [] }],
+      ['no studies array', { totalCount: 12 }],
+    ])('refuses a count whose totalCount comes with %s (#196)', async (_label, body) => {
+      mockFetch.mockResolvedValue(jsonResponse(body));
+
+      const err = await advanceUntilSettled(service.countStudies({}, createMockContext())).catch(
+        (e: unknown) => e,
+      );
+
+      expect((err as McpError).data?.reason).toBe('upstream_unavailable');
     });
 
     it('makes exactly one upstream request on a fresh field-validating service', async () => {
@@ -408,7 +430,7 @@ describe('ClinicalTrialsService', () => {
 
   describe('getStudy', () => {
     it('fetches a single study by NCT ID', async () => {
-      const study = { nctId: 'NCT12345678' };
+      const study = { protocolSection: { identificationModule: { nctId: 'NCT12345678' } } };
       mockFetch.mockResolvedValue(jsonResponse(study));
 
       const ctx = createMockContext();
@@ -431,7 +453,7 @@ describe('ClinicalTrialsService', () => {
     });
 
     it('URL-encodes the NCT ID', async () => {
-      mockFetch.mockResolvedValue(jsonResponse({}));
+      mockFetch.mockResolvedValue(jsonResponse({ protocolSection: {} }));
       const ctx = createMockContext();
 
       await service.getStudy('NCT12345678', ctx);
@@ -508,6 +530,26 @@ describe('ClinicalTrialsService', () => {
       const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.pathname.length + calledUrl.search.length).toBe(393);
       expect(calledUrl.searchParams.get('filter.ids')?.split('|')).toEqual(batch);
+    });
+
+    it('sends its fixed projection unchecked, reading no /studies/metadata (#192)', async () => {
+      // The five names never change, so checking them against the field index
+      // costs a fresh server a metadata read before every first batch, and a
+      // hung one the whole call.
+      const validating = new ClinicalTrialsService(testConfig, {
+        ...fastOptions,
+        validateFieldsLocally: true,
+      });
+      mockFetch.mockResolvedValue(jsonResponse({ studies: [] }));
+
+      await advanceUntilSettled(validating.getStudiesBatch(['NCT12345678'], createMockContext()));
+
+      expect(mockFetch.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+        '/v2/studies',
+      ]);
+      expect(new URL(String(mockFetch.mock.calls[0]![0])).searchParams.get('fields')).toBe(
+        'NCTId|NCTIdAlias|BriefTitle|HasResults|ResultsSection',
+      );
     });
   });
 
@@ -758,7 +800,7 @@ describe('ClinicalTrialsService', () => {
     });
 
     it('passes includeIndexedOnly param', async () => {
-      mockFetch.mockResolvedValue(jsonResponse([]));
+      mockFetch.mockResolvedValue(jsonResponse(RECORD_METADATA));
       const ctx = createMockContext();
 
       await service.getMetadata(true, ctx);
@@ -768,7 +810,7 @@ describe('ClinicalTrialsService', () => {
     });
 
     it('omits includeIndexedOnly when false', async () => {
-      mockFetch.mockResolvedValue(jsonResponse([]));
+      mockFetch.mockResolvedValue(jsonResponse(RECORD_METADATA));
       const ctx = createMockContext();
 
       await service.getMetadata(false, ctx);
@@ -778,7 +820,7 @@ describe('ClinicalTrialsService', () => {
     });
 
     it('does not set format=json for metadata', async () => {
-      mockFetch.mockResolvedValue(jsonResponse([]));
+      mockFetch.mockResolvedValue(jsonResponse(RECORD_METADATA));
       const ctx = createMockContext();
 
       await service.getMetadata(false, ctx);
@@ -804,7 +846,9 @@ describe('ClinicalTrialsService', () => {
       const ctx = createMockContext();
       const result = await service.getFieldValues(['OverallStatus'], ctx);
 
-      expect(result).toEqual(stats);
+      expect(result.stats).toEqual(stats);
+      // Local validation is off here, so no field index says whether it repeats.
+      expect(result.multiValuedUndetermined).toEqual(['OverallStatus']);
       const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
       expect(calledUrl.pathname).toBe('/v2/stats/field/values');
       expect(calledUrl.searchParams.get('fields')).toBe('OverallStatus');
@@ -812,7 +856,9 @@ describe('ClinicalTrialsService', () => {
     });
 
     it('joins multiple fields with pipe', async () => {
-      mockFetch.mockResolvedValue(jsonResponse([]));
+      mockFetch.mockResolvedValue(
+        jsonResponse([{ field: 'OverallStatus', piece: 'OverallStatus', type: 'ENUM' }]),
+      );
       const ctx = createMockContext();
 
       await service.getFieldValues(['OverallStatus', 'Phase'], ctx);
@@ -850,8 +896,8 @@ describe('ClinicalTrialsService', () => {
       );
     });
 
-    it('rethrows non-404 errors as-is', async () => {
-      // 403 is not retryable and not 404, so it propagates directly
+    it('ends a 403 as the untranslated-status error', async () => {
+      // 403 is neither retried nor a 404: it ends as the status it was
       mockFetch.mockResolvedValue({
         ok: false,
         status: 403,
@@ -863,6 +909,68 @@ describe('ClinicalTrialsService', () => {
       const ctx = createMockContext();
 
       await expect(service.getFieldValues(['Test'], ctx)).rejects.toThrow(/HTTP 403/);
+    });
+
+    // multiValued is read off the field index; without an entry for a piece the
+    // answer cannot say whether it repeats, and says so instead of leaving an
+    // absent flag to read as single-valued (#192).
+    describe('pieces whose multi-valued status went undetermined (#192)', () => {
+      const conditionStat = {
+        field: 'protocolSection.conditionsModule.conditions',
+        piece: 'Condition',
+        type: 'STRING',
+      };
+      const statusStat = {
+        field: 'protocolSection.statusModule.overallStatus',
+        piece: 'OverallStatus',
+        type: 'ENUM',
+      };
+      /** `/studies/metadata` answers `metadata`; the statistics answer `stats`. */
+      const routes = (metadata: unknown, stats: unknown[]) =>
+        mockFetch.mockImplementation((url: string | URL) =>
+          Promise.resolve(
+            new URL(String(url)).pathname === '/v2/studies/metadata'
+              ? metadata
+              : jsonResponse(structuredClone(stats)),
+          ),
+        );
+      const validating = () =>
+        new ClinicalTrialsService(testConfig, { ...fastOptions, validateFieldsLocally: true });
+
+      it('names every piece when the field index is unavailable, flagging none', async () => {
+        routes(jsonResponse(null, 503), [conditionStat, statusStat]);
+
+        const result = await advanceUntilSettled(
+          validating().getFieldValues(['Condition', 'OverallStatus'], createMockContext()),
+        );
+
+        expect(result.stats.map((s) => s.multiValued)).toEqual([undefined, undefined]);
+        expect(result.multiValuedUndetermined).toEqual(['Condition', 'OverallStatus']);
+      });
+
+      it('names none when the field index checked every piece', async () => {
+        routes(jsonResponse(RECORD_METADATA), [conditionStat, statusStat]);
+
+        const result = await advanceUntilSettled(
+          validating().getFieldValues(['Condition', 'OverallStatus'], createMockContext()),
+        );
+
+        expect(result.stats.map((s) => s.multiValued)).toEqual([true, undefined]);
+        expect(result.multiValuedUndetermined).toBeUndefined();
+      });
+
+      it('names only a piece upstream answered that the field index does not hold', async () => {
+        routes(jsonResponse(RECORD_METADATA), [
+          statusStat,
+          { field: 'unlisted', piece: 'Unlisted', type: 'ENUM' },
+        ]);
+
+        const result = await advanceUntilSettled(
+          validating().getFieldValues(['OverallStatus'], createMockContext()),
+        );
+
+        expect(result.multiValuedUndetermined).toEqual(['Unlisted']);
+      });
     });
   });
 
@@ -1323,13 +1431,187 @@ describe('ClinicalTrialsService', () => {
       const ctx = createMockContext();
       await expect(service.getStudy('NCT12345678', ctx)).rejects.toThrow(/HTTP 403/);
     });
+
+    /**
+     * A status fetchJson does not translate itself is sent once and answered as
+     * ServiceUnavailable: the API is public and keyless, so Unauthorized,
+     * Forbidden, Conflict, or InvalidRequest would put the fault on credentials
+     * or a request the caller cannot change. The reason tells an outage from a
+     * refusal, and the upstream body stays out of the message (#196).
+     */
+    describe('statuses fetchJson does not translate (#196)', () => {
+      const PAGE = '<!DOCTYPE html><html><body>Request blocked by policy</body></html>';
+      const answer = (status: number) => ({
+        ...textResponse(PAGE, status),
+        statusText: `Status ${status}`,
+      });
+
+      it.each([
+        [304, 'upstream_rejected', false],
+        [401, 'upstream_rejected', false],
+        [403, 'upstream_rejected', false],
+        [409, 'upstream_rejected', false],
+        [410, 'upstream_rejected', false],
+        [425, 'upstream_rejected', false],
+        [501, 'upstream_rejected', false],
+        [505, 'upstream_unavailable', undefined],
+        [520, 'upstream_unavailable', undefined],
+      ])('answers HTTP %i once as ServiceUnavailable %s', async (status, reason, retryable) => {
+        mockFetch.mockResolvedValue(answer(status));
+
+        const err = (await advanceUntilSettled(
+          service.searchStudies({}, createMockContext()),
+        ).catch((e: unknown) => e)) as McpError;
+
+        expect(err).toBeInstanceOf(McpError);
+        expect(err.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+        expect(err.message).toBe(`ClinicalTrials.gov returned HTTP ${status} Status ${status}.`);
+        expect(err.data).toMatchObject({ reason, status, path: '/studies' });
+        expect(err.data?.retryable).toBe(retryable);
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    /**
+     * A 404 that is a front-end error page names no study and no field: the
+     * route was refused before the API answered. The API's own 404s are plain
+     * text (verbatim bodies below) and keep their translation (#196).
+     */
+    describe('a 404 page from the front end, not the API (#196)', () => {
+      const PAGE =
+        '<!DOCTYPE html><html lang=en><meta charset=utf-8><title>Error 404 (Not Found)!!1</title><p><b>404.</b> <ins>That’s an error.</ins><p>The requested URL was not found on this server.';
+      const page404 = () => ({
+        ...htmlResponse(PAGE),
+        ok: false,
+        status: 404,
+        statusText: 'Not Found',
+      });
+      const calls = [
+        ['a search', () => service.searchStudies({}, createMockContext()), '/studies'],
+        [
+          'a study',
+          () => service.getStudy('NCT12345678', createMockContext()),
+          '/studies/NCT12345678',
+        ],
+        [
+          'value statistics',
+          () => service.getFieldValues(['OverallStatus'], createMockContext()),
+          '/stats/field/values',
+        ],
+      ] as const;
+
+      it.each(calls)(
+        'ends %s upstream_rejected, sent once, quoting none of the page',
+        async (_label, call, path) => {
+          mockFetch.mockResolvedValue(page404());
+
+          // Advanced, so a retry shows as a second request rather than a hang on the pacer gap.
+          const err = (await advanceUntilSettled<unknown>(call()).catch(
+            (e: unknown) => e,
+          )) as McpError;
+
+          expect(err).toBeInstanceOf(McpError);
+          expect(err.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+          expect(err.message).toBe('ClinicalTrials.gov returned HTTP 404 Not Found.');
+          expect(err.data).toMatchObject({ reason: 'upstream_rejected', status: 404, path });
+          expect(mockFetch).toHaveBeenCalledTimes(1);
+        },
+      );
+
+      it('keeps the API’s own plain-text study 404 as study_not_found', async () => {
+        mockFetch.mockResolvedValue(textResponse('NCT number NCT09999998 not found', 404));
+
+        await expect(service.getStudy('NCT09999998', createMockContext())).rejects.toMatchObject({
+          code: JsonRpcErrorCode.NotFound,
+          data: { reason: 'study_not_found' },
+        });
+      });
+
+      it('keeps the API’s own plain-text statistics 404 as field_invalid naming the field', async () => {
+        mockFetch.mockResolvedValue(
+          textResponse('Unknown piece name of field path: BogusPieceXyz', 404),
+        );
+
+        await expect(
+          service.getFieldValues(['BogusPieceXyz'], createMockContext()),
+        ).rejects.toMatchObject({
+          message: expect.stringContaining("Invalid field name: 'BogusPieceXyz'."),
+          data: { reason: 'field_invalid' },
+        });
+      });
+    });
+
+    /**
+     * Field validation reads /studies/metadata only to check and correct names:
+     * a read that fails any way — the new reasons included — leaves the search
+     * to go out as written, and a refused body is never kept as the index (#196).
+     */
+    describe('field validation fails open on a metadata read that fails (#196)', () => {
+      const validating = () =>
+        new ClinicalTrialsService(testConfig, { ...fastOptions, validateFieldsLocally: true });
+      /** Answer /studies/metadata with `metadata()`, and every search with an empty page. */
+      const serve = (metadata: () => unknown) =>
+        mockFetch.mockImplementation((url: string) =>
+          Promise.resolve(
+            new URL(url).pathname === '/v2/studies/metadata'
+              ? metadata()
+              : jsonResponse({ studies: [] }),
+          ),
+        );
+      const searches = () =>
+        mockFetch.mock.calls
+          .map(([url]) => new URL(String(url)))
+          .filter((url) => url.pathname === '/v2/studies');
+
+      it.each([
+        ['an empty array', () => jsonResponse([])],
+        ['an HTML page', () => htmlResponse('<html><body>Maintenance</body></html>')],
+        [
+          'a body that is not JSON',
+          () => ({ ...jsonResponse(null), text: () => Promise.resolve('not json') }),
+        ],
+        ['HTTP 403', () => jsonResponse(null, 403)],
+      ])(
+        'sends the search with its fields as written when the metadata read answers %s',
+        async (_label, metadata) => {
+          serve(metadata);
+
+          const page = await advanceUntilSettled(
+            validating().searchStudies({ fields: ['NCTId', 'BriefTitle'] }, createMockContext()),
+          );
+
+          expect(page.studies).toEqual([]);
+          expect(searches().map((url) => url.searchParams.get('fields'))).toEqual([
+            'NCTId|BriefTitle',
+          ]);
+        },
+      );
+
+      it('keeps no empty metadata array as the index: the next call validates against a healthy one', async () => {
+        const svc = validating();
+        let metadata = jsonResponse([]);
+        serve(() => metadata);
+        await advanceUntilSettled(svc.searchStudies({ fields: ['NCTId'] }, createMockContext()));
+        metadata = jsonResponse(RECORD_METADATA);
+        mockFetch.mockClear();
+
+        const err = await advanceUntilSettled(
+          svc.searchStudies({ fields: ['NotAField'] }, createMockContext()),
+        ).catch((e: unknown) => e);
+
+        expect(err).toMatchObject({ data: { reason: 'field_invalid' } });
+        expect(searches()).toEqual([]);
+      });
+    });
   });
 
   // Observed through the public methods only — the requests fetch sees and when
   // each one starts on the fake clock — so these hold whatever implements the
   // retry loop and the gap between starts.
   describe('retry logic', () => {
-    it.each([429, 500, 502, 503, 504])(
+    const study = { protocolSection: { identificationModule: { nctId: 'NCT12345678' } } };
+
+    it.each([408, 429, 500, 502, 503, 504])(
       'retries HTTP %i one gap later and returns the next answer',
       async (status) => {
         const starts = answerInTurn(jsonResponse(null, status), jsonResponse({ studies: [] }));
@@ -1368,23 +1650,57 @@ describe('ClinicalTrialsService', () => {
       ["Node's socket the other side closed (code on its cause)", nodeFetchError('UND_ERR_SOCKET')],
       ["Node's connect timeout (code on its cause)", nodeFetchError('UND_ERR_CONNECT_TIMEOUT')],
     ])('retries a fetch that fails with %s', async (_label, error) => {
-      const starts = answerInTurn(error, jsonResponse({ ok: true }));
+      const starts = answerInTurn(error, jsonResponse(study));
 
       const result = await advanceUntilSettled(
         service.getStudy('NCT12345678', createMockContext()),
       );
 
-      expect(result).toEqual({ ok: true });
+      expect(result).toEqual(study);
       expect(gaps(starts)).toEqual([1000]);
     });
 
+    // The last failure decides (#181, #196): a 429 a rate limit; a 408 or 504 an
+    // upstream timeout; a 5xx, a dropped connection, or a body no consumer can
+    // read an outage, named for its route and carrying a fixed lastError or the
+    // transport code — never upstream or parser text.
+    const outage = (what: string) => `ClinicalTrials.gov API unavailable after retries: ${what}.`;
     it.each([
+      [
+        'HTTP 500',
+        jsonResponse(null, 500),
+        JsonRpcErrorCode.ServiceUnavailable,
+        outage('/studies returned HTTP 500'),
+        {
+          path: '/studies',
+          lastError: 'Error: HTTP 500',
+          lastStatus: 500,
+          reason: 'upstream_unavailable',
+        },
+      ],
+      [
+        'HTTP 502',
+        jsonResponse(null, 502),
+        JsonRpcErrorCode.ServiceUnavailable,
+        outage('/studies returned HTTP 502'),
+        {
+          path: '/studies',
+          lastError: 'Error: HTTP 502',
+          lastStatus: 502,
+          reason: 'upstream_unavailable',
+        },
+      ],
       [
         'HTTP 503',
         jsonResponse(null, 503),
         JsonRpcErrorCode.ServiceUnavailable,
-        'ClinicalTrials.gov API unavailable after retries',
-        { path: '/studies', lastError: 'Error: HTTP 503', lastStatus: 503 },
+        outage('/studies returned HTTP 503'),
+        {
+          path: '/studies',
+          lastError: 'Error: HTTP 503',
+          lastStatus: 503,
+          reason: 'upstream_unavailable',
+        },
       ],
       [
         'HTTP 429',
@@ -1397,24 +1713,64 @@ describe('ClinicalTrialsService', () => {
         'an HTML page',
         htmlResponse('<html><body>Error</body></html>'),
         JsonRpcErrorCode.ServiceUnavailable,
-        'ClinicalTrials.gov API unavailable after retries',
-        { path: '/studies', lastError: 'Error: API returned HTML instead of JSON' },
+        outage('/studies returned HTML instead of JSON'),
+        {
+          path: '/studies',
+          lastError: 'Error: API returned HTML instead of JSON',
+          reason: 'upstream_unavailable',
+        },
+      ],
+      [
+        'a body that is not JSON',
+        { ...jsonResponse(null), text: () => Promise.resolve('not json') },
+        JsonRpcErrorCode.ServiceUnavailable,
+        outage('/studies returned a body that is not JSON'),
+        {
+          path: '/studies',
+          lastError: 'Error: API returned a body that is not JSON',
+          reason: 'upstream_unavailable',
+        },
+      ],
+      [
+        'JSON of the wrong shape',
+        jsonResponse({}),
+        JsonRpcErrorCode.ServiceUnavailable,
+        outage('/studies returned JSON of an unexpected shape'),
+        {
+          path: '/studies',
+          lastError: 'Error: API returned JSON of an unexpected shape',
+          reason: 'upstream_unavailable',
+        },
       ],
       [
         'ECONNRESET',
         Object.assign(new Error('connection reset'), { code: 'ECONNRESET' }),
         JsonRpcErrorCode.ServiceUnavailable,
-        'ClinicalTrials.gov API unavailable after retries',
-        { path: '/studies', lastError: 'Error: connection reset' },
+        outage('the connection for /studies failed (ECONNRESET)'),
+        { path: '/studies', lastError: 'ECONNRESET', reason: 'upstream_unavailable' },
+      ],
+      [
+        "Bun's connection reset",
+        bunFetchError('ECONNRESET'),
+        JsonRpcErrorCode.ServiceUnavailable,
+        outage('the connection for /studies failed (ECONNRESET)'),
+        { path: '/studies', lastError: 'ECONNRESET', reason: 'upstream_unavailable' },
       ],
       [
         "Node's connection reset",
         nodeFetchError('ECONNRESET'),
         JsonRpcErrorCode.ServiceUnavailable,
-        'ClinicalTrials.gov API unavailable after retries',
-        { path: '/studies', lastError: 'TypeError: fetch failed' },
+        outage('the connection for /studies failed (ECONNRESET)'),
+        { path: '/studies', lastError: 'ECONNRESET', reason: 'upstream_unavailable' },
       ],
-      // A gateway timeout that outlasts the ladder is an upstream timeout, not an outage.
+      [
+        "Node's socket the other side closed",
+        nodeFetchError('UND_ERR_SOCKET'),
+        JsonRpcErrorCode.ServiceUnavailable,
+        outage('the connection for /studies failed (UND_ERR_SOCKET)'),
+        { path: '/studies', lastError: 'UND_ERR_SOCKET', reason: 'upstream_unavailable' },
+      ],
+      // A gateway or request timeout that outlasts the ladder is an upstream timeout, not an outage.
       [
         'HTTP 504',
         jsonResponse(null, 504),
@@ -1424,6 +1780,18 @@ describe('ClinicalTrialsService', () => {
           path: '/studies',
           lastError: 'Error: HTTP 504',
           lastStatus: 504,
+          reason: 'upstream_timeout',
+        },
+      ],
+      [
+        'HTTP 408',
+        jsonResponse(null, 408),
+        JsonRpcErrorCode.Timeout,
+        'ClinicalTrials.gov timed out (HTTP 408) on every attempt',
+        {
+          path: '/studies',
+          lastError: 'Error: HTTP 408',
+          lastStatus: 408,
           reason: 'upstream_timeout',
         },
       ],
@@ -1473,6 +1841,61 @@ describe('ClinicalTrialsService', () => {
       },
     );
 
+    it('exhausts four attempts that each ran out CT_REQUEST_TIMEOUT_MS as upstream_timeout (#196)', async () => {
+      const shortAttempts = new ClinicalTrialsService(
+        { ...testConfig, requestTimeoutMs: 2000 },
+        fastOptions,
+      );
+      // Never answers; fails only when the attempt's signal aborts.
+      mockFetch.mockImplementation(
+        (_url: string, init?: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+              once: true,
+            });
+          }),
+      );
+
+      const err = (await advanceUntilSettled(
+        shortAttempts.getStudy('NCT12345678', createMockContext()),
+      ).catch((e: unknown) => e)) as McpError;
+
+      expect(err.code).toBe(JsonRpcErrorCode.Timeout);
+      expect(err.message).toBe(
+        'ClinicalTrials.gov sent no answer to /studies/NCT12345678 within 2000 ms on every attempt',
+      );
+      expect(err.data).toEqual({
+        path: '/studies/NCT12345678',
+        lastError: 'TimeoutError',
+        timeoutMs: 2000,
+        reason: 'upstream_timeout',
+      });
+      expect(mockFetch).toHaveBeenCalledTimes(4);
+    });
+
+    it('keeps one 50 s budget across retries of a body it cannot read (#196)', async () => {
+      const manyRetries = new ClinicalTrialsService(testConfig, {
+        ...fastOptions,
+        maxRetries: 100,
+      });
+      mockFetch.mockResolvedValue(jsonResponse(null));
+      const t0 = Date.now();
+
+      const err = (await advanceUntilSettled(
+        manyRetries.searchStudies({}, createMockContext()),
+      ).catch((e: unknown) => e)) as McpError;
+
+      expect(Date.now() - t0).toBe(50_000);
+      expect(err.code).toBe(JsonRpcErrorCode.Timeout);
+      expect(err.data).toEqual({
+        reason: 'retry_deadline_exceeded',
+        deadlineMs: 50_000,
+        path: '/studies',
+      });
+      // One attempt per 1 s request slot, until the budget runs out.
+      expect(mockFetch).toHaveBeenCalledTimes(50);
+    });
+
     it('does not retry an AbortError raised by the caller going away', async () => {
       const controller = new AbortController();
       const abortError = Object.assign(new Error('aborted'), { name: 'AbortError' });
@@ -1498,16 +1921,43 @@ describe('ClinicalTrialsService', () => {
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
-    it.each([
-      ['a TypeError it does not recognize', new TypeError('Invalid URL')],
-      ["Bun's refused connection", bunFetchError('ECONNREFUSED')],
-      ["Node's refused connection", nodeFetchError('ECONNREFUSED')],
-    ])('rethrows %s untouched and unretried', async (_label, error) => {
+    it('rethrows a TypeError it does not recognize untouched and unretried', async () => {
+      const error = new TypeError('Invalid URL');
       mockFetch.mockRejectedValue(error);
 
       await expect(
         advanceUntilSettled(service.getStudy('NCT12345678', createMockContext())),
       ).rejects.toBe(error);
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * A refused connection or a host name that does not resolve fails the same
+     * way on every attempt, so it is sent once — and still ends as an outage
+     * with its transport code, never Bun's message (which names the URL).
+     */
+    it.each([
+      ["Bun's refused connection", bunFetchError('ECONNREFUSED'), 'ECONNREFUSED'],
+      ["Node's refused connection", nodeFetchError('ECONNREFUSED'), 'ECONNREFUSED'],
+      ["Bun's unresolved host name", bunFetchError('ENOTFOUND'), 'ENOTFOUND'],
+      ["Node's unresolved host name", nodeFetchError('ENOTFOUND'), 'ENOTFOUND'],
+    ])('ends %s as upstream_unavailable, sent once (#196)', async (_label, error, code) => {
+      mockFetch.mockRejectedValue(error);
+
+      const err = (await advanceUntilSettled(
+        service.getStudy('NCT12345678', createMockContext()),
+      ).catch((e: unknown) => e)) as McpError;
+
+      expect(err).toBeInstanceOf(McpError);
+      expect(err.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+      expect(err.message).toBe(
+        `ClinicalTrials.gov API unavailable: the connection for /studies/NCT12345678 failed (${code}).`,
+      );
+      expect(err.data).toEqual({
+        path: '/studies/NCT12345678',
+        lastError: code,
+        reason: 'upstream_unavailable',
+      });
       expect(mockFetch).toHaveBeenCalledTimes(1);
     });
 
@@ -1610,31 +2060,316 @@ describe('ClinicalTrialsService', () => {
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
+    const study = { protocolSection: { identificationModule: { nctId: 'NCT12345678' } } };
+    /** A 200 carrying `text` verbatim under `contentType`, read as a real Response reads it. */
+    const bodyResponse = (text: string, contentType = 'application/json') => ({
+      ok: true,
+      status: 200,
+      statusText: 'OK',
+      headers: new Headers({ 'content-type': contentType }),
+      json: () => Promise.resolve(text).then((t) => JSON.parse(t) as unknown),
+      text: () => Promise.resolve(text),
+    });
+
     it('retries on DOCTYPE HTML response', async () => {
       mockFetch
         .mockResolvedValueOnce(htmlResponse('<!DOCTYPE html><html>...'))
-        .mockResolvedValueOnce(jsonResponse({ ok: true }));
+        .mockResolvedValueOnce(jsonResponse(study));
 
       const ctx = createMockContext();
       const result = await advanceUntilSettled(service.getStudy('NCT12345678', ctx));
 
-      expect(result).toEqual({ ok: true });
+      expect(result).toEqual(study);
       expect(mockFetch).toHaveBeenCalledTimes(2);
     });
 
     it('parses non-HTML text as JSON when content-type is not json', async () => {
       mockFetch.mockResolvedValue({
-        ok: true,
-        status: 200,
-        statusText: 'OK',
-        headers: new Headers({ 'content-type': 'text/plain' }),
-        text: () => Promise.resolve('{"data": "value"}'),
+        ...bodyResponse(JSON.stringify(study), 'text/plain'),
         json: () => Promise.reject(new Error('nope')),
       });
 
       const ctx = createMockContext();
       const result = await service.getStudy('NCT12345678', ctx);
-      expect(result).toEqual({ data: 'value' });
+      expect(result).toEqual(study);
+    });
+
+    it.each([
+      ['an HTML page labelled JSON', bodyResponse('<!DOCTYPE html><html><body>Down</body></html>')],
+      ['a lowercase doctype', bodyResponse('<!doctype html>\n<title>Down</title>', 'text/html')],
+      ['truncated JSON', bodyResponse('{"protocolSection":{"identificationModule":')],
+      ['an empty body', bodyResponse('')],
+    ])('retries %s one gap later and returns the next answer (#196)', async (_label, first) => {
+      const starts = answerInTurn(first, jsonResponse(study));
+
+      const result = await advanceUntilSettled(
+        service.getStudy('NCT12345678', createMockContext()),
+      );
+
+      expect(result).toEqual(study);
+      expect(gaps(starts)).toEqual([1000]);
+    });
+
+    /**
+     * Each route's 200 body passes an envelope check before anything reads it:
+     * the top level only, never each record. One that fails to parse or fails
+     * the check is retried as a 503 is, then ends `upstream_unavailable` naming
+     * the route — never quoting the body or the parser (#196).
+     */
+    describe('a 200 body its route cannot read (#196)', () => {
+      const html = 'HTML instead of JSON';
+      const notJson = 'a body that is not JSON';
+      const shape = 'JSON of an unexpected shape';
+      const anyRoute: Array<[string, string, string]> = [
+        ['not json', 'text/plain', notJson],
+        ['{"totalCount":7495,"studies":[{"protocolSection":', 'application/json', notJson],
+        ['', 'application/json', notJson],
+        ['<!DOCTYPE html><html><body>Down for maintenance</body></html>', 'application/json', html],
+        ['<html><body>Down for maintenance</body></html>', 'text/html', html],
+        ['null', 'application/json', shape],
+        ['42', 'application/json', shape],
+        ['"ok"', 'application/json', shape],
+      ];
+      const objectRoute: Array<[string, string, string]> = [
+        ['[]', 'application/json', shape],
+        ['{}', 'application/json', shape],
+      ];
+      const listRoute: Array<[string, string, string]> = [
+        ['[]', 'application/json', shape],
+        ['{}', 'application/json', shape],
+        ['{"x":[]}', 'application/json', shape],
+      ];
+      const routes = [
+        {
+          route: 'a search',
+          path: '/studies',
+          call: () => service.searchStudies({}, createMockContext()),
+          bodies: [
+            ...objectRoute,
+            ['{"totalCount":5}', 'application/json', shape],
+            ['{"studies":"x"}', 'application/json', shape],
+          ] as Array<[string, string, string]>,
+        },
+        {
+          route: 'a count',
+          path: '/studies',
+          call: () => service.countStudies({}, createMockContext()),
+          bodies: [...objectRoute, ['{"studies":[]}', 'application/json', shape]] as Array<
+            [string, string, string]
+          >,
+        },
+        {
+          route: 'a study',
+          path: '/studies/NCT12345678',
+          call: () => service.getStudy('NCT12345678', createMockContext()),
+          bodies: [
+            ...objectRoute,
+            ['{"ok":true}', 'application/json', shape],
+            ['{"protocolSection":null}', 'application/json', shape],
+            ['{"protocolSection":[]}', 'application/json', shape],
+          ] as Array<[string, string, string]>,
+        },
+        {
+          route: 'the field tree',
+          path: '/studies/metadata',
+          call: () => service.getMetadata(false, createMockContext()),
+          bodies: listRoute,
+        },
+        {
+          route: 'the field tree with index-only pieces',
+          path: '/studies/metadata',
+          call: () => service.getMetadata(true, createMockContext()),
+          bodies: listRoute,
+        },
+        {
+          route: 'value statistics',
+          path: '/stats/field/values',
+          call: () => service.getFieldValues(['OverallStatus'], createMockContext()),
+          bodies: listRoute,
+        },
+      ];
+      const cases = routes.flatMap(({ bodies, ...route }) =>
+        [...anyRoute, ...bodies].map(([text, contentType, fault]) => ({
+          ...route,
+          text,
+          contentType,
+          fault,
+        })),
+      );
+
+      it.each(cases)(
+        'ends $route answered $text ($contentType) upstream_unavailable after retries',
+        async ({ call, path, contentType, fault, text }) => {
+          mockFetch.mockResolvedValue(bodyResponse(text, contentType));
+
+          const err = (await advanceUntilSettled<unknown>(call()).catch(
+            (e: unknown) => e,
+          )) as McpError;
+
+          expect(err).toBeInstanceOf(McpError);
+          expect(err.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+          expect(err.message).toBe(
+            `ClinicalTrials.gov API unavailable after retries: ${path} returned ${fault}.`,
+          );
+          expect(err.data).toEqual({
+            path,
+            lastError: `Error: API returned ${fault}`,
+            reason: 'upstream_unavailable',
+          });
+          // Neither runtime's parser text (Bun `JSON Parse error: Unexpected identifier`,
+          // Node `Unexpected token`) nor any of the body reaches the message.
+          expect(err.message).not.toMatch(
+            /Unexpected (token|identifier|EOF)|Parse error|maintenance/,
+          );
+          expect(mockFetch).toHaveBeenCalledTimes(4);
+        },
+      );
+
+      /** A field-validating service whose /studies/search-areas read answers `areas()`. */
+      function servingSearchAreas(areas: () => unknown) {
+        mockFetch.mockImplementation((url: string) => {
+          const { pathname, searchParams } = new URL(url);
+          if (pathname === '/v2/studies/search-areas') return Promise.resolve(areas());
+          if (pathname === '/v2/studies/metadata') {
+            return Promise.resolve(
+              jsonResponse(
+                searchParams.has('includeIndexedOnly') ? INDEXED_METADATA : RECORD_METADATA,
+              ),
+            );
+          }
+          return Promise.resolve(jsonResponse({ studies: [] }));
+        });
+        return new ClinicalTrialsService(testConfig, {
+          ...fastOptions,
+          validateFieldsLocally: true,
+        });
+      }
+
+      it.each([
+        ['an empty array', '[]'],
+        ['an object', '{}'],
+        ['unparseable text', 'not json'],
+      ])(
+        'treats a search-areas read answering %s as failed and keeps nothing of it',
+        async (_label, text) => {
+          let areas: unknown = bodyResponse(text);
+          const svc = servingSearchAreas(() => areas);
+
+          const lookup = await advanceUntilSettled(svc.getAreaIndex(createMockContext()));
+          await expect(advanceUntilSettled(lookup!.extended!())).resolves.toBeUndefined();
+
+          // The next call reads it afresh, and keeps it once it reads.
+          areas = jsonResponse(SEARCH_AREAS);
+          const next = await advanceUntilSettled(svc.getAreaIndex(createMockContext()));
+          await expect(advanceUntilSettled(next!.extended!())).resolves.toBeDefined();
+        },
+      );
+    });
+
+    /**
+     * The envelope check reads only the top level, so it refuses no 200 the
+     * registry serves. Bodies verbatim from ClinicalTrials.gov (2026-11-13);
+     * the study records and metadata slices are the suite's own live captures.
+     */
+    describe('no live 200 is refused (#196)', () => {
+      const COUNT_PAGE =
+        '{"totalCount":7495,"studies":[\n{"protocolSection":{"identificationModule":{"nctId":"NCT06233123"}}}\n],"nextPageToken":"ZVNj7o2Elu8o3lpyWN2mp7LumpOQJJxuZvCk0A"}';
+      const ZERO_COUNT = '{"totalCount":0,"studies":[\n\n]}';
+      const SEARCH_PAGE =
+        '{"studies":[\n{"protocolSection":{"identificationModule":{"nctId":"NCT06233123","briefTitle":"Efficacy of a Phone Application on Treatment Adherence in Asthmatic Patients in Upper Egypt"}}},\n{"protocolSection":{"identificationModule":{"nctId":"NCT07457762","briefTitle":"AIRDROP: Can we Improve Adherence to Inhaled Treatment for Pulmonary Arterial Hypertension?"}}}\n],"nextPageToken":"ZVNj7o2Elu8o3lpyWN2mp7LumpOQJJxuYPah0A"}';
+      const ZERO_SEARCH = '{"studies":[\n\n]}';
+      // Page 2 of a walk sent countTotal=true: upstream sends no totalCount past page 1.
+      const CONTINUATION_PAGE =
+        '{"studies":[\n{"protocolSection":{"identificationModule":{"nctId":"NCT07457762"}}}\n],"nextPageToken":"ZVNj7o2Elu8o3lpyWN2mp7LumpOQJJxuYPah0A"}';
+      const OVERALL_STATUS =
+        '{"type":"ENUM","piece":"OverallStatus","field":"protocolSection.statusModule.overallStatus","missingStudiesCount":0,"uniqueValuesCount":14,"topValues":[{"value":"COMPLETED","studiesCount":334851},{"value":"UNKNOWN","studiesCount":98754},{"value":"RECRUITING","studiesCount":64888},{"value":"TERMINATED","studiesCount":34718},{"value":"NOT_YET_RECRUITING","studiesCount":30109},{"value":"ACTIVE_NOT_RECRUITING","studiesCount":22148},{"value":"WITHDRAWN","studiesCount":16992},{"value":"ENROLLING_BY_INVITATION","studiesCount":5268},{"value":"SUSPENDED","studiesCount":1757},{"value":"WITHHELD","studiesCount":991},{"value":"NO_LONGER_AVAILABLE","studiesCount":545},{"value":"AVAILABLE","studiesCount":249},{"value":"APPROVED_FOR_MARKETING","studiesCount":245},{"value":"TEMPORARILY_NOT_AVAILABLE","studiesCount":37}]}';
+      const PHASE =
+        '{"type":"ENUM","piece":"Phase","field":"protocolSection.designModule.phases","missingStudiesCount":145000,"uniqueValuesCount":6,"topValues":[{"value":"NA","studiesCount":241248},{"value":"PHASE2","studiesCount":91006},{"value":"PHASE1","studiesCount":66284},{"value":"PHASE3","studiesCount":50227},{"value":"PHASE4","studiesCount":36106},{"value":"EARLY_PHASE1","studiesCount":6543}]}';
+
+      it.each([
+        ['a first count page', COUNT_PAGE, 7495],
+        ['a zero-match count', ZERO_COUNT, 0],
+      ])('counts %s', async (_label, text, total) => {
+        mockFetch.mockResolvedValue(bodyResponse(text));
+
+        await expect(service.countStudies({}, createMockContext())).resolves.toBe(total);
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it.each([
+        ['a search page without totalCount', SEARCH_PAGE, {}],
+        ['a zero-match search', ZERO_SEARCH, {}],
+        [
+          'a continuation page sent countTotal=true',
+          CONTINUATION_PAGE,
+          { countTotal: true, pageToken: 'ZVNj7o2Elu8o3lpyWN2mp7LumpOQJJxuZvCk0A' },
+        ],
+        ['a first count page read as a search', COUNT_PAGE, { countTotal: true }],
+      ])('returns %s', async (_label, text, params) => {
+        mockFetch.mockResolvedValue(bodyResponse(text));
+
+        await expect(service.searchStudies(params, createMockContext())).resolves.toEqual(
+          JSON.parse(text),
+        );
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it.each([
+        ['with resultsSection', 'nct03722472'],
+        ['without resultsSection', 'nct06323538'],
+      ])('returns a study %s', async (_label, fixture) => {
+        const { loadStudyFixture } = await import('../../helpers/format-parity.js');
+        const record = loadStudyFixture(fixture);
+        mockFetch.mockResolvedValue(bodyResponse(JSON.stringify(record)));
+
+        await expect(service.getStudy('NCT03722472', createMockContext())).resolves.toEqual(record);
+      });
+
+      it.each([
+        ['the field tree', false, RECORD_METADATA],
+        ['the field tree with index-only pieces', true, INDEXED_METADATA],
+      ])('returns %s', async (_label, includeIndexedOnly, tree) => {
+        mockFetch.mockResolvedValue(bodyResponse(JSON.stringify(tree)));
+
+        await expect(service.getMetadata(includeIndexedOnly, createMockContext())).resolves.toEqual(
+          tree,
+        );
+      });
+
+      it.each([
+        ['one field', ['OverallStatus'], `[${OVERALL_STATUS}]`],
+        ['two fields', ['OverallStatus', 'Phase'], `[${OVERALL_STATUS},${PHASE}]`],
+      ])('returns value statistics for %s', async (_label, fields, text) => {
+        mockFetch.mockResolvedValue(bodyResponse(text));
+
+        // No field index here, so every piece goes undetermined (#192).
+        await expect(service.getFieldValues(fields, createMockContext())).resolves.toEqual({
+          stats: JSON.parse(text),
+          multiValuedUndetermined: fields,
+        });
+      });
+
+      it('reads the search areas', async () => {
+        mockFetch.mockImplementation((url: string) => {
+          const { pathname, searchParams } = new URL(url);
+          if (pathname === '/v2/studies/search-areas') {
+            return Promise.resolve(bodyResponse(JSON.stringify(SEARCH_AREAS)));
+          }
+          return Promise.resolve(
+            jsonResponse(
+              searchParams.has('includeIndexedOnly') ? INDEXED_METADATA : RECORD_METADATA,
+            ),
+          );
+        });
+        const svc = new ClinicalTrialsService(testConfig, {
+          ...fastOptions,
+          validateFieldsLocally: true,
+        });
+
+        const lookup = await advanceUntilSettled(svc.getAreaIndex(createMockContext()));
+
+        await expect(advanceUntilSettled(lookup!.extended!())).resolves.toBeDefined();
+      });
     });
   });
 
@@ -2079,6 +2814,25 @@ describe('ClinicalTrialsService', () => {
       }
     });
 
+    // The two upstream-failure reasons (#196) ride data.reason alone, as every
+    // service reason does: the declaring contract supplies the hint.
+    it.each([
+      ['a 503 on every attempt', jsonResponse(null, 503), 'upstream_unavailable'],
+      ['a body that is not the route’s JSON', jsonResponse({}), 'upstream_unavailable'],
+      ['HTTP 403', jsonResponse(null, 403), 'upstream_rejected'],
+    ])('attaches its reason and no recovery for %s', async (_label, answer, reason) => {
+      mockFetch.mockResolvedValue(answer);
+      const ctx = createMockContext({ errors: allReasons });
+
+      const err = (await advanceUntilSettled(service.searchStudies({}, ctx)).catch(
+        (e: unknown) => e,
+      )) as McpError;
+
+      expect(err.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+      expect(err.data?.reason).toBe(reason);
+      expect(err.data?.recovery).toBeUndefined();
+    });
+
     it('omits recovery.hint when no contract is attached (service stays contract-agnostic)', async () => {
       mockFetch.mockResolvedValue(jsonResponse(null, 404));
       const ctx = createMockContext();
@@ -2125,17 +2879,27 @@ describe('ClinicalTrialsService', () => {
         ],
       },
     ];
+    /** The includeIndexedOnly form: the same tree plus one index-only piece. */
+    const sampleIndexed: FieldNode[] = [
+      ...sampleMetadata,
+      { name: 'numLocations', piece: 'NumLocations', type: 'short', indexedOnly: true },
+    ];
 
     /**
-     * Answer each endpoint by its path: both metadata reads with `metadata`, the
-     * search-areas read with SEARCH_AREAS, the search and the field-values read
-     * with `primary`; anything else is an unmocked request.
+     * Answer each endpoint by its path: both metadata reads with `metadata`
+     * (by default the sample tree, with its index-only piece on the
+     * includeIndexedOnly read), the search-areas read with SEARCH_AREAS, the
+     * search and the field-values read with `primary`; anything else is an
+     * unmocked request.
      */
     function mockByRoute(routes: { metadata?: unknown; primary?: unknown } = {}) {
       mockFetch.mockImplementation((url: string | URL) => {
-        const { pathname } = new URL(String(url));
+        const { pathname, searchParams } = new URL(String(url));
         if (pathname === '/v2/studies/metadata') {
-          return Promise.resolve(routes.metadata ?? jsonResponse(sampleMetadata));
+          return Promise.resolve(
+            routes.metadata ??
+              jsonResponse(searchParams.has('includeIndexedOnly') ? sampleIndexed : sampleMetadata),
+          );
         }
         if (pathname === '/v2/studies/search-areas') {
           return Promise.resolve(jsonResponse(SEARCH_AREAS));
@@ -2332,9 +3096,12 @@ describe('ClinicalTrialsService', () => {
     it('rejects getFieldValues with an invalid field name', async () => {
       mockByRoute();
       const ctx = createMockContext();
-      await expect(validatingService.getFieldValues(['NotAField'], ctx)).rejects.toThrow(
-        /Invalid field name: 'NotAField'/,
-      );
+      // A record-tier miss reads the index-only pieces first, a pacer gap later (#194).
+      await expect(
+        advanceUntilSettled(validatingService.getFieldValues(['NotAField'], ctx)),
+      ).rejects.toThrow(/Invalid field name: 'NotAField'/);
+      const sent = mockFetch.mock.calls.map(([u]) => new URL(String(u)).pathname);
+      expect(sent).not.toContain('/v2/stats/field/values');
     });
 
     it('fails open when metadata is unreachable so the request still proceeds', async () => {
@@ -2422,7 +3189,19 @@ describe('ClinicalTrialsService', () => {
           ],
         },
       ];
-      mockByRoute({ metadata: jsonResponse(metadata), primary: jsonResponse([]) });
+      mockByRoute({
+        metadata: jsonResponse(metadata),
+        primary: jsonResponse([
+          {
+            field: 'protocolSection.statusModule.overallStatus',
+            piece: 'OverallStatus',
+            type: 'ENUM',
+            missingStudiesCount: 0,
+            uniqueValuesCount: 14,
+            topValues: [{ value: 'COMPLETED', studiesCount: 334_851 }],
+          },
+        ]),
+      });
       const ctx = createMockContext();
 
       await advanceUntilSettled(validatingService.getFieldValues(['RecruitmentStatus'], ctx));
@@ -2501,8 +3280,8 @@ describe('ClinicalTrialsService', () => {
         validatingService.getFieldValues(['Phase', 'OverallStatus'], ctx),
       );
 
-      const phase = result.find((s) => s.piece === 'Phase');
-      const status = result.find((s) => s.piece === 'OverallStatus');
+      const phase = result.stats.find((s) => s.piece === 'Phase');
+      const status = result.stats.find((s) => s.piece === 'OverallStatus');
       expect(phase?.multiValued).toBe(true);
       // Scalar field: flag is absent (not set to false).
       expect(status?.multiValued).toBeUndefined();
@@ -2535,7 +3314,7 @@ describe('ClinicalTrialsService', () => {
       const result = await advanceUntilSettled(
         validatingService.getFieldValues(['LocationCountry'], ctx),
       );
-      expect(result[0]?.multiValued).toBe(true);
+      expect(result.stats[0]?.multiValued).toBe(true);
     });
 
     it('flags a field two array-typed ancestors deep (#121)', async () => {
@@ -2560,7 +3339,7 @@ describe('ClinicalTrialsService', () => {
       const result = await advanceUntilSettled(
         validatingService.getFieldValues(['LocationContactName'], ctx),
       );
-      expect(result[0]?.multiValued).toBe(true);
+      expect(result.stats[0]?.multiValued).toBe(true);
     });
 
     it('leaves the provider counts byte-for-byte unchanged when flagging (#121)', async () => {
@@ -2588,7 +3367,7 @@ describe('ClinicalTrialsService', () => {
         validatingService.getFieldValues(['LocationCountry'], ctx),
       );
       // Only multiValued is added; every provider-supplied number survives.
-      expect(result[0]).toEqual({ ...upstream, multiValued: true });
+      expect(result.stats[0]).toEqual({ ...upstream, multiValued: true });
     });
 
     it('keeps a field with no array-typed ancestor at any depth unflagged (#121)', async () => {
@@ -2613,7 +3392,7 @@ describe('ClinicalTrialsService', () => {
       const result = await advanceUntilSettled(
         validatingService.getFieldValues(['OverallStatus'], ctx),
       );
-      expect(result[0]?.multiValued).toBeUndefined();
+      expect(result.stats[0]?.multiValued).toBeUndefined();
     });
 
     it('does not flag multiValued when the metadata index is unreachable (#85 fail-open)', async () => {
@@ -2629,7 +3408,7 @@ describe('ClinicalTrialsService', () => {
       const ctx = createMockContext();
 
       const result = await advanceUntilSettled(validatingService.getFieldValues(['Phase'], ctx));
-      expect(result[0]?.multiValued).toBeUndefined();
+      expect(result.stats[0]?.multiValued).toBeUndefined();
     });
 
     it('attaches reason=field_invalid on validation failure, leaving recovery to the contract', async () => {
@@ -3098,7 +3877,7 @@ describe('ClinicalTrialsService', () => {
           ),
         );
 
-        expect(result).toEqual(stats);
+        expect(result).toEqual({ stats });
         expect(primaryRequests().map((u) => u.searchParams.get('fields'))).toEqual([
           'OverallStatus',
         ]);
@@ -3152,11 +3931,16 @@ describe('ClinicalTrialsService', () => {
       });
 
       it('sends a path unchanged when the metadata is unavailable', async () => {
-        routes({ metadata: jsonResponse(null, 404), primary: jsonResponse([]) });
         const path = 'protocolSection.statusModule.overallStatus';
+        const unavailable = jsonResponse(null, 503);
+        routes({ metadata: unavailable });
         await advanceUntilSettled(
           validating.searchStudies({ fields: [path] }, createMockContext()),
         );
+        routes({
+          metadata: unavailable,
+          primary: jsonResponse([{ field: path, piece: 'OverallStatus', type: 'ENUM' }]),
+        });
         await advanceUntilSettled(validating.getFieldValues([path], createMockContext()));
 
         expect(primaryRequests().map((u) => u.searchParams.get('fields'))).toEqual([path, path]);
@@ -3373,7 +4157,7 @@ describe('ClinicalTrialsService', () => {
         expect(parseUnsupportedFieldType(text)).toBeUndefined();
       });
 
-      describe('stays linear on caller-sized text', () => {
+      describe('stays linear on caller-sized text', { timeout: 0 }, () => {
         it.each([
           ...LINE_BREAK_SHAPES.map(([name, shape]) => [name, shape, undefined] as const),
           [
@@ -4214,7 +4998,7 @@ describe('ClinicalTrialsService', () => {
         expect(parseAreaRejection(text)).toBeUndefined();
       });
 
-      describe('stays linear on caller-sized text', () => {
+      describe('stays linear on caller-sized text', { timeout: 0 }, () => {
         /** A rejection as one string to compare: its kind, then the name or path it carries. */
         const summary = (rejection: AreaRejection | undefined) =>
           rejection &&
@@ -4335,6 +5119,8 @@ describe('ClinicalTrialsService', () => {
       indexed?: Answer;
       metadata?: Answer;
       searchAreas?: Answer;
+      /** `/stats/field/values`, answered from the request's URL; unmocked unless given. */
+      stats?: (url: URL) => unknown;
       studies?: Answer;
     }
 
@@ -4343,10 +5129,14 @@ describe('ClinicalTrialsService', () => {
       metadata = jsonResponse(RECORD_METADATA),
       indexed = jsonResponse(INDEXED_METADATA),
       searchAreas = jsonResponse(SEARCH_AREAS),
+      stats,
       studies = jsonResponse({ studies: [], totalCount: 7 }),
     }: Routes = {}) =>
       mockFetch.mockImplementation((url: string | URL, init?: RequestInit) => {
         const { pathname, searchParams } = new URL(String(url));
+        if (pathname === '/v2/stats/field/values' && stats) {
+          return Promise.resolve(stats(new URL(String(url))));
+        }
         const answer =
           pathname === `${STUDIES}/metadata`
             ? searchParams.get('includeIndexedOnly') === 'true'
@@ -4883,6 +5673,479 @@ describe('ClinicalTrialsService', () => {
       });
     });
 
+    // `/stats/field/values` counts every index-only piece and every alt name as
+    // written, and refuses a mis-cased name and a search area (`Unknown piece
+    // name`, live 2026-11-13). So value statistics look a record-tier miss up
+    // among the index-only pieces before refusing it, and never read or suggest
+    // a search area.
+    describe('value statistics (#194)', () => {
+      /** `tree` with `nodes` appended to the children of the node at dot path `path`. */
+      const addAt = (tree: FieldNode[], path: string, nodes: FieldNode[]): FieldNode[] => {
+        const [head, ...rest] = path.split('.');
+        return tree.map((node) =>
+          node.name !== head
+            ? node
+            : {
+                ...node,
+                children:
+                  rest.length > 0
+                    ? addAt(node.children ?? [], rest.join('.'), nodes)
+                    : [...(node.children ?? []), ...nodes],
+              },
+        );
+      };
+      /** Live nodes (2026-11-13): Phase repeats itself; StudyFirstPostYear is index-only under no repeated node. */
+      const designModule: FieldNode = {
+        name: 'designModule',
+        piece: 'DesignModule',
+        sourceType: 'STRUCT',
+        type: 'DesignModule',
+        children: [
+          {
+            name: 'phases',
+            piece: 'Phase',
+            sourceType: 'TEXT',
+            type: 'Phase[]',
+            altPieceNames: ['PHASE'],
+          },
+        ],
+      };
+      const studyFirstPost = (indexed: boolean): FieldNode => ({
+        name: 'studyFirstPostDateStruct',
+        piece: 'StudyFirstPostDateStruct',
+        sourceType: 'STRUCT',
+        type: 'DateStruct',
+        children: [
+          {
+            name: 'date',
+            piece: 'StudyFirstPostDate',
+            sourceType: 'DATE',
+            type: 'NormalizedDate',
+            altPieceNames: ['STUDY-FIRST-POSTED'],
+          },
+          ...(indexed
+            ? [
+                {
+                  name: 'studyFirstPostYear',
+                  piece: 'StudyFirstPostYear',
+                  indexedOnly: true,
+                  sourceType: 'FUNC MinYear(StudyFirstPostDate)',
+                  type: 'short',
+                },
+              ]
+            : []),
+        ],
+      });
+      const withStatsPieces = (tree: FieldNode[], indexed: boolean) =>
+        addAt(addAt(tree, 'protocolSection', [designModule]), 'protocolSection.statusModule', [
+          studyFirstPost(indexed),
+        ]);
+      const STATS_RECORD = withStatsPieces(RECORD_METADATA, false);
+      const STATS_INDEXED = withStatsPieces(INDEXED_METADATA, true);
+
+      /** Live statistics (2026-11-13, top values cut), keyed by the piece upstream echoes. */
+      const LIVE_STATS = new Map<string, Record<string, unknown>>([
+        [
+          'Phase',
+          {
+            type: 'ENUM',
+            piece: 'Phase',
+            field: 'protocolSection.designModule.phases',
+            missingStudiesCount: 145000,
+            uniqueValuesCount: 6,
+            topValues: [{ value: 'NA', studiesCount: 241248 }],
+          },
+        ],
+        [
+          'NumLocations',
+          {
+            type: 'INTEGER',
+            piece: 'NumLocations',
+            field: 'protocolSection.contactsLocationsModule.numLocations',
+            missingStudiesCount: 18653,
+            min: 0,
+            max: 3510,
+            avg: 6.008053659788436,
+          },
+        ],
+        [
+          'StudyFirstPostYear',
+          {
+            type: 'INTEGER',
+            piece: 'StudyFirstPostYear',
+            field: 'protocolSection.statusModule.studyFirstPostDateStruct.studyFirstPostYear',
+            missingStudiesCount: 0,
+            min: 1999,
+            max: 2026,
+            avg: 2017.7153880547705,
+          },
+        ],
+        [
+          'LocationCountryCode',
+          {
+            type: 'STRING',
+            piece: 'LocationCountryCode',
+            field: 'protocolSection.contactsLocationsModule.locations.countryCode',
+            missingStudiesCount: 61219,
+            uniqueValuesCount: 226,
+            topValues: [{ value: 'US', studiesCount: 197011 }],
+            longest: { value: 'US', length: 2, nctId: 'NCT00587535' },
+          },
+        ],
+        [
+          'OverallStatus',
+          {
+            type: 'ENUM',
+            piece: 'OverallStatus',
+            field: 'protocolSection.statusModule.overallStatus',
+            missingStudiesCount: 0,
+            uniqueValuesCount: 14,
+            topValues: [{ value: 'COMPLETED', studiesCount: 334851 }],
+          },
+        ],
+        [
+          'CollaboratorName',
+          {
+            type: 'STRING',
+            piece: 'CollaboratorName',
+            field: 'protocolSection.sponsorCollaboratorsModule.collaborators.name',
+            missingStudiesCount: 418974,
+            uniqueValuesCount: 64367,
+            topValues: [{ value: 'National Cancer Institute (NCI)', studiesCount: 10890 }],
+          },
+        ],
+      ]);
+      /** Alt names upstream resolves as written, each to the piece it echoes (live 2026-11-13). */
+      const ALT_PIECE = new Map([
+        ['NUMBER-OF-LOCATIONS', 'NumLocations'],
+        ['OVERALL-STATUS', 'OverallStatus'],
+        ['COLLABORATOR', 'CollaboratorName'],
+      ]);
+      /** `/stats/field/values` as upstream answers: each name resolved as written, or a 404 naming the first that is not. */
+      const upstream = (url: URL) => {
+        const names = url.searchParams.get('fields')?.split('|') ?? [];
+        const unknown = names.find((name) => !LIVE_STATS.has(ALT_PIECE.get(name) ?? name));
+        return unknown === undefined
+          ? jsonResponse(
+              names.map((name) => structuredClone(LIVE_STATS.get(ALT_PIECE.get(name) ?? name))),
+            )
+          : textResponse(`Unknown piece name of field path: ${unknown}`, 404);
+      };
+      /** The live statistic for `piece`, flagged multiValued when `multiValued`. */
+      const liveStat = (piece: string, multiValued?: true) => ({
+        ...LIVE_STATS.get(piece),
+        ...(multiValued ? { multiValued } : {}),
+      });
+      const statsRoutes = (overrides: Routes = {}) =>
+        routes({
+          metadata: jsonResponse(STATS_RECORD),
+          indexed: jsonResponse(STATS_INDEXED),
+          stats: upstream,
+          ...overrides,
+        });
+      /** The `fields` each statistics request sent. */
+      const sentFields = () =>
+        mockFetch.mock.calls
+          .map(([url]) => new URL(String(url)))
+          .filter((u) => u.pathname === '/v2/stats/field/values')
+          .map((u) => u.searchParams.get('fields'));
+      const suggestionsOf = (err: McpError) =>
+        (err.data as { suggestions?: Record<string, string[]> }).suggestions ?? {};
+      const SEARCH_AREA_NAMES = SEARCH_AREAS.flatMap(({ areas }) => areas.map((a) => a.name));
+      const values = (
+        fields: string[],
+        ctx = createMockContext(),
+        service: ClinicalTrialsService = validating,
+      ) => advanceUntilSettled(service.getFieldValues(fields, ctx));
+
+      it.each<[string[], Record<string, unknown>[]]>([
+        [['NumLocations'], [liveStat('NumLocations')]],
+        [
+          ['StudyFirstPostYear', 'LocationCountryCode'],
+          [liveStat('StudyFirstPostYear'), liveStat('LocationCountryCode', true)],
+        ],
+        [
+          ['Phase', 'NumLocations'],
+          [liveStat('Phase', true), liveStat('NumLocations')],
+        ],
+      ])(
+        'answers %j with upstream’s statistics, every piece’s multiValued settled',
+        async (fields, stats) => {
+          statsRoutes();
+
+          const result = await values(fields);
+
+          expect(sentFields()).toEqual([fields.join('|')]);
+          expect(result).toEqual({ stats });
+          expect(requestCounts()).toMatchObject({ indexed: 1, searchAreas: 0 });
+        },
+      );
+
+      it.each([
+        ['numlocations', 'NumLocations'],
+        ['number-of-locations', 'NumLocations'],
+        ['NUMBER-OF-LOCATIONS', 'NUMBER-OF-LOCATIONS'],
+        [' NumLocations\t', 'NumLocations'],
+      ])('sends %j as %j, and upstream answers it', async (name, sent) => {
+        statsRoutes();
+        const ctx = createMockContext();
+
+        const result = await values([name], ctx);
+
+        expect(sentFields()).toEqual([sent]);
+        expect(result).toEqual({ stats: [liveStat('NumLocations')] });
+        expect(
+          logCalls(ctx)
+            .filter((c) => c.msg === 'Field names auto-corrected')
+            .map((c) => c.data),
+        ).toEqual(sent === name ? [] : [{ corrections: [{ from: name, to: sent }] }]);
+      });
+
+      it('settles multiValued whether upstream echoes the piece or the alt name sent', async () => {
+        statsRoutes({
+          stats: (url) =>
+            jsonResponse(
+              (url.searchParams.get('fields') ?? '')
+                .split('|')
+                .map((name) => ({ field: 'echoed', piece: name, type: 'STRING' })),
+            ),
+        });
+
+        const result = await values(['CONDITIONS', 'NUMBER-OF-LOCATIONS']);
+
+        expect(result).toEqual({
+          stats: [
+            { field: 'echoed', piece: 'CONDITIONS', type: 'STRING', multiValued: true },
+            { field: 'echoed', piece: 'NUMBER-OF-LOCATIONS', type: 'STRING' },
+          ],
+        });
+      });
+
+      it('flags an index-only piece whose own type repeats, as it flags a record piece', async () => {
+        statsRoutes({
+          indexed: jsonResponse(
+            addAt(STATS_INDEXED, 'protocolSection.conditionsModule', [
+              {
+                name: 'conditionCodes',
+                piece: 'ConditionCode',
+                indexedOnly: true,
+                type: 'keyword[]',
+              },
+            ]),
+          ),
+          stats: (url) =>
+            jsonResponse(
+              (url.searchParams.get('fields') ?? '')
+                .split('|')
+                .map((name) => ({ field: 'counted', piece: name, type: 'STRING' })),
+            ),
+        });
+
+        const result = await values(['ConditionCode', 'NumLocations']);
+
+        expect(result).toEqual({
+          stats: [
+            { field: 'counted', piece: 'ConditionCode', type: 'STRING', multiValued: true },
+            { field: 'counted', piece: 'NumLocations', type: 'STRING' },
+          ],
+        });
+      });
+
+      it('refuses a near miss of an index-only piece, suggesting the piece first, before any request', async () => {
+        statsRoutes();
+
+        const err = await rejection(() => values(['NumLocation']));
+
+        expect(err.code).toBe(JsonRpcErrorCode.ValidationError);
+        expect(err.data).toMatchObject({ reason: 'field_invalid', invalid: ['NumLocation'] });
+        expect(suggestionsOf(err).NumLocation?.[0]).toBe('NumLocations');
+        expect(err.message).toContain("'NumLocation' — did you mean 'NumLocations'");
+        expect(sentFields()).toEqual([]);
+      });
+
+      it.each([['ConditionSearch'], ['conditionsearch'], ['ConditionSearches']])(
+        'refuses the search-area name %j, never reading or suggesting a search area',
+        async (name) => {
+          statsRoutes();
+
+          const err = await rejection(() => values([name]));
+
+          expect(err.data).toMatchObject({ reason: 'field_invalid', invalid: [name] });
+          const suggested = Object.values(suggestionsOf(err)).flat();
+          expect(suggested.filter((piece) => SEARCH_AREA_NAMES.includes(piece))).toEqual([]);
+          expect(requestCounts().searchAreas).toBe(0);
+          expect(sentFields()).toEqual([]);
+        },
+      );
+
+      it.each([['OverallStatus'], ['overallstatus']])(
+        'reads no index-only piece for %j, which the record pieces resolve',
+        async (name) => {
+          statsRoutes();
+
+          await values([name]);
+
+          expect(sentFields()).toEqual(['OverallStatus']);
+          expect(requestCounts()).toMatchObject({ metadata: 1, indexed: 0, searchAreas: 0 });
+        },
+      );
+
+      // Fold-in: upstream counts a record alt name as written, too.
+      it.each<[string, string, Record<string, unknown>]>([
+        ['OVERALL-STATUS', 'OVERALL-STATUS', liveStat('OverallStatus')],
+        ['overall-status', 'OverallStatus', liveStat('OverallStatus')],
+        // Its lowered form names the group Collaborator; as written it is CollaboratorName's.
+        ['COLLABORATOR', 'COLLABORATOR', liveStat('CollaboratorName', true)],
+      ])(
+        'sends the record alt name %j as %j, read from the record pieces alone',
+        async (name, sent, stat) => {
+          statsRoutes();
+
+          const result = await values([name]);
+
+          expect(sentFields()).toEqual([sent]);
+          expect(result).toEqual({ stats: [stat] });
+          expect(requestCounts().indexed).toBe(0);
+        },
+      );
+
+      it('still refuses a lowered name that folds to a group, as that group (#191)', async () => {
+        statsRoutes();
+
+        const err = await rejection(() => values(['collaborator']));
+
+        expect(err.data).toEqual({
+          reason: 'field_invalid',
+          invalid: ['Collaborator'],
+          suggestions: { Collaborator: ['CollaboratorName', 'CollaboratorClass'] },
+        });
+        expect(sentFields()).toEqual([]);
+      });
+
+      describe('when the index-only read fails', () => {
+        /** The production 5 s bound, beside a request timeout past it, so only that bound ends a hang. */
+        const production = () =>
+          new ClinicalTrialsService(
+            { ...testConfig, requestTimeoutMs: 120_000 },
+            { ...fastOptions, validateFieldsLocally: true },
+          );
+        // The metadata read starts at 0 and the index-only read a pacer gap later;
+        // the statistics go out a gap after it fails, or as its 5 s bound ends it.
+        const failures = [
+          ['404', () => jsonResponse(null, 404), 2000],
+          ['503', () => jsonResponse(null, 503), 2000],
+          ['a hang', () => hang, 6000],
+        ] as const;
+
+        it.each(failures)(
+          'sends NumLocations as written when the read answers %s, its multiValued undetermined',
+          async (_label, answer, at) => {
+            const sentAt: number[] = [];
+            statsRoutes({
+              indexed: answer(),
+              stats: (url) => {
+                sentAt.push(Date.now());
+                return upstream(url);
+              },
+            });
+            const ctx = createMockContext();
+            const startedAt = Date.now();
+
+            const result = await values(['NumLocations'], ctx, production());
+
+            expect(sentAt.map((t) => t - startedAt)).toEqual([at]);
+            expect(result).toEqual({
+              stats: [liveStat('NumLocations')],
+              multiValuedUndetermined: ['NumLocations'],
+            });
+            expect(requestCounts()).toMatchObject({ indexed: 1, searchAreas: 0 });
+            expect(logCalls(ctx)).toContainEqual(
+              expect.objectContaining({
+                level: 'warning',
+                msg: 'Index-only piece lookup skipped — read failed',
+              }),
+            );
+          },
+        );
+
+        it.each(failures)(
+          'sends Bogus when the read answers %s, and upstream’s 404 refuses it field_invalid',
+          async (_label, answer) => {
+            statsRoutes({ indexed: answer() });
+
+            const err = await rejection(() => values(['Bogus'], createMockContext(), production()));
+
+            expect(sentFields()).toEqual(['Bogus']);
+            expect(err.code).toBe(JsonRpcErrorCode.ValidationError);
+            expect(err.message).toMatch(
+              /^Invalid field name: 'Bogus'\. Use PascalCase piece names/,
+            );
+            expect(err.data).toEqual({ reason: 'field_invalid' });
+          },
+        );
+
+        it('still refuses a group locally beside a name it could not check', async () => {
+          statsRoutes({ indexed: jsonResponse(null, 503) });
+
+          const err = await rejection(() => values(['LeadSponsor', 'NumLocations']));
+
+          expect(err.data).toEqual({
+            reason: 'field_invalid',
+            invalid: ['LeadSponsor'],
+            suggestions: { LeadSponsor: ['LeadSponsorName', 'LeadSponsorClass'] },
+          });
+          expect(sentFields()).toEqual([]);
+        });
+
+        it('reads it once per call, for every name the call checks, and afresh on the next call', async () => {
+          statsRoutes({ indexed: jsonResponse(null, 503) });
+          const result = await values(['numlocations', 'NumLocations']).catch((e: unknown) => e);
+          const once = requestCounts().indexed;
+          statsRoutes();
+          const next = await values(['NumLocations']);
+
+          // Unchecked, the mis-cased name went out as written and upstream refused it.
+          expect(result).toMatchObject({ data: { reason: 'field_invalid' } });
+          expect(sentFields()).toEqual(['numlocations|NumLocations', 'NumLocations']);
+          expect(once).toBe(1);
+          expect(requestCounts().indexed).toBe(2);
+          expect(next).toEqual({ stats: [liveStat('NumLocations')] });
+        });
+
+        it('treats a tree that flags no index-only piece as a failed read, kept for no later call', async () => {
+          // The default tree in place of the includeIndexedOnly one: a non-empty array, so it parses.
+          statsRoutes({ indexed: () => jsonResponse(STATS_RECORD) });
+          const first = await values(['NumLocations']);
+          const second = await values(['NumLocations']);
+
+          expect(first).toEqual({
+            stats: [liveStat('NumLocations')],
+            multiValuedUndetermined: ['NumLocations'],
+          });
+          expect(second).toEqual(first);
+          expect(sentFields()).toEqual(['NumLocations', 'NumLocations']);
+          expect(requestCounts().indexed).toBe(2);
+        });
+
+        it('ends as RequestCancelled when the caller aborts during the read, logging no warning', async () => {
+          const controller = new AbortController();
+          statsRoutes({
+            indexed: (init?: RequestInit) => {
+              controller.abort();
+              return hang(init);
+            },
+          });
+          const ctx = createMockContext({ signal: controller.signal });
+
+          const err = await rejection(() => values(['NumLocations'], ctx));
+
+          expect(err.code).toBe(JsonRpcErrorCode.RequestCancelled);
+          expect(logCalls(ctx).filter((c) => c.level === 'warning')).toEqual([]);
+          expect(sentFields()).toEqual([]);
+        });
+      });
+    });
+
     describe('rejections outside the single-study route', () => {
       it('reports a metadata 404 as a missing endpoint, never study_not_found', async () => {
         mockFetch.mockResolvedValue(textResponse('No such endpoint', 404));
@@ -4992,6 +6255,252 @@ describe('ClinicalTrialsService', () => {
       );
       expect(results).toEqual([]);
       expect(total).toBe(0);
+    });
+
+    it('reads the index on the full retry ladder once the bounded read fails, and keeps it (#192)', async () => {
+      // The bounded read takes one 503; the search's own ladder takes two more
+      // and the index. Its answer is the index, so it never ends on one attempt.
+      const starts = answerInTurn(
+        jsonResponse(null, 503),
+        jsonResponse(null, 503),
+        jsonResponse(null, 503),
+        jsonResponse(sampleMetadata),
+      );
+
+      const found = await advanceUntilSettled(
+        validatingService.searchFieldDefinitions('enrollment', 5, createMockContext()),
+      );
+      expect(found.entries[0]!.piece).toBe('EnrollmentCount');
+      expect(starts).toHaveLength(4);
+
+      await advanceUntilSettled(
+        validatingService.searchFieldDefinitions('sponsor', 5, createMockContext()),
+      );
+      expect(starts).toHaveLength(4);
+    });
+
+    it.each([
+      ['an empty list', []],
+      ['a tree with no field pieces', [{ name: 'protocolSection', children: [] }]],
+    ])(
+      'refuses metadata holding %s as upstream_unavailable, never an empty answer (#196)',
+      async (_label, tree) => {
+        mockFetch.mockResolvedValue(jsonResponse(tree));
+
+        const err = await advanceUntilSettled(
+          validatingService.searchFieldDefinitions('status', 5, createMockContext()),
+        ).catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(McpError);
+        expect(err).toMatchObject({
+          code: JsonRpcErrorCode.ServiceUnavailable,
+          data: { reason: 'upstream_unavailable', path: '/studies/metadata' },
+        });
+      },
+    );
+  });
+
+  // A fields list that reaches into posted results caps the search page at 10
+  // studies (#198); the tool reads the cap from this classification.
+  describe('results projection (#198)', () => {
+    /** A slice of the live field tree (2026-11-13), node fields verbatim. */
+    const RESULTS_METADATA: FieldNode[] = [
+      {
+        name: 'protocolSection',
+        piece: 'ProtocolSection',
+        sourceType: 'STRUCT',
+        type: 'ProtocolSection',
+        children: [
+          {
+            name: 'identificationModule',
+            piece: 'IdentificationModule',
+            sourceType: 'STRUCT',
+            type: 'IdentificationModule',
+            children: [{ name: 'nctId', piece: 'NCTId', sourceType: 'TEXT', type: 'nct' }],
+          },
+          {
+            name: 'statusModule',
+            piece: 'StatusModule',
+            sourceType: 'STRUCT',
+            type: 'StatusModule',
+            children: [
+              { name: 'overallStatus', piece: 'OverallStatus', sourceType: 'TEXT', type: 'Status' },
+            ],
+          },
+        ],
+      },
+      {
+        name: 'resultsSection',
+        piece: 'ResultsSection',
+        sourceType: 'STRUCT',
+        type: 'ResultsSection',
+        children: [
+          {
+            name: 'outcomeMeasuresModule',
+            piece: 'OutcomeMeasuresModule',
+            sourceType: 'STRUCT',
+            type: 'OutcomeMeasuresModule',
+            children: [
+              {
+                name: 'outcomeMeasures',
+                piece: 'OutcomeMeasure',
+                sourceType: 'STRUCT',
+                type: 'OutcomeMeasure[]',
+                children: [
+                  { name: 'title', piece: 'OutcomeMeasureTitle', sourceType: 'TEXT', type: 'text' },
+                ],
+              },
+            ],
+          },
+          {
+            name: 'adverseEventsModule',
+            piece: 'AdverseEventsModule',
+            sourceType: 'STRUCT',
+            type: 'AdverseEventsModule',
+            children: [
+              { name: 'timeFrame', piece: 'EventsTimeFrame', sourceType: 'TEXT', type: 'text' },
+            ],
+          },
+        ],
+      },
+      {
+        name: 'derivedSection',
+        piece: 'DerivedSection',
+        sourceType: 'STRUCT',
+        type: 'DerivedSection',
+      },
+    ];
+
+    let validating: ClinicalTrialsService;
+    beforeEach(() => {
+      validating = new ClinicalTrialsService(testConfig, {
+        ...fastOptions,
+        validateFieldsLocally: true,
+      });
+    });
+
+    const requestsTo = (pathname: string) =>
+      mockFetch.mock.calls.filter(([url]) => new URL(url as string).pathname === pathname).length;
+
+    /** Answer /studies/metadata with `metadata`, and /studies with an empty page. */
+    const serving = (metadata: unknown) =>
+      mockFetch.mockImplementation((url: string) =>
+        Promise.resolve(
+          new URL(url).pathname === '/v2/studies/metadata'
+            ? metadata
+            : jsonResponse({ studies: [], totalCount: 0 }),
+        ),
+      );
+
+    it.each([
+      ['the results section', ['ResultsSection'], 'results'],
+      [
+        'a module under results, beside a protocol leaf',
+        ['NCTId', 'OutcomeMeasuresModule'],
+        'results',
+      ],
+      ['a group inside a results module', ['OutcomeMeasure'], 'results'],
+      ['another results module', ['AdverseEventsModule'], 'results'],
+      ['the results section off by case', ['resultssection'], 'results'],
+      // A module's piece and path differ past case, so only the piece fold reaches it.
+      ['a results module off by case', ['adverseeventsmodule'], 'results'],
+      ['a group inside a results module off by case', ['outcomemeasure'], 'results'],
+      ['the results section with surrounding whitespace', ['  ResultsSection '], 'results'],
+      [
+        'a results module by its metadata path',
+        ['resultsSection.outcomeMeasuresModule'],
+        'results',
+      ],
+      [
+        'a results module by its path off by case',
+        ['RESULTSSECTION.ADVERSEEVENTSMODULE'],
+        'results',
+      ],
+      ['a leaf under results', ['NCTId', 'OutcomeMeasureTitle'], 'other'],
+      ['a leaf under results off by case', ['outcomemeasuretitle'], 'other'],
+      ['the protocol and derived sections', ['ProtocolSection', 'DerivedSection'], 'other'],
+      ['a protocol module', ['StatusModule'], 'other'],
+      ['a name the field index does not hold', ['NotAField'], 'other'],
+    ])('classifies %s as %s', async (_label, fields, expected) => {
+      serving(jsonResponse(RESULTS_METADATA));
+
+      const projection = await advanceUntilSettled(
+        validating.classifyProjection(fields, createMockContext()),
+      );
+
+      expect(projection).toBe(expected);
+      expect(requestsTo('/v2/studies/metadata')).toBe(1);
+    });
+
+    it("shares the call's one field-index read with the search that follows", async () => {
+      serving(jsonResponse(RESULTS_METADATA));
+      const ctx = createMockContext();
+
+      await expect(
+        advanceUntilSettled(validating.classifyProjection(['ResultsSection'], ctx)),
+      ).resolves.toBe('results');
+      await advanceUntilSettled(
+        validating.searchStudies({ fields: ['ResultsSection'], pageSize: 10 }, ctx),
+      );
+
+      expect(requestsTo('/v2/studies/metadata')).toBe(1);
+      expect(requestsTo('/v2/studies')).toBe(1);
+      const search = mockFetch.mock.calls.find(
+        ([url]) => new URL(url as string).pathname === '/v2/studies',
+      );
+      expect(new URL(search![0] as string).searchParams.get('pageSize')).toBe('10');
+    });
+
+    it('is unclassifiable when the field metadata cannot be read, and the search still goes out unchecked', async () => {
+      serving(jsonResponse(null, 503));
+      const ctx = createMockContext();
+
+      await expect(
+        advanceUntilSettled(validating.classifyProjection(['NCTId', 'ResultsSection'], ctx)),
+      ).resolves.toBe('unclassifiable');
+      await advanceUntilSettled(
+        validating.searchStudies({ fields: ['NCTId', 'ResultsSection'], pageSize: 10 }, ctx),
+      );
+
+      expect(requestsTo('/v2/studies/metadata')).toBe(1);
+      const search = mockFetch.mock.calls.find(
+        ([url]) => new URL(url as string).pathname === '/v2/studies',
+      );
+      expect(new URL(search![0] as string).searchParams.get('fields')).toBe('NCTId|ResultsSection');
+    });
+
+    it('is unclassifiable without reading anything when local validation is off', async () => {
+      await expect(
+        service.classifyProjection(['ResultsSection'], createMockContext()),
+      ).resolves.toBe('unclassifiable');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it("rethrows the caller's cancellation instead of reading it as unclassifiable", async () => {
+      // The metadata read never answers; the caller cancels while it waits.
+      mockFetch.mockImplementation(() => new Promise(() => {}));
+      const controller = new AbortController();
+      const pending = validating
+        .classifyProjection(['ResultsSection'], createMockContext({ signal: controller.signal }))
+        .catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(0);
+      controller.abort();
+
+      const err = await pending;
+      expect(err).toBeInstanceOf(McpError);
+      expect(err).toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+    });
+
+    it('rethrows a cancellation that arrived before the call', async () => {
+      const controller = new AbortController();
+      controller.abort();
+
+      const err = await validating
+        .classifyProjection(['ResultsSection'], createMockContext({ signal: controller.signal }))
+        .catch((e: unknown) => e);
+
+      expect(err).toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+      expect(mockFetch).not.toHaveBeenCalled();
     });
   });
 
@@ -5151,7 +6660,7 @@ describe('ClinicalTrialsService', () => {
         expect(last.abortedAt! - last.startedAt).toBeLessThanOrEqual(2000);
       });
 
-      it('exhausts four per-attempt timeouts as ServiceUnavailable naming the timeout', async () => {
+      it('exhausts four per-attempt timeouts as Timeout upstream_timeout naming the timeout', async () => {
         const shortAttempts = new ClinicalTrialsService(
           { ...testConfig, requestTimeoutMs: 2000 },
           fastOptions,
@@ -5160,11 +6669,15 @@ describe('ClinicalTrialsService', () => {
 
         const { err } = await failure(shortAttempts.getStudy('NCT12345678', createMockContext()));
 
-        expect(err.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
-        expect(err.message).toBe('ClinicalTrials.gov API unavailable after retries');
+        expect(err.code).toBe(JsonRpcErrorCode.Timeout);
+        expect(err.message).toBe(
+          'ClinicalTrials.gov sent no answer to /studies/NCT12345678 within 2000 ms on every attempt',
+        );
         expect(err.data).toEqual({
           path: '/studies/NCT12345678',
-          lastError: 'TimeoutError: The operation timed out.',
+          lastError: 'TimeoutError',
+          timeoutMs: 2000,
+          reason: 'upstream_timeout',
         });
         expect(sent.map((r) => r.abortedAt! - r.startedAt)).toEqual([2000, 2000, 2000, 2000]);
       });
@@ -5254,7 +6767,7 @@ describe('ClinicalTrialsService', () => {
         expect(at).toBe(BUDGET_MS);
       });
 
-      it('charges a field-index load to the call, which then sends nothing more', async () => {
+      it('charges the bounded field-index read to the call, whose own request gets the rest (#192)', async () => {
         const validating = new ClinicalTrialsService(slowAttempts, {
           ...fastOptions,
           validateFieldsLocally: true,
@@ -5266,8 +6779,12 @@ describe('ClinicalTrialsService', () => {
         );
 
         expect(at).toBe(BUDGET_MS);
-        expect(err.data).toMatchObject(deadline);
-        expect(sent.map((r) => r.path)).toEqual(['/v2/studies/metadata']);
+        expect(err.data).toEqual({ ...deadline, path: '/studies' });
+        const origin = sent[0]!.startedAt;
+        expect(sent.map((r) => [r.path, r.startedAt - origin, r.abortedAt! - origin])).toEqual([
+          ['/v2/studies/metadata', 0, 5000],
+          ['/v2/studies', 5000, BUDGET_MS],
+        ]);
       });
 
       it('starts no second-tier read for a call with nothing left, though the field index is loaded', async () => {
@@ -5315,27 +6832,28 @@ describe('ClinicalTrialsService', () => {
     });
 
     describe('waits on a load another call started', () => {
-      it('ends a field-index wait at the waiting call’s own deadline and leaves the load running', async () => {
+      it('ends a field-index wait at the waiting call’s own deadline and leaves the read running', async () => {
         const validating = new ClinicalTrialsService(slowAttempts, {
           ...fastOptions,
           validateFieldsLocally: true,
         });
         const sent = respond(
-          answerAfter(30_000, jsonResponse({ studies: [], totalCount: 3 })),
-          answerAfter(45_000, jsonResponse(RECORD_METADATA)),
+          answerAfter(47_000, jsonResponse({ studies: [], totalCount: 3 })),
+          answerAfter(4500, jsonResponse(RECORD_METADATA)),
         );
         const waiter = createMockContext();
         const loader = createMockContext();
 
         // The waiter's budget starts with its count at 0 s; the loader starts the
-        // field-index load at 20 s; the waiter joins it at 30 s.
+        // field-index read at 46 s, which answers at 50.5 s; the waiter joins it
+        // at 47 s with 3 s left.
         const counted = validating.countStudies({ queryCond: 'a' }, waiter);
-        await vi.advanceTimersByTimeAsync(20_000);
+        await vi.advanceTimersByTimeAsync(46_000);
         const loaded = validating.searchFieldDefinitions('status', 5, loader);
-        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.advanceTimersByTimeAsync(1000);
         await expect(counted).resolves.toBe(3);
         const waited = validating.searchFieldDefinitions('status', 5, waiter).catch((e) => e);
-        await vi.advanceTimersByTimeAsync(20_000);
+        await vi.advanceTimersByTimeAsync(3000);
 
         expect(await waited).toMatchObject({ code: JsonRpcErrorCode.Timeout, data: deadline });
         expect(sent[1]?.abortedAt).toBeUndefined();
@@ -5426,67 +6944,83 @@ describe('ClinicalTrialsService', () => {
         expect(err.data).toMatchObject({ reason: 'field_invalid', invalid: ['numlocation'] });
       });
 
-      it('starts the field-index load afresh for a waiter when the call loading it was cancelled', async () => {
+      it('leaves the shared read running for the calls still waiting when the call that started it is cancelled (#192)', async () => {
         const validating = new ClinicalTrialsService(testConfig, {
           ...fastOptions,
           validateFieldsLocally: true,
         });
-        const sent = respond('hang', jsonResponse(RECORD_METADATA));
+        const sent = respond(
+          answerAfter(2000, jsonResponse(RECORD_METADATA)),
+          jsonResponse({ studies: [], totalCount: 0 }),
+        );
         const controller = new AbortController();
 
         const leaving = validating
-          .searchFieldDefinitions('status', 5, createMockContext({ signal: controller.signal }))
+          .searchStudies(
+            { queryCond: 'a', fields: ['overallstatus'] },
+            createMockContext({ signal: controller.signal }),
+          )
           .catch((e) => e);
-        const staying = validating.searchFieldDefinitions('status', 5, createMockContext());
+        const staying = validating.searchStudies(
+          { queryCond: 'b', fields: ['overallstatus'] },
+          createMockContext(),
+        );
         await vi.advanceTimersByTimeAsync(100);
         controller.abort();
 
         expect(await leaving).toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
-        const found = await advanceUntilSettled(staying);
-        expect(found.entries.map((e) => e.piece)).toContain('OverallStatus');
-        expect(sent.map((r) => r.path)).toEqual(['/v2/studies/metadata', '/v2/studies/metadata']);
+        await advanceUntilSettled(staying);
+        // One read, never aborted, and the call still waiting folds its field from it.
+        expect(sent.map((r) => r.path)).toEqual(['/v2/studies/metadata', '/v2/studies']);
+        expect(sent[0]!.abortedAt).toBeUndefined();
+        expect(new URL(String(mockFetch.mock.calls[1]![0])).searchParams.get('fields')).toBe(
+          'OverallStatus',
+        );
       });
 
-      it('starts the field-index load afresh for a waiter when the call loading it ran out of budget', async () => {
+      it('keeps the shared read to its own bound when the call that started it runs out of budget (#192)', async () => {
         const validating = new ClinicalTrialsService(slowAttempts, {
           ...fastOptions,
           validateFieldsLocally: true,
         });
         const sent = respond(
-          answerAfter(45_000, jsonResponse({ studies: [], totalCount: 3 })),
-          'hang',
-          jsonResponse(RECORD_METADATA),
+          answerAfter(47_000, jsonResponse({ studies: [], totalCount: 3 })),
+          answerAfter(4500, jsonResponse(RECORD_METADATA)),
+          jsonResponse({ studies: [], totalCount: 0 }),
         );
         const loader = createMockContext();
-        const waiter = createMockContext();
 
-        // The loader spends 45 s on a count, then starts the field-index load with
-        // 5 s left; the waiter joins that load a second later with its whole budget.
+        // The loader spends 47 s on a count, then starts the field-index read
+        // with 3 s left; a fresh search joins it a second later.
         const counted = validating.countStudies({ queryCond: 'a' }, loader);
-        await vi.advanceTimersByTimeAsync(45_000);
+        await vi.advanceTimersByTimeAsync(47_000);
         await expect(counted).resolves.toBe(3);
         const loaderLookup = validating.searchFieldDefinitions('status', 5, loader).catch((e) => e);
         await vi.advanceTimersByTimeAsync(1000);
-        const waiterLookup = validating.searchFieldDefinitions('status', 5, waiter).then(
-          (found) => found.entries.map((e) => e.piece),
-          (err: unknown) => err,
+        const search = validating.searchStudies(
+          { queryCond: 'x', fields: ['overallstatus'] },
+          createMockContext(),
         );
 
-        // The loader's budget ends the shared load at 50 s; the waiter, 46 s still
-        // left, loads the index again on its own instead of inheriting the expiry.
+        // The loader's wait ends with its budget at 50 s; the read answers at
+        // 51.5 s, and the search that joined it folds its field from it.
         expect(await advanceUntilSettled(loaderLookup)).toMatchObject({
           code: JsonRpcErrorCode.Timeout,
           data: deadline,
         });
-        expect(await advanceUntilSettled(waiterLookup)).toContain('OverallStatus');
+        await advanceUntilSettled(search);
         expect(sent.map((r) => r.path)).toEqual([
           '/v2/studies',
           '/v2/studies/metadata',
-          '/v2/studies/metadata',
+          '/v2/studies',
         ]);
+        expect(sent[1]!.abortedAt).toBeUndefined();
+        expect(new URL(String(mockFetch.mock.calls[2]![0])).searchParams.get('fields')).toBe(
+          'OverallStatus',
+        );
       });
 
-      it('keeps a waiter’s field normalization when the call loading the index ran out of budget', async () => {
+      it('starts no second read for a waiter when the shared read hangs past the call that started it (#192)', async () => {
         const validating = new ClinicalTrialsService(slowAttempts, {
           ...fastOptions,
           validateFieldsLocally: true,
@@ -5494,7 +7028,6 @@ describe('ClinicalTrialsService', () => {
         const sent = respond(
           answerAfter(45_000, jsonResponse({ studies: [], totalCount: 3 })),
           'hang',
-          jsonResponse(RECORD_METADATA),
           jsonResponse({ studies: [], totalCount: 0 }),
         );
         const loader = createMockContext();
@@ -5511,14 +7044,18 @@ describe('ClinicalTrialsService', () => {
         await advanceUntilSettled(loaderLookup);
         await advanceUntilSettled(search);
 
-        // A fresh call sends the folded piece; so must one that joined the expired load.
-        const searched = mockFetch.mock.calls.filter(
-          ([url]) => new URL(String(url)).pathname === '/v2/studies',
+        // The read's 5 s bound ends it at 50 s, with the loader's budget. The
+        // search, 46 s still left, sends its field as written rather than
+        // reading the metadata again with the time it has.
+        expect(sent.map((r) => r.path)).toEqual([
+          '/v2/studies',
+          '/v2/studies/metadata',
+          '/v2/studies',
+        ]);
+        expect(sent[1]!.abortedAt! - sent[1]!.startedAt).toBe(5000);
+        expect(new URL(String(mockFetch.mock.calls[2]![0])).searchParams.get('fields')).toBe(
+          'overallstatus',
         );
-        expect(new URL(String(searched.at(-1)![0])).searchParams.get('fields')).toBe(
-          'OverallStatus',
-        );
-        expect(sent).toHaveLength(4);
       });
     });
 
@@ -5619,6 +7156,8 @@ describe('ClinicalTrialsService', () => {
 
           expect(err.data).toEqual({ reason: 'field_invalid', invalid: ['ConditionMesh'] });
           expect(requestsTo('/v2/stats/field/values')).toBe(1);
+          // One attempt, whatever the failure: the read is optional here (#192).
+          expect(requestsTo('/v2/studies/metadata')).toBe(1);
         },
       );
 
@@ -5635,29 +7174,336 @@ describe('ClinicalTrialsService', () => {
             validValues: ['NA', 'PHASE1', 'PHASE2'],
           });
           expect(err.message).toContain('enum field `protocolSection.designModule.phases`');
+          expect(requestsTo('/v2/studies/metadata')).toBe(1);
         },
       );
 
-      it('a hung metadata read spends the call’s budget: the statistics request is never sent', async () => {
+      it('a hung metadata read holds value statistics its 5 s bound, then the upstream 400 refuses the group (#192)', async () => {
         upstream(() => 'hang');
         const { err, at } = await failure(
           subject().getFieldValues(['ConditionMesh'], createMockContext()),
         );
 
-        expect(at).toBe(BUDGET_MS);
-        expect(err.data).toMatchObject(deadline);
-        expect(requestsTo('/v2/stats/field/values')).toBe(0);
+        expect(at).toBe(5000);
+        expect(err.data).toEqual({ reason: 'field_invalid', invalid: ['ConditionMesh'] });
+        expect(requestsTo('/v2/stats/field/values')).toBe(1);
       });
 
-      it('a hung metadata read on the error path delays the enum refusal to the budget’s end, still enum_invalid', async () => {
+      it('a hung metadata read on the error path delays the enum refusal by its 5 s bound and a gap, still enum_invalid (#192)', async () => {
         upstream(() => 'hang');
+        // The count is refused at 0 s; the lookup for its path wording reads the
+        // metadata a gap later, at 1 s, and gives up on it at 6 s.
         const { err, at } = await failure(
           subject().countStudies({ filterAdvanced: 'AREA[Phase]PHASE9' }, createMockContext()),
         );
 
-        expect(at).toBe(BUDGET_MS);
+        expect(at).toBe(6000);
         expect(err.data).toMatchObject({ reason: 'enum_invalid' });
+        expect(err.message).toContain('enum field `protocolSection.designModule.phases`');
       });
+    });
+
+    describe('a field-index read that fails holds a call only its own bound (#192)', () => {
+      type Ctx = ReturnType<typeof createMockContext>;
+      /** `/studies/metadata` answers `metadata` — `'hang'` never answers; every other route answers a page. */
+      function routes(metadata: unknown): Array<{ at: number; url: URL }> {
+        const sent: Array<{ at: number; url: URL }> = [];
+        mockFetch.mockImplementation((url: string | URL, init?: RequestInit) => {
+          const request = new URL(String(url));
+          sent.push({ at: Date.now(), url: request });
+          if (request.pathname !== '/v2/studies/metadata') {
+            return Promise.resolve(jsonResponse({ studies: [], totalCount: 0 }));
+          }
+          if (metadata === 'hang') {
+            return new Promise((_resolve, reject) => {
+              init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+                once: true,
+              });
+            });
+          }
+          return Promise.resolve(metadata);
+        });
+        return sent;
+      }
+      const subject = () =>
+        new ClinicalTrialsService(slowAttempts, { ...fastOptions, validateFieldsLocally: true });
+
+      /** Each validating call, the parameter its own request carries, and the caller's text there. */
+      const calls: Array<
+        [string, (s: ClinicalTrialsService, ctx: Ctx) => Promise<unknown>, string, string]
+      > = [
+        [
+          'a search with fields',
+          (s, ctx) => s.searchStudies({ queryTerm: 'x', fields: ['overallstatus'] }, ctx),
+          'fields',
+          'overallstatus',
+        ],
+        [
+          'a search with a mis-cased sort',
+          (s, ctx) => s.searchStudies({ sort: 'lastupdatepostdate:desc' }, ctx),
+          'sort',
+          'lastupdatepostdate:desc',
+        ],
+        [
+          'a count whose AREA[] name misses by case',
+          async (s, ctx) => {
+            // As clinicaltrials_get_study_count runs it: the name lookup first.
+            const { advancedFilter } = await normalizeAreaNames(
+              { advancedFilter: 'AREA[overallstatus]RECRUITING' },
+              () => s.getAreaIndex(ctx),
+              ctx.log,
+            );
+            return s.countStudies({ filterAdvanced: advancedFilter }, ctx);
+          },
+          'filter.advanced',
+          'AREA[overallstatus]RECRUITING',
+        ],
+      ];
+
+      it.each(calls)(
+        'hung: %s waits the read’s 5 s bound, then sends the caller’s text unchanged',
+        async (_label, run, param, text) => {
+          const sent = routes('hang');
+          const origin = Date.now();
+
+          await advanceUntilSettled(run(subject(), createMockContext()));
+
+          expect(sent.map(({ at, url }) => [url.pathname, at - origin])).toEqual([
+            ['/v2/studies/metadata', 0],
+            ['/v2/studies', 5000],
+          ]);
+          expect(sent[1]!.url.searchParams.get(param)).toContain(text);
+        },
+      );
+
+      it.each(calls)(
+        '503: %s sends one metadata request, not four, then the caller’s text unchanged',
+        async (_label, run, param, text) => {
+          const sent = routes(jsonResponse(null, 503));
+
+          await advanceUntilSettled(run(subject(), createMockContext()));
+
+          expect(sent.map(({ url }) => url.pathname)).toEqual([
+            '/v2/studies/metadata',
+            '/v2/studies',
+          ]);
+          expect(sent[1]!.url.searchParams.get(param)).toContain(text);
+        },
+      );
+
+      it('reads a healthy metadata once for a call that validates, folds, and looks names up', async () => {
+        const sent = routes(jsonResponse(RECORD_METADATA));
+        const validating = subject();
+        const ctx = createMockContext();
+
+        await advanceUntilSettled(
+          validating.searchStudies(
+            { queryTerm: 'x', fields: ['overallstatus'], sort: 'lastupdatepostdate:desc' },
+            ctx,
+          ),
+        );
+        await advanceUntilSettled(validating.getAreaIndex(ctx));
+
+        expect(sent.map(({ url }) => url.pathname)).toEqual([
+          '/v2/studies/metadata',
+          '/v2/studies',
+        ]);
+        expect(sent[1]!.url.searchParams.get('fields')).toBe('OverallStatus');
+        expect(sent[1]!.url.searchParams.get('sort')).toBe('LastUpdatePostDate:desc');
+      });
+    });
+
+    describe('a field search reads the index again on the full ladder (#192)', () => {
+      it('hung: the bounded read, then two ladder attempts, ending retry_deadline_exceeded at 50 s', async () => {
+        const defaults = new ClinicalTrialsService(
+          { ...testConfig, requestTimeoutMs: 30_000 },
+          { ...fastOptions, validateFieldsLocally: true },
+        );
+        const sent = respond('hang');
+
+        const { err, at } = await failure(
+          defaults.searchFieldDefinitions('status', 5, createMockContext()),
+        );
+
+        expect(at).toBe(BUDGET_MS);
+        expect(err.data).toEqual({ ...deadline, path: '/studies/metadata' });
+        const origin = sent[0]!.startedAt;
+        expect(sent).toHaveLength(3);
+        expect(sent.slice(0, 2).map((r) => [r.startedAt - origin, r.abortedAt! - origin])).toEqual([
+          [0, 5000],
+          [5000, 35_000],
+        ]);
+        expect(sent[2]!.abortedAt! - origin).toBe(BUDGET_MS);
+      });
+
+      it('503 three times, then the index: the field search answers from its own ladder', async () => {
+        const validating = new ClinicalTrialsService(slowAttempts, {
+          ...fastOptions,
+          validateFieldsLocally: true,
+        });
+        const sent = respond(
+          jsonResponse(null, 503),
+          jsonResponse(null, 503),
+          jsonResponse(null, 503),
+          jsonResponse(RECORD_METADATA),
+        );
+
+        const found = await advanceUntilSettled(
+          validating.searchFieldDefinitions('status', 5, createMockContext()),
+        );
+
+        expect(found.entries.map((e) => e.piece)).toContain('OverallStatus');
+        expect(sent).toHaveLength(4);
+      });
+
+      it('falls back on its own when the read it joined fails, never surfacing that read’s 503, and keeps what it built', async () => {
+        const validating = new ClinicalTrialsService(slowAttempts, {
+          ...fastOptions,
+          validateFieldsLocally: true,
+        });
+        let metadataAnswers = 0;
+        mockFetch.mockImplementation((url: string | URL) => {
+          if (new URL(String(url)).pathname !== '/v2/studies/metadata') {
+            return Promise.resolve(jsonResponse({ studies: [], totalCount: 0 }));
+          }
+          metadataAnswers += 1;
+          return Promise.resolve(
+            metadataAnswers <= 2 ? jsonResponse(null, 503) : jsonResponse(RECORD_METADATA),
+          );
+        });
+        const searched = () =>
+          mockFetch.mock.calls
+            .map(([url]) => new URL(String(url)))
+            .filter((u) => u.pathname === '/v2/studies')
+            .map((u) => u.searchParams.get('fields'));
+
+        // The validating search starts the read; the field search joins it.
+        const search = validating.searchStudies(
+          { queryCond: 'x', fields: ['overallstatus'] },
+          createMockContext(),
+        );
+        const lookup = validating.searchFieldDefinitions('status', 5, createMockContext());
+        const [, found] = await advanceUntilSettled(Promise.all([search, lookup]));
+
+        // The read's 503 sends the search out unchecked; the field search reads
+        // the index again on its own ladder (503, then the index) and answers.
+        expect(searched()).toEqual(['overallstatus']);
+        expect(found.entries.map((e) => e.piece)).toContain('OverallStatus');
+        expect(metadataAnswers).toBe(3);
+
+        // Kept: a later validating call folds its field and reads nothing.
+        await advanceUntilSettled(
+          validating.searchStudies(
+            { queryCond: 'y', fields: ['overallstatus'] },
+            createMockContext(),
+          ),
+        );
+        expect(metadataAnswers).toBe(3);
+        expect(searched()).toEqual(['overallstatus', 'OverallStatus']);
+      });
+
+      it('keeps what it built when a load another call started meanwhile fails after it', async () => {
+        const validating = new ClinicalTrialsService(slowAttempts, {
+          ...fastOptions,
+          validateFieldsLocally: true,
+        });
+        // In request order: the field search's bounded read, its ladder read, and
+        // the load a search starts while that ladder waits for its slot.
+        const metadata = [
+          jsonResponse(null, 503),
+          jsonResponse(RECORD_METADATA),
+          jsonResponse(null, 503),
+        ];
+        let metadataAnswers = 0;
+        mockFetch.mockImplementation((url: string | URL) => {
+          if (new URL(String(url)).pathname !== '/v2/studies/metadata') {
+            return Promise.resolve(jsonResponse({ studies: [], totalCount: 0 }));
+          }
+          metadataAnswers += 1;
+          return Promise.resolve(metadata[metadataAnswers - 1] ?? jsonResponse(RECORD_METADATA));
+        });
+        const searched = () =>
+          mockFetch.mock.calls
+            .map(([url]) => new URL(String(url)))
+            .filter((u) => u.pathname === '/v2/studies')
+            .map((u) => u.searchParams.get('fields'));
+
+        const lookup = validating.searchFieldDefinitions('status', 5, createMockContext());
+        await vi.advanceTimersByTimeAsync(0);
+        expect(metadataAnswers).toBe(1);
+        const search = validating.searchStudies(
+          { queryCond: 'x', fields: ['overallstatus'] },
+          createMockContext(),
+        );
+        const [found] = await advanceUntilSettled(Promise.all([lookup, search]));
+
+        expect(found.entries.map((e) => e.piece)).toContain('OverallStatus');
+        expect(metadataAnswers).toBe(3);
+        expect(searched()).toEqual(['overallstatus']);
+
+        // That load's later failure leaves the built index: the next call folds and reads nothing.
+        await advanceUntilSettled(
+          validating.searchStudies(
+            { queryCond: 'y', fields: ['overallstatus'] },
+            createMockContext(),
+          ),
+        );
+        expect(metadataAnswers).toBe(3);
+        expect(searched()).toEqual(['overallstatus', 'OverallStatus']);
+      });
+
+      it('ends as RequestCancelled when its caller cancels during the ladder', async () => {
+        const validating = new ClinicalTrialsService(slowAttempts, {
+          ...fastOptions,
+          validateFieldsLocally: true,
+        });
+        respond(jsonResponse(null, 503), 'hang');
+        const controller = new AbortController();
+
+        const lookup = validating
+          .searchFieldDefinitions('status', 5, createMockContext({ signal: controller.signal }))
+          .catch((e) => e);
+        await vi.advanceTimersByTimeAsync(2000);
+        controller.abort();
+
+        expect(await lookup).toMatchObject({ code: JsonRpcErrorCode.RequestCancelled });
+      });
+    });
+
+    describe('a metadata body with no fields is a failed read, never kept (#196)', () => {
+      it.each([
+        ['an empty list', []],
+        ['a tree with no field pieces', [{ name: 'protocolSection', children: [] }]],
+      ])(
+        '%s: the call fails open, and the next call validates against a healthy upstream',
+        async (_label, tree) => {
+          const validating = new ClinicalTrialsService(slowAttempts, {
+            ...fastOptions,
+            validateFieldsLocally: true,
+          });
+          let healthy = false;
+          mockFetch.mockImplementation((url: string | URL) =>
+            Promise.resolve(
+              new URL(String(url)).pathname === '/v2/studies/metadata'
+                ? jsonResponse(healthy ? RECORD_METADATA : tree)
+                : jsonResponse({ studies: [], totalCount: 0 }),
+            ),
+          );
+
+          await advanceUntilSettled(
+            validating.searchStudies({ queryCond: 'x', fields: ['Bogus'] }, createMockContext()),
+          );
+          expect(new URL(String(mockFetch.mock.calls.at(-1)![0])).searchParams.get('fields')).toBe(
+            'Bogus',
+          );
+
+          healthy = true;
+          const { err } = await failure(
+            validating.searchStudies({ queryCond: 'x', fields: ['Bogus'] }, createMockContext()),
+          );
+          expect(err.data).toMatchObject({ reason: 'field_invalid', invalid: ['Bogus'] });
+        },
+      );
     });
 
     describe('cancellation', () => {

@@ -2319,6 +2319,121 @@ describe('findEligible', () => {
     });
   });
 
+  // The eligibility search projects a fixed field list, so a field-validating
+  // service sends it unchecked: no /studies/metadata read, which, hung, ended
+  // the call at its 50 s budget before the search went out (#192). Read at the
+  // fetch boundary of a real service, since the mechanism is the service
+  // skipping that check.
+  describe('the eligibility search reads no field metadata (#192)', () => {
+    it('sends the search and both counts alone, with /studies/metadata hung', async () => {
+      const { ClinicalTrialsService } = await vi.importActual<
+        typeof import('@/services/clinical-trials/clinical-trials-service.js')
+      >('@/services/clinical-trials/clinical-trials-service.js');
+      const paths: string[] = [];
+      vi.stubGlobal('fetch', (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : input);
+        paths.push(url.pathname);
+        if (url.pathname === '/v2/studies/metadata') {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+              once: true,
+            });
+          });
+        }
+        return Promise.resolve(Response.json({ studies: [], totalCount: 0 }));
+      });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      try {
+        mockGetService.mockReturnValue(
+          new ClinicalTrialsService(
+            { apiBaseUrl: 'https://test.api/v2', requestTimeoutMs: 30_000, maxPageSize: 100 },
+            { validateFieldsLocally: true },
+          ),
+        );
+        let settled = false;
+        const outcome = Promise.resolve(
+          findEligible.handler(
+            findEligible.input!.parse(baseInput),
+            createMockContext({ errors: findEligible.errors }),
+          ),
+        )
+          .then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          )
+          .finally(() => {
+            settled = true;
+          });
+        while (!settled) await vi.advanceTimersToNextTimerAsync();
+        const done = await outcome;
+        if ('error' in done) throw done.error;
+
+        // The main search, then the two funnel counts — never the metadata.
+        expect(paths).toEqual(['/v2/studies', '/v2/studies', '/v2/studies']);
+        expect(done.value.studies).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    });
+  });
+
+  // A main search answered with a body that is not a search page ends the call
+  // once its retries are spent, before either funnel count goes out (#196).
+  // Read at the fetch boundary of a real service, since the mechanism is the
+  // service's envelope check.
+  describe('a malformed main-search body ends the call (#196)', () => {
+    it('ends upstream_unavailable on both surfaces and sends neither count', async () => {
+      const { ClinicalTrialsService } = await vi.importActual<
+        typeof import('@/services/clinical-trials/clinical-trials-service.js')
+      >('@/services/clinical-trials/clinical-trials-service.js');
+      const sent: URL[] = [];
+      vi.stubGlobal('fetch', (input: string | URL | Request) => {
+        sent.push(new URL(input instanceof Request ? input.url : input));
+        return Promise.resolve(Response.json({}));
+      });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      try {
+        mockGetService.mockReturnValue(
+          new ClinicalTrialsService(
+            { apiBaseUrl: 'https://test.api/v2', requestTimeoutMs: 30_000, maxPageSize: 100 },
+            { maxRetries: 2, validateFieldsLocally: false },
+          ),
+        );
+        let settled = false;
+        const outcome = runToolContract(findEligible, baseInput).finally(() => {
+          settled = true;
+        });
+        while (!settled) await vi.advanceTimersToNextTimerAsync();
+        const result = await outcome;
+        const error = (
+          result.structuredContent as { error: { code: number; data: Record<string, unknown> } }
+        ).error;
+
+        // The main search — a page of ten — on each of its three attempts, never
+        // a one-study funnel count.
+        expect(sent.map((u) => [u.pathname, u.searchParams.get('pageSize')])).toEqual([
+          ['/v2/studies', '10'],
+          ['/v2/studies', '10'],
+          ['/v2/studies', '10'],
+        ]);
+        expect(result.isError).toBe(true);
+        expect(error.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+        expect(error.data).toMatchObject({
+          reason: 'upstream_unavailable',
+          path: '/studies',
+          recovery: { hint: expect.stringMatching(/^Retry the same call unchanged/) },
+        });
+        expect(readMarkdown((result.content as { text: string }[])[0]!.text)).toContain(
+          'Recovery: Retry the same call unchanged',
+        );
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    });
+  });
+
   // Every string the searchCriteria trailer echoes reads back in content[] as
   // structuredContent carries it, and the no-match notice reads back the
   // conditions it quotes (#177). The value table lives with formatEchoValue in
@@ -2405,7 +2520,7 @@ describe('findEligible', () => {
       expect(seen).toContain(notice);
     });
 
-    describe('the notice render stays linear on caller-sized text', () => {
+    describe('the notice render stays linear on caller-sized text', { timeout: 0 }, () => {
       const render = (notice: string) => findEligible.enrichmentTrailer!.notice!.render!(notice);
 
       it.each([
@@ -3643,7 +3758,9 @@ describe('findEligible', () => {
         expect(placeWords(name)).toEqual(new Set(words));
       });
 
-      describe('the requested-country split stays linear on caller-sized text', () => {
+      describe('the requested-country split stays linear on caller-sized text', {
+        timeout: 0,
+      }, () => {
         it.each([
           ...LINE_BREAK_SHAPES,
           ['separators throughout', (n: number) => ', '.repeat(n / 2)],

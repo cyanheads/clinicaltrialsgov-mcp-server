@@ -418,7 +418,7 @@ const ELIGIBLE_RENDERED = new Set([
   'locationSummary',
 ]);
 
-/** Fields requested for eligibility evaluation. */
+/** Fields requested for eligibility evaluation; sent as `fixedFields`, unchecked against the metadata. */
 const ELIGIBLE_FIELDS = [
   'NCTId',
   'BriefTitle',
@@ -507,9 +507,25 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     {
       reason: 'upstream_timeout',
       code: JsonRpcErrorCode.Timeout,
-      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) on every attempt.',
+      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) or 408 (request timeout), or sent no answer within the per-attempt timeout, on every attempt.',
       recovery: RECOVERY_HINTS.upstream_timeout,
       retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_unavailable',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'Every attempt failed on ClinicalTrials.gov’s side — HTTP 500, 502, or 503, a dropped connection or one the network gave up opening, or a 200 body that is not the JSON the route serves (an HTML page, unparseable text, the wrong shape) — or it answered with another 5xx, such as 505, or the connection was refused or its host name did not resolve, none of which is retried.',
+      recovery: RECOVERY_HINTS.upstream_unavailable,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_rejected',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'ClinicalTrials.gov refused the request with a status its API does not use for a bad query — HTTP 501, a 3xx, or a 4xx such as 401, 403, or 410 — or answered with an HTML error page in place of its own 404.',
+      recovery: RECOVERY_HINTS.upstream_rejected,
+      retryable: false,
       thrownBy: 'service',
     },
   ],
@@ -886,6 +902,8 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         filterOverallStatus: statusFilter,
         filterAdvanced: advancedFilter,
         fields: ELIGIBLE_FIELDS,
+        // A fixed list: checking it against the field metadata buys nothing.
+        fixedFields: true,
         pageSize: Math.min(input.maxResults, MAX_RESULTS_PER_CALL),
         countTotal: true,
         // Eligibility matches are about who can enroll, not about enrollment

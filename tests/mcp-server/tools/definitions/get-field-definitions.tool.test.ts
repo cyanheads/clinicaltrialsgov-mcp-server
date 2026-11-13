@@ -702,6 +702,28 @@ describe('getFieldDefinitions', () => {
       expect(text).toContain('ENUM');
     });
 
+    it.each([
+      [
+        'an overview',
+        {
+          fields: [{ name: 'protocolSection', children: [{ name: 'a' }, { name: 'b' }] }],
+          totalFields: 3,
+        },
+        '3 fields:',
+      ],
+      [
+        'a one-field search',
+        { fields: [{ name: 'enrollmentInfo', piece: 'EnrollmentCount' }], totalFields: 1 },
+        '1 field:',
+      ],
+    ])(
+      'states the totalFields of %s in content[], as structuredContent carries it',
+      (_label, result, header) => {
+        const text = (getFieldDefinitions.format!(result)[0] as { text: string }).text;
+        expect(text.split('\n')[0]).toBe(header);
+      },
+    );
+
     it('renders empty result', () => {
       const blocks = getFieldDefinitions.format!({ fields: [], totalFields: 0 });
       expect((blocks[0] as { text: string }).text).toContain('No fields found');

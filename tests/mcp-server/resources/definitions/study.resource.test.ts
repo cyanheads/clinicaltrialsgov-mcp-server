@@ -3,8 +3,9 @@
  * @module tests/mcp-server/resources/definitions/study.resource
  */
 
-import { JsonRpcErrorCode, timeout } from '@cyanheads/mcp-ts-core/errors';
+import { JsonRpcErrorCode, serviceUnavailable, timeout } from '@cyanheads/mcp-ts-core/errors';
 import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { httpErrorFromResponse } from '@cyanheads/mcp-ts-core/utils';
 import { createWorkerHandler } from '@cyanheads/mcp-ts-core/worker';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -253,59 +254,61 @@ describe('studyResource', () => {
     });
   });
 
+  const PROTOCOL_REVISION = '2026-07-28';
+  const URI = 'clinicaltrials://NCT03722472';
+
+  /**
+   * Read the resource through the framework's resource factory — the path that
+   * fills a declared reason's hint in as `data.recovery.hint` — and return the
+   * JSON-RPC error, the one a client receives.
+   */
+  async function readThroughServer() {
+    const server = createWorkerHandler({
+      name: 'clinicaltrialsgov-mcp-server',
+      title: 'clinicaltrialsgov-mcp-server',
+      resources: [studyResource],
+    });
+    const response = await server.fetch(
+      new Request('http://localhost/mcp', {
+        method: 'POST',
+        headers: {
+          accept: 'application/json, text/event-stream',
+          'content-type': 'application/json',
+          'mcp-protocol-version': PROTOCOL_REVISION,
+          'mcp-method': 'resources/read',
+          'mcp-name': URI,
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'resources/read',
+          params: {
+            uri: URI,
+            _meta: {
+              'io.modelcontextprotocol/protocolVersion': PROTOCOL_REVISION,
+              'io.modelcontextprotocol/clientCapabilities': {},
+            },
+          },
+        }),
+      }) as never,
+      // Copied into `process.env.MCP_LOG_LEVEL`, which each test stubs so it is restored.
+      { LOG_LEVEL: 'error' } as never,
+      { waitUntil() {}, passThroughOnException() {} } as never,
+    );
+    const body = (await response.json()) as {
+      error?: { code: number; data?: Record<string, unknown>; message: string };
+    };
+    return body.error;
+  }
+
   /**
    * A read runs inside the same per-call time budget as a tool call, and can
-   * meet ClinicalTrials.gov's own 504 on every attempt. Read through the
-   * framework's resource factory — the path that fills a declared reason's
-   * hint in as `data.recovery.hint` — so the error is the one a client
-   * receives (#181).
+   * meet ClinicalTrials.gov's own 504 on every attempt (#181).
    */
   describe('timeouts through resources/read (#181)', () => {
-    const PROTOCOL_REVISION = '2026-07-28';
-    const URI = 'clinicaltrials://NCT03722472';
-
     afterEach(() => {
       vi.unstubAllEnvs();
     });
-
-    async function readThroughServer() {
-      const server = createWorkerHandler({
-        name: 'clinicaltrialsgov-mcp-server',
-        title: 'clinicaltrialsgov-mcp-server',
-        resources: [studyResource],
-      });
-      const response = await server.fetch(
-        new Request('http://localhost/mcp', {
-          method: 'POST',
-          headers: {
-            accept: 'application/json, text/event-stream',
-            'content-type': 'application/json',
-            'mcp-protocol-version': PROTOCOL_REVISION,
-            'mcp-method': 'resources/read',
-            'mcp-name': URI,
-          },
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: 1,
-            method: 'resources/read',
-            params: {
-              uri: URI,
-              _meta: {
-                'io.modelcontextprotocol/protocolVersion': PROTOCOL_REVISION,
-                'io.modelcontextprotocol/clientCapabilities': {},
-              },
-            },
-          }),
-        }) as never,
-        // Copied into `process.env.MCP_LOG_LEVEL`, which each test stubs so it is restored.
-        { LOG_LEVEL: 'error' } as never,
-        { waitUntil() {}, passThroughOnException() {} } as never,
-      );
-      const body = (await response.json()) as {
-        error?: { code: number; data?: Record<string, unknown>; message: string };
-      };
-      return body.error;
-    }
 
     it.each([
       [
@@ -343,6 +346,102 @@ describe('studyResource', () => {
         data: { ...thrown.data, recovery: { hint: RECOVERY_HINTS[reason] } },
       });
     });
+  });
+
+  /**
+   * An outage that outlasts every retry and a status the API never answers a
+   * bad query with are faults on the registry's side, each with its own reason.
+   * Both answer resources/read as -32000, which the SDK passes through
+   * unchanged, and the page a refusal came with stays on the server (#196).
+   */
+  describe('upstream failures through resources/read (#196)', () => {
+    afterEach(() => {
+      vi.unstubAllEnvs();
+    });
+
+    it('declares upstream_unavailable and upstream_rejected beside a widened upstream_timeout', () => {
+      const declared = (studyResource.errors ?? []) as readonly { reason: string; when: string }[];
+
+      expect(
+        declared.filter(
+          (e) => e.reason === 'upstream_unavailable' || e.reason === 'upstream_rejected',
+        ),
+      ).toEqual([
+        {
+          reason: 'upstream_unavailable',
+          code: JsonRpcErrorCode.ServiceUnavailable,
+          when: expect.any(String),
+          recovery: RECOVERY_HINTS.upstream_unavailable,
+          retryable: true,
+          thrownBy: 'service',
+        },
+        {
+          reason: 'upstream_rejected',
+          code: JsonRpcErrorCode.ServiceUnavailable,
+          when: expect.any(String),
+          recovery: RECOVERY_HINTS.upstream_rejected,
+          retryable: false,
+          thrownBy: 'service',
+        },
+      ]);
+      const timeoutWhen = declared.find((e) => e.reason === 'upstream_timeout')?.when;
+      expect(timeoutWhen).toMatch(/\b408\b/);
+      expect(timeoutWhen).toMatch(/per-attempt timeout/);
+    });
+
+    it.each([
+      [
+        'upstream_unavailable',
+        async () =>
+          serviceUnavailable(
+            'ClinicalTrials.gov API unavailable after retries: /studies/NCT03722472 returned JSON of an unexpected shape.',
+            {
+              path: '/studies/NCT03722472',
+              lastError: 'Error: API returned JSON of an unexpected shape',
+              reason: 'upstream_unavailable',
+            },
+          ),
+      ],
+      [
+        'upstream_rejected',
+        () =>
+          httpErrorFromResponse(
+            new Response('<html><body><h1>404 Not Found</h1></body></html>', {
+              status: 404,
+              statusText: 'Not Found',
+              headers: { 'content-type': 'text/html' },
+            }),
+            {
+              service: 'ClinicalTrials.gov',
+              codeOverride: () => JsonRpcErrorCode.ServiceUnavailable,
+              data: { path: '/studies/NCT03722472', reason: 'upstream_rejected', retryable: false },
+            },
+          ),
+      ],
+    ] as const)(
+      'answers %s as -32000 with its data and the declared hint',
+      async (reason, error) => {
+        vi.stubEnv('MCP_LOG_LEVEL', 'error');
+        const thrown = await error();
+        mockService.getStudy.mockRejectedValue(thrown);
+        // The thrown data as a client may see it: its string keys, less the captured page.
+        const clientData = Object.fromEntries(
+          Object.entries(thrown.data ?? {}).filter(
+            ([key]) => key !== 'body' && key !== 'responseBody',
+          ),
+        );
+
+        const wire = await readThroughServer();
+
+        expect(wire).toMatchObject({
+          code: -32000,
+          message: thrown.message,
+          data: { ...clientData, reason, recovery: { hint: RECOVERY_HINTS[reason] } },
+        });
+        expect(wire?.data).not.toHaveProperty('body');
+        expect(wire?.data).not.toHaveProperty('responseBody');
+      },
+    );
   });
 
   describe('metadata', () => {

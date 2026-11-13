@@ -34,13 +34,20 @@ import { missingLeaves } from '../../../helpers/format-parity.js';
 import { nctIds as ids } from '../../../helpers/nct-ids.js';
 
 describe('searchStudies', () => {
-  const mockService = { getAreaIndex: vi.fn(), searchStudies: vi.fn(), maxPageSize: 200 };
+  const mockService = {
+    classifyProjection: vi.fn(),
+    getAreaIndex: vi.fn(),
+    searchStudies: vi.fn(),
+    maxPageSize: 200,
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockService.maxPageSize = 200;
     // No AREA index unless a test supplies one: AREA[] names pass through as written.
     mockService.getAreaIndex.mockResolvedValue(undefined);
+    // A fields list reaches no results group unless a test says so (#198).
+    mockService.classifyProjection.mockResolvedValue('other');
     mockGetService.mockReturnValue(mockService as never);
   });
 
@@ -875,6 +882,218 @@ describe('searchStudies', () => {
 
       expect(result.isError).toBe(true);
       expect(mockService.searchStudies).not.toHaveBeenCalled();
+    });
+  });
+
+  // A page whose fields reach into posted results holds at most 10 studies:
+  // 200 heavy results records built a response too large to serialize. Which
+  // names reach results is the service's classification, tabled there.
+  describe('results-page cap (#198)', () => {
+    const resultsStudy = (n: number) => ({
+      protocolSection: {
+        identificationModule: { nctId: `NCT${String(n).padStart(8, '0')}` },
+      },
+      resultsSection: {
+        outcomeMeasuresModule: { outcomeMeasures: [{ title: `Outcome of study ${n}` }] },
+      },
+    });
+    const resultsPage = (count: number) =>
+      Array.from({ length: count }, (_, i) => resultsStudy(i + 1));
+    const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+      (result.content as { text: string }[]).map((b) => b.text).join('\n');
+    const RESULTS_FIELDS = ['NCTId', 'ResultsSection'];
+
+    it('requests 10 studies and discloses the cut on both surfaces', async () => {
+      mockService.classifyProjection.mockResolvedValue('results');
+      mockService.searchStudies.mockResolvedValue({
+        studies: resultsPage(10),
+        totalCount: 81009,
+        nextPageToken: 'tok_page2',
+      });
+
+      const result = await runToolContract(searchStudies, {
+        advancedFilter: 'AREA[HasResults]true',
+        fields: 'NCTId,ResultsSection',
+        pageSize: 200,
+      });
+
+      expect(mockService.classifyProjection.mock.calls[0]![0]).toEqual(RESULTS_FIELDS);
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({
+        fields: RESULTS_FIELDS,
+        pageSize: 10,
+      });
+      expect(result.isError).toBeFalsy();
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(sc).toMatchObject({
+        truncated: true,
+        shown: 10,
+        cap: 10,
+        nextPageToken: 'tok_page2',
+        requestedFields: RESULTS_FIELDS,
+      });
+      expect(sc.studies as unknown[]).toHaveLength(10);
+      const notice =
+        "Requested pageSize 200 is above this server's per-page cap of 10 for fields that name ResultsSection or a module or group under it, so this page holds 10 studies. Pass nextPageToken to continue.";
+      expect(sc.notice).toBe(notice);
+      const text = textOf(result);
+      expect(text).toContain(notice);
+      for (const line of [
+        '**truncated:** true',
+        '**shown:** 10',
+        '**cap:** 10',
+        'nextPageToken: tok_page2',
+        'Outcome Measures > Title: Outcome of study 10',
+      ]) {
+        expect(text).toContain(line);
+      }
+    });
+
+    it('caps a fields list the field metadata could not check, and says so', async () => {
+      mockService.classifyProjection.mockResolvedValue('unclassifiable');
+      mockService.searchStudies.mockResolvedValue({
+        studies: resultsPage(10),
+        totalCount: 500,
+        nextPageToken: 'tok_page2',
+      });
+
+      const result = await runToolContract(searchStudies, {
+        fields: ['NCTId', 'BriefTitle'],
+        pageSize: 50,
+      });
+
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({ pageSize: 10 });
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(sc).toMatchObject({ truncated: true, shown: 10, cap: 10 });
+      const notice =
+        "Requested pageSize 50 is above this server's per-page cap of 10 for fields it could not check for results groups (the field metadata could not be read), so this page holds 10 studies. Pass nextPageToken to continue.";
+      expect(sc.notice).toBe(notice);
+      expect(sc.notice).not.toContain('ResultsSection');
+      expect(textOf(result)).toContain(notice);
+    });
+
+    it.each([5, 10])(
+      'serves a results page under a server cap of %i with the server notice',
+      async (maxPageSize) => {
+        mockService.maxPageSize = maxPageSize;
+        mockService.classifyProjection.mockResolvedValue('results');
+        mockService.searchStudies.mockResolvedValue({
+          studies: resultsPage(maxPageSize),
+          totalCount: 500,
+          nextPageToken: 'tok_page2',
+        });
+
+        const result = await runToolContract(searchStudies, {
+          fields: RESULTS_FIELDS,
+          pageSize: 200,
+        });
+
+        expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({
+          pageSize: maxPageSize,
+        });
+        const sc = result.structuredContent as Record<string, unknown>;
+        expect(sc).toMatchObject({ truncated: true, shown: maxPageSize, cap: maxPageSize });
+        expect(sc.notice).toBe(
+          `Requested pageSize 200 is above this server's per-page cap of ${maxPageSize}, so this page holds ${maxPageSize} studies. Pass nextPageToken to continue.`,
+        );
+      },
+    );
+
+    it('keeps the server cap for a fields list that reaches no results group', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: resultsPage(200),
+        totalCount: 4321,
+        nextPageToken: 'tok_page2',
+      });
+
+      const result = await runToolContract(searchStudies, {
+        fields: ['NCTId', 'OutcomeMeasureTitle'],
+        pageSize: 500,
+      });
+
+      expect(mockService.classifyProjection).toHaveBeenCalledTimes(1);
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({ pageSize: 200 });
+      expect(result.structuredContent).toMatchObject({ truncated: true, shown: 200, cap: 200 });
+      expect((result.structuredContent as { notice: string }).notice).toBe(
+        "Requested pageSize 500 is above this server's per-page cap of 200, so this page holds 200 studies. Pass nextPageToken to continue.",
+      );
+    });
+
+    it('keeps the server cap for the compact default without classifying anything', async () => {
+      mockService.searchStudies.mockResolvedValue({
+        studies: resultsPage(200),
+        totalCount: 4321,
+        nextPageToken: 'tok_page2',
+      });
+
+      const result = await runToolContract(searchStudies, {
+        advancedFilter: 'AREA[HasResults]true',
+        pageSize: 500,
+      });
+
+      expect(mockService.classifyProjection).not.toHaveBeenCalled();
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({ pageSize: 200 });
+      expect(result.structuredContent).toMatchObject({ truncated: true, shown: 200, cap: 200 });
+    });
+
+    it('leaves a results page at or under 10 untouched', async () => {
+      mockService.classifyProjection.mockResolvedValue('results');
+      mockService.searchStudies.mockResolvedValue({
+        studies: resultsPage(10),
+        totalCount: 500,
+        nextPageToken: 'tok_page2',
+      });
+
+      const result = await runToolContract(searchStudies, { fields: RESULTS_FIELDS, pageSize: 10 });
+
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({ pageSize: 10 });
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(sc).not.toHaveProperty('truncated');
+      expect(sc).not.toHaveProperty('cap');
+      expect(sc).not.toHaveProperty('notice');
+      expect(sc.nextPageToken).toBe('tok_page2');
+    });
+
+    it('walks every page at 10 studies and returns each study once', async () => {
+      // A paging upstream: the token is the offset of the next page.
+      const all = resultsPage(25);
+      mockService.classifyProjection.mockResolvedValue('results');
+      mockService.searchStudies.mockImplementation(
+        async (params: { pageSize: number; pageToken?: string }) => {
+          const start = params.pageToken ? Number(params.pageToken.slice('tok_'.length)) : 0;
+          const next = start + params.pageSize;
+          return {
+            studies: all.slice(start, next),
+            ...(params.pageToken ? {} : { totalCount: all.length }),
+            ...(next < all.length ? { nextPageToken: `tok_${next}` } : {}),
+          };
+        },
+      );
+
+      const seen: string[] = [];
+      const shownPerPage: unknown[] = [];
+      let pageToken: string | undefined;
+      do {
+        const result = await runToolContract(searchStudies, {
+          fields: RESULTS_FIELDS,
+          pageSize: 200,
+          ...(pageToken ? { pageToken } : {}),
+        });
+        const sc = result.structuredContent as {
+          nextPageToken?: string;
+          shown?: number;
+          studies: ReturnType<typeof resultsStudy>[];
+        };
+        seen.push(...sc.studies.map((s) => s.protocolSection.identificationModule.nctId));
+        shownPerPage.push(sc.shown);
+        pageToken = sc.nextPageToken;
+      } while (pageToken);
+
+      expect(mockService.searchStudies.mock.calls.map(([params]) => params.pageSize)).toEqual([
+        10, 10, 10,
+      ]);
+      expect(shownPerPage).toEqual([10, 10, undefined]);
+      expect(seen).toEqual(all.map((s) => s.protocolSection.identificationModule.nctId));
+      expect(new Set(seen).size).toBe(25);
     });
   });
 

@@ -63,7 +63,7 @@ const GATED_ARGS = [
 
 export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', {
   description:
-    'Resolve valid field names from the ClinicalTrials.gov data model — the canonical PascalCase identifiers (OverallStatus, EnrollmentCount, LeadSponsorName) the other tools take. Every piece works in clinicaltrials_search_studies `fields`; a leaf piece (sourceType other than STRUCT) also works in `AREA[…]` expressions in `advancedFilter` and the query parameters, and as input to clinicaltrials_get_field_values (LocationGeoPoint aside); a leaf of a date or integer type (NormalizedDate, PartialDate, DateTimeMinutes, integer, long, short) also works in `sort`. Select a mode: `"search"` — keyword search returning ranked matches (pass `query`, e.g. "enrollment", "sponsor", "adverse events"); `"drill"` — drill into a specific section by dot-notation path (pass `path`, e.g. "protocolSection.designModule"); `"overview"` — top-level summary of all sections (no additional args).',
+    'Resolve valid field names from the ClinicalTrials.gov data model — the canonical PascalCase identifiers (OverallStatus, EnrollmentCount, LeadSponsorName) the other tools take. Every record piece works in clinicaltrials_search_studies `fields`; a leaf piece (sourceType other than STRUCT) also works in `AREA[…]` expressions in `advancedFilter` and the query parameters, and as input to clinicaltrials_get_field_values (LocationGeoPoint aside); a leaf of a date or integer type (NormalizedDate, PartialDate, DateTimeMinutes, integer, long, short) also works in `sort`. An index-only piece (drill with includeIndexedOnly, e.g. NumLocations) works wherever a leaf does except `fields`. Select a mode: `"search"` — keyword search returning ranked matches (pass `query`, e.g. "enrollment", "sponsor", "adverse events"); `"drill"` — drill into a specific section by dot-notation path (pass `path`, e.g. "protocolSection.designModule"); `"overview"` — top-level summary of all sections (no additional args).',
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -114,9 +114,25 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
     {
       reason: 'upstream_timeout',
       code: JsonRpcErrorCode.Timeout,
-      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) on every attempt.',
+      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) or 408 (request timeout), or sent no answer within the per-attempt timeout, on every attempt.',
       recovery: RECOVERY_HINTS.upstream_timeout,
       retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_unavailable',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'Every attempt failed on ClinicalTrials.gov’s side — HTTP 500, 502, or 503, a dropped connection or one the network gave up opening, or a 200 body that is not the JSON the route serves (an HTML page, unparseable text, the wrong shape, or, in search mode, a field tree that holds no fields) — or it answered with another 5xx, such as 505, or the connection was refused or its host name did not resolve, none of which is retried.',
+      recovery: RECOVERY_HINTS.upstream_unavailable,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_rejected',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'ClinicalTrials.gov refused the request with a status its API does not use for a bad query — HTTP 501, a 3xx, or a 4xx such as 401, 403, or 410 — or answered with an HTML error page in place of its own 404.',
+      recovery: RECOVERY_HINTS.upstream_rejected,
+      retryable: false,
       thrownBy: 'service',
     },
   ],
@@ -151,7 +167,7 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
       .boolean()
       .optional()
       .describe(
-        'drill mode only. Also list index-only pieces (search-index fields such as StudyFirstPostYear) alongside the record fields. Default: false.',
+        'drill mode only. Also list index-only pieces (search-index fields such as StudyFirstPostYear, NumLocations) alongside the record fields. They work in `AREA[…]`, in `sort` (the integer counts), and in clinicaltrials_get_field_values, but not in clinicaltrials_search_studies `fields`; search mode never lists them. Default: false.',
       ),
   }),
 
@@ -165,7 +181,7 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
               .string()
               .optional()
               .describe(
-                'PascalCase identifier. Any piece goes to search `fields`; a leaf (sourceType other than STRUCT) also to `AREA[]` and clinicaltrials_get_field_values; a date or integer leaf also to `sort`.',
+                'PascalCase identifier. Any record piece goes to search `fields`, an index-only piece never; a leaf (sourceType other than STRUCT) also to `AREA[]` and clinicaltrials_get_field_values; a date or integer leaf also to `sort`.',
               ),
             sourceType: z.string().optional().describe('Data type in the model.'),
             type: z.string().optional().describe('Semantic type.'),
@@ -339,6 +355,8 @@ export const getFieldDefinitions = tool('clinicaltrials_get_field_definitions', 
 
     if (result.resolvedPath) {
       lines.push(`**${result.resolvedPath}** (${result.totalFields} fields):\n`);
+    } else if (result.fields.length > 0) {
+      lines.push(`${result.totalFields} field${result.totalFields === 1 ? '' : 's'}:\n`);
     }
 
     for (const field of result.fields) {

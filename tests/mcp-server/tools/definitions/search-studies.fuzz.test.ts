@@ -16,10 +16,16 @@ import { searchStudies } from '@/mcp-server/tools/definitions/search-studies.too
 import { areaIndex } from '../../../helpers/area-metadata.js';
 
 describe('searchStudies fuzz', () => {
-  const mockService = { getAreaIndex: vi.fn(), searchStudies: vi.fn(), maxPageSize: 200 };
+  const mockService = {
+    classifyProjection: vi.fn(),
+    getAreaIndex: vi.fn(),
+    searchStudies: vi.fn(),
+    maxPageSize: 200,
+  };
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockService.classifyProjection.mockResolvedValue('other');
     mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
     // A real AREA index, so any generated text naming an AREA[] field runs the rewrite (#170).
     mockService.getAreaIndex.mockResolvedValue(areaIndex());

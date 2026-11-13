@@ -21,6 +21,7 @@ import {
   type AreaLookup,
   buildExtendedIndex,
   buildFieldIndex,
+  buildStatisticsIndex,
   type ExtendedIndex,
   type ExtendedName,
   type FieldIndex,
@@ -32,6 +33,7 @@ import {
   missesRecordTier,
   nearestPieces,
   resolveName,
+  type StatisticsIndex,
   searchAreaNames,
   searchFields,
 } from './field-search.js';
@@ -49,7 +51,7 @@ import type {
 const DEFAULT_MAX_RETRIES = 3;
 const DEFAULT_BASE_BACKOFF_MS = 1000;
 const DEFAULT_MAX_BACKOFF_MS = 30_000;
-const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
+const RETRYABLE_STATUS = new Set([408, 429, 500, 502, 503, 504]);
 /**
  * Transport codes of a connection that dropped or timed out mid-request,
  * retried like a 5xx. Bun's fetch carries the code on the rejection itself and
@@ -57,7 +59,8 @@ const RETRYABLE_STATUS = new Set([429, 500, 502, 503, 504]);
  * its `cause`, as `ECONNRESET` for a reset, `UND_ERR_SOCKET` for a socket the
  * other side closed before or during the response, and
  * `UND_ERR_CONNECT_TIMEOUT` for undici's 10 s connect timeout (measured on
- * Node 26). A refused connection (`ECONNREFUSED`) is not among them.
+ * Node 26). A refused connection or an unresolved host name is not among them
+ * (UNREACHABLE_NETWORK_CODES).
  */
 const TRANSIENT_NETWORK_CODES = new Set([
   'ECONNRESET',
@@ -65,6 +68,13 @@ const TRANSIENT_NETWORK_CODES = new Set([
   'UND_ERR_SOCKET',
   'UND_ERR_CONNECT_TIMEOUT',
 ]);
+/**
+ * Transport codes of a refused connection or an unresolved host name — the
+ * same on Bun's rejection and on Node's `cause` (measured on Bun 1.4 and
+ * Node 26). The same request meets the same failure, so it is sent once, and
+ * ends as an outage.
+ */
+const UNREACHABLE_NETWORK_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND']);
 /** Least time between two request starts — ClinicalTrials.gov allows about one a second. */
 const MIN_INTERVAL_MS = 1000;
 /**
@@ -77,14 +87,17 @@ const MIN_INTERVAL_MS = 1000;
  */
 const CALL_BUDGET_MS = 50_000;
 /**
- * Timeout for each read behind the second AREA[] and `sort` tier —
- * `/studies/metadata?includeIndexedOnly=true` (~198 KB) and
- * `/studies/search-areas` (~25 KB). Measured 2026-11-03 at 0.16–0.31 s and
- * 0.12–0.66 s; 5 s is several times the slowest. Each read gets one attempt;
- * the pacer starts the two a gap apart and they are awaited together, so a
- * call that misses the record tier waits at most two gaps plus this before its
- * own request — a hung read cannot spend the call's budget on a correction the
- * call can do without.
+ * Timeout for each reference read (readReference): the field index's default
+ * `/studies/metadata` (~176 KB), and the two behind the second AREA[] and
+ * `sort` tier, `/studies/metadata?includeIndexedOnly=true` (~198 KB) and
+ * `/studies/search-areas` (~25 KB). Measured at 0.13–0.29 s (2026-11-13), and
+ * 0.16–0.31 s and 0.12–0.66 s (2026-11-03); 5 s is many times the slowest.
+ * Each read gets one attempt, timed from its pacer slot. A call that validates
+ * or corrects names waits at most a gap plus this on the field index, and one
+ * that misses the record tier two more gaps plus this on the second tier, whose
+ * reads start a gap apart and are awaited together — or, for value statistics,
+ * one more gap plus this on the index-only read alone — so a hung read cannot
+ * spend the call's budget on work the call can do without.
  */
 const EXTENDED_READ_TIMEOUT_MS = 5000;
 /**
@@ -524,56 +537,171 @@ function isRetryDeadline(err: unknown): err is McpError {
 }
 
 /**
- * The error a request ends with once every attempt failed in a way a retry may
- * clear, built from the last of them: a 429 is a rate limit, a 504 an upstream
- * timeout, and anything else — another 5xx, an HTML page in place of JSON, a
- * dropped or timed-out connection — an outage. `status` is undefined for a
- * failure that carried no HTTP status.
+ * The top level a route's 200 body must have before anything reads it — never
+ * the records inside, since a schema per study, statistic, or field node would
+ * refuse records the registry serves.
+ *
+ * | Envelope | Route | Body |
+ * |:--|:--|:--|
+ * | `search` | `/studies` | object whose `studies` is an array — a continuation page sent `countTotal=true` carries no `totalCount` |
+ * | `count` | `/studies`, read by countStudies | the same, plus a numeric `totalCount` |
+ * | `study` | `/studies/{nctId}` | object whose `protocolSection` is an object |
+ * | `list` | `/studies/metadata` (either form), `/stats/field/values`, `/studies/search-areas` | non-empty array |
+ *
+ * A `list` route never answers an empty array when it works: the field tree
+ * always has its sections, the registry its search areas, and the statistics
+ * one entry per requested field — and an empty field tree, kept as the field
+ * index, would refuse every field until the process restarts.
  */
-function exhausted(
-  path: string,
-  lastError: string,
-  status: number | undefined,
-  retries: number,
-): McpError {
-  if (status === 429) {
-    return rateLimited(`Rate limited by ClinicalTrials.gov after ${retries} retries`, {
-      path,
-      lastError,
-      reason: 'rate_limited',
-    });
+type Envelope = 'count' | 'list' | 'search' | 'study';
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Whether `body`'s top level is what `envelope` names. */
+function envelopeHolds(envelope: Envelope, body: unknown): boolean {
+  switch (envelope) {
+    case 'search':
+      return isRecord(body) && Array.isArray(body.studies);
+    case 'count':
+      return isRecord(body) && Array.isArray(body.studies) && typeof body.totalCount === 'number';
+    case 'study':
+      return isRecord(body) && isRecord(body.protocolSection);
+    case 'list':
+      return Array.isArray(body) && body.length > 0;
   }
-  if (status === 504) {
-    return timeout('ClinicalTrials.gov timed out (HTTP 504) on every attempt', {
-      path,
-      lastError,
-      lastStatus: status,
-      reason: 'upstream_timeout',
-    });
-  }
-  return serviceUnavailable('ClinicalTrials.gov API unavailable after retries', {
-    path,
-    lastError,
-    ...(status !== undefined ? { lastStatus: status } : {}),
-  });
 }
 
 /**
- * A fetch rejection a retry may clear: a timeout or abort that neither the
- * caller nor the call's budget raised, or a connection that dropped. Anything
- * else a fetch throws — an invalid URL, a refused connection — fails the same
- * way on every attempt.
+ * Why a 200 body was refused, as the error words it: markup (a front-end page,
+ * whatever its content type says), text that does not parse as JSON (empty,
+ * truncated, plain text), or JSON whose top level is not the route's envelope.
+ * Never the body itself or the parser's message, which quotes it.
  */
-function isTransientFetchError(err: unknown): boolean {
-  if (typeof err !== 'object' || err === null) return false;
-  const { name, code, cause } = err as {
-    cause?: { code?: unknown };
-    code?: unknown;
-    name?: unknown;
-  };
-  if (name === 'AbortError' || name === 'TimeoutError') return true;
-  const transport = code ?? cause?.code;
-  return typeof transport === 'string' && TRANSIENT_NETWORK_CODES.has(transport);
+const BODY_FAULTS = {
+  html: 'HTML instead of JSON',
+  notJson: 'a body that is not JSON',
+  shape: 'JSON of an unexpected shape',
+} as const;
+
+/** Whether an upstream body is a markup page (an HTML error page, an XML fault) rather than the API's own text. */
+function isMarkup(text: string): boolean {
+  return text.trimStart().startsWith('<');
+}
+
+/**
+ * An attempt's failure that a retry may clear: a status in RETRYABLE_STATUS, a
+ * 200 body no consumer can read, a dropped or timed-out connection (by its
+ * transport code), or the attempt running out its own timeout.
+ */
+type RetryableFailure =
+  | { kind: 'body'; fault: keyof typeof BODY_FAULTS }
+  | { kind: 'connection'; code: string }
+  | { kind: 'status'; status: number }
+  | { kind: 'timeout'; timeoutMs: number };
+
+/**
+ * The error a request ends with once every attempt failed in a way a retry may
+ * clear, built from the last of them: a 429 is a rate limit; a 408, a 504, or
+ * an attempt that ran out its own timeout an upstream timeout; anything else —
+ * a 500, 502, or 503, a 200 body no consumer can read, a dropped or timed-out
+ * connection — an outage, named for its route. `data.lastError` is fixed text
+ * or a transport code, never text from upstream or a runtime.
+ */
+function exhausted(path: string, failure: RetryableFailure, retries: number): McpError {
+  const outage = (what: string, data: Record<string, unknown>) =>
+    serviceUnavailable(`ClinicalTrials.gov API unavailable after retries: ${what}.`, {
+      path,
+      ...data,
+      reason: 'upstream_unavailable',
+    });
+  switch (failure.kind) {
+    case 'status': {
+      const { status } = failure;
+      const lastError = `Error: HTTP ${status}`;
+      if (status === 429) {
+        return rateLimited(`Rate limited by ClinicalTrials.gov after ${retries} retries`, {
+          path,
+          lastError,
+          reason: 'rate_limited',
+        });
+      }
+      if (status === 408 || status === 504) {
+        return timeout(`ClinicalTrials.gov timed out (HTTP ${status}) on every attempt`, {
+          path,
+          lastError,
+          lastStatus: status,
+          reason: 'upstream_timeout',
+        });
+      }
+      return outage(`${path} returned HTTP ${status}`, { lastError, lastStatus: status });
+    }
+    case 'timeout':
+      return timeout(
+        `ClinicalTrials.gov sent no answer to ${path} within ${failure.timeoutMs} ms on every attempt`,
+        {
+          path,
+          lastError: 'TimeoutError',
+          timeoutMs: failure.timeoutMs,
+          reason: 'upstream_timeout',
+        },
+      );
+    case 'body': {
+      const what = BODY_FAULTS[failure.fault];
+      return outage(`${path} returned ${what}`, { lastError: `Error: API returned ${what}` });
+    }
+    case 'connection':
+      return outage(`the connection for ${path} failed (${failure.code})`, {
+        lastError: failure.code,
+      });
+  }
+}
+
+/**
+ * The transport code a fetch rejection carries: on the rejection itself (Bun)
+ * or its cause (Node). Only the code is kept: Bun's rejection message names the
+ * request URL and adds a developer hint.
+ */
+function transportCode(err: unknown): string | undefined {
+  if (!isRecord(err)) return undefined;
+  const code = err.code ?? (isRecord(err.cause) ? err.cause.code : undefined);
+  return typeof code === 'string' ? code : undefined;
+}
+
+/**
+ * The transport code of a fetch rejection a retry may clear — a connection
+ * that dropped or timed out, or an abort neither the caller nor the call's
+ * budget raised, by its name — or undefined for anything else a fetch throws
+ * (an invalid URL, a refused connection, an unresolved host name), which fails
+ * the same way on every attempt.
+ */
+function transientTransport(err: unknown): string | undefined {
+  const code = transportCode(err);
+  if (code !== undefined && TRANSIENT_NETWORK_CODES.has(code)) return code;
+  const name = isRecord(err) ? err.name : undefined;
+  return name === 'AbortError' || name === 'TimeoutError' ? name : undefined;
+}
+
+/**
+ * A status fetchJson does not translate itself, or a 404 that is a front-end
+ * page rather than the API's own plain-text answer — sent once, since the same
+ * request meets the same answer. ServiceUnavailable either way: the API is
+ * public and keyless, so Unauthorized, Forbidden, Conflict, or InvalidRequest
+ * would put the fault on credentials or on a request the caller cannot change.
+ * A 5xx other than 501 is an outage (`upstream_unavailable`); 501, a 3xx, or a
+ * 4xx is a refusal (`upstream_rejected`). The message names the status, and
+ * the body stays on the server.
+ */
+function untranslatedStatus(res: Response, path: string): Promise<McpError> {
+  const outage = res.status >= 500 && res.status !== 501;
+  return httpErrorFromResponse(res, {
+    service: 'ClinicalTrials.gov',
+    codeOverride: () => JsonRpcErrorCode.ServiceUnavailable,
+    data: outage
+      ? { path, reason: 'upstream_unavailable' }
+      : { path, reason: 'upstream_rejected', retryable: false },
+  });
 }
 
 /**
@@ -584,19 +712,71 @@ function isTransientFetchError(err: unknown): boolean {
 type AttemptOutcome<T> = { ok: true; value: T } | { failure: McpError; ok: false };
 
 /**
+ * The field index built from a default `/studies/metadata` tree. A tree that
+ * yields no field entries is a failed read, never an index: kept, it would
+ * refuse every `fields` name as unknown until the process restarts.
+ */
+function fieldIndexFrom(tree: FieldNode[]): FieldIndex {
+  const index = buildFieldIndex(tree);
+  if (index.entries.length === 0) {
+    throw serviceUnavailable('ClinicalTrials.gov answered /studies/metadata with no fields.', {
+      path: '/studies/metadata',
+      reason: 'upstream_unavailable',
+    });
+  }
+  return index;
+}
+
+/**
+ * What a value-statistics call's names were checked against: the field index,
+ * and the index-only tier when a name missed the record pieces and the read
+ * behind it succeeded.
+ */
+interface StatisticsModel {
+  index: FieldIndex;
+  indexOnly?: StatisticsIndex;
+}
+
+/**
+ * Whether the piece upstream answered as `name` repeats, or undefined when
+ * neither tier holds it. Upstream names the piece in each answer even for an
+ * alt name it was sent (`COLLABORATOR` → CollaboratorName, `NUMBER-OF-COUNTRIES`
+ * → NumUniqueLocationCountries, live 2026-11-13); an echoed record alt name
+ * would resolve to its piece all the same.
+ */
+function repeats(name: string, { index, indexOnly }: StatisticsModel): boolean | undefined {
+  const altOf = index.area.names.has(name) ? index.area.fold.get(name.toLowerCase()) : undefined;
+  const entry =
+    index.byPiece.get(name) ?? (altOf === undefined ? undefined : index.byPiece.get(altOf));
+  if (entry) return isArrayType(entry.type) || entry.hasArrayAncestor === true;
+  const extra = indexOnly?.extras.find((e) => e.names.includes(name));
+  return extra && (isArrayType(extra.type) || extra.hasArrayAncestor === true);
+}
+
+/**
  * Mark each stat as multi-valued by checking the metadata tree for an array
  * marker (`[]`, e.g. `Phase[]`, `Location[]`) — the durable source of
  * cardinality. Two shapes qualify: the leaf's own node type is array-typed,
  * or an ancestor object on its path is (`LocationCountry` is scalar `text`,
- * but sits under `locations: Location[]`, so a study carries one per site).
- * Note: the stat's own `type` (`ENUM`/`STRING`) is the value domain, not the
- * array marker, so the metadata tree is the only signal.
+ * but sits under `locations: Location[]`, so a study carries one per site;
+ * the index-only `LocationCountryCode` beside it likewise). Note: the stat's
+ * own `type` (`ENUM`/`STRING`) is the value domain, not the array marker, so
+ * the metadata tree is the only signal.
+ *
+ * Returns the pieces it could not settle — every one when there is no index,
+ * else those neither tier holds — whose flag stays absent.
  */
-function annotateMultiValued(stats: FieldValueStats[], { byPiece }: FieldIndex): void {
+function annotateMultiValued(
+  stats: FieldValueStats[],
+  model: StatisticsModel | undefined,
+): string[] {
+  const undetermined: string[] = [];
   for (const stat of stats) {
-    const entry = byPiece.get(stat.piece);
-    if (entry && (isArrayType(entry.type) || entry.hasArrayAncestor)) stat.multiValued = true;
+    const repeated = model && repeats(stat.piece, model);
+    if (repeated === undefined) undetermined.push(stat.piece);
+    else if (repeated) stat.multiValued = true;
   }
+  return undetermined;
 }
 
 /**
@@ -624,16 +804,41 @@ function describeUnsupportedType(
   );
 }
 
+/** A search request: its parameters, and how the service treats its `fields`. */
+export interface SearchStudiesParams extends SearchParams {
+  /**
+   * `fields` is a projection the server builds itself, whose names never
+   * change: it goes out as written, without the local check against the field
+   * index, so the call spends no `/studies/metadata` read on it.
+   */
+  fixedFields?: boolean;
+}
+
 /** A search page, plus the `filterIds` its request had no room for. */
 export interface SearchStudiesResult extends PagedStudiesResponse {
   /** Trailing `filterIds` left out of the request, in order. Absent when every ID went out. */
   deferredIds?: string[];
 }
 
+/** A getFieldValues answer: the statistics, and the pieces whose repetition it could not settle. */
+export interface FieldValuesAnswer {
+  /**
+   * The pieces the call could not settle `multiValued` for — the index was
+   * unavailable or holds no entry for them — whose absent flag does not mean
+   * single-valued. Absent when every piece was settled.
+   */
+  multiValuedUndetermined?: string[];
+  /** Upstream's statistics, each flagged `multiValued` where its piece repeats (annotateMultiValued). */
+  stats: FieldValueStats[];
+}
+
 /** Constructor options for overriding retry/backoff/validation behavior (primarily for tests). */
 export interface ClinicalTrialsServiceOptions {
   baseBackoffMs?: number;
-  /** Timeout for each read behind the second AREA[] and `sort` tier; defaults to EXTENDED_READ_TIMEOUT_MS. */
+  /**
+   * Timeout for each reference read — the field index and the two behind the
+   * second AREA[] and `sort` tier; defaults to EXTENDED_READ_TIMEOUT_MS.
+   */
   extendedReadTimeoutMs?: number;
   maxBackoffMs?: number;
   maxRetries?: number;
@@ -675,11 +880,13 @@ export class ClinicalTrialsService {
   /** When each call's budget runs out, set the first time the call reaches the service. */
   private readonly deadlineByCall = new WeakMap<Context, number>();
   /**
-   * The field index, loaded once for the process and kept: the load in flight
-   * or its success, cleared when it fails so the next call loads afresh.
+   * The field index for the process: its read in flight (loadFieldIndex), or
+   * the index once one is built — by that read, or by a field search's own
+   * read after it failed — and then kept. Cleared when the read fails, so the
+   * next call reads afresh.
    */
   private fieldIndexLoad: Promise<FieldIndex> | undefined;
-  /** Each call's one attempt at the field index, shared by every consumer in that call. */
+  /** Each call's one wait on the field index, shared by every consumer in that call. */
   private readonly fieldIndexByCall = new WeakMap<Context, Promise<FieldIndex>>();
   /**
    * The two reads behind the second tier, each kept once it succeeds and
@@ -689,6 +896,8 @@ export class ClinicalTrialsService {
   private searchAreasRead: Promise<ExtendedName[]> | undefined;
   /** Each call's one attempt at the second tier, shared by every consumer in that call. */
   private readonly extendedByCall = new WeakMap<Context, Promise<ExtendedIndex | undefined>>();
+  /** Each value-statistics call's one attempt at its second tier, the index-only read alone. */
+  private readonly statisticsByCall = new WeakMap<Context, Promise<StatisticsIndex | undefined>>();
 
   constructor(config: ServerConfig, options: ClinicalTrialsServiceOptions = {}) {
     this.baseUrl = config.apiBaseUrl;
@@ -707,9 +916,10 @@ export class ClinicalTrialsService {
    * beside every other parameter go out, and the rest come back unqueried in
    * `deferredIds` (see fitFilterIds). A relevance sort is spelled as upstream
    * accepts it before the fit (rewriteRelevance); every other correction comes
-   * after it and never lengthens the request.
+   * after it and never lengthens the request. `fixedFields` sends `fields`
+   * without the local check.
    */
-  async searchStudies(params: SearchParams, ctx: Context): Promise<SearchStudiesResult> {
+  async searchStudies(params: SearchStudiesParams, ctx: Context): Promise<SearchStudiesResult> {
     const sortCorrections: SortCorrection[] = [];
     if (params.sort) {
       const relevance = rewriteRelevance(params.sort);
@@ -722,7 +932,7 @@ export class ClinicalTrialsService {
       params = { ...params, filterIds: fit.sent };
       deferredIds = fit.deferred;
     }
-    if (this.validateFieldsLocally && params.fields?.length) {
+    if (this.validateFieldsLocally && !params.fixedFields && params.fields?.length) {
       const normalized = await this.normalizeFields(params.fields, ctx);
       await this.validateFields(normalized, ctx, 'projection');
       params = { ...params, fields: normalized };
@@ -746,7 +956,8 @@ export class ClinicalTrialsService {
    * `pageSize=0` with its default page of ten full studies, so the count asks
    * for one study projected to `NCTId` — the total rides the same response.
    * The fixed projection skips local field validation, which would otherwise
-   * fetch `/studies/metadata` on a fresh server's first count.
+   * fetch `/studies/metadata` on a fresh server's first count. A page without
+   * a numeric total is refused and retried like an outage, never read as zero.
    */
   async countStudies(params: CountParams, ctx: Context): Promise<number> {
     const q = this.buildSearchQuery({
@@ -756,8 +967,13 @@ export class ClinicalTrialsService {
       fields: ['NCTId'],
     });
     ctx.log.debug('countStudies', { paramKeys: Object.keys(q) });
-    const { totalCount } = await this.fetchJson<PagedStudiesResponse>('/studies', q, ctx);
-    return totalCount ?? 0;
+    const { totalCount } = await this.fetchJson<PagedStudiesResponse & { totalCount: number }>(
+      '/studies',
+      q,
+      ctx,
+      { envelope: 'count' },
+    );
+    return totalCount;
   }
 
   /** Fetch a single study by NCT ID. */
@@ -779,7 +995,8 @@ export class ClinicalTrialsService {
    *
    * A batch of 20 IDs (the results tool's per-call cap) comes to about 400
    * bytes of the request-target limit, so the ID fit in searchStudies never
-   * defers one here.
+   * defers one here. The projection is fixed, so it skips local field
+   * validation, as countStudies does.
    */
   async getStudiesBatch(nctIds: string[], ctx: Context): Promise<Study[]> {
     ctx.log.debug('getStudiesBatch', { count: nctIds.length });
@@ -787,6 +1004,7 @@ export class ClinicalTrialsService {
       {
         filterIds: nctIds,
         fields: ['NCTId', 'NCTIdAlias', 'BriefTitle', 'HasResults', 'ResultsSection'],
+        fixedFields: true,
         pageSize: nctIds.length,
         // ID-targeted lookups must never filter the caller's selection.
         includeUnknownEnrollment: true,
@@ -805,18 +1023,22 @@ export class ClinicalTrialsService {
   }
 
   /**
-   * Get field value statistics for the specified fields. Upstream counts leaf
-   * pieces only, so validateFields refuses a group of fields locally, naming its
-   * leaves. The 400 upstream answers any other type it cannot count with — a
-   * leaf such as LocationGeoPoint, or a group when no index checked the call —
-   * is translated to the same `field_invalid` (describeUnsupportedType).
+   * Get field value statistics for the specified fields. Upstream counts the
+   * record leaf pieces, their alt names, and the index-only pieces
+   * (`NumLocations`) with theirs, so a name the record pieces miss is looked up
+   * among the index-only ones before it is refused (normalizeFields,
+   * validateFields). It counts leaf pieces only, so validateFields refuses a
+   * group of fields locally, naming its leaves. The 400 upstream answers any
+   * other type it cannot count with — a leaf such as LocationGeoPoint, or a
+   * group when no index checked the call — is translated to the same
+   * `field_invalid` (describeUnsupportedType).
    */
-  async getFieldValues(fields: string[], ctx: Context): Promise<FieldValueStats[]> {
+  async getFieldValues(fields: string[], ctx: Context): Promise<FieldValuesAnswer> {
     ctx.log.debug('getFieldValues', { fields });
-    let index: FieldIndex | undefined;
+    let model: StatisticsModel | undefined;
     if (this.validateFieldsLocally) {
-      fields = await this.normalizeFields(fields, ctx);
-      index = await this.validateFields(fields, ctx, 'statistics');
+      fields = await this.normalizeFields(fields, ctx, 'statistics');
+      model = await this.validateFields(fields, ctx, 'statistics');
     }
     try {
       const stats = await this.fetchJson<FieldValueStats[]>(
@@ -825,18 +1047,22 @@ export class ClinicalTrialsService {
         ctx,
         { jsonFormat: false },
       );
-      // Flag multi-valued fields so callers can read the per-value counts
-      // correctly — array-type fields (e.g. Phase, Condition) let one study carry
-      // several values, so buckets sum above the study total. Reads the index
-      // validateFields checked the call against, so this adds no round-trip;
-      // skipped without one (local validation disabled or metadata unavailable).
-      if (index) annotateMultiValued(stats, index);
-      return stats;
+      /**
+       * Flag multi-valued fields so callers can read the per-value counts
+       * correctly — array-type fields (e.g. Phase, Condition) let one study
+       * carry several values, so buckets sum above the study total. Reads what
+       * validateFields checked the call against, so this adds no round-trip;
+       * without an index (local validation disabled or metadata unavailable),
+       * every piece is named undetermined instead, and without the index-only
+       * tier, every piece the record tier does not hold.
+       */
+      const undetermined = annotateMultiValued(stats, model);
+      return undetermined.length > 0 ? { stats, multiValuedUndetermined: undetermined } : { stats };
     } catch (err) {
       const unsupportedType =
         err instanceof McpError ? parseUnsupportedFieldType(err.message) : undefined;
       if (unsupportedType) {
-        throw describeUnsupportedType(unsupportedType, fields, index, err);
+        throw describeUnsupportedType(unsupportedType, fields, model?.index, err);
       }
       if (err instanceof McpError && err.code === JsonRpcErrorCode.NotFound) {
         // Upstream reports only the first bad name ("Unknown piece name of field
@@ -866,6 +1092,12 @@ export class ClinicalTrialsService {
   /**
    * Search the field model by keyword, returning ranked matches with paths and
    * types plus the pre-cap match total for accurate truncation disclosure.
+   *
+   * The answer is the field index, so when the shared read fails — this call's
+   * own, or one it joined — the index is read again on the full retry ladder
+   * within this call's budget, and the index built is kept for every call.
+   *
+   * @throws the caller's cancellation, never answered from the fallback read.
    */
   async searchFieldDefinitions(
     query: string,
@@ -873,8 +1105,18 @@ export class ClinicalTrialsService {
     ctx: Context,
   ): Promise<{ entries: FieldIndexEntry[]; total: number }> {
     ctx.log.debug('searchFieldDefinitions', { query, limit });
-    const { entries } = await this.getFieldIndex(ctx);
-    return searchFields(query, entries, limit);
+    let index: FieldIndex;
+    try {
+      index = await this.getFieldIndex(ctx);
+    } catch (err) {
+      if (ctx.signal.aborted) throw err;
+      ctx.log.debug('Field index read failed — reading it again with retries', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      index = fieldIndexFrom(await this.getMetadata(false, ctx));
+      this.fieldIndexLoad = Promise.resolve(index);
+    }
+    return searchFields(query, index.entries, limit);
   }
 
   /**
@@ -889,6 +1131,48 @@ export class ClinicalTrialsService {
   async getAreaIndex(ctx: Context): Promise<AreaLookup | undefined> {
     const index = await this.areaFieldIndex(ctx);
     return index && { ...index.area, extended: () => this.getExtendedIndex(index, ctx) };
+  }
+
+  /**
+   * Whether a search's `fields` list reaches into posted results: `results`
+   * when a name is ResultsSection or a group under it (OutcomeMeasuresModule,
+   * OutcomeMeasure), `other` otherwise — a leaf under results
+   * (OutcomeMeasureTitle) included, and a name the field index does not hold,
+   * which validation then refuses. Names are looked up as the caller sent
+   * them, with the folds field normalization applies: surrounding whitespace,
+   * case, and a metadata path in place of its piece. `unclassifiable` when
+   * local validation is disabled or the field index cannot be read; the read is
+   * the call's one attempt, which the search's own validation then shares.
+   *
+   * @throws the caller's cancellation, never passed off as an unreadable index.
+   */
+  async classifyProjection(
+    fields: string[],
+    ctx: Context,
+  ): Promise<'other' | 'results' | 'unclassifiable'> {
+    if (!this.validateFieldsLocally) return 'unclassifiable';
+    let index: FieldIndex;
+    try {
+      index = await this.getFieldIndex(ctx);
+    } catch (err) {
+      if (ctx.signal.aborted) throw err;
+      return 'unclassifiable';
+    }
+    const { byPiece, caseFold, paths } = index;
+    const reachesResults = fields.some((name) => {
+      const trimmed = name.trim();
+      const lowered = trimmed.toLowerCase();
+      const piece = byPiece.has(trimmed)
+        ? trimmed
+        : (caseFold.get(lowered) ?? paths.exact.get(trimmed) ?? paths.fold.get(lowered));
+      const entry = piece === undefined ? undefined : byPiece.get(piece);
+      return (
+        entry !== undefined &&
+        isStruct(entry) &&
+        (entry.path === 'resultsSection' || entry.path.startsWith('resultsSection.'))
+      );
+    });
+    return reachesResults ? 'results' : 'other';
   }
 
   /* ------------------------------------------------------------------ */
@@ -976,13 +1260,65 @@ export class ClinicalTrialsService {
     }
   }
 
+  /**
+   * The second tier of value statistics for this call, read when a name misses
+   * the record tier: the index-only pieces alone, through the read the AREA[]
+   * and `sort` tier shares — never the search areas, which `/stats/field/values`
+   * refuses, so their outage never costs it. One attempt per call, shared by
+   * normalizeFields and validateFields. Undefined when the read fails or the
+   * call's budget ends the wait, which sends the names it would have checked
+   * upstream as written; the next call that needs it reads it afresh.
+   *
+   * @throws the caller's cancellation, never passed off as an unavailable tier.
+   */
+  private getStatisticsIndex(
+    index: FieldIndex,
+    ctx: Context,
+  ): Promise<StatisticsIndex | undefined> {
+    let attempt = this.statisticsByCall.get(ctx);
+    if (!attempt) {
+      attempt = this.loadStatisticsIndex(index, ctx);
+      this.statisticsByCall.set(ctx, attempt);
+    }
+    return attempt;
+  }
+
+  private async loadStatisticsIndex(
+    index: FieldIndex,
+    ctx: Context,
+  ): Promise<StatisticsIndex | undefined> {
+    try {
+      const indexOnly = await this.untilCallEnds(() => this.readIndexOnly(ctx), ctx);
+      return buildStatisticsIndex(index.entries, indexOnly);
+    } catch (err) {
+      if (ctx.signal.aborted) throw err;
+      ctx.log.warning('Index-only piece lookup skipped — read failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return undefined;
+    }
+  }
+
   private readIndexOnly(ctx: Context): Promise<ExtendedName[]> {
     this.indexOnlyRead ??= this.readReference<FieldNode[]>(
       '/studies/metadata',
       { includeIndexedOnly: 'true' },
       ctx,
     )
-      .then(indexOnlyNames)
+      .then((tree) => {
+        const names = indexOnlyNames(tree);
+        /**
+         * A tree that flags no index-only piece (the default one, say) is a
+         * failed read: kept, it would refuse every index-only name until restart.
+         */
+        if (names.length === 0) {
+          throw serviceUnavailable(
+            'ClinicalTrials.gov answered /studies/metadata?includeIndexedOnly=true with no index-only pieces.',
+            { path: '/studies/metadata', reason: 'upstream_unavailable' },
+          );
+        }
+        return names;
+      })
       .catch((err: unknown) => {
         this.indexOnlyRead = undefined;
         throw err;
@@ -1001,12 +1337,12 @@ export class ClinicalTrialsService {
   }
 
   /**
-   * One attempt at a reference read behind the second tier, under its own short
-   * timeout. It runs on a context of its own — its own signal and budget, never
-   * the caller's: concurrent callers await the same read, so one caller
-   * cancelling or running out of time must not fail it for the rest. Each
-   * caller's wait ends on its own instead (untilCallEnds), and the read stays
-   * bounded by its timeout.
+   * One attempt at a reference read — the field index, or one behind the
+   * second tier — under its own short timeout. It runs on a context of its
+   * own — its own signal and budget, never the caller's: concurrent callers
+   * await the same read, so one caller cancelling or running out of time must
+   * not fail it for the rest. Each caller's wait ends on its own instead
+   * (untilCallEnds), and the read stays bounded by its timeout.
    */
   private readReference<T>(path: string, params: Record<string, string>, ctx: Context): Promise<T> {
     return this.fetchJson<T>(
@@ -1018,60 +1354,49 @@ export class ClinicalTrialsService {
   }
 
   /**
-   * The field index for this call: one attempt per call, shared by every
-   * consumer in it — field normalization and validation, the sort fold, the
-   * AREA[] lookup, the multi-value flags — so a load that failed is not retried
-   * before the call ends, and the next call loads afresh.
+   * The field index for this call: one wait per call on the process-wide read,
+   * shared by every consumer in it — field normalization and validation, the
+   * sort fold, the AREA[] lookup, the multi-value flags — so a read that failed
+   * is not retried before the call ends, and the next call reads afresh. The
+   * wait ends with the call — its cancellation or its budget — and leaves the
+   * read running for every other call awaiting it.
    */
   private getFieldIndex(ctx: Context): Promise<FieldIndex> {
     let attempt = this.fieldIndexByCall.get(ctx);
     if (!attempt) {
-      attempt = this.awaitFieldIndex(ctx);
+      attempt = this.untilCallEnds(() => this.loadFieldIndex(ctx), ctx);
       this.fieldIndexByCall.set(ctx, attempt);
     }
     return attempt;
   }
 
   /**
-   * Wait on the process-wide field index. The first call to need it loads it on
-   * its own context — its signal and its budget — and every other call waits
-   * on that load until the load settles or the waiting call ends. A load that
-   * ended with the call running it — cancelled, or out of budget — is no answer
-   * for a call still live and within its own budget, which starts the load
-   * again on its own.
+   * The process-wide field index: read once through readReference — one
+   * attempt under its short timeout, on a context of its own, so no caller's
+   * end fails it for the rest — and kept once built. A read that fails, or
+   * answers with no fields (fieldIndexFrom), is dropped, and the next call
+   * reads afresh. Every consumer here can do without the index; the one whose
+   * answer is the index reads it again itself (searchFieldDefinitions).
    */
-  private async awaitFieldIndex(ctx: Context): Promise<FieldIndex> {
-    for (;;) {
-      try {
-        return await this.untilCallEnds(
-          () => (this.fieldIndexLoad ??= this.loadFieldIndex(ctx)),
-          ctx,
-        );
-      } catch (err) {
-        const othersEnd =
-          !ctx.signal.aborted &&
-          err instanceof McpError &&
-          (err.code === JsonRpcErrorCode.RequestCancelled ||
-            (isRetryDeadline(err) && this.remainingMs(ctx) > 0));
-        if (!othersEnd) throw err;
-      }
-    }
-  }
-
-  /** Fetch /studies/metadata and build the field index from it, dropping a failed load. */
-  private async loadFieldIndex(ctx: Context): Promise<FieldIndex> {
-    try {
-      const index = buildFieldIndex(await this.getMetadata(false, ctx));
-      ctx.log.debug('Field index built', {
-        entryCount: index.entries.length,
-        caseFoldable: index.caseFold.size,
-        areaNames: index.area.names.size,
+  private loadFieldIndex(ctx: Context): Promise<FieldIndex> {
+    if (this.fieldIndexLoad) return this.fieldIndexLoad;
+    const load = this.readReference<FieldNode[]>('/studies/metadata', {}, ctx)
+      .then((tree) => {
+        const index = fieldIndexFrom(tree);
+        ctx.log.debug('Field index built', {
+          entryCount: index.entries.length,
+          caseFoldable: index.caseFold.size,
+          areaNames: index.area.names.size,
+        });
+        return index;
+      })
+      .catch((err: unknown) => {
+        // A field search's fallback may have kept an index in the meantime.
+        if (this.fieldIndexLoad === load) this.fieldIndexLoad = undefined;
+        throw err;
       });
-      return index;
-    } catch (err) {
-      this.fieldIndexLoad = undefined;
-      throw err;
-    }
+    this.fieldIndexLoad = load;
+    return load;
   }
 
   /** Milliseconds left of `ctx`'s budget, starting it on the call's first reach into the service. */
@@ -1120,6 +1445,8 @@ export class ClinicalTrialsService {
           reject(err);
         },
       );
+      // A cancellation while start() ran fired before the listener existed.
+      if (signal.aborted) onAbort();
     });
   }
 
@@ -1128,13 +1455,31 @@ export class ClinicalTrialsService {
    * surrounding whitespace, fold a case-only miss to its piece, map a metadata
    * path — as clinicaltrials_get_field_definitions prints it, or in another
    * case — to its piece (`protocolSection.statusModule.overallStatus` →
-   * `OverallStatus`), and apply the legacy renames. Each yields a name no longer
-   * than the one it replaces. Returns the corrected list — anything still
-   * invalid falls through to validateFields and surfaces the structured
-   * did-you-mean error. Logs corrections via ctx.log.notice so operators can
-   * spot recurring LLM mistakes without forcing a tool-call round-trip.
+   * `OverallStatus`), and apply the legacy renames.
+   *
+   * Value statistics (`use`) also take what upstream counts beyond the record
+   * pieces. A record alt name goes out as written (`OVERALL-STATUS`,
+   * `COLLABORATOR`), and one in another case folds to its piece after the piece
+   * fold has had its turn (`overall-status` → `OverallStatus`), so a lowered
+   * group name (`collaborator`) still names the group validateFields refuses. A
+   * name the record tier leaves unresolved is looked up among the index-only
+   * pieces the same way (`numlocations` → `NumLocations`, `NUMBER-OF-LOCATIONS`
+   * as written; getStatisticsIndex). Never among the search areas, which
+   * upstream refuses there.
+   *
+   * Each yields a name no longer than the one it replaces. Returns the
+   * corrected list — anything still invalid falls through to validateFields and
+   * surfaces the structured did-you-mean error. Logs corrections via
+   * ctx.log.notice so operators can spot recurring LLM mistakes without forcing
+   * a tool-call round-trip.
+   *
+   * @throws the caller's cancellation.
    */
-  private async normalizeFields(fields: string[], ctx: Context): Promise<string[]> {
+  private async normalizeFields(
+    fields: string[],
+    ctx: Context,
+    use: 'projection' | 'statistics' = 'projection',
+  ): Promise<string[]> {
     let index: FieldIndex;
     try {
       index = await this.getFieldIndex(ctx);
@@ -1144,26 +1489,34 @@ export class ClinicalTrialsService {
       // metadata-unavailable warning + fail-open behavior on the same failure.
       return fields;
     }
-    const { byPiece, caseFold, paths } = index;
-    const corrections: Array<{ from: string; to: string }> = [];
-    const normalized = fields.map((f) => {
-      if (byPiece.has(f)) return f;
+    const { area, byPiece, caseFold, paths } = index;
+    const statistics = use === 'statistics';
+    const asWritten = (name: string) => byPiece.has(name) || (statistics && area.names.has(name));
+    /** The record tier's spelling of `f`, or undefined when it misses. */
+    const record = (f: string): string | undefined => {
+      if (asWritten(f)) return f;
       const trimmed = f.trim();
-      if (trimmed !== f && byPiece.has(trimmed)) {
-        corrections.push({ from: f, to: trimmed });
-        return trimmed;
-      }
+      if (asWritten(trimmed)) return trimmed;
       const lowered = trimmed.toLowerCase();
-      const corrected =
+      return (
         caseFold.get(lowered) ??
         paths.exact.get(trimmed) ??
         paths.fold.get(lowered) ??
-        KNOWN_FIELD_RENAMES.get(lowered.replace(/[\s_]+/g, ''));
-      if (corrected) {
-        corrections.push({ from: f, to: corrected });
-        return corrected;
-      }
-      return f;
+        (statistics ? area.fold.get(lowered) : undefined) ??
+        KNOWN_FIELD_RENAMES.get(lowered.replace(/[\s_]+/g, ''))
+      );
+    };
+    const resolved = fields.map(record);
+    const indexOnly =
+      statistics && resolved.includes(undefined)
+        ? (await this.getStatisticsIndex(index, ctx))?.fold
+        : undefined;
+    const corrections: Array<{ from: string; to: string }> = [];
+    const normalized = fields.map((f, i) => {
+      const fixed = resolved[i] ?? (indexOnly && resolveName(f.trim(), indexOnly));
+      if (fixed === undefined) return f;
+      if (fixed !== f) corrections.push({ from: f, to: fixed });
+      return fixed;
     });
     if (corrections.length > 0) {
       ctx.log.notice('Field names auto-corrected', { corrections });
@@ -1360,18 +1713,25 @@ export class ClinicalTrialsService {
 
   /**
    * Reject invalid field names locally with did-you-mean suggestions, and
-   * return the index the call was checked against — undefined when it cannot
+   * return what the call was checked against — undefined when the index cannot
    * be loaded, which lets the request through unchecked. A dotted name no
    * metadata path matches is ranked on its last segment
    * (`protocolSection.designModule.phase` → `Phase`): ranked whole, its
    * enclosing module and section outrank the leaf.
    *
-   * `projection` is a search's `fields`, which takes every piece, groups
-   * included. `statistics` is clinicaltrials_get_field_values, which upstream
+   * `projection` is a search's `fields`, which takes every record piece, groups
+   * included, and no index-only piece (upstream answers one with an empty
+   * module). `statistics` is clinicaltrials_get_field_values, which upstream
    * answers for leaf pieces only (`Unsupported field type`): a requested group
    * is refused with its direct leaf pieces as its suggestions — or, when it
    * holds only groups, with its clinicaltrials_get_field_definitions drill
-   * path — and no did-you-mean there names a group.
+   * path — and no did-you-mean there names a group. It also counts record alt
+   * names and the index-only pieces, so a name the record tier misses is
+   * refused only once the index-only tier misses it too, and its suggestions
+   * lead with any index-only piece it is a near miss of (`NumLocation` →
+   * `NumLocations`). When that tier cannot be read, the names it would have
+   * checked go upstream unchecked, whose 404 for an unknown one is translated
+   * in getFieldValues.
    *
    * @throws the caller's cancellation, never logged as unavailable metadata.
    */
@@ -1379,7 +1739,7 @@ export class ClinicalTrialsService {
     fields: string[],
     ctx: Context,
     use: 'projection' | 'statistics',
-  ): Promise<FieldIndex | undefined> {
+  ): Promise<StatisticsModel | undefined> {
     let index: FieldIndex;
     try {
       index = await this.getFieldIndex(ctx);
@@ -1393,19 +1753,34 @@ export class ClinicalTrialsService {
       });
       return undefined;
     }
-    const unknown = fields.filter((f) => !index.byPiece.has(f));
-    const groups =
-      use === 'statistics'
-        ? fields.flatMap((f) => {
-            const entry = index.byPiece.get(f);
-            return entry && isStruct(entry) ? [entry] : [];
-          })
-        : [];
-    if (unknown.length === 0 && groups.length === 0) return index;
+    const statistics = use === 'statistics';
+    const missed = fields.filter(
+      (f) => !index.byPiece.has(f) && !(statistics && index.area.names.has(f)),
+    );
+    const indexOnly =
+      statistics && missed.length > 0 ? await this.getStatisticsIndex(index, ctx) : undefined;
+    const unknown = statistics
+      ? indexOnly
+        ? missed.filter((f) => !indexOnly.fold.names.has(f))
+        : []
+      : missed;
+    const groups = statistics
+      ? fields.flatMap((f) => {
+          const entry = index.byPiece.get(f);
+          return entry && isStruct(entry) ? [entry] : [];
+        })
+      : [];
+    if (unknown.length === 0 && groups.length === 0) {
+      return indexOnly ? { index, indexOnly } : { index };
+    }
 
-    const pool = use === 'statistics' ? index.area.entries : index.entries;
+    const pool = statistics ? index.area.entries : index.entries;
     const near = unknown.map(
-      (f) => [f, nearestPieces(f.split('.').filter(Boolean).pop() ?? f, pool, 3)] as const,
+      (f) =>
+        [
+          f,
+          nearestPieces(f.split('.').filter(Boolean).pop() ?? f, pool, 3, indexOnly?.extras),
+        ] as const,
     );
     const leaves = groups.map(
       (group) =>
@@ -1559,28 +1934,41 @@ export class ClinicalTrialsService {
   /**
    * GET `path` and parse its JSON, retrying transient failures and translating
    * upstream rejections into typed errors. `studyId` marks the single-study
-   * route, the only one whose 404 means a study is missing; `maxRetries` and
-   * `timeoutMs` override the service's own for a read that must stay short.
+   * route, the only one whose 404 means a study is missing; `envelope`
+   * overrides the route's own (see Envelope); `maxRetries` and `timeoutMs`
+   * override the service's own for a read that must stay short.
    *
    * Each attempt waits its turn in the pacer and stops at `timeoutMs`; the
    * whole request — attempts, backoffs, and waits — stops when the call's
-   * budget does, and a call with none left sends nothing. A 429, a 5xx, HTML in
-   * place of JSON, and a dropped or timed-out connection are retried, and the
-   * last attempt that ran to an outcome decides the error the request ends
-   * with: a budget that runs out after a 429 reports the rate limit, any other
-   * expiry `retry_deadline_exceeded`. The caller's cancellation outranks both.
+   * budget does, and a call with none left sends nothing. A 408, a 429, a 500,
+   * 502, 503, or 504, a 200 body that does not parse or fails the route's
+   * envelope, a dropped or timed-out connection, and an attempt's own timeout
+   * are retried, and the last attempt that ran to an outcome decides the error
+   * the request ends with (exhausted): a budget that runs out after a 429
+   * reports the rate limit, any other expiry `retry_deadline_exceeded`. The
+   * caller's cancellation outranks both. A status the ladder below does not
+   * translate is sent once (untranslatedStatus).
    */
   private async fetchJson<T>(
     path: string,
     params: Record<string, string>,
     ctx: Context,
     {
+      envelope,
       jsonFormat = true,
       maxRetries = this.maxRetries,
       studyId,
       timeoutMs = this.timeoutMs,
-    }: { jsonFormat?: boolean; maxRetries?: number; studyId?: string; timeoutMs?: number } = {},
+    }: {
+      envelope?: Envelope;
+      jsonFormat?: boolean;
+      maxRetries?: number;
+      studyId?: string;
+      timeoutMs?: number;
+    } = {},
   ): Promise<T> {
+    const expected: Envelope =
+      envelope ?? (studyId !== undefined ? 'study' : path === '/studies' ? 'search' : 'list');
     const url = this.buildUrl(path, params, jsonFormat);
     if (ctx.signal.aborted) throw requestCancelled('Request cancelled by caller', { path });
     const deadlineMs = this.remainingMs(ctx);
@@ -1600,6 +1988,10 @@ export class ClinicalTrialsService {
         () => attemptTimeout.abort(new DOMException('The operation timed out.', 'TimeoutError')),
         timeoutMs,
       );
+      const retry = (failure: RetryableFailure): AttemptOutcome<T> => ({
+        ok: false,
+        failure: exhausted(path, failure, maxRetries),
+      });
       try {
         const res = await fetch(url, {
           signal: AbortSignal.any([signal, attemptTimeout.signal]),
@@ -1607,19 +1999,25 @@ export class ClinicalTrialsService {
         });
 
         if (res.ok) {
-          const ct = res.headers.get('content-type') ?? '';
-          if (!ct.includes('json')) {
-            const text = await res.text();
-            if (text.includes('<html') || text.includes('<!DOCTYPE')) {
-              const lastError = 'Error: API returned HTML instead of JSON';
-              return { ok: false, failure: exhausted(path, lastError, undefined, maxRetries) };
-            }
-            return { ok: true, value: JSON.parse(text) as T };
+          // Parsed whatever the content type says, and checked before any
+          // consumer reads it: the parser's own error quotes the body.
+          const text = await res.text();
+          let body: unknown;
+          try {
+            body = JSON.parse(text);
+          } catch {
+            return retry({ kind: 'body', fault: isMarkup(text) ? 'html' : 'notJson' });
           }
-          return { ok: true, value: (await res.json()) as T };
+          return envelopeHolds(expected, body)
+            ? { ok: true, value: body as T }
+            : retry({ kind: 'body', fault: 'shape' });
         }
 
         if (res.status === 404) {
+          const text = (await res.text()).trim();
+          // A front-end page, not the API's plain-text 404: the route was
+          // refused, not the study or field the caller named.
+          if (isMarkup(text)) throw await untranslatedStatus(res, path);
           if (studyId !== undefined) {
             throw notFound(`Study ${studyId} not found`, { reason: 'study_not_found' });
           }
@@ -1627,7 +2025,6 @@ export class ClinicalTrialsService {
           // /studies/search-areas) — surface the upstream body so callers can
           // extract specific offenders instead of getting a generic "not found"
           // that loses which input was bad, or blames a study no one named.
-          const text = (await res.text()).trim();
           throw notFound(text || `Not found: ${path}`);
         }
         if (res.status === 400) {
@@ -1833,17 +2230,24 @@ export class ClinicalTrialsService {
           );
         }
 
-        if (RETRYABLE_STATUS.has(res.status)) {
-          const lastError = `Error: HTTP ${res.status}`;
-          return { ok: false, failure: exhausted(path, lastError, res.status, maxRetries) };
-        }
+        if (RETRYABLE_STATUS.has(res.status)) return retry({ kind: 'status', status: res.status });
 
-        throw await httpErrorFromResponse(res, { service: 'ClinicalTrials.gov' });
+        throw await untranslatedStatus(res, path);
       } catch (err) {
         // An abort on `signal` is the caller's or the budget's, for the ladder
         // to classify; any other failure a retry cannot clear is final.
-        if (err instanceof McpError || signal.aborted || !isTransientFetchError(err)) throw err;
-        return { ok: false, failure: exhausted(path, String(err), undefined, maxRetries) };
+        if (err instanceof McpError || signal.aborted) throw err;
+        if (attemptTimeout.signal.aborted) return retry({ kind: 'timeout', timeoutMs });
+        const code = transientTransport(err);
+        if (code !== undefined) return retry({ kind: 'connection', code });
+        const unreachable = transportCode(err);
+        if (unreachable !== undefined && UNREACHABLE_NETWORK_CODES.has(unreachable)) {
+          throw serviceUnavailable(
+            `ClinicalTrials.gov API unavailable: the connection for ${path} failed (${unreachable}).`,
+            { path, lastError: unreachable, reason: 'upstream_unavailable' },
+          );
+        }
+        throw err;
       } finally {
         clearTimeout(timer);
       }

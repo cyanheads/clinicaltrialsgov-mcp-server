@@ -54,6 +54,35 @@ import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 const NCT_ID_ENTRY_CEILING = 1000;
 
 /**
+ * Most studies one page carries when `fields` reaches into posted results, or
+ * cannot be checked for them (#198), unless the server's own cap is lower. A
+ * typical results-bearing record is ~30 KB and a heavy one runs past 1 MB, so
+ * ten typical records render about 1 MB per surface, where a page of 200 heavy
+ * ones built a response too large for Node to serialize.
+ */
+const RESULTS_PAGE_CAP = 10;
+
+/**
+ * Which cap a page is served under: the server's own, the results cap for a
+ * `fields` list that reaches into posted results, or the results cap for one
+ * the field metadata could not check.
+ */
+type PageCapBasis = 'results' | 'server' | 'unclassifiable';
+
+/** The notice on a page served at `cap` studies in place of the `requested` pageSize. */
+function pageCapNotice(requested: number, cap: number, shown: number, basis: PageCapBasis): string {
+  const held = `${shown} ${shown === 1 ? 'study' : 'studies'}`;
+  switch (basis) {
+    case 'server':
+      return `Requested pageSize ${requested} is above this server's per-page cap of ${cap}, so this page holds ${held}. Pass nextPageToken to continue.`;
+    case 'results':
+      return `Requested pageSize ${requested} is above this server's per-page cap of ${cap} for fields that name ResultsSection or a module or group under it, so this page holds ${held}. Pass nextPageToken to continue.`;
+    case 'unclassifiable':
+      return `Requested pageSize ${requested} is above this server's per-page cap of ${cap} for fields it could not check for results groups (the field metadata could not be read), so this page holds ${held}. Pass nextPageToken to continue.`;
+  }
+}
+
+/**
  * Dot-notation prefixes already rendered by the search formatter, named at the
  * leaf the dedicated renderers actually emit.
  *
@@ -421,9 +450,25 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     {
       reason: 'upstream_timeout',
       code: JsonRpcErrorCode.Timeout,
-      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) on every attempt.',
+      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) or 408 (request timeout), or sent no answer within the per-attempt timeout, on every attempt.',
       recovery: RECOVERY_HINTS.upstream_timeout,
       retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_unavailable',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'Every attempt failed on ClinicalTrials.gov’s side — HTTP 500, 502, or 503, a dropped connection or one the network gave up opening, or a 200 body that is not the JSON the route serves (an HTML page, unparseable text, the wrong shape) — or it answered with another 5xx, such as 505, or the connection was refused or its host name did not resolve, none of which is retried.',
+      recovery: RECOVERY_HINTS.upstream_unavailable,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_rejected',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'ClinicalTrials.gov refused the request with a status its API does not use for a bad query — HTTP 501, a 3xx, or a 4xx such as 401, 403, or 410 — or answered with an HTML error page in place of its own 404.',
+      recovery: RECOVERY_HINTS.upstream_rejected,
+      retryable: false,
       thrownBy: 'service',
     },
   ],
@@ -564,7 +609,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         )
         .optional()
         .describe(
-          `PascalCase piece names to return, leaves or groups (a group such as StatusModule returns all of its fields); strongly recommended since full records are ~70KB. Omit for the compact index projection — an empty list is rejected, not treated as omission. A comma- or pipe-joined entry ("NCTId,BriefTitle") is split into separate names, and a full path as clinicaltrials_get_field_definitions prints it ("protocolSection.statusModule.overallStatus") is sent as its piece name. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept.`,
+          `PascalCase piece names to return, leaves or groups (a group such as StatusModule returns all of its fields); strongly recommended since full records are ~70KB. Omit for the compact index projection — an empty list is rejected, not treated as omission. A comma- or pipe-joined entry ("NCTId,BriefTitle") is split into separate names, and a full path as clinicaltrials_get_field_definitions prints it ("protocolSection.statusModule.overallStatus") is sent as its piece name. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept. Naming ResultsSection, or a module or group under it (OutcomeMeasuresModule, AdverseEventsModule), caps the page at 10 studies, since one record with posted results can run past 1 MB; a leaf under it (OutcomeMeasureTitle) keeps the server's usual cap.`,
         ),
       sort: z
         .string()
@@ -578,7 +623,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         .min(1)
         .default(10)
         .describe(
-          `Results per page. Default 10; a larger value returns at most this server's per-page cap (200 unless the operator changed it) and says so in truncated/shown/cap, with nextPageToken to page the rest. The cap sits below ClinicalTrials.gov's own page maximum of ${UPSTREAM_MAX_PAGE_SIZE} because full study records run to tens of KB each.`,
+          `Results per page. Default 10; a larger value returns at most this server's per-page cap (200 unless the operator changed it; 10, or the operator's cap if lower, when fields names ResultsSection or a module or group under it, or cannot be checked for one) and says so in truncated/shown/cap, with nextPageToken to page the rest. The cap sits below ClinicalTrials.gov's own page maximum of ${UPSTREAM_MAX_PAGE_SIZE} because full study records run to tens of KB each, and one with posted results can run past 1 MB.`,
         ),
       pageToken: z
         .string()
@@ -660,13 +705,13 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        "Recovery guidance when no studies matched — echoes the constraint and suggests how to broaden, and names nctIds as part of the unmatched criteria when an ID list was supplied. On a page cut to the server's per-page cap, states the requested and served page sizes and points at nextPageToken. Absent on other pages with results, and on an exhausted continuation page, where the cohort already matched and there is nothing to broaden.",
+        'Recovery guidance when no studies matched — echoes the constraint and suggests how to broaden, and names nctIds as part of the unmatched criteria when an ID list was supplied. On a page cut to a per-page cap, states the requested and served page sizes and which cap applied, and points at nextPageToken. Absent on other pages with results, and on an exhausted continuation page, where the cohort already matched and there is nothing to broaden.',
       ),
     truncated: z
       .boolean()
       .optional()
       .describe(
-        "True when pageSize was above the server's per-page cap and this page filled to the cap with a nextPageToken. Without a total to check against (countTotal: false, or a continuation page), that next page can be empty. Absent otherwise.",
+        "True when pageSize was above the per-page cap this page was served under — the server's, or 10 for fields that name ResultsSection or a group under it or cannot be checked for one — and this page filled to the cap with a nextPageToken. Without a total to check against (countTotal: false, or a continuation page), that next page can be empty. Absent otherwise.",
       ),
     shown: z
       .number()
@@ -680,7 +725,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .positive()
       .optional()
       .describe(
-        "The server's per-page cap, served in place of the requested pageSize when truncated is true.",
+        "The per-page cap this page was served under, in place of the requested pageSize, when truncated is true: the server's own, or 10 for fields that name ResultsSection or a group under it or cannot be checked for one (the server's own when lower). The notice says which.",
       ),
   },
 
@@ -790,8 +835,14 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       ctx.log,
     );
     // The per-call page cap applies to this caller-facing page only, and is
-    // the one bound on pageSize: the schema sets no maximum above it.
-    const pageCap = service.maxPageSize;
+    // the one bound on pageSize: the schema sets no maximum above it. A fields
+    // list that reaches into posted results, or that the field metadata cannot
+    // check, takes the results cap when it is the lower one. The capped size
+    // goes upstream as the page size, so nextPageToken continues at it.
+    const projection = fields?.length ? await service.classifyProjection(fields, ctx) : 'other';
+    const capBasis: PageCapBasis =
+      projection === 'other' || service.maxPageSize <= RESULTS_PAGE_CAP ? 'server' : projection;
+    const pageCap = capBasis === 'server' ? service.maxPageSize : RESULTS_PAGE_CAP;
     // The service sends the leading IDs that fit one request and names the rest;
     // the same criteria fit the same IDs on every page of a walk.
     const { deferredIds = [], ...result } = await service.searchStudies(
@@ -947,7 +998,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       ctx.enrich.truncated({
         shown,
         cap: pageCap,
-        guidance: `Requested pageSize ${input.pageSize} is above this server's per-page cap of ${pageCap}, so this page holds ${shown} ${shown === 1 ? 'study' : 'studies'}. Pass nextPageToken to continue.`,
+        guidance: pageCapNotice(input.pageSize, pageCap, shown, capBasis),
       });
     }
 

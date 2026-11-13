@@ -4,20 +4,28 @@
  */
 
 import { JsonRpcErrorCode, validationError } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext, getEnrichment, runToolContract } from '@cyanheads/mcp-ts-core/testing';
+import {
+  createFetchMock,
+  createMockContext,
+  getEnrichment,
+  runToolContract,
+} from '@cyanheads/mcp-ts-core/testing';
 import MarkdownIt from 'markdown-it';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { INDEXED_METADATA, RECORD_METADATA } from '../../../helpers/area-metadata.js';
 import { missingLeaves } from '../../../helpers/format-parity.js';
 
 const { mockGetService } = vi.hoisted(() => ({
   mockGetService: vi.fn(),
 }));
 
-vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
+vi.mock('@/services/clinical-trials/clinical-trials-service.js', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
   getClinicalTrialsService: mockGetService,
 }));
 
 import { getFieldValues } from '@/mcp-server/tools/definitions/get-field-values.tool.js';
+import { ClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
 
 describe('getFieldValues', () => {
   const mockService = { getFieldValues: vi.fn() };
@@ -60,7 +68,7 @@ describe('getFieldValues', () => {
           topValues: [{ value: 'COMPLETED', studiesCount: 200000 }],
         },
       ];
-      mockService.getFieldValues.mockResolvedValue(stats);
+      mockService.getFieldValues.mockResolvedValue({ stats });
 
       const ctx = createMockContext({ errors: getFieldValues.errors });
       const input = getFieldValues.input!.parse({ fields: 'OverallStatus' });
@@ -71,7 +79,7 @@ describe('getFieldValues', () => {
     });
 
     it('normalizes single string to array', async () => {
-      mockService.getFieldValues.mockResolvedValue([]);
+      mockService.getFieldValues.mockResolvedValue({ stats: [] });
       const ctx = createMockContext({ errors: getFieldValues.errors });
       await getFieldValues.handler(getFieldValues.input!.parse({ fields: 'Phase' }), ctx);
 
@@ -79,7 +87,7 @@ describe('getFieldValues', () => {
     });
 
     it('passes array of fields through', async () => {
-      mockService.getFieldValues.mockResolvedValue([]);
+      mockService.getFieldValues.mockResolvedValue({ stats: [] });
       const ctx = createMockContext({ errors: getFieldValues.errors });
       const fields = ['OverallStatus', 'Phase'];
       await getFieldValues.handler(getFieldValues.input!.parse({ fields }), ctx);
@@ -88,7 +96,7 @@ describe('getFieldValues', () => {
     });
 
     it('normalizes a JSON-stringified fields array (regression for #75)', async () => {
-      mockService.getFieldValues.mockResolvedValue([]);
+      mockService.getFieldValues.mockResolvedValue({ stats: [] });
       const ctx = createMockContext({ errors: getFieldValues.errors });
       await getFieldValues.handler(
         getFieldValues.input!.parse({ fields: '["OverallStatus","Phase"]' }),
@@ -147,7 +155,7 @@ describe('getFieldValues', () => {
       [['Phase, StudyType']],
       [['Phase', 'StudyType,']],
     ])('splits the joined fields %j into separate names', async (fields) => {
-      mockService.getFieldValues.mockResolvedValue([]);
+      mockService.getFieldValues.mockResolvedValue({ stats: [] });
       const ctx = createMockContext({ errors: getFieldValues.errors });
       await getFieldValues.handler(getFieldValues.input!.parse({ fields }), ctx);
       expect(mockService.getFieldValues).toHaveBeenCalledWith(['Phase', 'StudyType'], ctx);
@@ -169,7 +177,7 @@ describe('getFieldValues', () => {
       ['a list', ['StudyType|Phase', 'Phase', 'StudyType'], ['StudyType', 'Phase']],
       ['"Phase," x1000', 'Phase,'.repeat(1000), ['Phase']],
     ])('requests each field of %s once, in first-seen order', async (_label, fields, deduped) => {
-      mockService.getFieldValues.mockResolvedValue([]);
+      mockService.getFieldValues.mockResolvedValue({ stats: [] });
       const ctx = createMockContext({ errors: getFieldValues.errors });
       await getFieldValues.handler(getFieldValues.input!.parse({ fields }), ctx);
       expect(mockService.getFieldValues).toHaveBeenCalledWith(deduped, ctx);
@@ -196,15 +204,17 @@ describe('getFieldValues', () => {
 
     it('hands a metadata path to the service as written and renders its statistics', async () => {
       const path = 'protocolSection.statusModule.overallStatus';
-      mockService.getFieldValues.mockResolvedValue([
-        {
-          field: path,
-          piece: 'OverallStatus',
-          type: 'ENUM',
-          uniqueValuesCount: 14,
-          topValues: [{ value: 'COMPLETED', studiesCount: 290_000 }],
-        },
-      ]);
+      mockService.getFieldValues.mockResolvedValue({
+        stats: [
+          {
+            field: path,
+            piece: 'OverallStatus',
+            type: 'ENUM',
+            uniqueValuesCount: 14,
+            topValues: [{ value: 'COMPLETED', studiesCount: 290_000 }],
+          },
+        ],
+      });
 
       const result = await runToolContract(getFieldValues, { fields: path });
 
@@ -260,6 +270,16 @@ describe('getFieldValues', () => {
       const when = getFieldValues.errors?.find((e) => e.reason === 'field_invalid')?.when;
       expect(when).toContain('a group of fields');
       expect(when).toContain('LocationGeoPoint');
+    });
+
+    it('says index-only pieces and alt names count, and search areas do not (#194)', () => {
+      const { description } = getFieldValues.input!.shape.fields;
+      expect(description).toContain('Index-only pieces count too (NumLocations');
+      expect(description).toContain('OVERALL-STATUS');
+      expect(description).toContain('a search area such as ConditionSearch does not');
+      const when = getFieldValues.errors?.find((e) => e.reason === 'field_invalid')?.when;
+      expect(when).toContain('index-only piece');
+      expect(when).toContain('a search area such as ConditionSearch is not');
     });
   });
 
@@ -721,7 +741,7 @@ describe('getFieldValues', () => {
 
   /** Run stats through the handler, then render the handler's result. */
   const present = async (stats: Record<string, unknown>[]) => {
-    mockService.getFieldValues.mockResolvedValue(stats);
+    mockService.getFieldValues.mockResolvedValue({ stats });
     const ctx = createMockContext({ errors: getFieldValues.errors });
     const input = getFieldValues.input!.parse({ fields: stats.map((s) => s.piece as string) });
     const result = await getFieldValues.handler(input, ctx);
@@ -1201,6 +1221,205 @@ describe('getFieldValues', () => {
       expect(result.fieldStats[0]!.uniqueValuesCount).toBe(5);
       expect('uniqueValuesCounted' in result.fieldStats[0]!).toBe(false);
       expect(text).toContain('(STRING, 5 unique values):');
+    });
+  });
+
+  /**
+   * The service names the pieces it had no field index entry for — the index
+   * was unavailable, or does not list them — and the handler says so, since an
+   * absent multiValued would otherwise read as single-valued. Which pieces go
+   * undetermined is tabled at the service seam; these cases prove the notice.
+   */
+  describe('multi-valued status the service could not determine (#192)', () => {
+    const ONE =
+      "multiValued was not determined for 'Phase', because the field metadata that marks repeated fields was unavailable or does not list it. Treat it as possibly repeated: its per-value studiesCount buckets may sum above the study total.";
+    const phase = {
+      field: 'protocolSection.designModule.phases',
+      piece: 'Phase',
+      type: 'ENUM',
+      topValues: [{ value: 'PHASE2', studiesCount: 40_000 }],
+    };
+    const condition = {
+      field: 'protocolSection.conditionsModule.conditions',
+      piece: 'Condition',
+      type: 'STRING',
+      uniqueValuesCount: 3,
+      topValues: [{ value: 'Asthma', studiesCount: 9_000 }],
+    };
+    /** Stats as the service returns them with `pieces` undetermined. */
+    const undetermined = (stats: Record<string, unknown>[], pieces: string[]) => ({
+      stats: structuredClone(stats),
+      multiValuedUndetermined: pieces,
+    });
+    const contentText = (result: { content: unknown }) =>
+      (result.content as Array<{ text?: string }>).map((b) => b.text).join('\n');
+    const structured = (result: { structuredContent?: unknown }) =>
+      result.structuredContent as { fieldStats: Record<string, unknown>[]; notice?: string };
+
+    it('notices an undetermined piece on both surfaces, its multiValued left absent', async () => {
+      mockService.getFieldValues.mockResolvedValue(undetermined([phase], ['Phase']));
+
+      const result = await runToolContract(getFieldValues, { fields: 'Phase' });
+
+      expect(result.isError).toBeFalsy();
+      expect(structured(result).notice).toBe(ONE);
+      expect('multiValued' in structured(result).fieldStats[0]!).toBe(false);
+      expect(contentText(result)).toContain(ONE);
+      expect(contentText(result)).not.toContain('(multi-valued field');
+    });
+
+    it('names several undetermined pieces in one notice', async () => {
+      mockService.getFieldValues.mockResolvedValue(
+        undetermined([phase, condition], ['Phase', 'Condition']),
+      );
+
+      const result = await runToolContract(getFieldValues, { fields: ['Phase', 'Condition'] });
+
+      expect(structured(result).notice).toBe(
+        "multiValued was not determined for 'Phase', 'Condition', because the field metadata that marks repeated fields was unavailable or does not list them. Treat them as possibly repeated: their per-value studiesCount buckets may sum above the study total.",
+      );
+    });
+
+    it('adds no notice when the field index settled every piece', async () => {
+      mockService.getFieldValues.mockResolvedValue({
+        stats: [{ ...phase, multiValued: true }, condition],
+      });
+
+      const result = await runToolContract(getFieldValues, { fields: ['Phase', 'Condition'] });
+
+      expect(structured(result).notice).toBeUndefined();
+      expect(contentText(result)).not.toContain('not determined');
+    });
+
+    it('joins the undetermined notice after a longest-value preview notice', async () => {
+      mockService.getFieldValues.mockResolvedValue(
+        undetermined(
+          [withLongest('DetailedDescription', 'd'.repeat(2500), 'NCT06708767'), phase],
+          ['DetailedDescription', 'Phase'],
+        ),
+      );
+      const ctx = createMockContext({ errors: getFieldValues.errors });
+
+      await getFieldValues.handler(
+        getFieldValues.input!.parse({ fields: ['DetailedDescription', 'Phase'] }),
+        ctx,
+      );
+
+      expect(getEnrichment(ctx).notice).toBe(
+        'longest.value is a preview of at most the first 2000 characters where longest.truncated is true; longest.length is the full length. Full text — DetailedDescription: clinicaltrials_search_studies with {"nctIds":["NCT06708767"],"fields":["DetailedDescription"]}. multiValued was not determined for \'DetailedDescription\', \'Phase\', because the field metadata that marks repeated fields was unavailable or does not list them. Treat them as possibly repeated: their per-value studiesCount buckets may sum above the study total.',
+      );
+    });
+
+    it('says what an absent multiValued means on the schema an agent reads', () => {
+      expect(getFieldValues.enrichment?.notice.description).toContain(
+        'multiValued could not be determined',
+      );
+      const stat = getFieldValues.output.shape.fieldStats.element;
+      expect(stat.shape.multiValued.description).toContain('the notice names');
+    });
+  });
+
+  /**
+   * The index-only lookup is tabled at the service seam (#194). These cases run
+   * the real service behind the tool, upstream stubbed at fetch, to prove a
+   * name the record pieces miss reaches both surfaces with its statistics, and
+   * that a failed index-only read reaches them as the undetermined notice.
+   */
+  describe('index-only pieces through the service (#194)', () => {
+    const numLocations = {
+      type: 'INTEGER',
+      piece: 'NumLocations',
+      field: 'protocolSection.contactsLocationsModule.numLocations',
+      missingStudiesCount: 18653,
+      min: 0,
+      max: 3510,
+      avg: 6.008053659788436,
+    };
+    const locationCountryCode = {
+      type: 'STRING',
+      piece: 'LocationCountryCode',
+      field: 'protocolSection.contactsLocationsModule.locations.countryCode',
+      missingStudiesCount: 61219,
+      uniqueValuesCount: 226,
+      topValues: [{ value: 'US', studiesCount: 197011 }],
+    };
+    /** The metadata reads by their query, then `/stats/field/values` answering `stats`. */
+    const upstream = (indexed: Response) =>
+      createFetchMock([
+        {
+          match: (req) => new URL(req.url).pathname === '/v2/studies/metadata',
+          respond: (req) =>
+            new URL(req.url).searchParams.has('includeIndexedOnly')
+              ? indexed.clone()
+              : Response.json(RECORD_METADATA),
+        },
+        {
+          match: (req) => new URL(req.url).pathname === '/v2/stats/field/values',
+          respond: Response.json([numLocations, locationCountryCode]),
+        },
+      ]);
+    const text = (result: { content: unknown }) =>
+      (result.content as Array<{ text?: string }>).map((b) => b.text).join('\n');
+    /** Run the tool to completion on the fake clock, which stands in for the pacer's gaps. */
+    const run = async (fields: string[]) => {
+      let settled = false;
+      const pending = runToolContract(getFieldValues, { fields }).finally(() => {
+        settled = true;
+      });
+      while (!settled) await vi.advanceTimersToNextTimerAsync();
+      return pending;
+    };
+    let http: ReturnType<typeof createFetchMock> | undefined;
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      mockGetService.mockReturnValue(
+        new ClinicalTrialsService(
+          { apiBaseUrl: 'https://test.api/v2', requestTimeoutMs: 5000, maxPageSize: 100 },
+          { maxRetries: 0 },
+        ),
+      );
+    });
+
+    afterEach(() => {
+      http?.restore();
+      vi.useRealTimers();
+    });
+
+    it('answers a mis-cased index-only piece and one under a repeated node on both surfaces', async () => {
+      http = upstream(Response.json(INDEXED_METADATA));
+      http.install();
+
+      const result = await run(['numlocations', 'LocationCountryCode']);
+
+      expect(result.isError).toBeFalsy();
+      const statsUrl = new URL(http.calls.at(-1)!.request.url);
+      expect(statsUrl.searchParams.get('fields')).toBe('NumLocations|LocationCountryCode');
+      expect(result.structuredContent).toEqual({
+        fieldStats: [numLocations, { ...locationCountryCode, multiValued: true }],
+      });
+      expect(text(result)).toContain(
+        '**NumLocations** — protocolSection.contactsLocationsModule.numLocations (INTEGER):\n  min: 0\n  max: 3510\n  avg: 6.008053659788436\n  (missing in 18653 studies)\n**LocationCountryCode**',
+      );
+      expect(text(result).match(/\(multi-valued field/g)).toHaveLength(1);
+      expect(text(result)).not.toContain('not determined');
+    });
+
+    it('sends the names unchecked when the index-only read fails, noticing both on both surfaces', async () => {
+      http = upstream(Response.json(null, { status: 503 }));
+      http.install();
+
+      const result = await run(['NumLocations', 'LocationCountryCode']);
+      const notice =
+        "multiValued was not determined for 'NumLocations', 'LocationCountryCode', because the field metadata that marks repeated fields was unavailable or does not list them. Treat them as possibly repeated: their per-value studiesCount buckets may sum above the study total.";
+
+      expect(result.isError).toBeFalsy();
+      expect(result.structuredContent).toEqual({
+        fieldStats: [numLocations, locationCountryCode],
+        notice,
+      });
+      expect(text(result)).toContain(notice);
+      expect(text(result)).not.toContain('(multi-valued field');
     });
   });
 });

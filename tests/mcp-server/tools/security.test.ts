@@ -136,11 +136,12 @@ const NO_LINE_BREAK_FINDINGS = { forgedHeadings: [], unfolded: [], proseChanged:
 // ---------------------------------------------------------------------------
 
 describe('searchStudies — injection and oversized inputs', () => {
-  const mockService = { searchStudies: vi.fn(), maxPageSize: 200 };
+  const mockService = { classifyProjection: vi.fn(), searchStudies: vi.fn(), maxPageSize: 200 };
 
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetService.mockReturnValue(mockService as never);
+    mockService.classifyProjection.mockResolvedValue('other');
     mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
   });
 
@@ -1088,7 +1089,7 @@ describe('getFieldValues — injection and output safety', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetService.mockReturnValue(mockService as never);
-    mockService.getFieldValues.mockResolvedValue([]);
+    mockService.getFieldValues.mockResolvedValue({ stats: [] });
   });
 
   it.each(INJECTION_PAYLOADS)(
@@ -1102,9 +1103,9 @@ describe('getFieldValues — injection and output safety', () => {
   );
 
   it('output does not contain env var names', async () => {
-    mockService.getFieldValues.mockResolvedValue([
-      { field: 'OverallStatus', piece: 'OverallStatus', type: 'ENUM', topValues: [] },
-    ]);
+    mockService.getFieldValues.mockResolvedValue({
+      stats: [{ field: 'OverallStatus', piece: 'OverallStatus', type: 'ENUM', topValues: [] }],
+    });
     const ctx = createMockContext({ errors: getFieldValues.errors });
     const result = await getFieldValues.handler(
       getFieldValues.input!.parse({ fields: 'OverallStatus' }),

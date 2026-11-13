@@ -2233,7 +2233,9 @@ describe('getStudyResults', () => {
         'offset_not_applicable',
         'rate_limited',
         'retry_deadline_exceeded',
+        'upstream_rejected',
         'upstream_timeout',
+        'upstream_unavailable',
       ]);
     });
 
@@ -2429,6 +2431,127 @@ describe('getStudyResults', () => {
       expect(result.fetchErrors).toEqual([
         { nctId: 'NCT05956821', error: 'ClinicalTrials.gov API unavailable after retries' },
       ]);
+    });
+  });
+
+  /**
+   * The batch projects five fixed names, so checking them against the field
+   * index buys nothing — and a hung /studies/metadata read used to end the call
+   * at its 50 s budget before the batch went out. Run against the real service,
+   * since the mechanism is the service skipping that check.
+   */
+  describe('the results batch reads no field metadata (#192)', () => {
+    it('sends the batch alone on a field-validating service, with /studies/metadata hung', async () => {
+      const { ClinicalTrialsService } = await vi.importActual<
+        typeof import('@/services/clinical-trials/clinical-trials-service.js')
+      >('@/services/clinical-trials/clinical-trials-service.js');
+      const paths: string[] = [];
+      vi.stubGlobal('fetch', (url: string | URL, init?: RequestInit) => {
+        const { pathname } = new URL(String(url));
+        paths.push(pathname);
+        if (pathname === '/v2/studies/metadata') {
+          return new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+              once: true,
+            });
+          });
+        }
+        return Promise.resolve(
+          new Response(JSON.stringify({ studies: [makeStudy('NCT12345678', false)] }), {
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      try {
+        mockGetService.mockReturnValue(
+          new ClinicalTrialsService(
+            { apiBaseUrl: 'https://test.api/v2', requestTimeoutMs: 30_000, maxPageSize: 100 },
+            { validateFieldsLocally: true },
+          ) as never,
+        );
+        let settled = false;
+        const outcome = Promise.resolve(
+          getStudyResults.handler(
+            getStudyResults.input!.parse({ nctIds: 'NCT12345678' }),
+            createMockContext({ errors: getStudyResults.errors }),
+          ),
+        )
+          .then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          )
+          .finally(() => {
+            settled = true;
+          });
+        while (!settled) await vi.advanceTimersToNextTimerAsync();
+        const done = await outcome;
+        if ('error' in done) throw done.error;
+
+        const result = done.value;
+        expect(paths).toEqual(['/v2/studies']);
+        expect(result.studiesWithoutResults).toEqual(['NCT12345678']);
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    });
+  });
+
+  /**
+   * A batch body that is not a search page is an outage the per-ID fallback
+   * cannot answer — each per-ID request meets the same upstream — so the call
+   * ends upstream_unavailable once the batch's own retries are spent. Run
+   * against the real service, since the mechanism is its envelope check (#196).
+   */
+  describe('a malformed batch body ends the call (#196)', () => {
+    it('ends upstream_unavailable on both surfaces after the batch retries, with no per-ID request', async () => {
+      const { ClinicalTrialsService } = await vi.importActual<
+        typeof import('@/services/clinical-trials/clinical-trials-service.js')
+      >('@/services/clinical-trials/clinical-trials-service.js');
+      const paths: string[] = [];
+      vi.stubGlobal('fetch', (url: string | URL) => {
+        paths.push(new URL(String(url)).pathname);
+        // Cut off mid-record, as a transfer that dropped part-way leaves it.
+        return Promise.resolve(
+          new Response('{"studies":[{"protocolSection":{"identificationModule":', {
+            headers: { 'content-type': 'application/json' },
+          }),
+        );
+      });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      try {
+        mockGetService.mockReturnValue(
+          new ClinicalTrialsService(
+            { apiBaseUrl: 'https://test.api/v2', requestTimeoutMs: 30_000, maxPageSize: 100 },
+            { maxRetries: 2, validateFieldsLocally: false },
+          ) as never,
+        );
+        let settled = false;
+        const outcome = runToolContract(getStudyResults, {
+          nctIds: ['NCT03722472', 'NCT05956821'],
+        }).finally(() => {
+          settled = true;
+        });
+        while (!settled) await vi.advanceTimersToNextTimerAsync();
+        const result = await outcome;
+        const error = (
+          result.structuredContent as { error: { code: number; data: Record<string, unknown> } }
+        ).error;
+
+        // The batch on each of its three attempts, then nothing: no /studies/{nctId}.
+        expect(paths).toEqual(['/v2/studies', '/v2/studies', '/v2/studies']);
+        expect(result.isError).toBe(true);
+        expect(error.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+        expect(error.data).toMatchObject({ reason: 'upstream_unavailable', path: '/studies' });
+        expect(wireRecoveryHint(result)).toMatch(/^Retry the same call unchanged/);
+        expect((result.content as { text: string }[])[0]!.text).toContain(
+          'Recovery: Retry the same call unchanged',
+        );
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
     });
   });
 
@@ -3899,7 +4022,7 @@ describe('getStudyResults', () => {
       expect(fullPart).toContain('frequencyThreshold');
     });
 
-    describe('the % decision stays linear on long upstream text', () => {
+    describe('the % decision stays linear on long upstream text', { timeout: 0 }, () => {
       it.each([
         ...LINE_BREAK_SHAPES,
         ['a digit run ending off-pattern', (n: number) => `${'1'.repeat(n)}x`],
@@ -4152,7 +4275,7 @@ describe('oneLine (#168)', () => {
     expect(kept).toBeGreaterThan(0);
   });
 
-  describe('stays linear on long upstream text', () => {
+  describe('stays linear on long upstream text', { timeout: 0 }, () => {
     /** Each line-break shape's folded form, so every size proves the whole input was read. */
     const foldedLineBreakShape: Record<string, (input: string) => string> = {
       'one long line ending in a break': (input) => input.replaceAll('\n', ' '),

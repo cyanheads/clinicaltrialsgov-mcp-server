@@ -14,10 +14,12 @@ import {
   JsonRpcErrorCode,
   notFound,
   rateLimited,
+  serviceUnavailable,
   timeout,
   validationError,
 } from '@cyanheads/mcp-ts-core/errors';
 import { runToolContract, toolContractSuite } from '@cyanheads/mcp-ts-core/testing/vitest';
+import { httpErrorFromResponse } from '@cyanheads/mcp-ts-core/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { readMarkdown } from '../../helpers/commonmark.js';
 import { loadStudyFixture } from '../../helpers/format-parity.js';
@@ -85,6 +87,7 @@ const metadata: FieldNode[] = [
 ];
 
 const mockService = {
+  classifyProjection: vi.fn(),
   countStudies: vi.fn(),
   getAreaIndex: vi.fn(),
   getFieldValues: vi.fn(),
@@ -100,6 +103,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockGetService.mockReturnValue(mockService as never);
   mockService.getAreaIndex.mockResolvedValue(undefined);
+  mockService.classifyProjection.mockResolvedValue('other');
   mockService.searchStudies.mockResolvedValue({
     studies: [recruitingStudy],
     totalCount: 1,
@@ -120,18 +124,20 @@ beforeEach(() => {
     ],
     total: 1,
   });
-  mockService.getFieldValues.mockResolvedValue([
-    {
-      field: 'protocolSection.statusModule.overallStatus',
-      piece: 'OverallStatus',
-      type: 'ENUM',
-      uniqueValuesCount: 2,
-      topValues: [
-        { value: 'COMPLETED', studiesCount: 200_000 },
-        { value: 'RECRUITING', studiesCount: 60_000 },
-      ],
-    },
-  ]);
+  mockService.getFieldValues.mockResolvedValue({
+    stats: [
+      {
+        field: 'protocolSection.statusModule.overallStatus',
+        piece: 'OverallStatus',
+        type: 'ENUM',
+        uniqueValuesCount: 2,
+        topValues: [
+          { value: 'COMPLETED', studiesCount: 200_000 },
+          { value: 'RECRUITING', studiesCount: 60_000 },
+        ],
+      },
+    ],
+  });
 });
 
 const eligibleInput = {
@@ -436,7 +442,7 @@ describe('get_field_values statistics variants survive the output schema (#119)'
 
   /** Run the mixed request through the framework pipeline once per assertion block. */
   const run = async () => {
-    mockService.getFieldValues.mockResolvedValue(structuredClone(variants));
+    mockService.getFieldValues.mockResolvedValue({ stats: structuredClone(variants) });
     return runToolContract(getFieldValues, {
       fields: ['EnrollmentCount', 'SyntheticRatio', 'StartDate', 'TargetDuration'],
     });
@@ -485,16 +491,18 @@ describe('get_field_values longest preview and uncounted fields on the wire (#16
   const description = `START ${'d'.repeat(32_334)} END`;
 
   const run = async () => {
-    mockService.getFieldValues.mockResolvedValue([
-      {
-        field: 'protocolSection.descriptionModule.detailedDescription',
-        piece: 'DetailedDescription',
-        type: 'STRING',
-        missingStudiesCount: 200_268,
-        uniqueValuesCount: 0,
-        longest: { value: description, length: 32_344, nctId: 'NCT06708767' },
-      },
-    ]);
+    mockService.getFieldValues.mockResolvedValue({
+      stats: [
+        {
+          field: 'protocolSection.descriptionModule.detailedDescription',
+          piece: 'DetailedDescription',
+          type: 'STRING',
+          missingStudiesCount: 200_268,
+          uniqueValuesCount: 0,
+          longest: { value: description, length: 32_344, nctId: 'NCT06708767' },
+        },
+      ],
+    });
     return runToolContract(getFieldValues, { fields: 'DetailedDescription' });
   };
 
@@ -938,6 +946,154 @@ describe('call budget and upstream timeout contracts (#181)', () => {
     expect(text).toContain(thrown.message);
     expect(text).toContain(`Recovery: ${RECOVERY_HINTS[c.reason]}`);
     expect(text).toContain(c.reason);
+  });
+});
+
+/**
+ * An outage that outlasts every retry and a status ClinicalTrials.gov's API
+ * never answers a bad query with are faults on the registry's side, which any
+ * tool can meet, so each declares both reasons with the shared hint. The wire
+ * cases prove one service throw per reason reaches both surfaces with its code,
+ * its data, and that hint — and that the page a refusal came with stays on the
+ * server (#196).
+ */
+describe('upstream failure contracts (#196)', () => {
+  const definitions = [
+    searchStudies,
+    getStudy,
+    getStudyResults,
+    getFieldValues,
+    getFieldDefinitions,
+    getStudyCount,
+    findEligible,
+  ];
+  const entries = (definition: (typeof definitions)[number]) =>
+    (definition.errors ?? []) as readonly { reason: string; when: string }[];
+
+  it.each(definitions)(
+    '$name declares upstream_unavailable and upstream_rejected',
+    (definition) => {
+      const declared = entries(definition).filter(
+        (e) => e.reason === 'upstream_unavailable' || e.reason === 'upstream_rejected',
+      );
+
+      expect(declared).toEqual([
+        {
+          reason: 'upstream_unavailable',
+          code: JsonRpcErrorCode.ServiceUnavailable,
+          when: expect.any(String),
+          recovery: RECOVERY_HINTS.upstream_unavailable,
+          retryable: true,
+          thrownBy: 'service',
+        },
+        {
+          reason: 'upstream_rejected',
+          code: JsonRpcErrorCode.ServiceUnavailable,
+          when: expect.any(String),
+          recovery: RECOVERY_HINTS.upstream_rejected,
+          retryable: false,
+          thrownBy: 'service',
+        },
+      ]);
+    },
+  );
+
+  it.each(definitions)(
+    '$name names 408 and the per-attempt timeout under upstream_timeout',
+    (definition) => {
+      const when = entries(definition).find((e) => e.reason === 'upstream_timeout')?.when;
+
+      expect(when).toMatch(/\b408\b/);
+      expect(when).toMatch(/per-attempt timeout/);
+    },
+  );
+
+  /** An exhausted ladder as the service raises it: reason and route, never a hint or the body. */
+  const outage = () =>
+    serviceUnavailable(
+      'ClinicalTrials.gov API unavailable after retries: /studies/metadata returned HTML instead of JSON.',
+      {
+        path: '/studies/metadata',
+        lastError: 'Error: API returned HTML instead of JSON',
+        reason: 'upstream_unavailable',
+      },
+    );
+  /** An untranslated status as the service raises it, through the framework's own status helper. */
+  const refusal = () =>
+    httpErrorFromResponse(
+      new Response('<html><body><h1>403 Forbidden</h1></body></html>', {
+        status: 403,
+        statusText: 'Forbidden',
+        headers: { 'content-type': 'text/html' },
+      }),
+      {
+        service: 'ClinicalTrials.gov',
+        codeOverride: () => JsonRpcErrorCode.ServiceUnavailable,
+        data: { path: '/stats/field/values', reason: 'upstream_rejected', retryable: false },
+      },
+    );
+
+  it.each([
+    {
+      name: 'get_field_definitions upstream_unavailable',
+      reason: 'upstream_unavailable' as const,
+      error: async () => outage(),
+      arrange: (err: Error) => mockService.getMetadata.mockRejectedValue(err),
+      run: () => runToolContract(getFieldDefinitions, { mode: 'overview' }),
+    },
+    {
+      name: 'get_field_values upstream_rejected',
+      reason: 'upstream_rejected' as const,
+      error: refusal,
+      arrange: (err: Error) => mockService.getFieldValues.mockRejectedValue(err),
+      run: () => runToolContract(getFieldValues, { fields: 'OverallStatus' }),
+    },
+  ])('$name reaches both surfaces with its code, data, and hint', async (c) => {
+    const thrown = await c.error();
+    c.arrange(thrown);
+    const result = await c.run();
+    const raw = (result.content as { text: string }[])[0]!.text;
+    const text = readMarkdown(raw);
+    const error = (
+      result.structuredContent as {
+        error: { code: number; data: Record<string, unknown>; message: string };
+      }
+    ).error;
+    // The thrown data as a client may see it: its string keys, less the captured page.
+    const clientData = Object.fromEntries(
+      Object.entries(thrown.data ?? {}).filter(([key]) => key !== 'body' && key !== 'responseBody'),
+    );
+
+    expect(result.isError).toBe(true);
+    expect(error.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+    expect(error.message).toBe(thrown.message);
+    expect(error.data).toMatchObject({
+      ...clientData,
+      reason: c.reason,
+      recovery: { hint: RECOVERY_HINTS[c.reason] },
+    });
+    expect(error.data).not.toHaveProperty('body');
+    expect(error.data).not.toHaveProperty('responseBody');
+    expect(text).toContain(thrown.message);
+    expect(text).toContain(`Recovery: ${RECOVERY_HINTS[c.reason]}`);
+    expect(text).toContain(c.reason);
+    expect(raw).not.toContain('<h1>');
+  });
+
+  it('answers a refusal with its status as not retryable, the page left on the thrown error', async () => {
+    const thrown = await refusal();
+    // The thrown error holds the page, so the no-body assertions can fail.
+    expect(thrown.data).toMatchObject({ body: expect.stringContaining('<h1>403 Forbidden</h1>') });
+    mockService.getFieldValues.mockRejectedValue(thrown);
+
+    const result = await runToolContract(getFieldValues, { fields: 'OverallStatus' });
+    const error = (result.structuredContent as { error: { data: Record<string, unknown> } }).error;
+
+    expect(error.data).toMatchObject({ status: 403, retryable: false });
+    expect(error.data).not.toHaveProperty('body');
+    expect(readMarkdown((result.content as { text: string }[])[0]!.text)).toContain(
+      'not retryable',
+    );
   });
 });
 

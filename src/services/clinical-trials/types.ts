@@ -337,8 +337,11 @@ export interface FieldValueStats {
    * study can carry several values and the per-value `studiesCount` buckets sum
    * above the study total. Covers both an array-typed leaf (`Phase`) and a
    * scalar leaf under a repeated ancestor object (`LocationCountry`, one per
-   * site). Derived from a metadata node `type` ending in `[]` on the leaf or
-   * anywhere above it; absent when local validation is disabled.
+   * site), record and index-only pieces alike. Derived from a metadata node
+   * `type` ending in `[]` on the leaf or anywhere above it. Absent for a
+   * single-valued field, and for a piece the call could not settle (metadata
+   * unavailable, or listed by neither the record nor the index-only tier),
+   * which the response's notice names.
    */
   multiValued?: boolean;
   piece: string;

@@ -185,6 +185,17 @@ function renderTopValue({ value, studiesCount }: { value: string; studiesCount: 
     : [`  ${inertLine(value)}: ${studiesCount} studies`];
 }
 
+/**
+ * The notice for the pieces the service could not settle multiValued for
+ * (`multiValuedUndetermined`): their absent flag would otherwise read as
+ * single-valued.
+ */
+function multiValuedUndeterminedNotice(pieces: string[]): string {
+  const named = pieces.map((piece) => `'${piece}'`).join(', ');
+  const [it, its] = pieces.length === 1 ? ['it', 'its'] : ['them', 'their'];
+  return `multiValued was not determined for ${named}, because the field metadata that marks repeated fields was unavailable or does not list ${it}. Treat ${it} as possibly repeated: ${its} per-value studiesCount buckets may sum above the study total.`;
+}
+
 export const getFieldValues = tool('clinicaltrials_get_field_values', {
   description: `Discover valid values for ClinicalTrials.gov fields with study counts per value. Use to explore available filter options before building a search — e.g., valid OverallStatus, Phase, InterventionType, StudyType, or LeadSponsorClass values.`,
   annotations: {
@@ -203,7 +214,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A requested name is not a field, names a group of fields such as LeadSponsor or ConditionMesh instead of its leaf pieces, or names a leaf whose type ClinicalTrials.gov does not count, such as LocationGeoPoint.',
+      when: 'A requested name is not a field (a record or index-only piece such as NumLocations, or an alt name of one; a search area such as ConditionSearch is not), names a group of fields such as LeadSponsor or ConditionMesh instead of its leaf pieces, or names a leaf whose type ClinicalTrials.gov does not count, such as LocationGeoPoint.',
       recovery: RECOVERY_HINTS.field_invalid,
       thrownBy: 'service',
     },
@@ -233,9 +244,25 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
     {
       reason: 'upstream_timeout',
       code: JsonRpcErrorCode.Timeout,
-      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) on every attempt.',
+      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) or 408 (request timeout), or sent no answer within the per-attempt timeout, on every attempt.',
       recovery: RECOVERY_HINTS.upstream_timeout,
       retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_unavailable',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'Every attempt failed on ClinicalTrials.gov’s side — HTTP 500, 502, or 503, a dropped connection or one the network gave up opening, or a 200 body that is not the JSON the route serves (an HTML page, unparseable text, the wrong shape) — or it answered with another 5xx, such as 505, or the connection was refused or its host name did not resolve, none of which is retried.',
+      recovery: RECOVERY_HINTS.upstream_unavailable,
+      retryable: true,
+      thrownBy: 'service',
+    },
+    {
+      reason: 'upstream_rejected',
+      code: JsonRpcErrorCode.ServiceUnavailable,
+      when: 'ClinicalTrials.gov refused the request with a status its API does not use for a bad query — HTTP 501, a 3xx, or a 4xx such as 401, 403, or 410 — or answered with an HTML error page in place of its own 404.',
+      recovery: RECOVERY_HINTS.upstream_rejected,
+      retryable: false,
       thrownBy: 'service',
     },
   ],
@@ -249,7 +276,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
           .describe('Multiple PascalCase leaf piece names (at least one required).'),
       ])
       .describe(
-        `PascalCase leaf piece name(s) to get value statistics for — an empty list is rejected, not treated as "every field". A group of fields (LeadSponsor, ConditionMesh) is refused with its leaf pieces named (LeadSponsorName, ConditionMeshTerm), and a full path as clinicaltrials_get_field_definitions prints it ("protocolSection.statusModule.overallStatus") is read as its piece name. A comma- or pipe-joined string ("Phase,StudyType") is split into separate names. Examples: OverallStatus, Phase, StudyType, Sex, LeadSponsorClass. Use clinicaltrials_get_field_definitions with a query to find more field names.`,
+        `PascalCase leaf piece name(s) to get value statistics for — an empty list is rejected, not treated as "every field". Index-only pieces count too (NumLocations, StudyFirstPostYear — listed by clinicaltrials_get_field_definitions in drill mode with includeIndexedOnly), as do legacy alt names such as OVERALL-STATUS; a search area such as ConditionSearch does not. A group of fields (LeadSponsor, ConditionMesh) is refused with its leaf pieces named (LeadSponsorName, ConditionMeshTerm), and a full path as clinicaltrials_get_field_definitions prints it ("protocolSection.statusModule.overallStatus") is read as its piece name. A comma- or pipe-joined string ("Phase,StudyType") is split into separate names. Examples: OverallStatus, Phase, StudyType, Sex, LeadSponsorClass. Use clinicaltrials_get_field_definitions with a query to find more field names.`,
       ),
   }),
 
@@ -269,7 +296,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
               .boolean()
               .optional()
               .describe(
-                'True when the field is repeated — array-typed itself (Phase, Condition) or nested under a repeated object (LocationCountry, one per site) — so a study can carry several values and the per-value studiesCount buckets sum above the study total. Use to avoid computing a percentage against the corpus.',
+                'True when the field is repeated — array-typed itself (Phase, Condition) or nested under a repeated object (LocationCountry, one per site) — so a study can carry several values and the per-value studiesCount buckets sum above the study total. Use to avoid computing a percentage against the corpus. Absent for a single-valued field, and for any field the notice names as not determined.',
               ),
             // ENUM / STRING fields
             uniqueValuesCount: z
@@ -376,7 +403,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
       .string()
       .optional()
       .describe(
-        'Present when a longest value was cut to a preview — names, for each such field, the clinicaltrials_search_studies arguments that return its full text.',
+        'Present when a longest value was cut to a preview — names, for each such field, the clinicaltrials_search_studies arguments that return its full text — or when multiValued could not be determined for a field, which then carries no multiValued flag and may be repeated.',
       ),
   },
 
@@ -396,7 +423,7 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
       throw ctx.fail('blank_value', blankValueMessage(blankParam), { param: blankParam });
     }
     const service = getClinicalTrialsService();
-    const stats = await service.getFieldValues(fields, ctx);
+    const { stats, multiValuedUndetermined } = await service.getFieldValues(fields, ctx);
     ctx.log.info('Field values fetched', { fieldCount: stats.length });
     const fieldStats = stats.map(presentFieldStat);
     /**
@@ -411,11 +438,17 @@ export const getFieldValues = tool('clinicaltrials_get_field_values', {
           ]
         : [],
     );
+    // One notice carries both disclosures: a later notice call replaces the text.
+    const notices: string[] = [];
     if (retrieval.length > 0) {
-      ctx.enrich.notice(
+      notices.push(
         `longest.value is a preview of at most the first ${LONGEST_PREVIEW_CHARS} characters where longest.truncated is true; longest.length is the full length. Full text — ${retrieval.join('; ')}.`,
       );
     }
+    if (multiValuedUndetermined) {
+      notices.push(multiValuedUndeterminedNotice(multiValuedUndetermined));
+    }
+    if (notices.length > 0) ctx.enrich.notice(notices.join(' '));
     return { fieldStats };
   },
 

@@ -848,19 +848,12 @@ describe('over-long requests (#163)', () => {
       mockFetch.mockResolvedValueOnce(jsonResponse(page));
       const result = await runToolContract(searchStudies, {
         nctIds: ids(500),
-        fields: ['NCTId'],
         pageSize: 500,
         ...(pageToken ? { pageToken } : {}),
       });
       const sc = result.structuredContent as Wire;
       expect(sc).not.toHaveProperty('deferredNctIds');
-      served.push(
-        ...sc.studies.map(
-          (s) =>
-            (s as { protocolSection: { identificationModule: { nctId: string } } }).protocolSection
-              .identificationModule.nctId,
-        ),
-      );
+      served.push(...sc.studies.map((s) => (s as { nctId: string }).nctId));
       pageToken = sc.nextPageToken;
     }
 

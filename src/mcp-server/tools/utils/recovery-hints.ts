@@ -40,4 +40,8 @@ export const RECOVERY_HINTS = {
     'Retry after a minute or two. If the call asked for a lot at once — a large pageSize, many fields, or many nctIds — ask for less per call, or split the request across several calls.',
   upstream_timeout:
     'Retry after a few minutes. If it fails again, narrow the request — a more specific query or filter, a smaller pageSize, or fewer fields or nctIds — so ClinicalTrials.gov has less to compute and return.',
+  upstream_unavailable:
+    'Retry the same call unchanged after a few minutes — the arguments were not at fault. If it keeps failing, ClinicalTrials.gov is down; tell the user rather than rewording the query.',
+  upstream_rejected:
+    'Do not retry the same call right away or reword it — ClinicalTrials.gov refused it for a reason unrelated to the arguments, and it will refuse again. Tell the user the registry is not serving this request, and try again later.',
 } as const;

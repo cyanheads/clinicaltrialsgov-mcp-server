@@ -6,7 +6,8 @@
  * mean" suggestions on validation, the group and sortable-type tests that
  * narrow those suggestions, and corrects the case of `AREA[…]` field names in
  * caller expressions — record pieces first, then the index-only pieces and
- * search areas beyond them.
+ * search areas beyond them — and builds the index-only tier value statistics
+ * look names up in.
  * @module services/clinical-trials/field-search
  */
 
@@ -429,6 +430,13 @@ export function buildFieldIndex(tree: FieldNode[]): FieldIndex {
  * sort field`).
  */
 export interface ExtendedName {
+  /**
+   * Whether an index-only piece sits under a repeated (`[]`) node, as
+   * FieldIndexEntry.hasArrayAncestor records for a record piece:
+   * LocationCountryCode, under `locations: Location[]`, counts once per site.
+   * Absent otherwise, and on a search area.
+   */
+  hasArrayAncestor?: true;
   kind: 'index-only' | 'search-area';
   /** Every spelling upstream resolves as written: the piece, then its altPieceNames. */
   names: string[];
@@ -445,12 +453,12 @@ export interface ExtendedName {
 /**
  * The index-only pieces in a `/studies/metadata?includeIndexedOnly=true` tree:
  * the nodes it flags `indexedOnly`, at whatever depth they sit, with their alt
- * names and type. Every other node is a record piece the default read already
- * holds.
+ * names, type, and repeated ancestry (threaded down the walk as flattenMetadata
+ * does). Every other node is a record piece the default read already holds.
  */
 export function indexOnlyNames(tree: FieldNode[]): ExtendedName[] {
   const found: ExtendedName[] = [];
-  const walk = (nodes: FieldNode[]) => {
+  const walk = (nodes: FieldNode[], underArray: boolean) => {
     for (const node of nodes) {
       if (node.indexedOnly && node.piece) {
         found.push({
@@ -458,12 +466,13 @@ export function indexOnlyNames(tree: FieldNode[]): ExtendedName[] {
           piece: node.piece,
           names: [node.piece, ...(node.altPieceNames ?? [])],
           ...(node.type ? { type: node.type } : {}),
+          ...(underArray ? { hasArrayAncestor: true as const } : {}),
         });
       }
-      if (node.children) walk(node.children);
+      if (node.children) walk(node.children, underArray || isArrayType(node.type));
     }
   };
-  walk(tree);
+  walk(tree, false);
   return found;
 }
 
@@ -488,23 +497,48 @@ export interface ExtendedIndex {
   sort: NameFold;
 }
 
+/** Each name of each extended piece, paired with the piece. */
+const extendedNames = (extras: readonly ExtendedName[]) =>
+  extras.flatMap(({ piece, names }) => names.map((name) => [name, piece] as const));
+
+/** The record AREA names (non-`STRUCT` pieces and their alt names) folded with every name in `extras`. */
+const areaFold = (entries: FieldIndexEntry[], extras: readonly ExtendedName[]) =>
+  foldNames([...entries.filter((e) => !isStruct(e)).flatMap(entryNames), ...extendedNames(extras)]);
+
 /** Build the second tier from the default metadata read's entries and the extended names. */
 export function buildExtendedIndex(
   entries: FieldIndexEntry[],
   extras: ExtendedName[],
 ): ExtendedIndex {
-  const extraNames = (kind?: ExtendedName['kind']) =>
-    extras
-      .filter((e) => kind === undefined || e.kind === kind)
-      .flatMap(({ piece, names }) => names.map((name) => [name, piece] as const));
   return {
-    area: foldNames([...entries.filter((e) => !isStruct(e)).flatMap(entryNames), ...extraNames()]),
+    area: areaFold(entries, extras),
     extras,
     sort: foldNames([
       ...entries.map(({ piece }) => [piece, piece] as const),
-      ...extraNames('index-only'),
+      ...extendedNames(extras.filter((e) => e.kind === 'index-only')),
     ]),
   };
+}
+
+/**
+ * The second tier of value statistics, consulted only for a name the record
+ * tier leaves unresolved: `/stats/field/values` counts every index-only piece
+ * and alt name as written, and refuses every search area (`Unknown piece
+ * name`), so it holds the index-only pieces alone.
+ */
+export interface StatisticsIndex {
+  /** The index-only pieces: the pool a near-miss suggestion comes from, and their repeated ancestry. */
+  extras: ExtendedName[];
+  /** The record AREA names and every index-only name, folded together as the AREA[] lookup folds them. */
+  fold: NameFold;
+}
+
+/** Build the value-statistics second tier from the default read's entries and the index-only names. */
+export function buildStatisticsIndex(
+  entries: FieldIndexEntry[],
+  indexOnly: ExtendedName[],
+): StatisticsIndex {
+  return { extras: indexOnly, fold: areaFold(entries, indexOnly) };
 }
 
 /**

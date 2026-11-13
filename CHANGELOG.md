@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.11.3](changelog/2.11.x/2.11.3.md) — 2026-11-13
+
+A 200 body that is not the JSON its route serves is retried, then ends upstream_unavailable; unretried statuses end upstream_unavailable or upstream_rejected. Field validation makes one bounded metadata read, get_field_values counts index-only pieces, and a results page holds 10 studies.
+
 ## [2.11.2](changelog/2.11.x/2.11.2.md) — 2026-11-09
 
 One 50 s time budget covers every request, retry, and wait of a tool call and ends it with a typed Timeout. fields takes full field paths, sort suggests only sortable fields, and AREA[], RANGE[], and object-field refusals name the field and the form that works. REST parameter names alias onto the search tools.

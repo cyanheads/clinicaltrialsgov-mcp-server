@@ -227,7 +227,7 @@ Per-variant fields:
 
 `NUMBER` is a documented variant with no live field at present — `types=NUMBER` answers `[]` against the current dataset.
 
-Errors: `400` (bad request), `404` (field not found). Only leaf pieces are counted: a group of fields answers `400 Unsupported field type: <type>` with its metadata `type`, `[]` stripped (`ConditionMesh` → `Mesh`, `LeadSponsor` → `Sponsor`, `protocolSection.statusModule` → `StatusModule`), and so does the leaf `LocationGeoPoint` (`GeoPoint`). The body names the type, never the field, and one such field fails the whole request (probed 2026-11-09).
+Errors: `400` (bad request), `404` (field not found). Counted: the record leaf pieces and their alt names (`COLLABORATOR` is answered as `CollaboratorName`), and the index-only pieces from `/studies/metadata?includeIndexedOnly=true` with theirs (`NumLocations`, `NUMBER-OF-LOCATIONS`); a search area (`ConditionSearch`) and a name in another case (`numlocations`) answer `404 Unknown piece name` (probed 2026-11-13). Only leaf pieces are counted: a group of fields answers `400 Unsupported field type: <type>` with its metadata `type`, `[]` stripped (`ConditionMesh` → `Mesh`, `LeadSponsor` → `Sponsor`, `protocolSection.statusModule` → `StatusModule`), and so does the leaf `LocationGeoPoint` (`GeoPoint`). The body names the type, never the field, and one such field fails the whole request (probed 2026-11-09).
 
 ### 8.3 `GET /stats/field/sizes` -- List Field Size Statistics
 

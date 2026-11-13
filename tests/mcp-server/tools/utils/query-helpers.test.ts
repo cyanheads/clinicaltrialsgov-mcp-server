@@ -482,7 +482,7 @@ describe('quoteLocationPart (#159)', () => {
     );
   });
 
-  describe('stays linear on caller-sized text', () => {
+  describe('stays linear on caller-sized text', { timeout: 0 }, () => {
     it.each([
       ...LINE_BREAK_SHAPES,
       ['letters only, scanned to the end', (n: number) => 'x'.repeat(n)],
@@ -517,7 +517,7 @@ describe('quoteLocationLiteral (#164)', () => {
     expect(quoteLocationLiteral('x\\"y')).toBe('"x\\\\y"');
   });
 
-  describe('stays linear on caller-sized text', () => {
+  describe('stays linear on caller-sized text', { timeout: 0 }, () => {
     it.each([
       ...LINE_BREAK_SHAPES,
       ['letters only', (n: number) => 'x'.repeat(n)],

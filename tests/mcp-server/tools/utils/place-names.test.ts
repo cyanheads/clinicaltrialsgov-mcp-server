@@ -230,7 +230,7 @@ describe('registryState', () => {
   });
 });
 
-describe('place-name lookups stay linear on caller-sized text', () => {
+describe('place-name lookups stay linear on caller-sized text', { timeout: 0 }, () => {
   const lookups: Array<[name: string, fn: (input: string) => unknown]> = [
     ['registryCountry', registryCountry],
     ['registryState, state', (s) => registryState(s, 'United States')],

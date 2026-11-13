@@ -29,7 +29,8 @@ const MAX_CPU_US_PER_SIZE = 1_000_000;
  */
 const TRIALS = 3;
 
-function cpuMicros(reps: number, run: () => void): number {
+/** CPU microseconds (user + system) the calling thread spends running `run` `reps` times. */
+export function cpuMicros(reps: number, run: () => void): number {
   const start = process.threadCpuUsage();
   for (let i = 0; i < reps; i++) run();
   const used = process.threadCpuUsage(start);

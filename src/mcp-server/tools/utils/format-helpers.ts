@@ -37,6 +37,26 @@ function humanizeSegment(segment: string): string {
     .replace(/^./, (c) => c.toUpperCase());
 }
 
+/** A record's key → its humanized segment, built once per key. */
+type Humanize = (segment: string) => string;
+
+/**
+ * `humanizeSegment` memoized for one record's dump: a record repeats its few
+ * hundred distinct keys across every leaf, and each leaf's label is built from
+ * them at least once. The memo lives as long as the dump that created it.
+ */
+function memoizedHumanize(): Humanize {
+  const bySegment = new Map<string, string>();
+  return (segment) => {
+    let humanized = bySegment.get(segment);
+    if (humanized === undefined) {
+      humanized = humanizeSegment(segment);
+      bySegment.set(segment, humanized);
+    }
+    return humanized;
+  };
+}
+
 /** Structural path segments skipped when building labels. */
 const STRUCTURAL = new Set(['protocolSection', 'resultsSection', 'derivedSection']);
 
@@ -74,10 +94,10 @@ const LABEL_WINDOW = 2;
  * `content[]`-only reader can attribute each line to its originating entry.
  * Single-entry arrays keep the plain label — the common case stays quiet.
  */
-function labelAt(meaningful: PathPart[], width: number): string {
+function labelAt(meaningful: PathPart[], width: number, humanize: Humanize): string {
   return meaningful
     .slice(-width)
-    .map((part) => `${humanizeSegment(part.key)}${part.repeated ? part.entry : ''}`)
+    .map((part) => `${humanize(part.key)}${part.repeated ? part.entry : ''}`)
     .join(' > ');
 }
 
@@ -94,8 +114,8 @@ function labelAt(meaningful: PathPart[], width: number): string {
  * one, so display widening (see `disambiguateLabels`) can never change which
  * leaves consolidate — and therefore never disturbs the truncation footer.
  */
-function describeLeaf(meaningful: PathPart[]): { label: string; key: string } {
-  const label = labelAt(meaningful, LABEL_WINDOW);
+function describeLeaf(meaningful: PathPart[], humanize: Humanize): { label: string; key: string } {
+  const label = labelAt(meaningful, LABEL_WINDOW, humanize);
   const innermostEntry = meaningful.findLastIndex((part) => part.entry !== '');
   if (innermostEntry < 0) return { label, key: label };
   const entryPath = meaningful
@@ -115,6 +135,25 @@ interface DescribedLeaf {
   value: string;
 }
 
+/** The leaves of one shape and the label window they share. */
+interface ShapeLabels {
+  /** The shape's meaningful segments — the widest window it can take. */
+  depth: number;
+  leaves: DescribedLeaf[];
+  /** Segments its labels show. */
+  width: number;
+}
+
+/** Whether a label's leaves sit under two or more dedup keys, so the label misattributes. */
+function mixesKeys(group: Iterable<DescribedLeaf>): boolean {
+  let first: string | undefined;
+  for (const { key } of group) {
+    if (first === undefined) first = key;
+    else if (key !== first) return true;
+  }
+  return false;
+}
+
 /**
  * Widen the label window of any leaves whose labels collide, until each rendered
  * label identifies the record its value came from.
@@ -130,45 +169,62 @@ interface DescribedLeaf {
  * Width is tracked per shape, not per leaf, so every entry of one array widens
  * together: an array whose last entry has no counterpart in the colliding array
  * would otherwise keep a narrow label while its siblings widened.
+ *
+ * The leaves under each label are kept across passes. The first pass checks
+ * every label; each later pass checks only the labels a widened leaf moved
+ * into, since a label gains a collision only by gaining leaves, and every shape
+ * in a label already found colliding has either widened out of it or reached
+ * its full depth. Only the leaves of a widened shape are relabelled.
  */
-function disambiguateLabels(items: DescribedLeaf[]): void {
-  const widths = new Map<string, number>();
-  const depths = new Map<string, number>();
+function disambiguateLabels(items: DescribedLeaf[], humanize: Humanize): void {
+  const shapes = new Map<string, ShapeLabels>();
+  const byLabel = new Map<string, Set<DescribedLeaf>>();
+  const join = (item: DescribedLeaf) => {
+    const group = byLabel.get(item.label);
+    if (group) group.add(item);
+    else byLabel.set(item.label, new Set([item]));
+  };
   let maxDepth = 0;
   for (const item of items) {
-    widths.set(item.shape, LABEL_WINDOW);
-    depths.set(item.shape, item.meaningful.length);
+    const shape = shapes.get(item.shape);
+    if (shape) shape.leaves.push(item);
+    else {
+      shapes.set(item.shape, {
+        depth: item.meaningful.length,
+        leaves: [item],
+        width: LABEL_WINDOW,
+      });
+    }
     maxDepth = Math.max(maxDepth, item.meaningful.length);
+    join(item);
   }
 
   // Each pass widens every shape involved in a collision by one segment. Bounded
   // by the deepest path: past that, widening cannot change any label.
+  let toCheck: Iterable<string> = [...byLabel.keys()];
   for (let pass = LABEL_WINDOW; pass < maxDepth; pass++) {
-    const byLabel = new Map<string, DescribedLeaf[]>();
-    for (const item of items) {
-      const group = byLabel.get(item.label);
-      if (group) group.push(item);
-      else byLabel.set(item.label, [item]);
-    }
-
     const ambiguous = new Set<string>();
-    for (const group of byLabel.values()) {
-      if (new Set(group.map((item) => item.key)).size < 2) continue;
+    for (const label of toCheck) {
+      const group = byLabel.get(label);
+      if (!group || !mixesKeys(group)) continue;
       for (const item of group) ambiguous.add(item.shape);
     }
 
-    let widened = false;
-    for (const shape of ambiguous) {
-      const width = widths.get(shape) ?? LABEL_WINDOW;
-      if (width >= (depths.get(shape) ?? 0)) continue;
-      widths.set(shape, width + 1);
-      widened = true;
+    const joined = new Set<string>();
+    for (const name of ambiguous) {
+      const shape = shapes.get(name);
+      if (!shape || shape.width >= shape.depth) continue;
+      shape.width++;
+      for (const item of shape.leaves) {
+        const group = byLabel.get(item.label);
+        if (group?.delete(item) && group.size === 0) byLabel.delete(item.label);
+        item.label = labelAt(item.meaningful, shape.width, humanize);
+        join(item);
+        joined.add(item.label);
+      }
     }
-    if (!widened) return;
-
-    for (const item of items) {
-      item.label = labelAt(item.meaningful, widths.get(item.shape) ?? LABEL_WINDOW);
-    }
+    if (joined.size === 0) return;
+    toCheck = joined;
   }
 }
 
@@ -236,16 +292,17 @@ export function formatRemainingStudyFields(
   const remaining = leaves.filter((leaf) => !isRendered(leaf.path, renderedPrefixes));
   if (remaining.length === 0) return [];
 
+  const humanize = memoizedHumanize();
   const described = remaining.map((leaf) => {
     const meaningful = leaf.path.filter((part) => !STRUCTURAL.has(part.key));
     return {
-      ...describeLeaf(meaningful),
+      ...describeLeaf(meaningful, humanize),
       meaningful,
       shape: meaningful.map((part) => part.key).join('.'),
       value: leaf.value,
     };
   });
-  disambiguateLabels(described);
+  disambiguateLabels(described, humanize);
 
   // Count only cap-dropped fields as "uncovered" — dedup-dropped leaves aren't
   // truncation, just consolidation. Pre-fix logic counted both, lying about

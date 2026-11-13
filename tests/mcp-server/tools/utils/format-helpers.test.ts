@@ -10,7 +10,7 @@ import {
   formatSearchCriteria,
 } from '@/mcp-server/tools/utils/format-helpers.js';
 import { commonmark, type InlineToken, readMarkdown } from '../../../helpers/commonmark.js';
-import { expectLinearGrowth, LINE_BREAK_SHAPES } from '../../../helpers/cpu-timing.js';
+import { cpuMicros, expectLinearGrowth, LINE_BREAK_SHAPES } from '../../../helpers/cpu-timing.js';
 
 describe('formatRemainingStudyFields', () => {
   it('returns empty array when all fields are already rendered', () => {
@@ -413,6 +413,122 @@ describe('formatRemainingStudyFields', () => {
   });
 });
 
+describe('formatRemainingStudyFields label widening and its cost', () => {
+  const dumpAll = (study: Record<string, unknown>) =>
+    formatRemainingStudyFields(study, new Set(), {
+      maxLines: Number.POSITIVE_INFINITY,
+      maxValueLen: Number.POSITIVE_INFINITY,
+    });
+
+  /** A `{ level11: { … { level0: { term } } } }` chain, 12 segments above its leaf. */
+  const nested = (term: string) => {
+    let node: Record<string, unknown> = { term };
+    for (let level = 0; level < 12; level++) node = { [`level${level}`]: node };
+    return node;
+  };
+  const LEVELS = Array.from({ length: 12 }, (_, i) => `Level${11 - i}`).join(' > ');
+
+  /** `leaves` outcome titles, one label each, plus three leaves 12 segments deep when `deep`. */
+  const record = (leaves: number, deep: boolean): Record<string, unknown> => ({
+    resultsSection: {
+      outcomeMeasuresModule: {
+        outcomeMeasures: Array.from({ length: leaves }, (_, i) => ({ title: `Measure ${i}` })),
+      },
+    },
+    ...(deep ? { derivedSection: { alpha: [nested('a'), nested('b')], beta: [nested('c')] } } : {}),
+  });
+
+  it('renders every row of a record whose labels widen at different rates', () => {
+    // Every mesh array renders `Meshes[i] > Term` at the default window. One
+    // widening step separates the browse modules and Beta, but the two Browse
+    // arrays still match, so Alpha's widens once more while the derived one,
+    // already at its full depth, keeps its three segments. The deep arrays
+    // widen until the array name enters the window. The two contact emails
+    // share a label outside any array and consolidate to the first.
+    const study = {
+      protocolSection: {
+        identificationModule: { nctId: 'NCT00000001' },
+        alphaModule: { browse: { meshes: [{ term: 'A0' }, { term: 'A1' }] } },
+        betaModule: { meshes: [{ term: 'B0' }, { term: 'B1' }] },
+        centralContactModule: { contact: { email: 'central@example.org' } },
+        overallOfficialModule: { contact: { email: 'official@example.org' } },
+      },
+      derivedSection: {
+        browse: { meshes: [{ term: 'C0' }, { term: 'C1' }] },
+        conditionBrowseModule: {
+          meshes: [{ term: 'Obesity' }, { term: 'Asthma' }, { term: 'Gout' }],
+        },
+        interventionBrowseModule: { meshes: [{ term: 'Placebo' }, { term: 'Metformin' }] },
+        deepAlpha: [nested('a'), nested('b')],
+        deepBeta: [nested('c')],
+      },
+    };
+    expect(dumpAll(study)).toEqual([
+      '  Identification > Nct Id: NCT00000001',
+      '  Alpha > Browse > Meshes[0] > Term: A0',
+      '  Alpha > Browse > Meshes[1] > Term: A1',
+      '  Beta > Meshes[0] > Term: B0',
+      '  Beta > Meshes[1] > Term: B1',
+      '  Contact > Email: central@example.org',
+      '  Browse > Meshes[0] > Term: C0',
+      '  Browse > Meshes[1] > Term: C1',
+      '  Condition Browse > Meshes[0] > Term: Obesity',
+      '  Condition Browse > Meshes[1] > Term: Asthma',
+      '  Condition Browse > Meshes[2] > Term: Gout',
+      '  Intervention Browse > Meshes[0] > Term: Placebo',
+      '  Intervention Browse > Meshes[1] > Term: Metformin',
+      `  Deep Alpha[0] > ${LEVELS} > Term: a`,
+      `  Deep Alpha[1] > ${LEVELS} > Term: b`,
+      `  Deep Beta > ${LEVELS} > Term: c`,
+    ]);
+  });
+
+  it('labels the timing records as the guards below assume', () => {
+    expect(dumpAll(record(2, true))).toEqual([
+      '  Outcome Measures[0] > Title: Measure 0',
+      '  Outcome Measures[1] > Title: Measure 1',
+      `  Alpha[0] > ${LEVELS} > Term: a`,
+      `  Alpha[1] > ${LEVELS} > Term: b`,
+      `  Beta > ${LEVELS} > Term: c`,
+    ]);
+  });
+
+  /** The least CPU time of `trials` dumps of `study`, in microseconds. */
+  const leastDumpMicros = (study: Record<string, unknown>, trials = 3) =>
+    Math.min(...Array.from({ length: trials }, () => cpuMicros(1, () => dumpAll(study))));
+
+  it('keeps a 50,000-leaf dump within 1.5× of the plain record’s CPU cost', () => {
+    const plain = record(50_000, false);
+    const deep = record(50_000, true);
+    dumpAll(plain);
+    dumpAll(deep);
+    const plainMicros = leastDumpMicros(plain);
+    const deepMicros = leastDumpMicros(deep);
+    expect(plainMicros, 'CPU µs for one 50,000-leaf dump').toBeLessThan(5_000_000);
+    expect(
+      deepMicros / plainMicros,
+      `CPU µs with / without the deep leaves: ${deepMicros} / ${plainMicros}`,
+    ).toBeLessThan(1.5);
+  }, 0);
+
+  it('costs within 2× per row at 100,000 leaves of a 10,000-leaf record', () => {
+    const small = record(10_000, true);
+    const large = record(100_000, true);
+    dumpAll(small);
+    dumpAll(large);
+    // Ten small dumps render as many rows as one large one; the baseline is
+    // re-timed beside each large run and the least growth counts.
+    let leastGrowth = Number.POSITIVE_INFINITY;
+    for (let trial = 0; trial < 3; trial++) {
+      const smallMicros = cpuMicros(10, () => dumpAll(small));
+      const largeMicros = cpuMicros(1, () => dumpAll(large));
+      expect(largeMicros, 'CPU µs for one 100,000-leaf dump').toBeLessThan(10_000_000);
+      leastGrowth = Math.min(leastGrowth, largeMicros / smallMicros);
+    }
+    expect(leastGrowth, 'per-row CPU at 100,000 leaves over 10,000').toBeLessThan(2);
+  }, 0);
+});
+
 /**
  * What a CommonMark parse makes of `markdown`: its code literals in order (a
  * fence's content keeps its closing line break), its block types, and any
@@ -519,7 +635,7 @@ describe('formatEchoValue', () => {
     expect(formatEchoValue(value)).toBe(text);
   });
 
-  describe('stays linear on caller-sized text', () => {
+  describe('stays linear on caller-sized text', { timeout: 0 }, () => {
     it.each([
       ...LINE_BREAK_SHAPES,
       ['one long backtick run', (n: number) => '`'.repeat(n)],

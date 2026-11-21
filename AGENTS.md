@@ -28,11 +28,11 @@ MCP server wrapping the [ClinicalTrials.gov REST API v2](https://clinicaltrials.
 | :------------------------------------- | :---------------------------------------------------------------------------------- |
 | `clinicaltrials_search_studies`        | Search studies with queries, filters, pagination, field selection. Primary tool.    |
 | `clinicaltrials_get_study_record`      | Single study by NCT ID. Tool equivalent of the resource for resource-unaware clients. |
-| `clinicaltrials_get_study_results`     | Extract outcomes, adverse events, participant flow, baseline for completed studies. |
+| `clinicaltrials_get_study_results`     | Extract outcomes, adverse events, participant flow, baseline for completed studies; name the result publications of studies without posted results. |
 | `clinicaltrials_get_field_values`      | Discover valid enum values for API fields with study counts.                        |
 | `clinicaltrials_get_field_definitions` | Browse the study data model field tree — piece names, types, nesting.               |
 | `clinicaltrials_get_study_count`       | Lightweight study count for a query (no data fetched).                              |
-| `clinicaltrials_find_eligible`         | Match patient demographics to recruiting trials.                                    |
+| `clinicaltrials_find_eligible`         | Match patient demographics to recruiting trials, by place name or by distance from the patient (`location.near`). |
 
 ### Resources (1)
 
@@ -316,8 +316,12 @@ src/
       index.ts                          # allToolDefinitions barrel
     tools/utils/
       query-helpers.ts                  # toArray, buildAdvancedFilter shared helpers
-      format-helpers.ts                 # oneLine, formatSearchCriteria, formatRemainingStudyFields
+      format-helpers.ts                 # oneLine, formatSearchCriteria, formatEchoValue, formatRemainingStudyFields, contactLine, contactPhone, countLabel, formatReferenceLines
       place-names.ts                    # country / US state synonyms -> registry spelling (find_eligible ranking)
+      geo-helpers.ts                    # haversineMi, sitesByDistance (within-radius site pass), nearGeoFilter, plainDecimal, geoFilter parsing and rejection
+      study-filters.ts                  # applyFilters (location/outcome/reference caps, nearLocation), summarizeResults
+      recovery-hints.ts                 # RECOVERY_HINTS shared across tool error contracts
+      _schemas.ts                       # nctIdSchema shared by tool inputs and resource params
     resources/definitions/
       study.resource.ts                 # clinicaltrials://{nctId}
       index.ts                          # allResourceDefinitions barrel

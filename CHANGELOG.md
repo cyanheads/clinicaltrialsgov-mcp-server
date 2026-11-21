@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.11.4](changelog/2.11.x/2.11.4.md) — 2026-11-21
+
+clinicaltrials_find_eligible matches by distance from the patient with location.near and returns each site's own contacts; clinicaltrials_get_study_results adds adverse-event totals and flow milestones to summary mode and names result publications for studies without posted results.
+
 ## [2.11.3](changelog/2.11.x/2.11.3.md) — 2026-11-13
 
 A 200 body that is not the JSON its route serves is retried, then ends upstream_unavailable; unretried statuses end upstream_unavailable or upstream_rejected. Field validation makes one bounded metadata read, get_field_values counts index-only pieces, and a results page holds 10 studies.

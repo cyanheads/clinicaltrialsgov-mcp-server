@@ -4733,12 +4733,47 @@ describe('findEligible', () => {
             retrieveFullStudyWith: 'clinicaltrials_get_study_record',
           });
           // Vancouver, recruiting at 5 mi, is nearer than Nine: the added site is
-          // the nearest in the requested country, and the line says so.
+          // the nearest in the requested country, and the line says so. Both
+          // recruit within the radius, so the line names the two sites listed
+          // before the added one, not the five in range.
           expect(text).toContain(
-            '(5 within 15 mi of the patient, list truncated; none of them is recruiting, so the nearest recruiting site in the requested country is included, or the nearest anywhere when none recruits there)',
+            '(5 within 15 mi of the patient, list truncated; none of the first 2 sites listed is recruiting, so the recruiting site in the requested country nearest the patient is added last, or the nearest anywhere when none recruits there)',
           );
           expect(text).toContain(
             '    - Nine, Nine City, Washington, United States [RECRUITING] (9 mi from the patient)',
+          );
+        });
+
+        // The cap keeps sites in distance order, so a recruiting site within the
+        // radius can sit past it and come back as the added site. The line then
+        // names the sites listed before it, never "none of them" of the sites in
+        // range, and a list that shows every site in range is not truncated.
+        it('names the sites before an added site that lies within the radius', async () => {
+          const { sc, text } = await surfaces(
+            [
+              studyWith('NCT1', [
+                at('Two', 2),
+                at('One', 1, 'COMPLETED'),
+                at('Far', 500, 'COMPLETED'),
+              ]),
+            ],
+            nearInput({}, { locationLimit: 1 }),
+          );
+          const [candidate] = sc.studies;
+
+          expect(byDistance(candidate!)).toEqual([
+            ['One', 1],
+            ['Two', 2],
+          ]);
+          expect(candidate!.locationSummary).toEqual({
+            totalLocations: 3,
+            matchedLocations: 2,
+            locationsTruncated: false,
+            nearestRecruitingSiteAdded: true,
+            retrieveFullStudyWith: 'clinicaltrials_get_study_record',
+          });
+          expect(text).toContain(
+            '  Sites: showing 2 of 3 registered (2 within 15 mi of the patient; the first site listed is not recruiting, so the recruiting site in the requested country nearest the patient is added last, or the nearest anywhere when none recruits there). Full site list: clinicaltrials_get_study_record with NCT1.',
           );
         });
 
@@ -4780,7 +4815,7 @@ describe('findEligible', () => {
           });
           expect(text).toContain('(16 mi from the patient)');
           expect(text).toContain(
-            '(0 within 15 mi of the patient, so the nearest measured site is shown; none of them is recruiting',
+            '(0 within 15 mi of the patient, so the nearest measured site is shown; the first site listed is not recruiting, so the recruiting site in the requested country nearest the patient is added last',
           );
 
           const lone = await surfaces([studyWith('NCT2', [at('Sixteen', 16)])]);
@@ -4825,7 +4860,7 @@ describe('findEligible', () => {
             ['Open', undefined],
           ]);
           expect(text).toContain(
-            'one recruiting site from a wider area is included (picked by match order — coordinates to measure distance are missing)',
+            '(1 within 15 mi of the patient; the first site listed is not recruiting, so one recruiting site is added last (picked by match order — coordinates to measure distance are missing))',
           );
         });
 
@@ -4888,7 +4923,7 @@ describe('findEligible', () => {
             nearestRecruitingSiteAdded: true,
           });
           expect(text).toContain(
-            '(0 within 15 mi of the patient: no site publishes coordinates, so the sites are shown unmeasured; none of them is recruiting, so one recruiting site from a wider area is included (picked by match order — coordinates to measure distance are missing))',
+            '(0 within 15 mi of the patient: no site publishes coordinates, so the sites are shown unmeasured; none of the first 2 sites listed is recruiting, so one recruiting site is added last (picked by match order — coordinates to measure distance are missing))',
           );
         });
 

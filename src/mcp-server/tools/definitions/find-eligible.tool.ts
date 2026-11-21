@@ -257,12 +257,12 @@ function admitRecruitingSite(
 
 /** What a candidate's site list was bounded to, and how to retrieve the rest. */
 interface LocationSummary {
-  /** True when the locationLimit cap cut sites that matched the requested location. */
+  /** True when the list leaves out sites that matched the requested location, cut by the locationLimit cap. */
   locationsTruncated: boolean;
   /** Sites matching the requested location, before the cap. */
   matchedLocations: number;
   /**
-   * Present when no matched site is recruiting and one recruiting site was
+   * Present when no site the cap kept is recruiting and one recruiting site was
    * added — the nearest by distance when coordinates allow (it then carries
    * distanceMi), otherwise the first in match order.
    */
@@ -282,11 +282,14 @@ interface BoundSites {
 /**
  * The capped sites plus any admitted recruiting site, with a summary only when
  * the result is genuinely smaller than the upstream list — reporting a bound
- * that dropped nothing would imply a filter ran where none did.
+ * that dropped nothing would imply a filter ran where none did. `matchedShown`
+ * counts the matched sites the list carries, the admitted one included when it
+ * is one of them.
  */
 function boundResult(
   total: number,
   matchedLocations: number,
+  matchedShown: number,
   capped: LocationWithDistance[],
   admitted: LocationWithDistance | undefined,
 ): BoundSites {
@@ -297,7 +300,7 @@ function boundResult(
     summary: {
       totalLocations: total,
       matchedLocations,
-      locationsTruncated: matchedLocations > capped.length,
+      locationsTruncated: matchedLocations > matchedShown,
       ...(admitted ? { nearestRecruitingSiteAdded: true } : {}),
       retrieveFullStudyWith: 'clinicaltrials_get_study_record',
     },
@@ -346,7 +349,8 @@ function boundLocations(
         user.inCountry,
         matched.filter(hasGeoPoint).map((site) => site.geoPoint),
       );
-  return boundResult(sortedLocations.length, matched.length, capped, admitted);
+  // An admitted site is never a matched one: no matched site recruits.
+  return boundResult(sortedLocations.length, matched.length, capped.length, capped, admitted);
 }
 
 /**
@@ -359,7 +363,8 @@ function boundLocations(
  * empty; a study whose sites publish no coordinates keeps them all, capped, as
  * an unmatched study does in `boundLocations`. Sites are in distance order, not
  * recruiting order, so a recruiting site within the radius can sit past the
- * cap; the admission rule is the same, measured from the point.
+ * cap; the admission rule is the same, measured from the point, and the site it
+ * admits can be that one, shown again.
  */
 function boundNearLocations(
   sites: StudyLocation[],
@@ -374,7 +379,11 @@ function boundNearLocations(
   const admitted = capped.some(isRecruiting)
     ? undefined
     : admitRecruitingSite(sites, inCountry, [near]);
-  return boundResult(sites.length, withinRadius, capped, admitted);
+  // The radius test sitesByDistance applies, on the exact distance.
+  const admittedInRange =
+    admitted?.geoPoint != null && haversineMi(near, admitted.geoPoint) <= near.radiusMi;
+  const inRangeShown = Math.min(capped.length, withinRadius) + (admittedInRange ? 1 : 0);
+  return boundResult(sites.length, withinRadius, inRangeShown, capped, admitted);
 }
 
 /**
@@ -476,6 +485,33 @@ function siteLine(loc: LocationWithDistance, distanceFrom: string): string {
   const status = loc.status ? ` [${loc.status}]` : '';
   const distance = loc.distanceMi != null ? ` (${loc.distanceMi} mi from ${distanceFrom})` : '';
   return `${place}${status}${distance}`;
+}
+
+/**
+ * The `Sites:` line's clause on the added recruiting site, always the last of
+ * the `listed` sites. Without location.near the matched tier sorts its
+ * recruiting sites first, so a cap that shows none open leaves none of the
+ * matched sites recruiting. Under location.near the cap keeps sites in distance
+ * order, so a site in range past it can recruit and be the one added: the
+ * clause names the sites listed before it, never the sites in range (#205). The
+ * added site is the nearest recruiting one in the requested country, which a
+ * nearer one across a border can beat on distance, so "nearest" carries its
+ * country rule (admitRecruitingSite), and is claimed only when `measured`, the
+ * added site carrying distanceMi (#138).
+ */
+function addedSiteClause(underNear: boolean, measured: boolean, listedBefore: number): string {
+  if (!underNear) {
+    return measured
+      ? '; none of them is recruiting, so the nearest recruiting site in the requested country is included, or the nearest anywhere when none recruits there'
+      : '; none of them is recruiting, so one recruiting site from a wider area is included (picked by match order — coordinates to measure distance are missing)';
+  }
+  const before =
+    listedBefore === 1
+      ? 'the first site listed is not recruiting'
+      : `none of the first ${listedBefore} sites listed is recruiting`;
+  return measured
+    ? `; ${before}, so the recruiting site in the requested country nearest the patient is added last, or the nearest anywhere when none recruits there`
+    : `; ${before}, so one recruiting site is added last (picked by match order — coordinates to measure distance are missing)`;
 }
 
 /** Dot-notation prefixes already rendered by the eligible formatter. */
@@ -1335,14 +1371,9 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
           // itself below (#138). Under location.near the other sites carry one
           // too, so only the admitted site's own counts (#205).
           const measured = (locs.at(-1) as LocationWithDistance | undefined)?.distanceMi != null;
-          // The added site is the nearest recruiting one in the requested
-          // country, which a nearer one across a border can beat on distance,
-          // so "nearest" carries its country rule (admitRecruitingSite).
-          const admitted = !locationSummary.nearestRecruitingSiteAdded
-            ? ''
-            : measured
-              ? '; none of them is recruiting, so the nearest recruiting site in the requested country is included, or the nearest anywhere when none recruits there'
-              : '; none of them is recruiting, so one recruiting site from a wider area is included (picked by match order — coordinates to measure distance are missing)';
+          const admitted = locationSummary.nearestRecruitingSiteAdded
+            ? addedSiteClause(near !== undefined, measured, locs.length - 1)
+            : '';
           // Under location.near the matched sites are the ones in range, in any
           // country, so the count names the radius, never the requested
           // location; with none in range it says what stands in (#205).

@@ -6,7 +6,10 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode } from '@cyanheads/mcp-ts-core/errors';
 import { UPSTREAM_MAX_PAGE_SIZE } from '@/config/server-config.js';
-import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
+import {
+  getClinicalTrialsService,
+  type ProjectionClass,
+} from '@/services/clinical-trials/clinical-trials-service.js';
 import { normalizeAreaNames } from '@/services/clinical-trials/field-search.js';
 import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
@@ -63,11 +66,30 @@ const NCT_ID_ENTRY_CEILING = 1000;
 const RESULTS_PAGE_CAP = 10;
 
 /**
- * Which cap a page is served under: the server's own, the results cap for a
- * `fields` list that reaches into posted results, or the results cap for one
- * the field metadata could not check.
+ * Most studies one page carries when `fields` names the protocol section
+ * itself and nothing that takes the results cap (#199), unless the server's
+ * own cap is lower. A typical page of 200 protocol sections renders 2.0–2.6 MB
+ * per surface, and 75 render 0.8–0.9 MB, near the 1 MB the results cap is
+ * sized to. Its modules and leaves keep the server's cap: the largest module,
+ * OutcomesModule, renders at most 0.69 MB at 200.
  */
-type PageCapBasis = 'results' | 'server' | 'unclassifiable';
+const PROTOCOL_PAGE_CAP = 75;
+
+/** The cap each projection class earns before the server's own; `other` earns none. */
+const PROJECTION_PAGE_CAP = {
+  other: Number.POSITIVE_INFINITY,
+  protocol: PROTOCOL_PAGE_CAP,
+  results: RESULTS_PAGE_CAP,
+  unclassifiable: RESULTS_PAGE_CAP,
+} satisfies Record<ProjectionClass, number>;
+
+/**
+ * Which cap a page is served under: the server's own, or the one its `fields`
+ * list earns where that is lower — the results cap for a list that reaches
+ * into posted results or that the field metadata could not check, the
+ * protocol cap for one that names the protocol section.
+ */
+type PageCapBasis = Exclude<ProjectionClass, 'other'> | 'server';
 
 /** The notice on a page served at `cap` studies in place of the `requested` pageSize. */
 function pageCapNotice(requested: number, cap: number, shown: number, basis: PageCapBasis): string {
@@ -75,6 +97,8 @@ function pageCapNotice(requested: number, cap: number, shown: number, basis: Pag
   switch (basis) {
     case 'server':
       return `Requested pageSize ${requested} is above this server's per-page cap of ${cap}, so this page holds ${held}. Pass nextPageToken to continue.`;
+    case 'protocol':
+      return `Requested pageSize ${requested} is above this server's per-page cap of ${cap} for fields that name ProtocolSection, so this page holds ${held}. Pass nextPageToken to continue.`;
     case 'results':
       return `Requested pageSize ${requested} is above this server's per-page cap of ${cap} for fields that name ResultsSection or a module or group under it, so this page holds ${held}. Pass nextPageToken to continue.`;
     case 'unclassifiable':
@@ -179,7 +203,7 @@ interface StudyHeaderFields {
  * need one complete record use clinicaltrials_get_study_record.
  */
 interface StudyIndexEntry extends StudyHeaderFields {
-  /** Whether results are posted — the gate for clinicaltrials_get_study_results. */
+  /** Whether results are posted — clinicaltrials_get_study_results returns them only when true. */
   hasResults?: boolean;
   /** Bounded locations summary — the lead/nearest site plus the total site count. */
   locations?: { nearest?: NearestSite; total: number };
@@ -387,7 +411,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A name in the fields parameter is not a field; an AREA[] expression names a field ClinicalTrials.gov does not recognize or cannot search by value — often a module or group such as LeadSponsor instead of a leaf piece such as LeadSponsorName; or a valid field sits where upstream refuses it: a study-level field or a search area inside SEARCH[Location](…), or RANGE[] on a field that is not a date, number, or age.',
+      when: 'A name in the fields parameter is not a field; an AREA[] expression names a field ClinicalTrials.gov does not recognize or cannot search by value — often a module or group such as LeadSponsor instead of a leaf piece such as LeadSponsorName; or a valid field sits where upstream refuses it: a study-level field, a search area, or a DISTANCE[] term (at times a RANGE[] term) inside SEARCH[Location](…), RANGE[] on a field that is not a date, number, or age, or DISTANCE[] on any field but LocationGeoPoint.',
       recovery: RECOVERY_HINTS.field_invalid,
       thrownBy: 'service',
     },
@@ -400,7 +424,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     {
       reason: 'query_parse_error',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a `[` or `]` outside an AREA[…] / RANGE[…] expression, an unmatched `(` / `)`, or an unterminated quote in a query/conditionQuery/etc. value.',
+      when: 'A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a `[` or `]` outside an AREA[…] / RANGE[…] expression, an unmatched `(` / `)`, or an unterminated quote in a query/conditionQuery/etc. value — or carries a DISTANCE[] operand it cannot read: a latitude or longitude that is not a number or is out of range, a radius under 1 or with no mi or km unit, or no radius at all.',
       recovery: RECOVERY_HINTS.query_parse_error,
       thrownBy: 'service',
     },
@@ -609,7 +633,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         )
         .optional()
         .describe(
-          `PascalCase piece names to return, leaves or groups (a group such as StatusModule returns all of its fields); strongly recommended since full records are ~70KB. Omit for the compact index projection — an empty list is rejected, not treated as omission. A comma- or pipe-joined entry ("NCTId,BriefTitle") is split into separate names, and a full path as clinicaltrials_get_field_definitions prints it ("protocolSection.statusModule.overallStatus") is sent as its piece name. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept. Naming ResultsSection, or a module or group under it (OutcomeMeasuresModule, AdverseEventsModule), caps the page at 10 studies, since one record with posted results can run past 1 MB; a leaf under it (OutcomeMeasureTitle) keeps the server's usual cap.`,
+          `PascalCase piece names to return, leaves or groups (a group such as StatusModule returns all of its fields); strongly recommended since full records are ~70KB. Omit for the compact index projection — an empty list is rejected, not treated as omission. A comma- or pipe-joined entry ("NCTId,BriefTitle") is split into separate names, and a full path as clinicaltrials_get_field_definitions prints it ("protocolSection.statusModule.overallStatus") is sent as its piece name. Common leaves: NCTId, BriefTitle, BriefSummary, OverallStatus, Phase, LeadSponsorName, Condition. Call clinicaltrials_get_field_definitions with a concept query (e.g., "adverse events", "eligibility") to find the exact leaf for any concept. Naming ResultsSection, or a module or group under it (OutcomeMeasuresModule, AdverseEventsModule), caps the page at 10 studies, since one record with posted results can run past 1 MB; a leaf under it (OutcomeMeasureTitle) keeps the server's usual cap. Naming ProtocolSection caps the page at 75, since a page of 200 runs past 2 MB; a module or leaf under it (StatusModule, BriefTitle) keeps the server's usual cap. A list takes the lowest cap any of its names earns.`,
         ),
       sort: z
         .string()
@@ -623,7 +647,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         .min(1)
         .default(10)
         .describe(
-          `Results per page. Default 10; a larger value returns at most this server's per-page cap (200 unless the operator changed it; 10, or the operator's cap if lower, when fields names ResultsSection or a module or group under it, or cannot be checked for one) and says so in truncated/shown/cap, with nextPageToken to page the rest. The cap sits below ClinicalTrials.gov's own page maximum of ${UPSTREAM_MAX_PAGE_SIZE} because full study records run to tens of KB each, and one with posted results can run past 1 MB.`,
+          `Results per page. Default 10; a larger value returns at most this server's per-page cap (200 unless the operator changed it; 10 when fields names ResultsSection or a module or group under it, or cannot be checked for one; otherwise 75 when it names ProtocolSection; the operator's cap when that is lower) and says so in truncated/shown/cap, with nextPageToken to page the rest. The cap sits below ClinicalTrials.gov's own page maximum of ${UPSTREAM_MAX_PAGE_SIZE} because full study records run to tens of KB each, and one with posted results can run past 1 MB.`,
         ),
       pageToken: z
         .string()
@@ -711,7 +735,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .boolean()
       .optional()
       .describe(
-        "True when pageSize was above the per-page cap this page was served under — the server's, or 10 for fields that name ResultsSection or a group under it or cannot be checked for one — and this page filled to the cap with a nextPageToken. Without a total to check against (countTotal: false, or a continuation page), that next page can be empty. Absent otherwise.",
+        "True when pageSize was above the per-page cap this page was served under — the server's, 10 for fields that name ResultsSection or a group under it or cannot be checked for one, or 75 for fields that name ProtocolSection — and this page filled to the cap with a nextPageToken. Without a total to check against (countTotal: false, or a continuation page), that next page can be empty. Absent otherwise.",
       ),
     shown: z
       .number()
@@ -725,7 +749,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .positive()
       .optional()
       .describe(
-        "The per-page cap this page was served under, in place of the requested pageSize, when truncated is true: the server's own, or 10 for fields that name ResultsSection or a group under it or cannot be checked for one (the server's own when lower). The notice says which.",
+        "The per-page cap this page was served under, in place of the requested pageSize, when truncated is true: the server's own, 10 for fields that name ResultsSection or a group under it or cannot be checked for one, or 75 for fields that name ProtocolSection (the server's own when lower). The notice says which.",
       ),
   },
 
@@ -793,10 +817,10 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     }
 
     // Validate the geo expression before spending a round trip on it.
-    // ClinicalTrials.gov answers a unit-less radius with an empty 200 (read as
-    // metres), a zero radius with a 500 through the whole retry budget, and an
+    // ClinicalTrials.gov answers a unit-less radius with a near-empty 200 (read
+    // as metres), a zero radius with a 500 through the whole retry budget, and an
     // out-of-range coordinate with an unclassifiable 400 — so three ordinary
-    // input mistakes reached the caller as an empty cohort, a service outage,
+    // input mistakes reached the caller as a near-empty cohort, a service outage,
     // and a reason-less validation error respectively. Handler-level, like the
     // blank check above: a schema-level constraint is classified InvalidParams
     // before the handler runs, where the declared geo_invalid contract and its
@@ -836,13 +860,16 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     );
     // The per-call page cap applies to this caller-facing page only, and is
     // the one bound on pageSize: the schema sets no maximum above it. A fields
-    // list that reaches into posted results, or that the field metadata cannot
-    // check, takes the results cap when it is the lower one. The capped size
-    // goes upstream as the page size, so nextPageToken continues at it.
+    // list takes the cap its projection earns when that is the lower one: the
+    // results cap where it reaches into posted results or the field metadata
+    // cannot check it, the protocol cap where it names the protocol section.
+    // A tie goes to the server's cap and notice. The capped size goes upstream
+    // as the page size, so nextPageToken continues at it.
     const projection = fields?.length ? await service.classifyProjection(fields, ctx) : 'other';
+    const projectionCap = PROJECTION_PAGE_CAP[projection];
     const capBasis: PageCapBasis =
-      projection === 'other' || service.maxPageSize <= RESULTS_PAGE_CAP ? 'server' : projection;
-    const pageCap = capBasis === 'server' ? service.maxPageSize : RESULTS_PAGE_CAP;
+      projection === 'other' || service.maxPageSize <= projectionCap ? 'server' : projection;
+    const pageCap = Math.min(service.maxPageSize, projectionCap);
     // The service sends the leading IDs that fit one request and names the rest;
     // the same criteria fit the same IDs on every page of a walk.
     const { deferredIds = [], ...result } = await service.searchStudies(

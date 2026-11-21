@@ -1379,6 +1379,113 @@ describe('a valid field upstream refuses where it stands (#183, #187)', () => {
   );
 
   /**
+   * A DISTANCE[] or RANGE[] term inside SEARCH[Location](…), which upstream
+   * answers with a Java exception naming no field, is field_invalid with no
+   * field blamed and a hint of its own (#206).
+   */
+  describe('a DISTANCE[] or RANGE[] term inside SEARCH[Location](…) (#206)', () => {
+    const NULL_PIECE =
+      'Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null';
+    const BESIDE = 'AREA[LocationGeoPoint]DISTANCE[lat,lon,radius] AND SEARCH[Location](…)';
+    const radiusInside = 'SEARCH[Location](AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi])';
+
+    it.each(TOOLS)(
+      '%s answers a radius inside the wrapper with the form beside it, geoFilter, and no field blamed',
+      async (_name, definition) => {
+        refusing(`Error parsing query in advanced filter: ${NULL_PIECE}`);
+        const result = await call(definition, {
+          conditionQuery: 'breast cancer',
+          advancedFilter:
+            'SEARCH[Location](AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi] AND AREA[LocationStatus]RECRUITING)',
+        });
+        const { data, message } = wire(result);
+        const hint = (data.recovery as { hint: string }).hint;
+
+        expect(result.isError).toBe(true);
+        expect(data).toMatchObject({ reason: 'field_invalid' });
+        expect(data).not.toHaveProperty('invalid');
+        for (const surface of [message, hint]) {
+          for (const named of [
+            'DISTANCE[]',
+            'RANGE[]',
+            'SEARCH[Location](…)',
+            'geoFilter',
+            BESIDE,
+          ]) {
+            expect(surface).toContain(named);
+          }
+        }
+        expect(hint).toContain('clinicaltrials_get_study_record and nearLocation');
+        expect(hint).not.toBe(RECOVERY_HINTS.field_invalid);
+        expect(seenText(result)).toContain(`Recovery: ${hint}`);
+        expect(seenText(result)).not.toContain('Free-text');
+        expect(seenText(result)).not.toContain(RECOVERY_HINTS.query_parse_error);
+        expect(text(result)).toContain(`\`${BESIDE}\``);
+        expect(text(result)).toContain('no `DISTANCE[]` or `RANGE[]` term');
+        expect(text(result)).not.toContain('\\[');
+      },
+    );
+
+    it.each(TOOLS)('%s reads the same refusal in locationQuery', async (_name, definition) => {
+      refusing(`Error parsing query in Location terms: ${NULL_PIECE}`);
+      const result = await call(definition, { locationQuery: radiusInside });
+      const { data } = wire(result);
+
+      expect(data).toMatchObject({ reason: 'field_invalid' });
+      expect(data).not.toHaveProperty('invalid');
+      expect(seenText(result)).toContain('Error parsing query in Location terms:');
+      expect(seenText(result)).toContain(
+        'Recovery: Move the DISTANCE[] or RANGE[] term out of SEARCH[Location](…)',
+      );
+    });
+  });
+
+  it.each(TOOLS)(
+    '%s answers DISTANCE[] on LocationCity with the one field it takes, not the bracket hint',
+    async (_name, definition) => {
+      refusing(
+        'Error parsing query in advanced filter: DISTANCE is not supported for GeoName field protocolSection.contactsLocationsModule.locations.city',
+      );
+      const result = await call(definition, {
+        advancedFilter: 'AREA[LocationCity]DISTANCE[47.6062,-122.3321,25mi]',
+      });
+      const { data, message } = wire(result);
+
+      expect(data).toMatchObject({ reason: 'field_invalid', invalid: ['LocationCity'] });
+      expect(message).toContain("'LocationCity' takes no DISTANCE[]");
+      expect(seenText(result)).toContain(
+        'Recovery: Name LocationGeoPoint for a radius, as in AREA[LocationGeoPoint]DISTANCE[lat,lon,radius]',
+      );
+      expect(seenText(result)).not.toContain(RECOVERY_HINTS.query_parse_error);
+      expect(seenText(result)).not.toContain('Free-text');
+      expect(text(result)).toContain('`AREA[LocationGeoPoint]DISTANCE[lat,lon,radius]`');
+      expect(text(result)).not.toContain('\\[');
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s answers an unreadable DISTANCE[] operand as a query_parse_error restating the operand, not the bracket hint',
+    async (_name, definition) => {
+      refusing('Error parsing query in advanced filter: Invalid radius in DISTANCE operator');
+      const result = await call(definition, {
+        advancedFilter: 'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25]',
+      });
+      const { data, message } = wire(result);
+      const hint = (data.recovery as { hint: string }).hint;
+
+      expect(data).toMatchObject({ reason: 'query_parse_error' });
+      expect(hint).not.toBe(RECOVERY_HINTS.query_parse_error);
+      expect(message).toContain('DISTANCE[] reads three values, DISTANCE[lat,lon,radius]');
+      expect(seenText(result)).toContain(
+        'Recovery: Write the radius term as AREA[LocationGeoPoint]DISTANCE[lat,lon,radius] with a latitude from -90 to 90',
+      );
+      expect(seenText(result)).not.toContain('Free-text');
+      expect(text(result)).toContain('`AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi]`');
+      expect(text(result)).not.toContain('\\[');
+    },
+  );
+
+  /**
    * find_eligible runs no AREA[] name pass and takes no advancedFilter, but a
    * conditions entry without whitespace reaches query.cond as written, so it can
    * carry either refusal; the main search is the request upstream refuses. Its
@@ -1448,6 +1555,63 @@ describe('a valid field upstream refuses where it stands (#183, #187)', () => {
       expect(seenText(result)).not.toContain('Free-text');
       expect(text(result)).toContain('`AREA[StartDate]RANGE[2020-01-01, MAX]`');
       expect(text(result)).not.toContain('RANGE\\[');
+    });
+
+    it('answers a radius inside SEARCH[Location](…) naming the tools that take each radius form (#206)', async () => {
+      refusingSearch(
+        'Error parsing query in Conditions or disease: Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null',
+      );
+      const entry = 'SEARCH[Location](AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi])';
+      const result = await eligible([entry]);
+      const { data, message } = wire(result);
+
+      expect(sentConditions()).toBe(entry);
+      expect(data).toMatchObject({ reason: 'field_invalid' });
+      expect(data).not.toHaveProperty('invalid');
+      expect(message).toContain('Error parsing query in Conditions or disease:');
+      // find_eligible takes neither an advancedFilter nor a geoFilter, so the hint names the tools that do, and its own location.near.
+      expect(seenText(result)).toContain(
+        'in the advancedFilter of clinicaltrials_search_studies or clinicaltrials_get_study_count, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible.',
+      );
+      expect(seenText(result)).not.toContain(RECOVERY_HINTS.field_invalid);
+      expect(seenText(result)).not.toContain('Free-text');
+      expect(text(result)).toContain(
+        '`AREA[LocationGeoPoint]DISTANCE[lat,lon,radius] AND SEARCH[Location](…)`',
+      );
+      expect(text(result)).not.toContain('\\[');
+    });
+
+    it('answers DISTANCE[] on LocationCity naming the path, since it reads no field index', async () => {
+      refusingSearch(
+        'Error parsing query in Conditions or disease: DISTANCE is not supported for GeoName field protocolSection.contactsLocationsModule.locations.city',
+      );
+      const entry = 'AREA[LocationCity]DISTANCE[47.6062,-122.3321,25mi]';
+      const result = await eligible([entry]);
+
+      expect(sentConditions()).toBe(entry);
+      expect(wire(result).data).toMatchObject({
+        reason: 'field_invalid',
+        invalid: ['protocolSection.contactsLocationsModule.locations.city'],
+      });
+      expect(seenText(result)).toContain('Recovery: Name LocationGeoPoint for a radius');
+      expect(seenText(result)).not.toContain(RECOVERY_HINTS.field_invalid);
+      expect(seenText(result)).not.toContain('Free-text');
+    });
+
+    it('answers a DISTANCE[] with no radius restating the operand, not the Java exception alone', async () => {
+      refusingSearch(
+        'Error parsing query in Conditions or disease: Cannot read field "exception" because "radius" is null',
+      );
+      const entry = 'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321]';
+      const result = await eligible([entry]);
+
+      expect(sentConditions()).toBe(entry);
+      expect(wire(result).data).toMatchObject({ reason: 'query_parse_error' });
+      expect(seenText(result)).toContain(
+        'Recovery: Write the radius term as AREA[LocationGeoPoint]DISTANCE[lat,lon,radius]',
+      );
+      expect(seenText(result)).not.toContain(RECOVERY_HINTS.query_parse_error);
+      expect(seenText(result)).not.toContain('Free-text');
     });
   });
 });

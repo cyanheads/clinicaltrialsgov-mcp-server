@@ -1083,6 +1083,81 @@ describe('getStudy', () => {
         const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
         expect(missingLeaves(result.structuredContent, text)).toEqual([]);
       });
+
+      // The within-radius pass is shared with clinicaltrials_find_eligible's
+      // location.near (#205); this record must read the same through it.
+      it('keeps the nearLocation output whole: order, rounding, skipped sites, and the cap', async () => {
+        const locations = [
+          north('Five Oh Four', 5.04),
+          { facility: 'No Coords One' },
+          north('Five Oh One', 5.01),
+          north('Twenty', 20),
+          north('Just Past Ten', 10.04),
+          { facility: 'No Coords Two' },
+          north('Center', 0),
+        ];
+        mockService.getStudy.mockResolvedValue(
+          buildStudy({ contactsLocationsModule: { locations } }),
+        );
+        const read = async (extra: Record<string, unknown>) => {
+          const result = await runToolContract(getStudy, {
+            nctId: 'NCT12345678',
+            nearLocation: { ...center, radiusMi: 10 },
+            ...extra,
+          });
+          const sc = result.structuredContent as {
+            filtersApplied: Record<string, unknown>;
+            study: {
+              protocolSection: {
+                contactsLocationsModule: { locations: { distanceMi: number; facility: string }[] };
+              };
+            };
+          };
+          return {
+            filtersApplied: sc.filtersApplied,
+            sites: sc.study.protocolSection.contactsLocationsModule.locations.map((s) => [
+              s.facility,
+              s.distanceMi,
+            ]),
+            text: (result.content as { text: string }[]).map((b) => b.text).join('\n'),
+          };
+        };
+
+        const all = await read({});
+        expect(all.sites).toEqual([
+          ['Center', 0],
+          ['Five Oh One', 5],
+          ['Five Oh Four', 5],
+        ]);
+        expect(all.filtersApplied).toEqual({
+          locationsWithoutGeo: 2,
+          nearLocation: { ...center, radiusMi: 10 },
+          totalLocations: 7,
+        });
+        expect(all.text).toContain(
+          '## Locations (3 within 10 mi of 47.606,-122.332 of 7 total, 2 without coordinates skipped)',
+        );
+
+        const capped = await read({ locationLimit: 2 });
+        expect(capped.sites).toEqual([
+          ['Center', 0],
+          ['Five Oh One', 5],
+        ]);
+        expect(capped.filtersApplied).toEqual({
+          locationLimit: 2,
+          locationsWithoutGeo: 2,
+          nearLocation: { ...center, radiusMi: 10 },
+          totalLocations: 7,
+        });
+        expect(capped.text).toContain(
+          '## Locations (2 shown by locationLimit=2 of the sites within 10 mi of 47.606,-122.332; 7 total, 2 without coordinates skipped)',
+        );
+        for (const { text } of [all, capped]) {
+          expect(text).not.toContain('Twenty');
+          expect(text).not.toContain('Just Past Ten');
+          expect(text).not.toContain('No Coords');
+        }
+      });
     });
   });
 
@@ -1654,9 +1729,34 @@ describe('getStudy', () => {
       expect(text).toContain('2 outcome measures');
       expect(text).toContain('87 serious adverse events');
       expect(text).toContain('328 other adverse events');
-      expect(text).toContain('1 participant flow periods');
-      expect(text).toContain('1 baseline measures');
+      expect(text).toContain('| 1 participant flow period |');
+      expect(text).toMatch(/\| 1 baseline measure$/m);
       expect(text).toContain('Use clinicaltrials_get_study_results for full data.');
+    });
+
+    // Each resultsSummary count agrees its noun in number: singular at one, plural otherwise.
+    it.each([
+      [{ outcomeMeasures: 1 }, '1 outcome measure'],
+      [{ outcomeMeasures: 2 }, '2 outcome measures'],
+      [{ seriousAdverseEvents: 1 }, '1 serious adverse event'],
+      [{ seriousAdverseEvents: 0 }, '0 serious adverse events'],
+      [{ otherAdverseEvents: 1 }, '1 other adverse event'],
+      [{ otherAdverseEvents: 328 }, '328 other adverse events'],
+      [{ participantFlowPeriods: 1 }, '1 participant flow period'],
+      [{ participantFlowPeriods: 3 }, '3 participant flow periods'],
+      [{ baselineMeasures: 1 }, '1 baseline measure'],
+      [{ baselineMeasures: 0 }, '0 baseline measures'],
+    ])('renders resultsSummary %j as the line %j', (resultsSummary, line) => {
+      const blocks = getStudy.format!({
+        filtersApplied: {},
+        study: {
+          protocolSection: { identificationModule: { nctId: 'NCT02130466', briefTitle: 'X' } },
+          hasResults: true,
+        },
+        resultsSummary,
+      });
+      const lines = (blocks[0] as { text: string }).text.split('\n');
+      expect(lines[lines.indexOf('## Results Summary') + 1]).toBe(line);
     });
 
     it('renders a date struct type alongside its date (#18)', () => {

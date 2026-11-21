@@ -1,6 +1,7 @@
 /**
  * @fileoverview Geographic helpers shared by location-aware tools — great-circle
- * distance and parsing of the `geoFilter` center coordinates.
+ * distance, the within-radius site pass, building a `filter.geo` value, and
+ * parsing of the `geoFilter` center coordinates.
  * @module mcp-server/tools/utils/geo-helpers
  */
 
@@ -12,6 +13,13 @@ export const EARTH_RADIUS_MI = 3958.7613;
 
 /** A study location annotated with its distance from a reference point. */
 export type LocationWithDistance = StudyLocation & { distanceMi?: number };
+
+/** A point and a radius around it, in decimal degrees and miles. */
+export interface NearPoint {
+  lat: number;
+  lon: number;
+  radiusMi: number;
+}
 
 /** A distance in miles to the one decimal content[] renders, so both surfaces carry the same value. */
 export function roundMi(distanceMi: number): number {
@@ -30,6 +38,63 @@ export function haversineMi(
   const lat2 = toRad(b.lat);
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
   return 2 * EARTH_RADIUS_MI * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/** A study's sites measured from a point and split at a radius; see `sitesByDistance`. */
+export interface SitesByDistance<T extends StudyLocation> {
+  /** Every site that publishes coordinates, nearest first, each carrying its distanceMi from the point. */
+  measured: Array<T & { distanceMi: number }>;
+  /** How many leading `measured` sites lie within the radius. */
+  withinRadius: number;
+  /** Sites that publish no coordinates, so were never measured and never lie within. */
+  withoutGeo: number;
+}
+
+/**
+ * Measure each site from `near` and order them nearest first. The exact
+ * distance decides the order and the radius split; each site carries it
+ * rounded (`roundMi`), since rounding first would admit a site just past the
+ * radius. Ties keep list order. Because the order is by distance, the sites
+ * within the radius are exactly the first `withinRadius` of `measured`.
+ */
+export function sitesByDistance<T extends StudyLocation>(
+  locations: readonly T[],
+  near: NearPoint,
+): SitesByDistance<T> {
+  const withGeo = locations.filter(
+    (l): l is T & { geoPoint: { lat: number; lon: number } } => l.geoPoint != null,
+  );
+  const exact = withGeo
+    .map((l) => ({ ...l, distanceMi: haversineMi(near, l.geoPoint) }))
+    .sort((a, b) => a.distanceMi - b.distanceMi);
+  const outside = exact.findIndex((l) => l.distanceMi > near.radiusMi);
+  return {
+    measured: exact.map((l) => ({ ...l, distanceMi: roundMi(l.distanceMi) })),
+    withinRadius: outside === -1 ? exact.length : outside,
+    withoutGeo: locations.length - withGeo.length,
+  };
+}
+
+/**
+ * A number in plain decimal notation. `String()` writes very small and very
+ * large numbers in exponent form (`1e-7`, `1e+21`), which ClinicalTrials.gov
+ * rejects inside `filter.geo`; this spells out the same digits.
+ */
+export function plainDecimal(n: number): string {
+  const text = String(n);
+  const match = /^(-?)(\d)(?:\.(\d+))?e([+-]\d+)$/.exec(text);
+  if (!match) return text;
+  const [, sign, lead, fraction = '', exponent] = match;
+  const digits = `${lead}${fraction}`;
+  const pointAt = 1 + Number(exponent);
+  if (pointAt <= 0) return `${sign}0.${'0'.repeat(-pointAt)}${digits}`;
+  if (pointAt >= digits.length) return `${sign}${digits}${'0'.repeat(pointAt - digits.length)}`;
+  return `${sign}${digits.slice(0, pointAt)}.${digits.slice(pointAt)}`;
+}
+
+/** The `filter.geo` value for a radius in miles around a point: `distance(lat,lon,radiusmi)`. */
+export function nearGeoFilter(near: NearPoint): string {
+  return `distance(${plainDecimal(near.lat)},${plainDecimal(near.lon)},${plainDecimal(near.radiusMi)}mi)`;
 }
 
 /**
@@ -68,12 +133,12 @@ const GEO_RADIUS_UNITS = new Set(['mi', 'km']);
  * it is well formed.
  *
  * ClinicalTrials.gov does not reject every bad geo expression: a radius with no
- * unit returns 200 with an empty result set (the number is read as meters), a
- * zero radius answers 500 through the whole retry budget, and an out-of-range
- * coordinate answers 400 with a bare `Search error` body that carries nothing
- * to classify on. Each surfaced as something other than a bad-input error, so
- * the caller saw an empty cohort, a service outage, or an unreasoned validation
- * failure instead of the mistake they made.
+ * unit returns 200 and is read as meters, so it matches only sites geocoded to
+ * the center point; a zero radius answers 500 through the whole retry budget,
+ * and an out-of-range coordinate answers 400 with a bare `Search error` body
+ * that carries nothing to classify on. Each surfaced as something other than a
+ * bad-input error, so the caller saw a near-empty cohort, a service outage, or
+ * an unreasoned validation failure instead of the mistake they made.
  *
  * Shapes upstream does reject with `incorrect format` are caught here early
  * with the same message the service would have thrown, so only the round trip

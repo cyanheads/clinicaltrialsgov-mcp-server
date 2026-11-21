@@ -25,7 +25,7 @@ vi.mock('@/services/clinical-trials/clinical-trials-service.js', () => ({
 }));
 
 import { getStudyResults } from '@/mcp-server/tools/definitions/get-study-results.tool.js';
-import { oneLine } from '@/mcp-server/tools/utils/format-helpers.js';
+import { formatReferenceLines, oneLine } from '@/mcp-server/tools/utils/format-helpers.js';
 import type { RawStudyShape } from '@/services/clinical-trials/types.js';
 import { expectLinearGrowth, LINE_BREAK_SHAPES } from '../../../helpers/cpu-timing.js';
 import { loadStudyFixture, missingLeaves } from '../../../helpers/format-parity.js';
@@ -92,6 +92,63 @@ const BULLETS = {
   outcome: /^- \*\*Outcome /,
   serious: /^- Serious term /,
 } as const;
+
+type StudyReference = NonNullable<
+  NonNullable<NonNullable<RawStudyShape['protocolSection']>['referencesModule']>['references']
+>[number];
+
+/** Give a study record a referencesModule, as the batch and the per-ID record both carry it (#204). */
+function withReferences(study: RawStudyShape, references: StudyReference[]): RawStudyShape {
+  return {
+    ...study,
+    protocolSection: { ...study.protocolSection, referencesModule: { references } },
+  };
+}
+
+/** RESULT references as the live registry returns them (#204). */
+const RESULT_REFERENCES = {
+  /** NCT03288740's one result publication. */
+  semaglutide: {
+    pmid: '33159658',
+    type: 'RESULT',
+    citation:
+      'Shi A, Xie P, Nielsen LL, Skjoth TV, He X, Haugaard SP. Pharmacokinetics, Safety and Tolerability of Once-Weekly Subcutaneous Semaglutide in Healthy Chinese Subjects: A Double-Blind, Phase 1, Randomized Controlled Trial. Adv Ther. 2021 Jan;38(1):550-561. doi: 10.1007/s12325-020-01548-y. Epub 2020 Nov 7.',
+  },
+  /** NCT01250223's first, a conference abstract with no PMID. */
+  noPmid: {
+    type: 'RESULT',
+    citation:
+      'Federico M, Bellei M, Pro B, Lopez-Guillermo A, Marcheselli L, Trneny M, Soubeyran P, MCLaughlin P, Pileri S, Solal-Céligny P on behalf of the F2 study. Revalidation of FLIPI in patients with Follicular Lymphoma (FL) registered in the F2 study and treated upfront with immunochemotherapy. J Clin Oncol 25(18s), 2007. Abstr 8008.',
+  },
+  /** NCT02928783's retracted one. */
+  retracted: {
+    pmid: '17039348',
+    type: 'RESULT',
+    citation:
+      'Suttner S, Schollhorn T, Boldt J, Mayer J, Rohm KD, Lang K, Piper SN. Noninvasive assessment of cardiac output using thoracic electrical bioimpedance in hemodynamically stable and unstable patients after cardiac surgery: a comparison with pulmonary artery thermodilution. Intensive Care Med. 2006 Dec;32(12):2053-8. doi: 10.1007/s00134-006-0409-x. Epub 2006 Oct 13.',
+    retractions: [{ pmid: '21604011', source: 'Intensive Care Med. 2011 Jul;37(7):1232' }],
+  },
+} satisfies Record<string, StudyReference>;
+
+/** The three RESULT references above interleaved with the kinds a study's publications leave out. */
+const MIXED_REFERENCES: StudyReference[] = [
+  RESULT_REFERENCES.semaglutide,
+  { pmid: '41174235', type: 'BACKGROUND', citation: 'A background paper.' },
+  RESULT_REFERENCES.noPmid,
+  { pmid: '20000001', type: 'DERIVED', citation: 'A paper indexed by NCT number.' },
+  RESULT_REFERENCES.retracted,
+];
+
+/** What MIXED_REFERENCES yields as resultPublications: the RESULT entries, in order, without their type. */
+const MIXED_PUBLICATIONS = [
+  { pmid: '33159658', citation: RESULT_REFERENCES.semaglutide.citation },
+  { citation: RESULT_REFERENCES.noPmid.citation },
+  {
+    pmid: '17039348',
+    citation: RESULT_REFERENCES.retracted.citation,
+    retractions: [{ pmid: '21604011', source: 'Intensive Care Med. 2011 Jul;37(7):1232' }],
+  },
+];
 
 describe('getStudyResults', () => {
   const mockService = { getStudiesBatch: vi.fn(), getStudy: vi.fn() };
@@ -476,7 +533,7 @@ describe('getStudyResults', () => {
           { groupId: 'G2', numAffected: 40, numAtRisk: 100 },
         ],
       });
-      // The roster the rows are keyed against, trimmed to id and title.
+      // The roster the rows are keyed against; these groups publish no totals, so each stays id and title.
       expect(result.results[0]!.adverseEvents!.eventGroups).toEqual([
         { id: 'G1', title: 'Placebo' },
         { id: 'G2', title: 'Drug' },
@@ -1156,7 +1213,9 @@ describe('getStudyResults', () => {
       );
       // Per-ID fallback: two valid, one invalid.
       mockService.getStudy.mockImplementation(async (nctId: string) => {
-        if (nctId === 'NCT00000000') throw new Error('Study NCT00000000 not found');
+        if (nctId === 'NCT00000000') {
+          throw notFound('Study NCT00000000 not found', { reason: 'study_not_found' });
+        }
         return makeStudy(nctId, nctId === 'NCT03722472', {
           outcomeMeasuresModule: { outcomeMeasures: [{ title: 'Measure' }] },
         });
@@ -1182,7 +1241,9 @@ describe('getStudyResults', () => {
           reason: 'ids_not_found',
         }),
       );
-      mockService.getStudy.mockRejectedValue(new Error('Study not found'));
+      mockService.getStudy.mockRejectedValue(
+        notFound('Study not found', { reason: 'study_not_found' }),
+      );
 
       const ctx = createMockContext({ errors: getStudyResults.errors });
       const input = getStudyResults.input!.parse({
@@ -1218,6 +1279,147 @@ describe('getStudyResults', () => {
 
       expect(result.results[0]!.hasResults).toBe(true);
       expect(result.results[0]!.outcomes).toBeUndefined();
+    });
+
+    describe('result publications of studies without posted results (#204)', () => {
+      const withoutResults = (references: StudyReference[]) =>
+        withReferences(makeStudy('NCT12345678', false), references);
+
+      it('lists the RESULT references in upstream order, leaving BACKGROUND and DERIVED out', async () => {
+        const { result, entry } = await runTool({}, withoutResults(MIXED_REFERENCES));
+
+        expect(entry.hasResults).toBe(false);
+        expect(entry.resultPublications).toStrictEqual(MIXED_PUBLICATIONS);
+        expect(result.studiesWithoutResults).toEqual(['NCT12345678']);
+      });
+
+      it('keeps a PMID, citation, or retraction field the record omits absent, never blank', async () => {
+        const { entry } = await runTool(
+          {},
+          withoutResults([
+            { pmid: '30000001', type: 'RESULT' },
+            {
+              type: 'RESULT',
+              citation: 'A citation alone.',
+              retractions: [{ source: 'A retraction source alone' }, { pmid: '30000003' }],
+            },
+          ]),
+        );
+
+        expect(entry.resultPublications).toStrictEqual([
+          { pmid: '30000001' },
+          {
+            citation: 'A citation alone.',
+            retractions: [{ source: 'A retraction source alone' }, { pmid: '30000003' }],
+          },
+        ]);
+      });
+
+      // Characterization: a study without posted results and without a RESULT
+      // reference keeps today's entry and line.
+      it.each([
+        [
+          'BACKGROUND and DERIVED references only',
+          withoutResults([MIXED_REFERENCES[1]!, MIXED_REFERENCES[3]!]),
+        ],
+        ['no referencesModule', makeStudy('NCT12345678', false)],
+        ['an empty reference list', withoutResults([])],
+      ])('leaves resultPublications off a study with %s', async (_shape, study) => {
+        const { entry, text } = await runTool({}, study);
+
+        expect(entry).toStrictEqual({
+          nctId: 'NCT12345678',
+          title: 'Study NCT12345678',
+          hasResults: false,
+        });
+        expect(text).toContain('No results available.');
+      });
+
+      // Characterization: posted results are the whole answer for a study that
+      // has them, so its references add nothing on either surface.
+      it.each([false, true])(
+        'adds nothing to a study with posted results, a RESULT reference included (summary: %s)',
+        async (summary) => {
+          const study = withReferences(
+            makeStudy('NCT12345678', true, {
+              outcomeMeasuresModule: { outcomeMeasures: [{ title: 'Measure' }] },
+            }),
+            MIXED_REFERENCES,
+          );
+          const { entry, text } = await runTool({ summary }, study);
+
+          expect(entry).not.toHaveProperty('resultPublications');
+          expect(text).not.toContain('33159658');
+          expect(text).not.toContain('Result publications');
+        },
+      );
+
+      it('returns the same publications in summary mode', async () => {
+        const { entry } = await runTool({ summary: true }, withoutResults(MIXED_REFERENCES));
+
+        expect(entry.resultPublications).toStrictEqual(MIXED_PUBLICATIONS);
+      });
+
+      it('reads the same publications from the whole record the per-ID fallback fetches', async () => {
+        mockService.getStudiesBatch.mockRejectedValue(
+          notFound('Study ID(s) not found or rejected by API: NCT00000000', {
+            reason: 'ids_not_found',
+          }),
+        );
+        mockService.getStudy.mockImplementation(async (nctId: string) => {
+          if (nctId === 'NCT00000000') {
+            throw notFound('Study NCT00000000 not found', { reason: 'study_not_found' });
+          }
+          return withReferences(makeStudy(nctId, false), MIXED_REFERENCES);
+        });
+
+        const ctx = createMockContext({ errors: getStudyResults.errors });
+        const input = getStudyResults.input!.parse({ nctIds: ['NCT03288740', 'NCT00000000'] });
+        const result = await getStudyResults.handler(input, ctx);
+
+        // One batch request and one record per ID — nothing else is fetched.
+        expect(mockService.getStudiesBatch).toHaveBeenCalledTimes(1);
+        expect(mockService.getStudy.mock.calls.map((c) => c[0])).toEqual([
+          'NCT03288740',
+          'NCT00000000',
+        ]);
+        expect(result.results).toHaveLength(1);
+        expect(result.results[0]!.resultPublications).toStrictEqual(MIXED_PUBLICATIONS);
+        expect(result.studiesWithoutResults).toEqual(['NCT03288740']);
+      });
+
+      it('keeps every RESULT reference, with no cap on the list', async () => {
+        const references = Array.from({ length: 112 }, (_, i) => ({
+          pmid: String(30000000 + i),
+          type: 'RESULT',
+          citation: `Result paper ${i}.`,
+        }));
+        const { entry, text } = await runTool({}, withoutResults(references));
+
+        expect(entry.resultPublications).toHaveLength(112);
+        expect(entry.resultPublications!.at(-1)).toStrictEqual({
+          pmid: '30000111',
+          citation: 'Result paper 111.',
+        });
+        expect(text).toContain('Result publications (112):');
+        expect(text).toContain('- Result paper 111. (PMID: 30000111)');
+      });
+
+      it('carries the publications through output validation onto both surfaces', async () => {
+        mockService.getStudiesBatch.mockResolvedValue([withoutResults(MIXED_REFERENCES)]);
+
+        const result = await runToolContract(getStudyResults, { nctIds: 'NCT12345678' });
+
+        expect(result.isError).toBeFalsy();
+        const sc = result.structuredContent as {
+          results: Array<{ resultPublications?: unknown }>;
+        };
+        expect(sc.results[0]!.resultPublications).toStrictEqual(MIXED_PUBLICATIONS);
+        const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+        expect(text).toContain(
+          `- ${RESULT_REFERENCES.retracted.citation} (PMID: 17039348)\n  Retracted — Intensive Care Med. 2011 Jul;37(7):1232, PMID: 21604011`,
+        );
+      });
     });
   });
 
@@ -2304,7 +2506,9 @@ describe('getStudyResults', () => {
         }),
       );
       mockService.getStudy.mockImplementation(async (nctId: string) => {
-        if (nctId === 'NCT00000000') throw new Error('Study NCT00000000 not found');
+        if (nctId === 'NCT00000000') {
+          throw notFound('Study NCT00000000 not found', { reason: 'study_not_found' });
+        }
         return makeStudy(nctId, false);
       });
 
@@ -2341,9 +2545,10 @@ describe('getStudyResults', () => {
 
   /**
    * The per-ID fallback answers the one batch failure it can fix — a malformed
-   * ID rejecting the whole batch. An outage, the call's spent time budget, a
-   * rate limit, or the caller cancelling would fail every remaining request the
-   * same way, so each ends the call wherever it lands (#181).
+   * ID rejecting the whole batch — and records only a study that does not exist
+   * as one ID's own failure. An outage, the call's spent time budget, a rate
+   * limit, or the caller cancelling would fail every remaining request the same
+   * way, so each ends the call wherever it lands (#181, #201).
    */
   describe('failures that end the call (#181)', () => {
     const deadline = () =>
@@ -2417,20 +2622,222 @@ describe('getStudyResults', () => {
       expect(mockService.getStudy.mock.calls.map((c) => c[0])).toEqual(THREE.slice(0, 2));
     });
 
-    it('keeps a per-ID outage as that ID’s fetch error and fetches the rest', async () => {
+    /** The per-ID failures the service ends a /studies/{nctId} request with, by reason. */
+    const PER_ID_PATH = '/studies/NCT05956821';
+    const perIdUnavailable = () =>
+      serviceUnavailable(
+        `ClinicalTrials.gov API unavailable after retries: ${PER_ID_PATH} returned HTTP 503.`,
+        {
+          path: PER_ID_PATH,
+          lastError: 'Error: HTTP 503',
+          lastStatus: 503,
+          reason: 'upstream_unavailable',
+        },
+      );
+    const perIdTimeout = () =>
+      timeout('ClinicalTrials.gov timed out (HTTP 504) on every attempt', {
+        path: PER_ID_PATH,
+        lastError: 'Error: HTTP 504',
+        lastStatus: 504,
+        reason: 'upstream_timeout',
+      });
+    const perIdRejected = () =>
+      serviceUnavailable('ClinicalTrials.gov returned HTTP 403 Forbidden.', {
+        path: PER_ID_PATH,
+        status: 403,
+        reason: 'upstream_rejected',
+        retryable: false,
+      });
+    /** The walk with the second of THREE failing as given. */
+    const failSecond = (error: () => unknown) => {
       mockService.getStudiesBatch.mockRejectedValue(malformedBatch());
       mockService.getStudy.mockImplementation(async (nctId: string) => {
-        if (nctId === 'NCT05956821') throw outage();
+        if (nctId === 'NCT05956821') throw error();
         return makeStudy(nctId, false);
       });
+    };
+
+    it.each([
+      ['upstream_unavailable', perIdUnavailable],
+      ['upstream_timeout', perIdTimeout],
+      ['upstream_rejected', perIdRejected],
+      ['an outage carrying no reason', outage],
+      ['a plain Error', () => new Error('socket hang up')],
+    ])(
+      'ends the per-ID walk on %s, rethrowing it unchanged and fetching no later ID (#201)',
+      async (_label, error) => {
+        const thrown = error();
+        failSecond(() => thrown);
+
+        await expect(run()).rejects.toBe(thrown);
+        expect(mockService.getStudy.mock.calls.map((c) => c[0])).toEqual(THREE.slice(0, 2));
+      },
+    );
+
+    it.each([
+      ['upstream_unavailable', perIdUnavailable],
+      ['upstream_timeout', perIdTimeout],
+      ['upstream_rejected', perIdRejected],
+    ] as const)(
+      'carries a per-ID %s to both surfaces with its declared recovery (#201)',
+      async (reason, error) => {
+        failSecond(error);
+        const recovery = getStudyResults.errors!.find((e) => e.reason === reason)!.recovery;
+
+        const result = await runToolContract(getStudyResults, { nctIds: THREE });
+        const wire = (result.structuredContent as { error: { data: Record<string, unknown> } })
+          .error;
+
+        expect(result.isError).toBe(true);
+        expect(wire.data).toMatchObject({ reason, path: PER_ID_PATH });
+        expect(wireRecoveryHint(result)).toBe(recovery);
+        expect((result.content as { text: string }[])[0]!.text).toContain(`Recovery: ${recovery}`);
+        expect(mockService.getStudy.mock.calls.map((c) => c[0])).toEqual(THREE.slice(0, 2));
+      },
+    );
+
+    it('keeps a per-ID study_not_found as that ID’s fetch error and fetches the rest (#201)', async () => {
+      failSecond(() => notFound('Study NCT05956821 not found', { reason: 'study_not_found' }));
 
       const result = await run();
 
       expect(mockService.getStudy.mock.calls.map((c) => c[0])).toEqual(THREE);
       expect(result.results.map((r) => r.nctId)).toEqual(['NCT03722472', 'NCT02130466']);
       expect(result.fetchErrors).toEqual([
-        { nctId: 'NCT05956821', error: 'ClinicalTrials.gov API unavailable after retries' },
+        { nctId: 'NCT05956821', error: 'Study NCT05956821 not found' },
       ]);
+    });
+  });
+
+  /**
+   * The walk keys on the reason the service gives each record: the plain-text
+   * 404 for an ID with no study and the 400 the single-study route answers
+   * NCT00000000 with both come back study_not_found, while a record that fails
+   * every attempt keeps the reason of that failure. Run against the real
+   * service, since the mechanism is its tagging meeting the handler's check
+   * (#201). Response bodies are the live route's, verbatim.
+   */
+  describe('the per-ID walk records only studies that do not exist (#201)', () => {
+    const plainText = (body: string, status: number) => () =>
+      new Response(body, { status, headers: { 'content-type': 'text/plain; charset=UTF-8' } });
+    const record = (nctId: string) => () =>
+      new Response(JSON.stringify(makeStudy(nctId, false)), {
+        headers: { 'content-type': 'application/json' },
+      });
+    const NO_STUDY = plainText('NCT number NCT99999999 not found', 404);
+    const MALFORMED_ID = plainText('Parameter `nctId` has incorrect format', 400);
+
+    /**
+     * One call through the real service: the batch refused over NCT00000000, as
+     * the live endpoint refuses it, then each /studies/{nctId} answered from
+     * `perId`. Returns the result and every path requested, in order.
+     */
+    const runWalk = async (nctIds: string[], perId: Map<string, () => Response>) => {
+      const { ClinicalTrialsService } = await vi.importActual<
+        typeof import('@/services/clinical-trials/clinical-trials-service.js')
+      >('@/services/clinical-trials/clinical-trials-service.js');
+      const paths: string[] = [];
+      vi.stubGlobal('fetch', (url: string | URL) => {
+        const { pathname } = new URL(String(url));
+        paths.push(pathname);
+        if (pathname === '/v2/studies') {
+          const item = nctIds.indexOf('NCT00000000') + 1;
+          return Promise.resolve(
+            plainText(`Item ${item} in parameter \`filter.ids\` has incorrect format`, 400)(),
+          );
+        }
+        const answer = perId.get(pathname.replace('/v2/studies/', ''));
+        if (!answer) throw new Error(`Unexpected request: ${pathname}`);
+        return Promise.resolve(answer());
+      });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      try {
+        mockGetService.mockReturnValue(
+          new ClinicalTrialsService(
+            { apiBaseUrl: 'https://test.api/v2', requestTimeoutMs: 30_000, maxPageSize: 100 },
+            { maxRetries: 2, validateFieldsLocally: false },
+          ) as never,
+        );
+        let settled = false;
+        const outcome = runToolContract(getStudyResults, { nctIds }).finally(() => {
+          settled = true;
+        });
+        while (!settled) await vi.advanceTimersToNextTimerAsync();
+        return { result: await outcome, paths };
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    };
+
+    it('records a 404 and the NCT00000000 refusal as fetch errors and fetches every other ID', async () => {
+      const { result, paths } = await runWalk(
+        ['NCT03722472', 'NCT99999999', 'NCT00000000', 'NCT02130466'],
+        new Map([
+          ['NCT03722472', record('NCT03722472')],
+          ['NCT99999999', NO_STUDY],
+          ['NCT00000000', MALFORMED_ID],
+          ['NCT02130466', record('NCT02130466')],
+        ]),
+      );
+      const sc = result.structuredContent as {
+        fetchErrors?: Array<{ nctId: string; error: string }>;
+        results: Array<{ nctId: string }>;
+      };
+      const text = (result.content as { text: string }[])[0]!.text;
+
+      expect(paths).toEqual([
+        '/v2/studies',
+        '/v2/studies/NCT03722472',
+        '/v2/studies/NCT99999999',
+        '/v2/studies/NCT00000000',
+        '/v2/studies/NCT02130466',
+      ]);
+      expect(sc.results.map((r) => r.nctId)).toEqual(['NCT03722472', 'NCT02130466']);
+      expect(sc.fetchErrors).toEqual([
+        { nctId: 'NCT99999999', error: 'Study NCT99999999 not found' },
+        {
+          nctId: 'NCT00000000',
+          error: 'Study NCT00000000 not found. Verify the NCT ID exists on ClinicalTrials.gov.',
+        },
+      ]);
+      expect(text).toContain(
+        'Fetch errors: NCT99999999: Study NCT99999999 not found, NCT00000000: Study NCT00000000 not found. Verify the NCT ID exists on ClinicalTrials.gov.',
+      );
+    });
+
+    it('ends upstream_unavailable on both surfaces when a record fails every attempt, requesting no later ID', async () => {
+      const { result, paths } = await runWalk(
+        ['NCT03722472', 'NCT05956821', 'NCT00000000'],
+        new Map([
+          ['NCT03722472', record('NCT03722472')],
+          ['NCT05956821', plainText('Service Unavailable', 503)],
+          ['NCT00000000', MALFORMED_ID],
+        ]),
+      );
+      const error = (
+        result.structuredContent as { error: { code: number; data: Record<string, unknown> } }
+      ).error;
+
+      // The batch, the first record, then the second's three attempts — never the third.
+      expect(paths).toEqual([
+        '/v2/studies',
+        '/v2/studies/NCT03722472',
+        '/v2/studies/NCT05956821',
+        '/v2/studies/NCT05956821',
+        '/v2/studies/NCT05956821',
+      ]);
+      expect(result.isError).toBe(true);
+      expect(error.code).toBe(JsonRpcErrorCode.ServiceUnavailable);
+      expect(error.data).toMatchObject({
+        reason: 'upstream_unavailable',
+        path: '/studies/NCT05956821',
+        lastStatus: 503,
+      });
+      expect(wireRecoveryHint(result)).toMatch(/^Retry the same call unchanged/);
+      expect((result.content as { text: string }[])[0]!.text).toContain(
+        'Recovery: Retry the same call unchanged',
+      );
     });
   });
 
@@ -2643,6 +3050,63 @@ describe('getStudyResults', () => {
         results: [{ nctId: 'NCT12345678', title: 'No Data', hasResults: false }],
       });
       expect((blocks[0] as { text: string }).text).toContain('No results available.');
+    });
+
+    it('renders result publications under a header, one line per publication and per retraction (#204)', () => {
+      const blocks = getStudyResults.format!({
+        results: [
+          {
+            nctId: 'NCT02928783',
+            title: 'Rehabilitation Study',
+            hasResults: false,
+            resultPublications: [
+              { pmid: '17572248', citation: 'Haykowsky MJ. First paper.' },
+              { citation: 'An abstract with no PMID.' },
+              {
+                pmid: '17039348',
+                citation: 'Suttner S. Retracted paper.',
+                retractions: [
+                  { pmid: '21604011', source: 'Intensive Care Med. 2011 Jul;37(7):1232' },
+                ],
+              },
+            ],
+          },
+        ],
+        studiesWithoutResults: ['NCT02928783'],
+      });
+      expect((blocks[0] as { text: string }).text.split('\n')).toEqual([
+        '## NCT02928783: Rehabilitation Study',
+        'No results posted to ClinicalTrials.gov. Result publications (3):',
+        '- Haykowsky MJ. First paper. (PMID: 17572248)',
+        '- An abstract with no PMID.',
+        '- Suttner S. Retracted paper. (PMID: 17039348)',
+        '  Retracted — Intensive Care Med. 2011 Jul;37(7):1232, PMID: 21604011',
+        '',
+        'Without results: NCT02928783',
+      ]);
+    });
+
+    it('folds a line break in registry text so a citation cannot start a line of its own (#204)', () => {
+      const blocks = getStudyResults.format!({
+        results: [
+          {
+            nctId: 'NCT12345678',
+            title: 'Study',
+            hasResults: false,
+            resultPublications: [
+              {
+                pmid: '30000001',
+                citation: 'Part one.\r\n## Forged heading\n- forged item',
+                retractions: [{ pmid: '30000002', source: 'Journal\nsecond line' }],
+              },
+            ],
+          },
+        ],
+      });
+      const lines = (blocks[0] as { text: string }).text.split('\n');
+      expect(lines).toContain('- Part one. ## Forged heading - forged item (PMID: 30000001)');
+      expect(lines).toContain('  Retracted — Journal second line, PMID: 30000002');
+      expect(lines.filter((line) => /^(?:## Forged|- forged|second line)/.test(line))).toEqual([]);
     });
 
     it('renders outcomes section', () => {
@@ -2894,6 +3358,36 @@ describe('getStudyResults', () => {
       expect(text).toContain('x@example.com');
     });
 
+    // The registry carries a point-of-contact extension with no phone (NCT03176654).
+    it.each([
+      ['an extension with no phone', { phoneExt: '83171' }, 'ext. 83171'],
+      ['a phone with its extension', { phone: '555-0100', phoneExt: '42' }, '555-0100 ext. 42'],
+      ['a phone alone', { phone: '555-0100' }, '555-0100'],
+    ])(
+      'renders the point of contact’s phone for %s on both surfaces',
+      async (_name, phoneParts, phone) => {
+        const pointOfContact = { title: 'Study Director', email: 'x@example.com', ...phoneParts };
+        mockService.getStudiesBatch.mockResolvedValue([
+          makeStudy('NCT12345678', true, { moreInfoModule: { pointOfContact } }),
+        ]);
+
+        const result = await runToolContract(getStudyResults, {
+          nctIds: 'NCT12345678',
+          sections: 'moreInfo',
+        });
+
+        expect(result.isError).toBeFalsy();
+        const sc = result.structuredContent as {
+          results: Array<{ moreInfo?: { pointOfContact?: unknown } }>;
+        };
+        expect(sc.results[0]!.moreInfo!.pointOfContact).toStrictEqual(pointOfContact);
+        const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+        expect(text.split('\n')).toContain(
+          `**Point of Contact:** Study Director | x@example.com | ${phone}`,
+        );
+      },
+    );
+
     it('renders fetch errors', () => {
       const blocks = getStudyResults.format!({
         results: [],
@@ -3067,6 +3561,98 @@ describe('getStudyResults', () => {
       expect(text).toContain('4 measures');
       expect(text).toContain('- Age (MEAN, years)');
     });
+
+    /** The lines `format()` renders for one study carrying the given result sections. */
+    const renderedLines = (sections: Record<string, unknown>) =>
+      (
+        getStudyResults.format!({
+          results: [{ nctId: 'NCT12345678', title: 'Count Study', hasResults: true, ...sections }],
+        })[0] as { text: string }
+      ).text.split('\n');
+    const outcome = (meta: Record<string, unknown>) => ({ outcomes: [{ title: 'OS', ...meta }] });
+
+    // Every count label either mode prints, at one and at more or none (#203).
+    it.each([
+      ['outcome measures', { outcomes: [{ title: 'OS' }] }, '### Outcomes (1 measure)'],
+      [
+        'outcome measures',
+        { outcomes: [{ title: 'OS' }, { title: 'PFS' }] },
+        '### Outcomes (2 measures)',
+      ],
+      ['summary outcome groups', outcome({ groupCount: 1 }), '- **OS** (1 group)'],
+      ['summary outcome groups', outcome({ groupCount: 2 }), '- **OS** (2 groups)'],
+      ['summary outcome classes', outcome({ classCount: 1 }), '- **OS** (1 class)'],
+      ['summary outcome classes', outcome({ classCount: 0 }), '- **OS** (0 classes)'],
+      ['summary outcome classes', outcome({ classCount: 3 }), '- **OS** (3 classes)'],
+      ['summary outcome analyses', outcome({ analysisCount: 1 }), '- **OS** (1 analysis)'],
+      ['summary outcome analyses', outcome({ analysisCount: 2 }), '- **OS** (2 analyses)'],
+      [
+        'full-mode outcome groups and classes',
+        outcome({ groups: [{ id: 'OG000' }], classes: [{}] }),
+        '- **OS** (1 group, 1 class)',
+      ],
+      [
+        'full-mode outcome groups and classes',
+        outcome({ groups: [{ id: 'OG000' }, { id: 'OG001' }], classes: [{}, {}] }),
+        '- **OS** (2 groups, 2 classes)',
+      ],
+      ['event groups', { adverseEvents: { groupCount: 1 } }, '1 group'],
+      ['event groups', { adverseEvents: { groupCount: 2 } }, '2 groups'],
+      ['serious events', { adverseEvents: { seriousEventCount: 1 } }, '1 serious event'],
+      ['serious events', { adverseEvents: { seriousEventCount: 0 } }, '0 serious events'],
+      ['serious events', { adverseEvents: { seriousEventCount: 3 } }, '3 serious events'],
+      ['other events', { adverseEvents: { otherEventCount: 1 } }, '1 other event'],
+      ['other events', { adverseEvents: { otherEventCount: 15 } }, '15 other events'],
+      ['flow groups', { participantFlow: { groupCount: 1 } }, '1 group'],
+      ['flow groups', { participantFlow: { groupCount: 3 } }, '3 groups'],
+      ['flow periods', { participantFlow: { periodCount: 1 } }, '1 period'],
+      ['flow periods', { participantFlow: { periodCount: 0 } }, '0 periods'],
+      ['flow periods', { participantFlow: { periodCount: 2 } }, '2 periods'],
+      ['baseline groups', { baseline: { groupCount: 1 } }, '1 group'],
+      ['baseline groups', { baseline: { groupCount: 2 } }, '2 groups'],
+      ['baseline measures', { baseline: { measureCount: 1 } }, '1 measure'],
+      ['baseline measures', { baseline: { measureCount: 4 } }, '4 measures'],
+    ] as Array<[string, Record<string, unknown>, string]>)(
+      'agrees the %s label in number: %j renders %j',
+      (_label, sections, line) => {
+        expect(renderedLines(sections)).toContain(line);
+      },
+    );
+
+    it('renders a summary participant flow’s roster and milestones beneath its counts (#203)', () => {
+      const lines = renderedLines({
+        participantFlow: {
+          groupCount: 2,
+          periodCount: 1,
+          groups: [{ id: 'FG000', title: 'Single-vial' }, { id: 'FG001' }],
+          periods: [
+            {
+              title: 'Overall Study',
+              milestones: [
+                {
+                  type: 'STARTED',
+                  achievements: [
+                    { groupId: 'FG000', numSubjects: '23' },
+                    { groupId: 'FG001', numSubjects: '25' },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      });
+      expect(lines.slice(lines.indexOf('### Participant Flow'))).toEqual([
+        '### Participant Flow',
+        '2 groups | 1 period',
+        'Groups:',
+        '- FG000: Single-vial',
+        '- FG001',
+        '',
+        '**Overall Study**',
+        '- **STARTED**: FG000: 23, FG001: 25',
+        '',
+      ]);
+    });
   });
 
   describe('channel parity — every populated leaf reaches content[] (#63)', () => {
@@ -3099,6 +3685,59 @@ describe('getStudyResults', () => {
         expect(missingLeaves(result, text)).toEqual([]);
       });
     }
+
+    it('renders each summary event-group total under its own group, zeros included (#203)', async () => {
+      const { result, text } = await render('adverseEvents', true);
+      expect(result.results[0]!.adverseEvents!.eventGroups).toEqual([
+        {
+          id: 'EG000',
+          title: 'Single-vial Presentation ID93 + GLA-SE',
+          deathsNumAffected: 0,
+          deathsNumAtRisk: 23,
+          seriousNumAffected: 0,
+          seriousNumAtRisk: 23,
+          otherNumAffected: 23,
+          otherNumAtRisk: 23,
+        },
+        {
+          id: 'EG001',
+          title: 'Two-vial Presentation ID93 + GLA-SE',
+          deathsNumAffected: 0,
+          deathsNumAtRisk: 25,
+          seriousNumAffected: 0,
+          seriousNumAtRisk: 25,
+          otherNumAffected: 24,
+          otherNumAtRisk: 25,
+        },
+      ]);
+      expect(text).toContain(
+        'Event Groups:\n- EG000: Single-vial Presentation ID93 + GLA-SE\n  deaths 0/23 | serious 0/23 | other 23/23\n- EG001: Two-vial Presentation ID93 + GLA-SE\n  deaths 0/25 | serious 0/25 | other 24/25\n',
+      );
+    });
+
+    it('renders every summary milestone count on its milestone line, under its period, keyed by group id (#203)', async () => {
+      const { result, text } = await render('participantFlow', true);
+      type Period = {
+        milestones: Array<{
+          achievements: Array<{ groupId: string; numSubjects: string }>;
+          type: string;
+        }>;
+        title: string;
+      };
+      const periods = result.results[0]!.participantFlow!.periods as Period[];
+      expect(periods.map((p) => [p.title, p.milestones.map((m) => m.type)])).toEqual([
+        ['Overall Study', ['STARTED', 'COMPLETED', 'NOT COMPLETED']],
+      ]);
+      expect(text).toContain('- **STARTED**: FG000: 23, FG001: 25\n');
+      // Each structured milestone reaches its own line inside its period's block.
+      for (const period of periods) {
+        const block = text.split(`\n**${period.title}**\n`)[1]!.split('\n\n')[0]!.split('\n');
+        for (const ms of period.milestones) {
+          const cells = ms.achievements.map((a) => `${a.groupId}: ${a.numSubjects}`).join(', ');
+          expect(block).toContain(`- **${ms.type}**: ${cells}`);
+        }
+      }
+    });
 
     it('renders every field of a fully-populated statistical analysis (#63)', () => {
       const analysis = {
@@ -3138,6 +3777,23 @@ describe('getStudyResults', () => {
       expect(missingLeaves(output, text)).toEqual([]);
       expect(text).toContain('95% 2-Sided CI [-11.97, -6.80]');
     });
+
+    it.each([false, true])(
+      'renders every resultPublications leaf of a study without posted results (summary: %s) (#204)',
+      async (summary) => {
+        mockService.getStudiesBatch.mockResolvedValue([
+          withReferences(makeStudy('NCT02928783', false), MIXED_REFERENCES),
+        ]);
+        const ctx = createMockContext({ errors: getStudyResults.errors });
+        const input = getStudyResults.input!.parse({ nctIds: 'NCT02928783', summary });
+        const result = await getStudyResults.handler(input, ctx);
+        const text = (getStudyResults.format!(result)[0] as { text: string }).text;
+
+        // The leaves exist to be checked: every pmid, citation, and retraction field.
+        expect(result.results[0]!.resultPublications).toHaveLength(3);
+        expect(missingLeaves(result, text)).toEqual([]);
+      },
+    );
 
     it('surfaces reportingStatus for summarized outcomes (#63)', async () => {
       const { result, text } = await render('outcomes', true);
@@ -3690,6 +4346,515 @@ describe('getStudyResults', () => {
         expect(missingLeaves(entry, text)).toEqual([]);
       });
     });
+
+    describe('per-arm adverse-event totals and flow milestones (#203)', () => {
+      /** Per-group participant counts from `[groupId, numSubjects]` pairs, as upstream sends them. */
+      const subjects = (...rows: Array<[string, string]>) =>
+        rows.map(([groupId, numSubjects]) => ({ groupId, numSubjects }));
+
+      /** NCT03548935's event groups, descriptions cut to their opening words. */
+      const nct03548935EventGroups = [
+        {
+          id: 'EG000',
+          title: 'Sema 2.4 mg',
+          description: 'Participants were to receive once-weekly subcutaneous (s.c) injection',
+          deathsNumAffected: 1,
+          deathsNumAtRisk: 1306,
+          seriousNumAffected: 128,
+          seriousNumAtRisk: 1306,
+          otherNumAffected: 1052,
+          otherNumAtRisk: 1306,
+        },
+        {
+          id: 'EG001',
+          title: 'Placebo',
+          description: 'Participants were to receive once-weekly subcutaneous (s.c) injection',
+          deathsNumAffected: 1,
+          deathsNumAtRisk: 655,
+          seriousNumAffected: 42,
+          seriousNumAtRisk: 655,
+          otherNumAffected: 447,
+          otherNumAtRisk: 655,
+        },
+      ];
+
+      /** NCT03548935's participant flow: one period, five milestones, three drop/withdraw reasons. */
+      const nct03548935Flow = {
+        recruitmentDetails:
+          'The trial was conducted at 129 sites in 16 countries as follows (all sites screened and randomized)',
+        preAssignmentDetails:
+          'The trial included an initial 16-week dose-escalation period and a 52-week dose maintenance period.',
+        groups: [
+          {
+            id: 'FG000',
+            title: 'Semaglutide 2.4 mg',
+            description: 'Participants were to receive once-weekly subcutaneous (s.c) injection',
+          },
+          {
+            id: 'FG001',
+            title: 'Placebo',
+            description: 'Participants were to receive once-weekly subcutaneous (s.c) injection',
+          },
+        ],
+        periods: [
+          {
+            title: 'Overall Study',
+            milestones: [
+              { type: 'STARTED', achievements: subjects(['FG000', '1306'], ['FG001', '655']) },
+              {
+                type: 'Full Analysis Set (FAS)',
+                achievements: subjects(['FG000', '1306'], ['FG001', '655']),
+              },
+              {
+                type: 'Safety Analysis Set (SAS)',
+                achievements: subjects(['FG000', '1306'], ['FG001', '655']),
+              },
+              { type: 'COMPLETED', achievements: subjects(['FG000', '1240'], ['FG001', '609']) },
+              { type: 'NOT COMPLETED', achievements: subjects(['FG000', '66'], ['FG001', '46']) },
+            ],
+            dropWithdraws: [
+              {
+                type: 'Withdrawal by Subject',
+                reasons: subjects(['FG000', '26'], ['FG001', '17']),
+              },
+              { type: 'Lost to Follow-up', reasons: subjects(['FG000', '39'], ['FG001', '28']) },
+              { type: 'Death', reasons: subjects(['FG000', '1'], ['FG001', '1']) },
+            ],
+          },
+        ],
+      };
+
+      /** NCT00307489's event groups: serious and other affected counts only — no deaths, no at-risk. */
+      const nct00307489EventGroups = [
+        {
+          id: 'EG000',
+          title: 'Tenofovir DF',
+          description: 'tenofovir DF 300 mg QD',
+          seriousNumAffected: 6,
+          otherNumAffected: 49,
+        },
+        {
+          id: 'EG001',
+          title: 'Emtricitibine/Tenofovir DF',
+          description: 'emtricitabine 200 mg / tenofovir DF 300 mg QD (combination tablet)',
+          seriousNumAffected: 10,
+          otherNumAffected: 42,
+        },
+      ];
+
+      /** NCT00307489's two-period flow; its first COMPLETED counts carry per-group comments. */
+      const nct00307489Flow = {
+        groups: [
+          { id: 'FG000', title: 'Tenofovir DF' },
+          { id: 'FG001', title: 'Emtricitibine/Tenofovir DF' },
+        ],
+        periods: [
+          {
+            title: 'Baseline Through Week 48',
+            milestones: [
+              { type: 'STARTED', achievements: subjects(['FG000', '53'], ['FG001', '52']) },
+              {
+                type: 'COMPLETED',
+                achievements: [
+                  {
+                    groupId: 'FG000',
+                    comment:
+                      '16 of the 52 subjects switched to open-label FTC/TDF prior to Week 48.',
+                    numSubjects: '52',
+                  },
+                  {
+                    groupId: 'FG001',
+                    comment:
+                      '9 of the 50 subjects switched to open-label FTC/TDF prior to Week 48.',
+                    numSubjects: '50',
+                  },
+                ],
+              },
+              { type: 'NOT COMPLETED', achievements: subjects(['FG000', '1'], ['FG001', '2']) },
+            ],
+          },
+          {
+            title: 'Week 48 Through Week 168',
+            milestones: [
+              { type: 'STARTED', achievements: subjects(['FG000', '52'], ['FG001', '50']) },
+              { type: 'COMPLETED', achievements: subjects(['FG000', '46'], ['FG001', '44']) },
+              { type: 'NOT COMPLETED', achievements: subjects(['FG000', '6'], ['FG001', '6']) },
+            ],
+          },
+        ],
+      };
+
+      /** One call through the assembled pipeline: parse → handler → output parse → format. */
+      const call = async (
+        resultsSection: Record<string, Record<string, unknown>>,
+        sections: Array<(typeof SECTIONS)[number]>,
+        summary = true,
+      ) => {
+        mockService.getStudiesBatch.mockResolvedValue([
+          makeStudy('NCT03548935', true, resultsSection),
+        ]);
+        const result = await runToolContract(getStudyResults, {
+          nctIds: 'NCT03548935',
+          sections,
+          summary,
+        });
+        expect(result.isError).toBeFalsy();
+        const structured = result.structuredContent as {
+          results: Array<{
+            adverseEvents?: Record<string, unknown>;
+            participantFlow?: Record<string, unknown>;
+          }>;
+        };
+        const text = (result.content as Array<{ type: string; text?: string }>)
+          .filter((b) => b.type === 'text')
+          .map((b) => b.text ?? '')
+          .join('\n');
+        return { entry: structured.results[0]!, text };
+      };
+
+      it("carries each event group's death, serious, and other totals, printed under its roster line", async () => {
+        const { entry, text } = await call(
+          { adverseEventsModule: { eventGroups: nct03548935EventGroups } },
+          ['adverseEvents'],
+        );
+        expect(entry.adverseEvents!.eventGroups).toEqual([
+          {
+            id: 'EG000',
+            title: 'Sema 2.4 mg',
+            deathsNumAffected: 1,
+            deathsNumAtRisk: 1306,
+            seriousNumAffected: 128,
+            seriousNumAtRisk: 1306,
+            otherNumAffected: 1052,
+            otherNumAtRisk: 1306,
+          },
+          {
+            id: 'EG001',
+            title: 'Placebo',
+            deathsNumAffected: 1,
+            deathsNumAtRisk: 655,
+            seriousNumAffected: 42,
+            seriousNumAtRisk: 655,
+            otherNumAffected: 447,
+            otherNumAtRisk: 655,
+          },
+        ]);
+        expect(text).toContain(
+          'Event Groups:\n- EG000: Sema 2.4 mg\n  deaths 1/1306 | serious 128/1306 | other 1052/1306\n- EG001: Placebo\n  deaths 1/655 | serious 42/655 | other 447/655\n',
+        );
+        // Arm descriptions stay full-mode only, on both channels.
+        expect(JSON.stringify(entry)).not.toContain('subcutaneous');
+        expect(text).not.toContain('subcutaneous');
+      });
+
+      it('keeps a count the study does not publish absent, never 0, and prints ? for a missing at-risk count', async () => {
+        const { entry, text } = await call(
+          { adverseEventsModule: { eventGroups: nct00307489EventGroups } },
+          ['adverseEvents'],
+        );
+        expect(entry.adverseEvents!.eventGroups).toEqual([
+          { id: 'EG000', title: 'Tenofovir DF', seriousNumAffected: 6, otherNumAffected: 49 },
+          {
+            id: 'EG001',
+            title: 'Emtricitibine/Tenofovir DF',
+            seriousNumAffected: 10,
+            otherNumAffected: 42,
+          },
+        ]);
+        expect(text).toContain(
+          '- EG000: Tenofovir DF\n  serious 6/? | other 49/?\n- EG001: Emtricitibine/Tenofovir DF\n  serious 10/? | other 42/?\n',
+        );
+        expect(text).not.toContain('deaths');
+      });
+
+      it('omits a pair whose affected count is absent, even beside a published at-risk count', async () => {
+        const { entry, text } = await call(
+          {
+            adverseEventsModule: {
+              eventGroups: [
+                { id: 'EG000', title: 'Arm A', deathsNumAtRisk: 40, seriousNumAffected: 0 },
+                { id: 'EG001', title: 'Arm B' },
+              ],
+            },
+          },
+          ['adverseEvents'],
+        );
+        expect(entry.adverseEvents!.eventGroups).toEqual([
+          { id: 'EG000', title: 'Arm A', deathsNumAtRisk: 40, seriousNumAffected: 0 },
+          { id: 'EG001', title: 'Arm B' },
+        ]);
+        // A zero is a published count; a group with no totals gets no totals line.
+        expect(text).toContain('- EG000: Arm A\n  serious 0/?\n- EG001: Arm B\n');
+        expect(text).not.toContain('deaths');
+      });
+
+      it('carries the flow roster and every milestone of the period, in upstream order', async () => {
+        const { entry, text } = await call({ participantFlowModule: nct03548935Flow }, [
+          'participantFlow',
+        ]);
+        expect(entry.participantFlow).toEqual({
+          groupCount: 2,
+          periodCount: 1,
+          groups: [
+            { id: 'FG000', title: 'Semaglutide 2.4 mg' },
+            { id: 'FG001', title: 'Placebo' },
+          ],
+          periods: [
+            {
+              title: 'Overall Study',
+              milestones: [
+                {
+                  type: 'STARTED',
+                  achievements: [
+                    { groupId: 'FG000', numSubjects: '1306' },
+                    { groupId: 'FG001', numSubjects: '655' },
+                  ],
+                },
+                {
+                  type: 'Full Analysis Set (FAS)',
+                  achievements: [
+                    { groupId: 'FG000', numSubjects: '1306' },
+                    { groupId: 'FG001', numSubjects: '655' },
+                  ],
+                },
+                {
+                  type: 'Safety Analysis Set (SAS)',
+                  achievements: [
+                    { groupId: 'FG000', numSubjects: '1306' },
+                    { groupId: 'FG001', numSubjects: '655' },
+                  ],
+                },
+                {
+                  type: 'COMPLETED',
+                  achievements: [
+                    { groupId: 'FG000', numSubjects: '1240' },
+                    { groupId: 'FG001', numSubjects: '609' },
+                  ],
+                },
+                {
+                  type: 'NOT COMPLETED',
+                  achievements: [
+                    { groupId: 'FG000', numSubjects: '66' },
+                    { groupId: 'FG001', numSubjects: '46' },
+                  ],
+                },
+              ],
+            },
+          ],
+        });
+        expect(text).toContain(
+          [
+            '### Participant Flow',
+            '2 groups | 1 period',
+            'Groups:',
+            '- FG000: Semaglutide 2.4 mg',
+            '- FG001: Placebo',
+            '',
+            '**Overall Study**',
+            '- **STARTED**: FG000: 1306, FG001: 655',
+            '- **Full Analysis Set (FAS)**: FG000: 1306, FG001: 655',
+            '- **Safety Analysis Set (SAS)**: FG000: 1306, FG001: 655',
+            '- **COMPLETED**: FG000: 1240, FG001: 609',
+            '- **NOT COMPLETED**: FG000: 66, FG001: 46',
+            '',
+          ].join('\n'),
+        );
+        // Recruitment and pre-assignment prose, group descriptions, and drop/withdraw
+        // reasons stay full-mode only.
+        expect(text).not.toMatch(/Recruitment:|Pre-assignment:|Drop\/Withdraw|subcutaneous/);
+      });
+
+      it('renders each period of a multi-period flow under its own title, leaving the achievement comments to full mode', async () => {
+        const { entry, text } = await call({ participantFlowModule: nct00307489Flow }, [
+          'participantFlow',
+        ]);
+        const periods = entry.participantFlow!.periods as Array<{
+          milestones: Array<{ achievements: Array<Record<string, unknown>> }>;
+          title: string;
+        }>;
+        expect(periods.map((p) => p.title)).toEqual([
+          'Baseline Through Week 48',
+          'Week 48 Through Week 168',
+        ]);
+        expect(periods[0]!.milestones[1]!.achievements).toEqual([
+          { groupId: 'FG000', numSubjects: '52' },
+          { groupId: 'FG001', numSubjects: '50' },
+        ]);
+        expect(text).toContain(
+          [
+            '2 groups | 2 periods',
+            'Groups:',
+            '- FG000: Tenofovir DF',
+            '- FG001: Emtricitibine/Tenofovir DF',
+            '',
+            '**Baseline Through Week 48**',
+            '- **STARTED**: FG000: 53, FG001: 52',
+            '- **COMPLETED**: FG000: 52, FG001: 50',
+            '- **NOT COMPLETED**: FG000: 1, FG001: 2',
+            '',
+            '**Week 48 Through Week 168**',
+            '- **STARTED**: FG000: 52, FG001: 50',
+            '- **COMPLETED**: FG000: 46, FG001: 44',
+            '- **NOT COMPLETED**: FG000: 6, FG001: 6',
+            '',
+          ].join('\n'),
+        );
+        expect(JSON.stringify(entry)).not.toContain('switched to open-label');
+        expect(text).not.toContain('switched to open-label');
+      });
+
+      it("keeps a sparse flow's absent title, type, and count absent, rendered as full mode renders them", async () => {
+        const sparseFlow = {
+          groups: [{ id: 'FG000' }, { id: 'FG001', title: 'Arm B' }],
+          periods: [
+            {
+              milestones: [
+                { achievements: [{ groupId: 'FG000' }, { groupId: 'FG001', numSubjects: '0' }] },
+                { type: 'STARTED' },
+              ],
+            },
+            { title: 'Follow-up' },
+          ],
+        };
+        const { entry, text } = await call({ participantFlowModule: sparseFlow }, [
+          'participantFlow',
+        ]);
+        expect(entry.participantFlow).toEqual({ groupCount: 2, periodCount: 2, ...sparseFlow });
+        expect(text).toContain(
+          [
+            '2 groups | 2 periods',
+            'Groups:',
+            '- FG000',
+            '- FG001: Arm B',
+            '- **Milestone**: FG000: ?, FG001: 0',
+            '- **STARTED**: ',
+            '',
+            '**Follow-up**',
+            '',
+          ].join('\n'),
+        );
+        const full = await call({ participantFlowModule: sparseFlow }, ['participantFlow'], false);
+        expect(full.text.split('Groups:\n')[1]).toBe(text.split('Groups:\n')[1]);
+      });
+
+      it('keeps a line break in a flow group title, period title, or milestone type inside its line', async () => {
+        const forged = (field: string) => `${field} start\n## Forged ${field}`;
+        const flow = {
+          groups: [{ id: 'FG000', title: forged('flowGroup') }],
+          periods: [
+            {
+              title: forged('periodTitle'),
+              milestones: [
+                {
+                  type: forged('milestoneType'),
+                  achievements: subjects(['FG000', '3']),
+                },
+              ],
+            },
+          ],
+        };
+        const { entry, text } = await call({ participantFlowModule: flow }, ['participantFlow']);
+        // structuredContent keeps every upstream value verbatim.
+        expect(entry.participantFlow).toEqual({ groupCount: 1, periodCount: 1, ...flow });
+        const lines = text.split(/\r\n|\r|\n/);
+        expect(lines.filter((l) => /^\s*## Forged/.test(l))).toEqual([]);
+        expect(lines).toContain('- FG000: flowGroup start ## Forged flowGroup');
+        expect(lines).toContain('**periodTitle start ## Forged periodTitle**');
+        expect(lines).toContain('- **milestoneType start ## Forged milestoneType**: FG000: 3');
+        // The same line-break and Markdown handling as the full-mode renderer.
+        const full = await call({ participantFlowModule: flow }, ['participantFlow'], false);
+        expect(full.text.split('Groups:\n')[1]).toBe(text.split('Groups:\n')[1]);
+      });
+
+      it('leaves full-mode adverse events and participant flow unchanged on both channels', async () => {
+        const adverseEventsModule = {
+          timeFrame: 'week 0 to week 75',
+          frequencyThreshold: '5',
+          eventGroups: nct03548935EventGroups,
+        };
+        const { entry, text } = await call(
+          { adverseEventsModule, participantFlowModule: nct03548935Flow },
+          ['adverseEvents', 'participantFlow'],
+          false,
+        );
+        expect(entry.adverseEvents).toEqual(adverseEventsModule);
+        expect(entry.participantFlow).toEqual(nct03548935Flow);
+        expect(text).toBe(
+          [
+            '## NCT03548935: Study NCT03548935',
+            '',
+            '### Adverse Events',
+            'Assessment period: week 0 to week 75',
+            'Frequency threshold: 5%',
+            'Event Groups:',
+            '- EG000: Sema 2.4 mg',
+            '  Participants were to receive once-weekly subcutaneous (s.c) injection',
+            '  deaths 1/1306 | serious 128/1306 | other 1052/1306',
+            '- EG001: Placebo',
+            '  Participants were to receive once-weekly subcutaneous (s.c) injection',
+            '  deaths 1/655 | serious 42/655 | other 447/655',
+            '',
+            '### Participant Flow',
+            'Recruitment: The trial was conducted at 129 sites in 16 countries as follows (all sites screened and randomized)',
+            'Pre-assignment: The trial included an initial 16-week dose-escalation period and a 52-week dose maintenance period.',
+            'Groups:',
+            '- FG000: Semaglutide 2.4 mg',
+            '  Participants were to receive once-weekly subcutaneous (s.c) injection',
+            '- FG001: Placebo',
+            '  Participants were to receive once-weekly subcutaneous (s.c) injection',
+            '',
+            '**Overall Study**',
+            '- **STARTED**: FG000: 1306, FG001: 655',
+            '- **Full Analysis Set (FAS)**: FG000: 1306, FG001: 655',
+            '- **Safety Analysis Set (SAS)**: FG000: 1306, FG001: 655',
+            '- **COMPLETED**: FG000: 1240, FG001: 609',
+            '- **NOT COMPLETED**: FG000: 66, FG001: 46',
+            '- Drop/Withdraw — Withdrawal by Subject: FG000: 26, FG001: 17',
+            '- Drop/Withdraw — Lost to Follow-up: FG000: 39, FG001: 28',
+            '- Drop/Withdraw — Death: FG000: 1, FG001: 1',
+            '',
+          ].join('\n'),
+        );
+      });
+
+      it('names the new summary keys in the adverseEvents and participantFlow descriptions, and the flow growth in summary', () => {
+        const results = getStudyResults.output!.shape.results as unknown as {
+          element: { shape: Record<string, { description?: string }> };
+        };
+        const [aeSummary] = (results.element.shape.adverseEvents?.description ?? '').split(
+          'Full mode:',
+        );
+        for (const key of [
+          'deathsNumAffected',
+          'deathsNumAtRisk',
+          'seriousNumAffected',
+          'seriousNumAtRisk',
+          'otherNumAffected',
+          'otherNumAtRisk',
+        ]) {
+          expect(aeSummary).toContain(key);
+        }
+        const [flowSummary, flowFull] = (
+          results.element.shape.participantFlow?.description ?? ''
+        ).split('Full mode:');
+        expect(flowFull).toBeDefined();
+        for (const key of [
+          'groupCount',
+          'periodCount',
+          'groups',
+          'periods',
+          'milestones',
+          'achievements',
+          'numSubjects',
+        ]) {
+          expect(flowSummary).toContain(key);
+        }
+        const summary = (
+          getStudyResults.input as unknown as { shape: Record<string, { description?: string }> }
+        ).shape.summary?.description;
+        expect(summary).toContain('groups × periods');
+      });
+    });
   });
 
   describe('every rendered cell names its group (#128)', () => {
@@ -3920,8 +5085,8 @@ describe('getStudyResults', () => {
         seriousEventCount: 1,
         otherEventCount: 1,
         eventGroups: [
-          { id: 'EG000', title: 'AMG334 140 mg DB' },
-          { id: 'EG001', title: 'Placebo DB' },
+          { id: 'EG000', title: 'AMG334 140 mg DB', seriousNumAffected: 3, seriousNumAtRisk: 119 },
+          { id: 'EG001', title: 'Placebo DB', seriousNumAffected: 4, seriousNumAtRisk: 124 },
         ],
         topEvents: [
           {
@@ -3946,7 +5111,14 @@ describe('getStudyResults', () => {
       });
       // The line sits right after the assessment period, as in full mode.
       expect(text).toContain(
-        `\n### Adverse Events\nAssessment period: ${NCT03096834_TIME_FRAME}\nFrequency threshold: 5%\n2 groups | 1 serious events | 1 other events\n`,
+        `\n### Adverse Events\nAssessment period: ${NCT03096834_TIME_FRAME}\nFrequency threshold: 5%\n2 groups | 1 serious event | 1 other event\n`,
+      );
+    });
+
+    it('prints the serious totals alone when a study publishes no death or other totals (#203)', async () => {
+      const { text } = await call('NCT03096834', nct03096834Module('5'), true);
+      expect(text).toContain(
+        'Frequency threshold: 5%\n2 groups | 1 serious event | 1 other event\nEvent Groups:\n- EG000: AMG334 140 mg DB\n  serious 3/119\n- EG001: Placebo DB\n  serious 4/124\n',
       );
     });
 
@@ -4123,7 +5295,9 @@ describe('getStudyResults', () => {
         }),
       );
       mockService.getStudy.mockImplementation(async (nctId: string) => {
-        if (nctId === 'NCT00000000') throw new Error('Study NCT00000000 not found');
+        if (nctId === 'NCT00000000') {
+          throw notFound('Study NCT00000000 not found', { reason: 'study_not_found' });
+        }
         // The single-study endpoint follows the 301 and answers canonically.
         return aliasStudy();
       });
@@ -4196,7 +5370,9 @@ describe('getStudyResults', () => {
           }),
         );
         mockService.getStudy.mockImplementation(async (nctId: string) => {
-          if (nctId === 'NCT00000000') throw new Error('Study NCT00000000 not found');
+          if (nctId === 'NCT00000000') {
+            throw notFound('Study NCT00000000 not found', { reason: 'study_not_found' });
+          }
           return otherStudy();
         });
         const ctx = createMockContext({ errors: getStudyResults.errors });
@@ -4294,5 +5470,44 @@ describe('oneLine (#168)', () => {
         return input;
       });
     });
+  });
+});
+
+describe('formatReferenceLines (#204)', () => {
+  it('renders a reference as clinicaltrials_get_study_record always has', () => {
+    expect(
+      formatReferenceLines({ citation: 'A paper.', pmid: '30000001', type: 'RESULT' }),
+    ).toEqual(['- A paper. (PMID: 30000001) [RESULT]']);
+    expect(formatReferenceLines({ pmid: '30000001' })).toEqual([
+      '- Citation unavailable (PMID: 30000001)',
+    ]);
+    expect(
+      formatReferenceLines({
+        citation: 'A retracted paper.',
+        retractions: [
+          { source: 'A journal', pmid: '30000002' },
+          { source: 'Another' },
+          { pmid: '3' },
+        ],
+      }),
+    ).toEqual([
+      '- A retracted paper.',
+      '  Retracted — A journal, PMID: 30000002',
+      '  Retracted — Another',
+      '  Retracted — PMID: 3',
+    ]);
+  });
+
+  describe('stays linear on long upstream text', { timeout: 0 }, () => {
+    it.each([...LINE_BREAK_SHAPES, ['a long digit run', (n: number) => '1'.repeat(n)]] as const)(
+      '%s',
+      (_name, shape) => {
+        expectLinearGrowth(
+          (input) =>
+            formatReferenceLines({ citation: input, pmid: '1', retractions: [{ source: input }] }),
+          shape,
+        );
+      },
+    );
   });
 });

@@ -12,11 +12,10 @@ import type {
   DateStruct,
   ProtocolOutcome,
   RawStudyShape,
-  StudyContact,
   StudyIdInfo,
 } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
-import { oneLine } from '../utils/format-helpers.js';
+import { contactLine, countLabel, formatReferenceLines, oneLine } from '../utils/format-helpers.js';
 import type { LocationWithDistance } from '../utils/geo-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 import { applyFilters, summarizeResults } from '../utils/study-filters.js';
@@ -55,12 +54,6 @@ function idWithProvenance(info: StudyIdInfo): string {
   const core = [info.type, info.id].filter(Boolean).join(': ');
   const extras = [info.domain, info.link].filter(Boolean);
   return extras.length ? `${core} (${extras.join(' — ')})` : core;
-}
-
-/** Render a contact (central, per-site, or overall official) as a single line. */
-function contactLine(contact: StudyContact): string {
-  const phone = contact.phoneExt ? `${contact.phone} ext. ${contact.phoneExt}` : contact.phone;
-  return [contact.name, contact.role, phone, contact.email].filter(Boolean).join(' | ');
 }
 
 /**
@@ -607,15 +600,17 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
     const rsum = result.resultsSummary;
     if (rsum) {
       const parts = [
-        rsum.outcomeMeasures != null ? `${rsum.outcomeMeasures} outcome measures` : '',
+        rsum.outcomeMeasures != null ? countLabel(rsum.outcomeMeasures, 'outcome measure') : '',
         rsum.seriousAdverseEvents != null
-          ? `${rsum.seriousAdverseEvents} serious adverse events`
+          ? countLabel(rsum.seriousAdverseEvents, 'serious adverse event')
           : '',
-        rsum.otherAdverseEvents != null ? `${rsum.otherAdverseEvents} other adverse events` : '',
+        rsum.otherAdverseEvents != null
+          ? countLabel(rsum.otherAdverseEvents, 'other adverse event')
+          : '',
         rsum.participantFlowPeriods != null
-          ? `${rsum.participantFlowPeriods} participant flow periods`
+          ? countLabel(rsum.participantFlowPeriods, 'participant flow period')
           : '',
-        rsum.baselineMeasures != null ? `${rsum.baselineMeasures} baseline measures` : '',
+        rsum.baselineMeasures != null ? countLabel(rsum.baselineMeasures, 'baseline measure') : '',
       ].filter(Boolean);
       if (parts.length) {
         lines.push('');
@@ -774,18 +769,7 @@ export const getStudy = tool('clinicaltrials_get_study_record', {
         lines.push(
           `Left out by referenceLimit=${meta.referenceLimit}. Omit referenceLimit to see all ${meta.totalReferences}.`,
         );
-      for (const r of references.references ?? []) {
-        const pmid = r.pmid ? ` (PMID: ${r.pmid})` : '';
-        const type = r.type ? ` [${r.type}]` : '';
-        lines.push(oneLine(`- ${r.citation ?? 'Citation unavailable'}${pmid}${type}`));
-        for (const retraction of r.retractions ?? []) {
-          const parts = [
-            retraction.source,
-            retraction.pmid ? `PMID: ${retraction.pmid}` : '',
-          ].filter(Boolean);
-          lines.push(oneLine(`  Retracted — ${parts.join(', ')}`));
-        }
-      }
+      for (const r of references.references ?? []) lines.push(...formatReferenceLines(r));
       for (const link of references.seeAlsoLinks ?? []) {
         lines.push(
           oneLine(`- See also: ${link.label ?? link.url}${link.url ? ` — ${link.url}` : ''}`),

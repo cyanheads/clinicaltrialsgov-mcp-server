@@ -11,6 +11,7 @@ import {
   type AreaRejection,
   ClinicalTrialsService,
   getClinicalTrialsService,
+  isDistanceOperandRejection,
   parseAreaRejection,
   parseUnsupportedFieldType,
 } from '@/services/clinical-trials/clinical-trials-service.js';
@@ -517,10 +518,10 @@ describe('ClinicalTrialsService', () => {
       expect(fields).toContain('NCTIdAlias');
     });
 
-    it('sends a full 20-ID results batch in a 393-byte request target, nowhere near the limit (#163)', async () => {
+    it('sends a full 20-ID results batch in a 481-byte request target, nowhere near the limit (#163, #204)', async () => {
       // `/v2/studies` (11) + `?format=json` (12) + `&filter.ids=` (12) + 20 IDs
-      // at 11 bytes with 19 `%7C` separators (277) + `&fields=` and five
-      // pieces joined by `%7C` (69) + `&pageSize=20` (12) = 393 of 8,177.
+      // at 11 bytes with 19 `%7C` separators (277) + `&fields=` and ten
+      // pieces joined by `%7C` (157) + `&pageSize=20` (12) = 481 of 8,177.
       mockFetch.mockResolvedValue(jsonResponse({ studies: [] }));
       const ctx = createMockContext();
       const batch = ids(20);
@@ -528,12 +529,12 @@ describe('ClinicalTrialsService', () => {
       await service.getStudiesBatch(batch, ctx);
 
       const calledUrl = new URL(mockFetch.mock.calls[0]![0] as string);
-      expect(calledUrl.pathname.length + calledUrl.search.length).toBe(393);
+      expect(calledUrl.pathname.length + calledUrl.search.length).toBe(481);
       expect(calledUrl.searchParams.get('filter.ids')?.split('|')).toEqual(batch);
     });
 
     it('sends its fixed projection unchecked, reading no /studies/metadata (#192)', async () => {
-      // The five names never change, so checking them against the field index
+      // The ten names never change, so checking them against the field index
       // costs a fresh server a metadata read before every first batch, and a
       // hung one the whole call.
       const validating = new ClinicalTrialsService(testConfig, {
@@ -548,7 +549,7 @@ describe('ClinicalTrialsService', () => {
         '/v2/studies',
       ]);
       expect(new URL(String(mockFetch.mock.calls[0]![0])).searchParams.get('fields')).toBe(
-        'NCTId|NCTIdAlias|BriefTitle|HasResults|ResultsSection',
+        'NCTId|NCTIdAlias|BriefTitle|HasResults|ResultsSection|ReferencePMID|ReferenceType|ReferenceCitation|RetractionPMID|RetractionSource',
       );
     });
   });
@@ -4760,6 +4761,20 @@ describe('ClinicalTrialsService', () => {
           expect(mockFetch).toHaveBeenCalledTimes(1);
         });
 
+        /** The guidance for a RANGE[] or DISTANCE[] spanning several fields, which upstream cannot tell apart. */
+        const SEVERAL_FIELDS_TAIL =
+          'A bare RANGE[] or DISTANCE[], or one after a search area, spans several fields; RANGE[] needs AREA[Field] naming one of the date, numeric, and age fields (StartDate, EnrollmentCount, MinimumAge), and DISTANCE[] needs AREA[LocationGeoPoint], as in AREA[LocationGeoPoint]DISTANCE[lat,lon,radius].';
+        const SEVERAL_FIELDS_HINT =
+          'Name one field before the range with AREA[Field], as in AREA[StartDate]RANGE[2020-01-01, MAX]; RANGE[] takes date, numeric, and age fields (StartDate, EnrollmentCount, MinimumAge). Name LocationGeoPoint for a radius, as in AREA[LocationGeoPoint]DISTANCE[lat,lon,radius] in the advancedFilter of clinicaltrials_search_studies or clinicaltrials_get_study_count, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible.';
+        const SEVERAL_FIELDS_LITERALS = [
+          'RANGE[]',
+          'AREA[Field]',
+          'AREA[StartDate]RANGE[2020-01-01, MAX]',
+          'DISTANCE[]',
+          'AREA[LocationGeoPoint]',
+          'AREA[LocationGeoPoint]DISTANCE[lat,lon,radius]',
+        ];
+
         it.each([
           ['advanced filter', { filterAdvanced: 'AREA[ConditionSearch]RANGE[1, 2]' }],
           ['Conditions or disease', { queryCond: 'RANGE[1, 2]' }],
@@ -4772,19 +4787,39 @@ describe('ClinicalTrialsService', () => {
             );
 
             expect(err.message).toBe(
-              `Error parsing query in ${where}: RANGE is not supported for multiple (7) fields. A bare RANGE[], or one after a search area, spans several fields; RANGE[] needs AREA[Field] naming one of the date, numeric, and age fields (StartDate, EnrollmentCount, MinimumAge).`,
+              `Error parsing query in ${where}: RANGE is not supported for multiple (7) fields. ${SEVERAL_FIELDS_TAIL}`,
             );
             expect(err.data).toEqual({
               reason: 'field_invalid',
-              recovery: {
-                hint: 'Name one field before the range with AREA[Field], as in AREA[StartDate]RANGE[2020-01-01, MAX]; RANGE[] takes date, numeric, and age fields (StartDate, EnrollmentCount, MinimumAge).',
-              },
+              recovery: { hint: SEVERAL_FIELDS_HINT },
             });
-            expect(err.literals).toEqual([
-              'RANGE[]',
-              'AREA[Field]',
-              'AREA[StartDate]RANGE[2020-01-01, MAX]',
-            ]);
+            expect(err.literals).toEqual(SEVERAL_FIELDS_LITERALS);
+            expect(reads()).toEqual([]);
+          },
+        );
+
+        // Live bodies (2026-11-21): upstream answers a DISTANCE[] with no field before it
+        // exactly as it answers such a RANGE[], naming RANGE, so the reading covers both.
+        it.each([
+          ['bare', 'DISTANCE[47.6062,-122.3321,25mi]', 26],
+          ['after a search area', 'AREA[ConditionSearch]DISTANCE[47.6062,-122.3321,25mi]', 7],
+        ] as const)(
+          'reads a DISTANCE[] %s as spanning several fields, with the radius form beside the range one',
+          async (_label, filterAdvanced, count) => {
+            refusing(parseError(`RANGE is not supported for multiple (${count}) fields`));
+            const err = await advanceUntilSettled(
+              rejection(() => validating.searchStudies({ filterAdvanced }, createMockContext())),
+            );
+
+            expect(err.message).toBe(
+              `Error parsing query in advanced filter: RANGE is not supported for multiple (${count}) fields. ${SEVERAL_FIELDS_TAIL}`,
+            );
+            expect(err.message).not.toContain('Free-text');
+            expect(err.data).toEqual({
+              reason: 'field_invalid',
+              recovery: { hint: SEVERAL_FIELDS_HINT },
+            });
+            expect(err.literals).toEqual(SEVERAL_FIELDS_LITERALS);
             expect(reads()).toEqual([]);
           },
         );
@@ -4808,6 +4843,209 @@ describe('ClinicalTrialsService', () => {
             'Query syntax error: Cannot parse number for `protocolSection.designModule.enrollmentInfo.count` field. Free-text fields take plain words plus AND, OR, NOT.',
           );
           expect(err.data).toEqual({ reason: 'query_parse_error' });
+        });
+      });
+
+      // Upstream evaluates no DISTANCE[] or RANGE[] term inside SEARCH[Location](…),
+      // on any site field, and answers with a Java exception that names neither the
+      // operator nor the field, the same sentence in every parameter (#206).
+      describe('a DISTANCE[] or RANGE[] term inside SEARCH[Location](…) (#206)', () => {
+        const NULL_PIECE =
+          'Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null';
+        const BESIDE = 'AREA[LocationGeoPoint]DISTANCE[lat,lon,radius] AND SEARCH[Location](…)';
+        const MESSAGE_TAIL = `SEARCH[Location](…) evaluates no DISTANCE[] or RANGE[] term on any site field, so the term goes beside the wrapper, joined with AND: a radius as ${BESIDE}, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible.`;
+        const HINT = `Move the DISTANCE[] or RANGE[] term out of SEARCH[Location](…) and join it beside the wrapper with AND: a radius as ${BESIDE} in the advancedFilter of clinicaltrials_search_studies or clinicaltrials_get_study_count, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible. Beside the wrapper the radius and the wrapper's terms can match different sites of one study, so check each in-range site's own status with clinicaltrials_get_study_record and nearLocation.`;
+
+        it('names the wrapper, both operators, and the radius beside it, blaming no field and reading no index', async () => {
+          refusing(parseError(NULL_PIECE));
+          const err = await advanceUntilSettled(
+            rejection(() =>
+              validating.countStudies(
+                {
+                  queryCond: 'breast cancer',
+                  filterAdvanced:
+                    'SEARCH[Location](AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi] AND AREA[LocationStatus]RECRUITING)',
+                },
+                createMockContext(),
+              ),
+            ),
+          );
+
+          expect(err.message).toBe(
+            `Error parsing query in advanced filter: ${NULL_PIECE}. ${MESSAGE_TAIL}`,
+          );
+          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: HINT } });
+          expect(err.literals).toEqual(['SEARCH[Location](…)', 'DISTANCE[]', 'RANGE[]', BESIDE]);
+          expect(reads()).toEqual([]);
+        });
+
+        it.each([
+          [
+            'DISTANCE[] in locationQuery',
+            'Location terms',
+            {
+              queryLocn: 'SEARCH[Location](AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi])',
+            },
+          ],
+          [
+            'DISTANCE[] in a conditions query',
+            'Conditions or disease',
+            {
+              queryCond: 'SEARCH[Location](AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi])',
+            },
+          ],
+          // RANGE[] on a site field, whenever upstream answers it with the same sentence.
+          [
+            'RANGE[] on LocationZip',
+            'advanced filter',
+            { filterAdvanced: 'SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199])' },
+          ],
+          [
+            'DISTANCE[] on LocationCity after a value',
+            'advanced filter',
+            {
+              filterAdvanced:
+                'SEARCH[Location](AREA[LocationCity]Seattle AND AREA[LocationCity]DISTANCE[47.6062,-122.3321,25mi])',
+            },
+          ],
+        ] as const)('reads the same refusal for %s', async (_label, where, params) => {
+          refusing(parseError(NULL_PIECE, where));
+          const err = await advanceUntilSettled(
+            rejection(() => validating.searchStudies(params, createMockContext())),
+          );
+
+          expect(err.message).toBe(
+            `Error parsing query in ${where}: ${NULL_PIECE}. ${MESSAGE_TAIL}`,
+          );
+          expect(err.message).not.toContain('Free-text');
+          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: HINT } });
+        });
+
+        it('blames no field, and reads no metadata, with local validation disabled', async () => {
+          mockFetch.mockResolvedValue(parseError(NULL_PIECE));
+          const err = await rejection(() =>
+            service.countStudies(
+              { filterAdvanced: 'SEARCH[Location](AREA[LocationGeoPoint]RANGE[1, 2])' },
+              createMockContext(),
+            ),
+          );
+
+          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: HINT } });
+          expect(mockFetch).toHaveBeenCalledTimes(1);
+        });
+
+        it('keeps the other Java exception, a DISTANCE[] with no radius outside the wrapper, off this reading', async () => {
+          refusing(parseError('Cannot read field "exception" because "radius" is null'));
+          const err = await advanceUntilSettled(
+            rejection(() =>
+              validating.countStudies(
+                { filterAdvanced: 'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321]' },
+                createMockContext(),
+              ),
+            ),
+          );
+
+          expect(err.data).toMatchObject({ reason: 'query_parse_error' });
+          expect(err.message).not.toContain(MESSAGE_TAIL);
+          expect(hint(err)).not.toBe(HINT);
+        });
+
+        it('keeps the body that only repeats the expression as sent the parse error it is today', async () => {
+          refusing(
+            parseError(
+              'Error parsing query: (SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199])) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])',
+            ),
+          );
+          const err = await advanceUntilSettled(
+            rejection(() =>
+              validating.countStudies(
+                { filterAdvanced: 'SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199])' },
+                createMockContext(),
+              ),
+            ),
+          );
+
+          expect(err.message).toBe(
+            'Query syntax error: Error parsing query: (SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199])) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX]). Free-text fields take plain words plus AND, OR, NOT.',
+          );
+          expect(err.data).toEqual({ reason: 'query_parse_error' });
+        });
+      });
+
+      describe('DISTANCE[] on a field that is not LocationGeoPoint (fold-in)', () => {
+        const HINT =
+          'Name LocationGeoPoint for a radius, as in AREA[LocationGeoPoint]DISTANCE[lat,lon,radius] in the advancedFilter of clinicaltrials_search_studies or clinicaltrials_get_study_count, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible; DISTANCE[] takes no other field.';
+
+        it('names LocationCity from the path, and the one field DISTANCE[] takes', async () => {
+          refusing(
+            parseError(
+              'DISTANCE is not supported for GeoName field protocolSection.contactsLocationsModule.locations.city',
+            ),
+          );
+          const err = await advanceUntilSettled(
+            rejection(() =>
+              validating.countStudies(
+                { filterAdvanced: 'AREA[LocationCity]DISTANCE[47.6062,-122.3321,25mi]' },
+                createMockContext(),
+              ),
+            ),
+          );
+
+          expect(err.message).toBe(
+            "Error parsing query in advanced filter: DISTANCE is not supported for GeoName field protocolSection.contactsLocationsModule.locations.city. 'LocationCity' takes no DISTANCE[]: DISTANCE[] takes LocationGeoPoint only, the point each site carries, as in AREA[LocationGeoPoint]DISTANCE[lat,lon,radius].",
+          );
+          expect(err.message).not.toContain('Free-text');
+          expect(err.data).toEqual({
+            reason: 'field_invalid',
+            invalid: ['LocationCity'],
+            recovery: { hint: HINT },
+          });
+          expect(err.literals).toEqual([
+            'DISTANCE[]',
+            'AREA[LocationGeoPoint]DISTANCE[lat,lon,radius]',
+          ]);
+        });
+
+        it('names a path the field index does not hold by the path itself', async () => {
+          const path = 'protocolSection.designModule.enrollmentInfo.count';
+          refusing(
+            parseError(`DISTANCE is not supported for integer field ${path}`, 'Other terms'),
+          );
+          const err = await advanceUntilSettled(
+            rejection(() =>
+              validating.searchStudies(
+                { queryTerm: 'AREA[EnrollmentCount]DISTANCE[47.6062,-122.3321,25mi]' },
+                createMockContext(),
+              ),
+            ),
+          );
+
+          expect(err.message).toMatch(/^Error parsing query in Other terms: /);
+          expect(err.data).toEqual({
+            reason: 'field_invalid',
+            invalid: [path],
+            recovery: { hint: HINT },
+          });
+        });
+
+        it('names the path, and reads no metadata, with local validation disabled', async () => {
+          mockFetch.mockResolvedValue(
+            parseError(
+              'DISTANCE is not supported for GeoName field protocolSection.contactsLocationsModule.locations.city',
+            ),
+          );
+          const err = await rejection(() =>
+            service.countStudies(
+              { filterAdvanced: 'AREA[LocationCity]DISTANCE[47.6062,-122.3321,25mi]' },
+              createMockContext(),
+            ),
+          );
+
+          expect(err.data).toMatchObject({
+            reason: 'field_invalid',
+            invalid: ['protocolSection.contactsLocationsModule.locations.city'],
+          });
+          expect(mockFetch).toHaveBeenCalledTimes(1);
         });
       });
 
@@ -4875,6 +5113,97 @@ describe('ClinicalTrialsService', () => {
           );
           expect(err.literals).toEqual(['RANDOMIZED', 'NA']);
         });
+      });
+    });
+
+    // A DISTANCE[] operand upstream cannot read is answered with a sentence of
+    // its own, a missing radius with a Java exception; each is the one operand
+    // shape to restate, not free-text syntax (fold-in).
+    describe('a DISTANCE[] operand upstream cannot read (fold-in)', () => {
+      const MESSAGE_TAIL =
+        'DISTANCE[] reads three values, DISTANCE[lat,lon,radius]: a latitude from -90 to 90, a longitude from -180 to 180, and a radius of at least 1 carrying a mi or km unit, as in AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi].';
+      const HINT =
+        'Write the radius term as AREA[LocationGeoPoint]DISTANCE[lat,lon,radius] with a latitude from -90 to 90, a longitude from -180 to 180, and a radius of at least 1 carrying a mi or km unit, such as 25mi or 40km.';
+
+      it.each([
+        ['Latitude must be a number', 'DISTANCE[abc,def,25mi]'],
+        ['Latitude must be between -90 and 90', 'DISTANCE[95,-122.3321,25mi]'],
+        ['Longitude must be a number', 'DISTANCE[47.6062,abc,25mi]'],
+        ['Longitude must be between -180 and 180', 'DISTANCE[47.6062,-200,25mi]'],
+        ['Invalid radius in DISTANCE operator', 'DISTANCE[47.6062,-122.3321,25]'],
+        ['Radius must be set to at least 1 mile or 1 kilometer', 'DISTANCE[47.6062,-122.3321,0mi]'],
+        ['Cannot read field "exception" because "radius" is null', 'DISTANCE[47.6062,-122.3321]'],
+      ] as const)(
+        'restates the operand shape for %j, with its hint',
+        async (sentence, distance) => {
+          route(parseError(sentence));
+          const err = await advanceUntilSettled(
+            rejection(() =>
+              validating.countStudies(
+                { filterAdvanced: `AREA[LocationGeoPoint]${distance}` },
+                createMockContext(),
+              ),
+            ),
+          );
+
+          expect(err.message).toBe(
+            `Error parsing query in advanced filter: ${sentence}. ${MESSAGE_TAIL}`,
+          );
+          expect(err.message).not.toContain('Free-text');
+          expect(err.data).toEqual({ reason: 'query_parse_error', recovery: { hint: HINT } });
+          expect(err.literals).toEqual([
+            'DISTANCE[]',
+            'DISTANCE[lat,lon,radius]',
+            'AREA[LocationGeoPoint]DISTANCE[lat,lon,radius]',
+            'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi]',
+          ]);
+        },
+      );
+
+      it('keeps the parameter upstream names', async () => {
+        route(parseError('Invalid radius in DISTANCE operator', 'Other terms'));
+        const err = await advanceUntilSettled(
+          rejection(() =>
+            validating.searchStudies(
+              { queryTerm: 'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25]' },
+              createMockContext(),
+            ),
+          ),
+        );
+
+        expect(err.message).toBe(
+          `Error parsing query in Other terms: Invalid radius in DISTANCE operator. ${MESSAGE_TAIL}`,
+        );
+        expect(err.data).toEqual({ reason: 'query_parse_error', recovery: { hint: HINT } });
+      });
+
+      it('keeps the parse error when the sentence is the caller’s own text upstream repeats', async () => {
+        const filterAdvanced =
+          'SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199]) AND AREA[BriefTitle]"Latitude must be a number"';
+        // Live (2026-11-21): the body that only repeats the expression as sent.
+        const repeated = `(${filterAdvanced}) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])`;
+        route(parseError(`Error parsing query: ${repeated}`));
+        const err = await advanceUntilSettled(
+          rejection(() => validating.countStudies({ filterAdvanced }, createMockContext())),
+        );
+
+        expect(err.message).toBe(
+          `Query syntax error: Error parsing query: ${repeated}. Free-text fields take plain words plus AND, OR, NOT.`,
+        );
+        expect(err.data).toEqual({ reason: 'query_parse_error' });
+      });
+
+      it('keeps the parse error when a DISTANCE[] refusal is the caller’s own text upstream repeats', async () => {
+        const filterAdvanced =
+          'SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199]) AND AREA[BriefTitle]"DISTANCE is not supported for text field Foo"';
+        const repeated = `(${filterAdvanced}) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])`;
+        route(parseError(`Error parsing query: ${repeated}`));
+        const err = await advanceUntilSettled(
+          rejection(() => validating.countStudies({ filterAdvanced }, createMockContext())),
+        );
+
+        expect(err.data).toEqual({ reason: 'query_parse_error' });
+        expect(err.message).not.toContain('takes no DISTANCE[]');
       });
     });
 
@@ -4998,6 +5327,55 @@ describe('ClinicalTrialsService', () => {
         expect(parseAreaRejection(text)).toBeUndefined();
       });
 
+      // Live bodies (2026-11-21): one Java exception for any DISTANCE[] or RANGE[]
+      // term inside SEARCH[Location](…), whatever parameter carried it (#206).
+      it.each([
+        'Error parsing query in advanced filter: Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null',
+        'Error parsing query in Location terms: Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null',
+        'Error parsing query in Conditions or disease: Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null',
+      ])('reads a DISTANCE[] or RANGE[] term inside SEARCH[Location](…) in %j', (text) => {
+        expect(parseAreaRejection(text)).toEqual({ kind: 'location-operator' });
+      });
+
+      it.each([
+        // The one other Java exception upstream answers with: a DISTANCE[] with no radius, outside the wrapper.
+        'Error parsing query in advanced filter: Cannot read field "exception" because "radius" is null',
+        // Another method of the same class is another sentence.
+        'Error parsing query in advanced filter: Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getName()" because the return value of "java.util.Map.get(Object)" is null',
+        'Error parsing query in advanced filter: Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()"',
+        // The body that only repeats the expression as sent.
+        'Error parsing query in advanced filter: Error parsing query: (SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199])) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])',
+        // That body again, the sentence inside the caller's own expression it repeats.
+        'Error parsing query in advanced filter: Error parsing query: (AREA[BriefTitle]Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])',
+      ])('reads no DISTANCE[] or RANGE[] term inside SEARCH[Location](…) in %j', (text) => {
+        expect(parseAreaRejection(text)).toBeUndefined();
+      });
+
+      // Upstream repeats the caller's text in two bodies: the one that only
+      // repeats the expression as sent, and an ANTLR error quoting a token. A
+      // refusal sentence there is the caller's, never upstream's (live,
+      // 2026-11-21: the first body answers the expression below).
+      it.each([
+        'Error parsing query in advanced filter: Error parsing query: (SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199]) AND AREA[BriefTitle]"DISTANCE is not supported for text field Foo") AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])',
+        `Error parsing query in advanced filter: token recognition error at: '"DISTANCE is not supported for text field Foo'`,
+      ])('reads no DISTANCE[] refusal in caller text upstream repeats: %j', (text) => {
+        expect(parseAreaRejection(text)).toBeUndefined();
+      });
+
+      // Live bodies (2026-11-21): DISTANCE[] outside the wrapper on a field that is not a point.
+      it.each([
+        [
+          'Error parsing query in advanced filter: DISTANCE is not supported for GeoName field protocolSection.contactsLocationsModule.locations.city',
+          { kind: 'distance-type', path: 'protocolSection.contactsLocationsModule.locations.city' },
+        ],
+        [
+          'Error parsing query in Other terms: DISTANCE is not supported for integer field protocolSection.designModule.enrollmentInfo.count',
+          { kind: 'distance-type', path: 'protocolSection.designModule.enrollmentInfo.count' },
+        ],
+      ] as const)('reads %j', (text, rejection) => {
+        expect(parseAreaRejection(text)).toEqual(rejection);
+      });
+
       describe('stays linear on caller-sized text', { timeout: 0 }, () => {
         /** A rejection as one string to compare: its kind, then the name or path it carries. */
         const summary = (rejection: AreaRejection | undefined) =>
@@ -5101,6 +5479,126 @@ describe('ClinicalTrialsService', () => {
               rejection &&
               ('name' in rejection ? rejection.name : 'path' in rejection ? rejection.path : '');
             if (carried?.length !== input.length - around) throw new Error('cut short');
+          }, shape);
+        });
+
+        const NULL_PIECE =
+          'Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null';
+        const NULL_PIECE_LEAD = 'Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.';
+        // The Java exception read as a whole sentence (#206).
+        it.each([
+          [
+            'repeated leads of the Java sentence',
+            (n: number) => NULL_PIECE_LEAD.repeat(n / NULL_PIECE_LEAD.length),
+            undefined,
+          ],
+          // Each copy matches all but the sentence's last character.
+          [
+            'repeated near-misses of the Java sentence',
+            (n: number) => `${NULL_PIECE.slice(0, -1)}X`.repeat(n / NULL_PIECE.length),
+            undefined,
+          ],
+          [
+            'the Java sentence after a long parameter label',
+            (n: number) => `Error parsing query in ${'x'.repeat(n)}: ${NULL_PIECE}`,
+            'location-operator',
+          ],
+          [
+            'repeated DISTANCE prefixes',
+            (n: number) => 'DISTANCE is not supported for '.repeat(n / 30),
+            undefined,
+          ],
+          [
+            'a DISTANCE type that runs on with no field',
+            (n: number) => `DISTANCE is not supported for ${'x'.repeat(n)}`,
+            undefined,
+          ],
+          // Each sentence's path is the next one's `DISTANCE`.
+          [
+            'overlapping DISTANCE sentences',
+            (n: number) => 'DISTANCE is not supported for x field '.repeat(n / 38),
+            'distance-type:DISTANCE',
+          ],
+        ] as const)('%s', (_name, shape, expected) => {
+          expectLinearGrowth((input) => {
+            if (summary(parseAreaRejection(input)) !== expected) {
+              throw new Error('unexpected rejection');
+            }
+          }, shape);
+        });
+
+        it('a DISTANCE path as long as the request allows', () => {
+          const lead = 'DISTANCE is not supported for GeoName field ';
+          expectLinearGrowth(
+            (input) => {
+              const rejection = parseAreaRejection(input);
+              const carried = rejection && 'path' in rejection ? rejection.path : '';
+              if (carried.length !== input.length - lead.length) throw new Error('cut short');
+            },
+            (n) => `${lead}${'p'.repeat(n)}`,
+          );
+        });
+      });
+    });
+
+    // Live bodies (2026-11-21): DISTANCE[] on LocationGeoPoint, outside the wrapper.
+    describe('isDistanceOperandRejection', () => {
+      const OPERAND_SENTENCES = [
+        'Latitude must be a number',
+        'Latitude must be between -90 and 90',
+        'Longitude must be a number',
+        'Longitude must be between -180 and 180',
+        'Invalid radius in DISTANCE operator',
+        'Radius must be set to at least 1 mile or 1 kilometer',
+        'Cannot read field "exception" because "radius" is null',
+      ];
+
+      it.each(
+        OPERAND_SENTENCES.flatMap((sentence) => [
+          `Error parsing query in advanced filter: ${sentence}`,
+          `Error parsing query in Other terms: ${sentence}`,
+        ]),
+      )('reads %j', (text) => {
+        expect(isDistanceOperandRejection(text)).toBe(true);
+      });
+
+      it.each([
+        'Error parsing query in advanced filter: Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null',
+        'Error parsing query in advanced filter: Cannot parse number for `protocolSection.designModule.enrollmentInfo.count` field',
+        'Error parsing query in advanced filter: DISTANCE is not supported for GeoName field protocolSection.contactsLocationsModule.locations.city',
+        'Error parsing query in advanced filter: Latitude must be',
+        'Error parsing query in advanced filter: Radius must be set to at least 1 mile',
+        // Caller text upstream repeats (live, 2026-11-21): the body that repeats
+        // the expression as sent, and an unterminated quote's ANTLR error.
+        'Error parsing query in advanced filter: Error parsing query: (SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199]) AND AREA[BriefTitle]"Latitude must be a number") AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])',
+        `Error parsing query in advanced filter: token recognition error at: '"Latitude must be a number'\nmismatched input '<EOF>' expecting {'(', ',', 'NOT', 'SEARCH', 'AREA', 'RANGE', 'DISTANCE', Term}`,
+        '',
+      ])('reads no DISTANCE[] operand in %j', (text) => {
+        expect(isDistanceOperandRejection(text)).toBe(false);
+      });
+
+      describe('stays linear on caller-sized text', { timeout: 0 }, () => {
+        it.each([
+          ...LINE_BREAK_SHAPES.map(([name, shape]) => [name, shape, false] as const),
+          // Each copy matches all but the sentence's last character.
+          ...OPERAND_SENTENCES.map(
+            (sentence) =>
+              [
+                `repeated near-misses of ${JSON.stringify(sentence)}`,
+                (n: number) => `${sentence.slice(0, -1)}X`.repeat(n / sentence.length),
+                false,
+              ] as const,
+          ),
+          [
+            'an operand sentence after a long parameter label',
+            (n: number) =>
+              `Error parsing query in ${'x'.repeat(n)}: Invalid radius in DISTANCE operator`,
+            true,
+          ],
+        ] as const)('%s', (_name, shape, expected) => {
+          expectLinearGrowth((input) => {
+            if (isDistanceOperandRejection(input) !== expected)
+              throw new Error('unexpected reading');
           }, shape);
         });
       });
@@ -6301,9 +6799,13 @@ describe('ClinicalTrialsService', () => {
   });
 
   // A fields list that reaches into posted results caps the search page at 10
-  // studies (#198); the tool reads the cap from this classification.
-  describe('results projection (#198)', () => {
-    /** A slice of the live field tree (2026-11-13), node fields verbatim. */
+  // studies (#198), and one that names the protocol section at 75 (#199); the
+  // tool reads the cap from this classification.
+  describe('projection classes (#198, #199)', () => {
+    /**
+     * A slice of the live field tree (2026-11-13; the annotation and document
+     * sections and ExpandedAccessInfo 2026-11-21), node fields verbatim.
+     */
     const RESULTS_METADATA: FieldNode[] = [
       {
         name: 'protocolSection',
@@ -6325,6 +6827,20 @@ describe('ClinicalTrialsService', () => {
             type: 'StatusModule',
             children: [
               { name: 'overallStatus', piece: 'OverallStatus', sourceType: 'TEXT', type: 'Status' },
+              {
+                name: 'expandedAccessInfo',
+                piece: 'ExpandedAccessInfo',
+                sourceType: 'STRUCT',
+                type: 'ExpandedAccessInfo',
+                children: [
+                  {
+                    name: 'hasExpandedAccess',
+                    piece: 'HasExpandedAccess',
+                    sourceType: 'TEXT',
+                    type: 'boolean',
+                  },
+                ],
+              },
             ],
           },
         ],
@@ -6360,6 +6876,34 @@ describe('ClinicalTrialsService', () => {
             children: [
               { name: 'timeFrame', piece: 'EventsTimeFrame', sourceType: 'TEXT', type: 'text' },
             ],
+          },
+        ],
+      },
+      {
+        name: 'annotationSection',
+        piece: 'AnnotationSection',
+        sourceType: 'STRUCT',
+        type: 'AnnotationSection',
+        children: [
+          {
+            name: 'annotationModule',
+            piece: 'AnnotationModule',
+            sourceType: 'STRUCT',
+            type: 'AnnotationModule',
+          },
+        ],
+      },
+      {
+        name: 'documentSection',
+        piece: 'DocumentSection',
+        sourceType: 'STRUCT',
+        type: 'DocumentSection',
+        children: [
+          {
+            name: 'largeDocumentModule',
+            piece: 'LargeDocumentModule',
+            sourceType: 'STRUCT',
+            type: 'LargeDocumentModule',
           },
         ],
       },
@@ -6418,10 +6962,39 @@ describe('ClinicalTrialsService', () => {
       ],
       ['a leaf under results', ['NCTId', 'OutcomeMeasureTitle'], 'other'],
       ['a leaf under results off by case', ['outcomemeasuretitle'], 'other'],
-      ['the protocol and derived sections', ['ProtocolSection', 'DerivedSection'], 'other'],
+      ['the protocol section', ['ProtocolSection'], 'protocol'],
+      ['the protocol section off by case', ['protocolsection'], 'protocol'],
+      ['the protocol section in capitals', ['PROTOCOLSECTION'], 'protocol'],
+      ['the protocol section by its metadata path', ['protocolSection'], 'protocol'],
+      ['the protocol section with surrounding whitespace', [' ProtocolSection  '], 'protocol'],
+      ['the protocol section beside a protocol leaf', ['NCTId', 'ProtocolSection'], 'protocol'],
+      ['the protocol and derived sections', ['ProtocolSection', 'DerivedSection'], 'protocol'],
+      [
+        'the four non-results sections',
+        ['ProtocolSection', 'DerivedSection', 'AnnotationSection', 'DocumentSection'],
+        'protocol',
+      ],
+      // The lowest cap wins: results over protocol, whichever comes first.
+      ['the protocol and results sections', ['ProtocolSection', 'ResultsSection'], 'results'],
+      [
+        'a results module by its path before the protocol section off by case',
+        ['resultsSection.adverseEventsModule', 'protocolsection'],
+        'results',
+      ],
       ['a protocol module', ['StatusModule'], 'other'],
+      ['a protocol module by its metadata path', ['protocolSection.statusModule'], 'other'],
+      ['a group inside a protocol module', ['ExpandedAccessInfo'], 'other'],
+      ['a protocol leaf', ['NCTId'], 'other'],
+      ['the derived section', ['DerivedSection'], 'other'],
+      ['the annotation section', ['AnnotationSection'], 'other'],
+      ['the document section', ['DocumentSection'], 'other'],
+      [
+        'the three other non-results sections',
+        ['DerivedSection', 'AnnotationSection', 'DocumentSection'],
+        'other',
+      ],
       ['a name the field index does not hold', ['NotAField'], 'other'],
-    ])('classifies %s as %s', async (_label, fields, expected) => {
+    ])('classifies %s (fields %j) as %s', async (_label, fields, expected) => {
       serving(jsonResponse(RESULTS_METADATA));
 
       const projection = await advanceUntilSettled(

@@ -1013,6 +1013,9 @@ describe('getStudyResults — injection and output safety', () => {
         'aeGroupTitle',
         'aeTerm',
         'aeOrganSystem',
+        'flowGroup',
+        'periodTitle',
+        'milestoneType',
         'restriction',
         'pocTitle',
         'pocOrganization',
@@ -1030,9 +1033,6 @@ describe('getStudyResults — injection and output safety', () => {
         'baselineClass',
         'baselineCategory',
         'flowUnitsAnalyzed',
-        'flowGroup',
-        'periodTitle',
-        'milestoneType',
         'milestoneComment',
         'achievementComment',
         'dropType',
@@ -1319,6 +1319,15 @@ describe('findEligible — injection and output safety', () => {
         state: br('state'),
         country: br('country', `country start United States${lineBreak}## Forged country`),
         status: br('siteStatus'),
+        contacts: [
+          {
+            name: br('siteContactName'),
+            role: br('siteContactRole'),
+            phone: br('siteContactPhone'),
+            phoneExt: br('siteContactPhoneExt'),
+            email: br('siteContactEmail'),
+          },
+        ],
       };
       const study = {
         protocolSection: {
@@ -1337,7 +1346,12 @@ describe('findEligible — injection and output safety', () => {
           },
           contactsLocationsModule: {
             centralContacts: [
-              { name: br('contactName'), phone: br('contactPhone'), email: br('contactEmail') },
+              {
+                name: br('contactName'),
+                phone: br('contactPhone'),
+                phoneExt: br('contactPhoneExt'),
+                email: br('contactEmail'),
+              },
             ],
             // The closed foreign site is bounded out, so the Sites line renders.
             locations: [matchedSite, { facility: 'Toronto site', country: 'Canada' }],

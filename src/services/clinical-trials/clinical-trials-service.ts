@@ -225,8 +225,7 @@ function describeQueryParseError(text: string): string {
   }
 
   // Unrecognized shape — preserve whatever upstream said, minus any grammar dump.
-  const detail = text
-    .replace(/^Error parsing query in [^:]*:\s*/, '')
+  const detail = refusalSentence(text)
     .split(/\s*expecting [{(]/)[0]
     ?.trim();
   return detail
@@ -234,7 +233,7 @@ function describeQueryParseError(text: string): string {
     : 'Query syntax error: the upstream parser rejected the query. Free-text fields take plain words plus AND, OR, NOT.';
 }
 
-/** An AREA[] or RANGE[] term upstream refused for the field it names, and how. */
+/** An AREA[], RANGE[], or DISTANCE[] term upstream refused for the field it names, or where it stands, and how. */
 export type AreaRejection =
   /** No field by that name. */
   | { kind: 'unknown'; name: string }
@@ -242,26 +241,61 @@ export type AreaRejection =
   | { kind: 'unsearchable'; name: string }
   /** A field named inside `SEARCH[Location](…)` that is not a field of a site, such as OverallStatus. */
   | { kind: 'location-scope'; name: string }
+  /** A DISTANCE[] or RANGE[] term inside `SEARCH[Location](…)`, on a site field upstream does not name. */
+  | { kind: 'location-operator' }
   /** RANGE[] on one field whose type takes no range, named by its metadata path. */
   | { kind: 'range-type'; path: string }
-  /** RANGE[] spanning several fields: a bare RANGE[], or one after a search area. */
-  | { kind: 'range-fields' };
+  /** RANGE[] or DISTANCE[] spanning several fields: a bare one, or one after a search area. */
+  | { kind: 'range-fields' }
+  /** DISTANCE[] on one field that is not a point, named by its metadata path. */
+  | { kind: 'distance-type'; path: string };
 
 /**
- * Read an upstream refusal of the field an AREA[] or RANGE[] term names out of
- * a 400 body, whatever parameter's `Error parsing query in <where>:` leads it:
+ * Upstream's answer to a DISTANCE[] term inside `SEARCH[Location](…)`, and at
+ * times to a RANGE[] term there, on every site field probed (LocationGeoPoint,
+ * LocationCity, LocationZip; 2026-11-21): a Java exception naming neither the
+ * operator nor the field. Read as this whole sentence, never as generic
+ * exception text — a DISTANCE[] with no radius outside the wrapper answers with
+ * another one, `Cannot read field "exception" because "radius" is null`.
+ */
+const LOCATION_OPERATOR_SENTENCE =
+  'Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null';
+
+/**
+ * What a 400 body says after its `Error parsing query in <where>:` label, the
+ * place upstream states a refusal. Two bodies also repeat the caller's own
+ * text further on — the one that only repeats the expression as sent
+ * (`Error parsing query: <expression>`) and an ANTLR error quoting a token
+ * (`token recognition error at: '"…'`) — so the DISTANCE[] readings, whose
+ * sentences a caller could type into a quoted phrase, count only at this start.
+ */
+function refusalSentence(text: string): string {
+  return text.replace(/^Error parsing query in [^:]*:\s*/, '');
+}
+
+/**
+ * Read an upstream refusal of the field an AREA[], RANGE[], or DISTANCE[] term
+ * names, or of the term where it stands, out of a 400 body, whatever parameter's
+ * `Error parsing query in <where>:` leads it:
  *
  * | Body | Kind |
  * |:--|:--|
  * | `Unknown area name: \`X\`` | `unknown` — no field X; inside `SEARCH[Location](…)` also a search area such as LocationSearch |
  * | `This type of query is not allowed for X` | `unsearchable` — every `STRUCT` piece probed (LeadSponsor, SponsorCollaboratorsModule, DesignInfo) |
  * | `` `X` is outside Location scope `` | `location-scope` — the first field inside the wrapper that no site holds (OverallStatus, Phase, NumLocations) |
+ * | LOCATION_OPERATOR_SENTENCE | `location-operator` — a DISTANCE[] or RANGE[] term inside the wrapper; a field of the study there is `location-scope` first |
  * | `RANGE is not supported for <type> field <path>` | `range-type` — a field neither date, number, nor age (`nct`, `text`, `boolean`, an enum's own type such as `Phase`, the group `Sponsor`) |
- * | `RANGE is not supported for multiple (N) fields` | `range-fields` |
+ * | `RANGE is not supported for multiple (N) fields` | `range-fields` — a bare RANGE[] or DISTANCE[], or one after a search area; upstream names RANGE for both |
+ * | `DISTANCE is not supported for <type> field <path>` | `distance-type` — any field but LocationGeoPoint (`GeoName` LocationCity, `integer` EnrollmentCount) |
  *
  * Undefined for any other body: `Search scope must be \`Study\` or \`Location\``
  * and `Cannot parse number for \`…\` field` (a RANGE bound, not its field) stay
- * the parse error they are.
+ * the parse error they are, as does the body that only repeats the expression
+ * as sent, `Error parsing query: <expression>`, which upstream sometimes answers
+ * a RANGE[] inside the wrapper with instead. The `location-operator` and
+ * `distance-type` sentences count only where the refusal starts
+ * (refusalSentence), so the same words in caller text upstream repeats never
+ * take their reading.
  */
 export function parseAreaRejection(text: string): AreaRejection | undefined {
   const unknown = text.match(/Unknown area name:\s*`([^`]+)`/)?.[1];
@@ -270,10 +304,39 @@ export function parseAreaRejection(text: string): AreaRejection | undefined {
   if (unsearchable) return { kind: 'unsearchable', name: unsearchable };
   const outside = text.match(/`([^`]+)` is outside Location scope/)?.[1];
   if (outside) return { kind: 'location-scope', name: outside };
+  const refusal = refusalSentence(text);
+  if (refusal.startsWith(LOCATION_OPERATOR_SENTENCE)) return { kind: 'location-operator' };
   if (/RANGE is not supported for multiple \(\d+\) fields/.test(text))
     return { kind: 'range-fields' };
   const rangePath = text.match(/RANGE is not supported for \S+ field (\S+)/)?.[1];
-  return rangePath ? { kind: 'range-type', path: rangePath } : undefined;
+  if (rangePath) return { kind: 'range-type', path: rangePath };
+  const distancePath = refusal.match(/^DISTANCE is not supported for \S+ field (\S+)/)?.[1];
+  return distancePath ? { kind: 'distance-type', path: distancePath } : undefined;
+}
+
+/**
+ * Upstream's answers to a DISTANCE[] operand it cannot read, on LocationGeoPoint
+ * outside `SEARCH[Location](…)` (probed 2026-11-21): a latitude or longitude that
+ * is not a number or out of range, a radius with no unit or under 1 mile or
+ * kilometer, and no radius at all, which reaches the caller as a Java exception.
+ */
+const DISTANCE_OPERAND_SENTENCES = [
+  'Latitude must be a number',
+  'Latitude must be between -90 and 90',
+  'Longitude must be a number',
+  'Longitude must be between -180 and 180',
+  'Invalid radius in DISTANCE operator',
+  'Radius must be set to at least 1 mile or 1 kilometer',
+  'Cannot read field "exception" because "radius" is null',
+];
+
+/**
+ * Whether a 400 body refuses a DISTANCE[] operand: its refusal (refusalSentence)
+ * opens with one of DISTANCE_OPERAND_SENTENCES.
+ */
+export function isDistanceOperandRejection(text: string): boolean {
+  const refusal = refusalSentence(text);
+  return DISTANCE_OPERAND_SENTENCES.some((sentence) => refusal.startsWith(sentence));
 }
 
 /**
@@ -374,6 +437,93 @@ function searchAreaInLocationScope(name: string, upstream: string): McpError {
   );
 }
 
+/** A radius term on the one field DISTANCE[] takes, its operand's shape spelled out. */
+const RADIUS_TERM = 'AREA[LocationGeoPoint]DISTANCE[lat,lon,radius]';
+/**
+ * A radius joined beside the site wrapper, where upstream evaluates it —
+ * `geoFilter` matches the same studies (measured 2026-11-21).
+ */
+const RADIUS_BESIDE_WRAPPER = `${RADIUS_TERM} AND ${LOCATION_WRAPPER}`;
+/**
+ * The two inputs that take a radius as a point and a distance, each named with
+ * its tool, for a message and a hint to name alike.
+ */
+const RADIUS_INPUTS =
+  'as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible';
+/**
+ * Where a radius goes, each lever named with the tool that has it, since a
+ * hint reaches every tool and each takes a radius its own way:
+ * clinicaltrials_find_eligible takes neither an advancedFilter nor a
+ * geoFilter, only location.near.
+ */
+const RADIUS_LEVERS = `in the advancedFilter of clinicaltrials_search_studies or clinicaltrials_get_study_count, or ${RADIUS_INPUTS}`;
+
+/**
+ * A DISTANCE[] or RANGE[] term inside `SEARCH[Location](…)`, which upstream
+ * answers with a Java exception naming no field, so nothing is blamed. The
+ * explicit hint replaces both the declared `field_invalid` one, which sends the
+ * caller to look up a name, and any reading of the exception as syntax, and
+ * warns that beside the wrapper the radius and the wrapper's terms can match
+ * different sites of one study.
+ */
+function operatorInLocationScope(upstream: string): McpError {
+  return validationError(
+    `${closed(upstream)} ${LOCATION_WRAPPER} evaluates no DISTANCE[] or RANGE[] term on any site field, so the term goes beside the wrapper, joined with AND: a radius as ${RADIUS_BESIDE_WRAPPER}, or ${RADIUS_INPUTS}.`,
+    {
+      reason: 'field_invalid',
+      recovery: {
+        hint: `Move the DISTANCE[] or RANGE[] term out of ${LOCATION_WRAPPER} and join it beside the wrapper with AND: a radius as ${RADIUS_BESIDE_WRAPPER} ${RADIUS_LEVERS}. Beside the wrapper the radius and the wrapper's terms can match different sites of one study, so check each in-range site's own status with clinicaltrials_get_study_record and nearLocation.`,
+      },
+    },
+    { literals: [LOCATION_WRAPPER, 'DISTANCE[]', 'RANGE[]', RADIUS_BESIDE_WRAPPER] },
+  );
+}
+
+/**
+ * DISTANCE[] on one field that is not a point. `entry` is the field the
+ * upstream path names; without it the path stands in for the piece.
+ */
+function distanceTypeUnsupported(
+  path: string,
+  entry: FieldIndexEntry | undefined,
+  upstream: string,
+): McpError {
+  const piece = entry?.piece ?? path;
+  return validationError(
+    `${closed(upstream)} '${piece}' takes no DISTANCE[]: DISTANCE[] takes LocationGeoPoint only, the point each site carries, as in ${RADIUS_TERM}.`,
+    {
+      reason: 'field_invalid',
+      invalid: [piece],
+      recovery: {
+        hint: `Name LocationGeoPoint for a radius, as in ${RADIUS_TERM} ${RADIUS_LEVERS}; DISTANCE[] takes no other field.`,
+      },
+    },
+    { literals: ['DISTANCE[]', RADIUS_TERM] },
+  );
+}
+
+const RADIUS_EXAMPLE = 'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi]';
+
+/**
+ * A DISTANCE[] operand upstream cannot read (isDistanceOperandRejection). Still
+ * a `query_parse_error`, but the explicit hint restates the operand's shape in
+ * place of the declared one about brackets and free text.
+ */
+function distanceOperandUnreadable(upstream: string): McpError {
+  const bounds =
+    'a latitude from -90 to 90, a longitude from -180 to 180, and a radius of at least 1 carrying a mi or km unit';
+  return validationError(
+    `${closed(upstream)} DISTANCE[] reads three values, DISTANCE[lat,lon,radius]: ${bounds}, as in ${RADIUS_EXAMPLE}.`,
+    {
+      reason: 'query_parse_error',
+      recovery: {
+        hint: `Write the radius term as ${RADIUS_TERM} with ${bounds}, such as 25mi or 40km.`,
+      },
+    },
+    { literals: ['DISTANCE[]', 'DISTANCE[lat,lon,radius]', RADIUS_TERM, RADIUS_EXAMPLE] },
+  );
+}
+
 /**
  * The field types RANGE[] takes, one field of each: every date, integer, and
  * age (`NormalizedTime`) type, whatever its `sourceType`; every other type is
@@ -423,17 +573,31 @@ function rangeTypeUnsupported(
   );
 }
 
-/** RANGE[] spanning several fields, which names no one field to blame. */
+/**
+ * A RANGE[] or DISTANCE[] spanning several fields, which names no one field to
+ * blame. Upstream answers a DISTANCE[] with no field before it with the same
+ * `RANGE is not supported for multiple (N) fields` a RANGE[] gets (probed
+ * 2026-11-21), so the guidance covers both.
+ */
 function rangeOnSeveralFields(upstream: string): McpError {
   return validationError(
-    `${closed(upstream)} A bare RANGE[], or one after a search area, spans several fields; RANGE[] needs AREA[Field] naming one of the ${RANGE_FIELD_TYPES}.`,
+    `${closed(upstream)} A bare RANGE[] or DISTANCE[], or one after a search area, spans several fields; RANGE[] needs AREA[Field] naming one of the ${RANGE_FIELD_TYPES}, and DISTANCE[] needs AREA[LocationGeoPoint], as in ${RADIUS_TERM}.`,
     {
       reason: 'field_invalid',
       recovery: {
-        hint: `Name one field before the range with AREA[Field], as in ${DATE_RANGE}; RANGE[] takes ${RANGE_FIELD_TYPES}.`,
+        hint: `Name one field before the range with AREA[Field], as in ${DATE_RANGE}; RANGE[] takes ${RANGE_FIELD_TYPES}. Name LocationGeoPoint for a radius, as in ${RADIUS_TERM} ${RADIUS_LEVERS}.`,
       },
     },
-    { literals: ['RANGE[]', 'AREA[Field]', DATE_RANGE] },
+    {
+      literals: [
+        'RANGE[]',
+        'AREA[Field]',
+        DATE_RANGE,
+        'DISTANCE[]',
+        'AREA[LocationGeoPoint]',
+        RADIUS_TERM,
+      ],
+    },
   );
 }
 
@@ -832,6 +996,13 @@ export interface FieldValuesAnswer {
   stats: FieldValueStats[];
 }
 
+/**
+ * What a search's `fields` list projects, as far as its page size goes (see
+ * classifyProjection): posted results, the whole protocol section, neither,
+ * or a list the field index could not check.
+ */
+export type ProjectionClass = 'other' | 'protocol' | 'results' | 'unclassifiable';
+
 /** Constructor options for overriding retry/backoff/validation behavior (primarily for tests). */
 export interface ClinicalTrialsServiceOptions {
   baseBackoffMs?: number;
@@ -986,16 +1157,22 @@ export class ClinicalTrialsService {
 
   /**
    * Fetch multiple studies by NCT IDs in a single request. Returns
-   * identification and results section data.
+   * identification, results section, and reference data.
    *
    * `NCTIdAlias` is requested alongside `NCTId` because the endpoint resolves a
    * previous (alias) ID to its canonical record silently: the record comes back
    * under an ID the caller never asked for, and the alias list is the only thing
    * tying it to the ID they did ask for.
    *
-   * A batch of 20 IDs (the results tool's per-call cap) comes to about 400
-   * bytes of the request-target limit, so the ID fit in searchStudies never
-   * defers one here. The projection is fixed, so it skips local field
+   * The reference leaves — each reference's PMID, type, and citation, and its
+   * retraction notices — serve studies without posted results, whose RESULT
+   * references the results tool names in their place. They come back under
+   * `protocolSection.referencesModule.references`, as the single-study record
+   * carries them; the record's see-also links and IPD entries stay out.
+   *
+   * A batch of 20 IDs (the results tool's per-call cap) comes to about 485
+   * bytes of the 8,177-byte request-target limit, so the ID fit in searchStudies
+   * never defers one here. The projection is fixed, so it skips local field
    * validation, as countStudies does.
    */
   async getStudiesBatch(nctIds: string[], ctx: Context): Promise<Study[]> {
@@ -1003,7 +1180,18 @@ export class ClinicalTrialsService {
     const response = await this.searchStudies(
       {
         filterIds: nctIds,
-        fields: ['NCTId', 'NCTIdAlias', 'BriefTitle', 'HasResults', 'ResultsSection'],
+        fields: [
+          'NCTId',
+          'NCTIdAlias',
+          'BriefTitle',
+          'HasResults',
+          'ResultsSection',
+          'ReferencePMID',
+          'ReferenceType',
+          'ReferenceCitation',
+          'RetractionPMID',
+          'RetractionSource',
+        ],
         fixedFields: true,
         pageSize: nctIds.length,
         // ID-targeted lookups must never filter the caller's selection.
@@ -1134,11 +1322,14 @@ export class ClinicalTrialsService {
   }
 
   /**
-   * Whether a search's `fields` list reaches into posted results: `results`
-   * when a name is ResultsSection or a group under it (OutcomeMeasuresModule,
-   * OutcomeMeasure), `other` otherwise — a leaf under results
-   * (OutcomeMeasureTitle) included, and a name the field index does not hold,
-   * which validation then refuses. Names are looked up as the caller sent
+   * What a search's `fields` list projects, for the tool's per-page cap:
+   * `results` when a name is ResultsSection or a group under it
+   * (OutcomeMeasuresModule, OutcomeMeasure); otherwise `protocol` when a name
+   * is the protocol section itself, the `STRUCT` at path `protocolSection` — a
+   * module or leaf under it does not count; otherwise `other`, a leaf under
+   * results (OutcomeMeasureTitle) included, and a name the field index does
+   * not hold, which validation then refuses. A list that earns both classes
+   * takes `results`, whose cap is the lower. Names are looked up as the caller sent
    * them, with the folds field normalization applies: surrounding whitespace,
    * case, and a metadata path in place of its piece. `unclassifiable` when
    * local validation is disabled or the field index cannot be read; the read is
@@ -1146,10 +1337,7 @@ export class ClinicalTrialsService {
    *
    * @throws the caller's cancellation, never passed off as an unreadable index.
    */
-  async classifyProjection(
-    fields: string[],
-    ctx: Context,
-  ): Promise<'other' | 'results' | 'unclassifiable'> {
+  async classifyProjection(fields: string[], ctx: Context): Promise<ProjectionClass> {
     if (!this.validateFieldsLocally) return 'unclassifiable';
     let index: FieldIndex;
     try {
@@ -1159,20 +1347,21 @@ export class ClinicalTrialsService {
       return 'unclassifiable';
     }
     const { byPiece, caseFold, paths } = index;
-    const reachesResults = fields.some((name) => {
+    // Each named group's metadata path; a leaf, or a name the index lacks, adds none.
+    const groupPaths = fields.flatMap((name) => {
       const trimmed = name.trim();
       const lowered = trimmed.toLowerCase();
       const piece = byPiece.has(trimmed)
         ? trimmed
         : (caseFold.get(lowered) ?? paths.exact.get(trimmed) ?? paths.fold.get(lowered));
       const entry = piece === undefined ? undefined : byPiece.get(piece);
-      return (
-        entry !== undefined &&
-        isStruct(entry) &&
-        (entry.path === 'resultsSection' || entry.path.startsWith('resultsSection.'))
-      );
+      return entry !== undefined && isStruct(entry) ? [entry.path] : [];
     });
-    return reachesResults ? 'results' : 'other';
+    const reachesResults = groupPaths.some(
+      (path) => path === 'resultsSection' || path.startsWith('resultsSection.'),
+    );
+    if (reachesResults) return 'results';
+    return groupPaths.includes('protocolSection') ? 'protocol' : 'other';
   }
 
   /* ------------------------------------------------------------------ */
@@ -1635,11 +1824,11 @@ export class ClinicalTrialsService {
    * misses it — drawn from the AREA index, so no suggestion is a `STRUCT` piece
    * upstream would refuse in turn. A listed search area upstream does not know
    * was named inside `SEARCH[Location](…)`, the one place it is unknown, and is
-   * told so with no did-you-mean. Every other kind is a valid field in the
-   * wrong place, which the declared hint (look the name up) misdirects, so each
-   * carries a hint of its own. The lookups read the index the caller's AREA[]
-   * text already loaded and fail open: this runs on an error path, where a
-   * metadata failure must not replace the real error.
+   * told so with no did-you-mean. Every other kind is a valid field or term in
+   * the wrong place, which the declared hint (look the name up) misdirects, so
+   * each carries a hint of its own. The lookups read the index the caller's
+   * AREA[] text already loaded and fail open: this runs on an error path, where
+   * a metadata failure must not replace the real error.
    *
    * @throws the caller's cancellation.
    */
@@ -1652,6 +1841,8 @@ export class ClinicalTrialsService {
     switch (rejection.kind) {
       case 'location-scope':
         return outsideLocationScope(rejection.name, upstream);
+      case 'location-operator':
+        return operatorInLocationScope(upstream);
       case 'range-type':
         return rangeTypeUnsupported(
           rejection.path,
@@ -1660,6 +1851,12 @@ export class ClinicalTrialsService {
         );
       case 'range-fields':
         return rangeOnSeveralFields(upstream);
+      case 'distance-type':
+        return distanceTypeUnsupported(
+          rejection.path,
+          await this.entryAtPath(rejection.path, ctx),
+          upstream,
+        );
       case 'unknown':
       case 'unsearchable': {
         const { name } = rejection;
@@ -2159,16 +2356,22 @@ export class ClinicalTrialsService {
           // where <where> names the parameter (`advanced filter`, `Conditions or
           // disease`, `Other terms`) and is the only part that varies with it.
           // Several shapes show up:
-          //   1. A refusal of the field an AREA[] or RANGE[] term names, read by
-          //      parseAreaRejection: `Unknown area name: \`X\``; `This type of
-          //      query is not allowed for X` (a STRUCT piece); `\`X\` is outside
-          //      Location scope` (a study-level field inside SEARCH[Location](…));
-          //      `RANGE is not supported for <type> field <path>` and `… for
-          //      multiple (N) fields`. Each is a field mistake, not a syntax error.
+          //   1. A refusal of the field an AREA[] or RANGE[] term names, or of the
+          //      term where it stands, read by parseAreaRejection: `Unknown area
+          //      name: \`X\``; `This type of query is not allowed for X` (a STRUCT
+          //      piece); `\`X\` is outside Location scope` (a study-level field
+          //      inside SEARCH[Location](…)); the Java exception `Cannot invoke
+          //      "…Piece.getDataType()" …` (a DISTANCE[] or RANGE[] term inside
+          //      that wrapper); `RANGE is not supported for <type> field <path>`
+          //      and `… for multiple (N) fields`; `DISTANCE is not supported for
+          //      <type> field <path>`. Each is a field mistake, not a syntax error.
           //   2. `Allowed values for enum field \`<path>\` are \`V1\`, \`V2\`, …` — invalid enum
           //      value in a caller's AREA[] expression (advancedFilter or a query parameter;
           //      phaseFilter entries are validated in the tool handlers before any request)
-          //   3. ANTLR syntax errors from a stray bracket, unbalanced parens, or an
+          //   3. A DISTANCE[] operand upstream cannot read (`Latitude must be a
+          //      number`, `Invalid radius in DISTANCE operator`, and the rest of
+          //      isDistanceOperandRejection's sentences), restated as its shape.
+          //   4. ANTLR syntax errors from a stray bracket, unbalanced parens, or an
           //      unterminated quote in a free-text field — several distinct shapes,
           //      each read by describeQueryParseError (the catch-all below), which
           //      keeps any other upstream sentence (`Search scope must be …`).
@@ -2204,6 +2407,7 @@ export class ClinicalTrialsService {
                 { literals: area ? [area, ...validValues] : validValues },
               );
             }
+            if (isDistanceOperandRejection(text)) throw distanceOperandUnreadable(text.trim());
             // ANTLR catch-all — see describeQueryParseError for why each shape
             // needs its own reading of the quoted token.
             throw validationError(

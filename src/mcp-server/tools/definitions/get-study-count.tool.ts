@@ -40,7 +40,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'An AREA[] expression in advancedFilter or a query parameter names a field ClinicalTrials.gov does not recognize or cannot search by value — often a module or group such as LeadSponsor instead of a leaf piece such as LeadSponsorName — or puts a valid field where upstream refuses it: a study-level field or a search area inside SEARCH[Location](…), or RANGE[] on a field that is not a date, number, or age.',
+      when: 'An AREA[] expression in advancedFilter or a query parameter names a field ClinicalTrials.gov does not recognize or cannot search by value — often a module or group such as LeadSponsor instead of a leaf piece such as LeadSponsorName — or puts a valid field where upstream refuses it: a study-level field, a search area, or a DISTANCE[] term (at times a RANGE[] term) inside SEARCH[Location](…), RANGE[] on a field that is not a date, number, or age, or DISTANCE[] on any field but LocationGeoPoint.',
       recovery: RECOVERY_HINTS.field_invalid,
       thrownBy: 'service',
     },
@@ -53,7 +53,7 @@ export const getStudyCount = tool('clinicaltrials_get_study_count', {
     {
       reason: 'query_parse_error',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a `[` or `]` outside an AREA[…] / RANGE[…] expression, an unmatched `(` / `)`, or an unterminated quote in a query/conditionQuery/etc. value.',
+      when: 'A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a `[` or `]` outside an AREA[…] / RANGE[…] expression, an unmatched `(` / `)`, or an unterminated quote in a query/conditionQuery/etc. value — or carries a DISTANCE[] operand it cannot read: a latitude or longitude that is not a number or is out of range, a radius under 1 or with no mi or km unit, or no radius at all.',
       recovery: RECOVERY_HINTS.query_parse_error,
       thrownBy: 'service',
     },

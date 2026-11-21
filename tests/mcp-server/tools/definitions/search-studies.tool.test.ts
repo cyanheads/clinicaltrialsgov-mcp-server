@@ -1097,6 +1097,194 @@ describe('searchStudies', () => {
     });
   });
 
+  // A page whose fields name the protocol section holds at most 75 studies:
+  // 200 protocol sections render 2 MB or more per surface. Which names reach
+  // it, and that results outranks it in a mixed list, is the service's
+  // classification, tabled there.
+  describe('protocol-page cap (#199)', () => {
+    const protocolStudy = (n: number) => ({
+      protocolSection: {
+        identificationModule: {
+          nctId: `NCT${String(n).padStart(8, '0')}`,
+          briefTitle: `Protocol study ${n}`,
+        },
+        statusModule: { overallStatus: 'RECRUITING' },
+      },
+    });
+    const protocolPage = (count: number) =>
+      Array.from({ length: count }, (_, i) => protocolStudy(i + 1));
+    const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+      (result.content as { text: string }[]).map((b) => b.text).join('\n');
+    const PROTOCOL_FIELDS = ['ProtocolSection'];
+
+    it.each([200, 1000])(
+      'requests 75 studies under a server cap of %i and discloses the cut on both surfaces',
+      async (maxPageSize) => {
+        mockService.maxPageSize = maxPageSize;
+        mockService.classifyProjection.mockResolvedValue('protocol');
+        mockService.searchStudies.mockResolvedValue({
+          studies: protocolPage(75),
+          totalCount: 4321,
+          nextPageToken: 'tok_page2',
+        });
+
+        const result = await runToolContract(searchStudies, {
+          fields: PROTOCOL_FIELDS,
+          pageSize: 500,
+        });
+
+        expect(mockService.classifyProjection.mock.calls[0]![0]).toEqual(PROTOCOL_FIELDS);
+        expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({
+          fields: PROTOCOL_FIELDS,
+          pageSize: 75,
+        });
+        expect(result.isError).toBeFalsy();
+        const sc = result.structuredContent as Record<string, unknown>;
+        expect(sc).toMatchObject({
+          truncated: true,
+          shown: 75,
+          cap: 75,
+          nextPageToken: 'tok_page2',
+          requestedFields: PROTOCOL_FIELDS,
+        });
+        expect(sc.studies as unknown[]).toHaveLength(75);
+        const notice =
+          "Requested pageSize 500 is above this server's per-page cap of 75 for fields that name ProtocolSection, so this page holds 75 studies. Pass nextPageToken to continue.";
+        expect(sc.notice).toBe(notice);
+        const text = textOf(result);
+        expect(text).toContain(notice);
+        for (const line of [
+          '**truncated:** true',
+          '**shown:** 75',
+          '**cap:** 75',
+          'nextPageToken: tok_page2',
+          '- **NCT00000075**: Protocol study 75 [RECRUITING]',
+        ]) {
+          expect(text).toContain(line);
+        }
+      },
+    );
+
+    it.each([50, 75])(
+      'serves a protocol page under a server cap of %i with the server notice',
+      async (maxPageSize) => {
+        mockService.maxPageSize = maxPageSize;
+        mockService.classifyProjection.mockResolvedValue('protocol');
+        mockService.searchStudies.mockResolvedValue({
+          studies: protocolPage(maxPageSize),
+          totalCount: 4321,
+          nextPageToken: 'tok_page2',
+        });
+
+        const result = await runToolContract(searchStudies, {
+          fields: PROTOCOL_FIELDS,
+          pageSize: 200,
+        });
+
+        expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({
+          pageSize: maxPageSize,
+        });
+        const sc = result.structuredContent as Record<string, unknown>;
+        expect(sc).toMatchObject({ truncated: true, shown: maxPageSize, cap: maxPageSize });
+        expect(sc.notice).toBe(
+          `Requested pageSize 200 is above this server's per-page cap of ${maxPageSize}, so this page holds ${maxPageSize} studies. Pass nextPageToken to continue.`,
+        );
+      },
+    );
+
+    it('takes the results cap and notice for a list that also names ResultsSection', async () => {
+      mockService.classifyProjection.mockResolvedValue('results');
+      mockService.searchStudies.mockResolvedValue({
+        studies: protocolPage(10),
+        totalCount: 4321,
+        nextPageToken: 'tok_page2',
+      });
+
+      const result = await runToolContract(searchStudies, {
+        fields: ['ProtocolSection', 'ResultsSection'],
+        pageSize: 200,
+      });
+
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({ pageSize: 10 });
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(sc).toMatchObject({ truncated: true, shown: 10, cap: 10 });
+      expect(sc.notice).toBe(
+        "Requested pageSize 200 is above this server's per-page cap of 10 for fields that name ResultsSection or a module or group under it, so this page holds 10 studies. Pass nextPageToken to continue.",
+      );
+    });
+
+    it('leaves a protocol page at or under 75 untouched', async () => {
+      mockService.classifyProjection.mockResolvedValue('protocol');
+      mockService.searchStudies.mockResolvedValue({
+        studies: protocolPage(75),
+        totalCount: 4321,
+        nextPageToken: 'tok_page2',
+      });
+
+      const result = await runToolContract(searchStudies, {
+        fields: PROTOCOL_FIELDS,
+        pageSize: 75,
+      });
+
+      expect(mockService.searchStudies.mock.calls[0]![0]).toMatchObject({ pageSize: 75 });
+      const sc = result.structuredContent as Record<string, unknown>;
+      expect(sc).not.toHaveProperty('truncated');
+      expect(sc).not.toHaveProperty('cap');
+      expect(sc).not.toHaveProperty('notice');
+      expect(sc.nextPageToken).toBe('tok_page2');
+    });
+
+    it('walks on from each page served, a page cut to 10 included, returning each study once', async () => {
+      // A paging upstream: the token is the offset after the last study served,
+      // whatever pageSize the next request carries.
+      const all = protocolPage(160);
+      mockService.classifyProjection
+        .mockResolvedValueOnce('protocol')
+        .mockResolvedValueOnce('protocol')
+        // The field index could not be read on the third call.
+        .mockResolvedValueOnce('unclassifiable');
+      mockService.searchStudies.mockImplementation(
+        async (params: { pageSize: number; pageToken?: string }) => {
+          const start = params.pageToken ? Number(params.pageToken.slice('tok_'.length)) : 0;
+          const next = start + params.pageSize;
+          return {
+            studies: all.slice(start, next),
+            ...(params.pageToken ? {} : { totalCount: all.length }),
+            ...(next < all.length ? { nextPageToken: `tok_${next}` } : {}),
+          };
+        },
+      );
+
+      const pages: string[][] = [];
+      const shownPerPage: unknown[] = [];
+      let pageToken: string | undefined;
+      do {
+        const result = await runToolContract(searchStudies, {
+          fields: PROTOCOL_FIELDS,
+          pageSize: 200,
+          ...(pageToken ? { pageToken } : {}),
+        });
+        const sc = result.structuredContent as {
+          nextPageToken?: string;
+          shown?: number;
+          studies: ReturnType<typeof protocolStudy>[];
+        };
+        pages.push(sc.studies.map((s) => s.protocolSection.identificationModule.nctId));
+        shownPerPage.push(sc.shown);
+        pageToken = sc.nextPageToken;
+      } while (pageToken);
+
+      const allIds = all.map((s) => s.protocolSection.identificationModule.nctId);
+      expect(mockService.searchStudies.mock.calls.map(([params]) => params.pageSize)).toEqual([
+        75, 75, 10,
+      ]);
+      expect(shownPerPage).toEqual([75, 75, undefined]);
+      expect(pages[1]).toEqual(allIds.slice(75, 150));
+      expect(pages.flat()).toEqual(allIds);
+      expect(new Set(pages.flat()).size).toBe(160);
+    });
+  });
+
   // An ID-targeted lookup that matches nothing is its own kind of empty: the
   // constraint is a list of identifiers, and broadening guidance aimed at
   // queries and filters says nothing about it.
@@ -1821,7 +2009,7 @@ describe('searchStudies', () => {
 
   // #93 routed the shapes upstream rejects with `incorrect format` to the typed
   // geo_invalid contract. The shapes upstream does NOT reject are the gap this
-  // covers: a unit-less radius answers 200 with an empty set (read as metres),
+  // covers: a unit-less radius answers 200 with a near-empty set (read as metres),
   // a zero radius 500s through the whole retry budget, and an out-of-range
   // coordinate 400s with a bare `Search error` the service cannot classify.
   describe('geoFilter validation (#123)', () => {

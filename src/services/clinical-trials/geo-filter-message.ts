@@ -7,5 +7,5 @@
  */
 
 export function geoFilterShapeMessage(geoFilter: string): string {
-  return `Invalid value for \`geoFilter\`: '${geoFilter}'. Format must be distance(lat,lon,radius) with a \`mi\` or \`km\` suffix on the radius — e.g. "distance(47.6062,-122.3321,50mi)". A bare radius is rejected: upstream would read it as meters and match almost nothing.`;
+  return `Invalid value for \`geoFilter\`: '${geoFilter}'. Format must be distance(lat,lon,radius) with a \`mi\` or \`km\` suffix on the radius — e.g. "distance(47.6062,-122.3321,50mi)". A bare radius is rejected: it is read as meters, so it matches only sites geocoded to the center point.`;
 }

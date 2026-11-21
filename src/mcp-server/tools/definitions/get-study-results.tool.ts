@@ -6,9 +6,14 @@
 import { tool, z } from '@cyanheads/mcp-ts-core';
 import { JsonRpcErrorCode, McpError } from '@cyanheads/mcp-ts-core/errors';
 import { getClinicalTrialsService } from '@/services/clinical-trials/clinical-trials-service.js';
-import type { RawStudyShape } from '@/services/clinical-trials/types.js';
+import type { RawStudyShape, StudyContact } from '@/services/clinical-trials/types.js';
 import { nctIdSchema } from '../utils/_schemas.js';
-import { oneLine } from '../utils/format-helpers.js';
+import {
+  contactPhone,
+  countLabel,
+  formatReferenceLines,
+  oneLine,
+} from '../utils/format-helpers.js';
 import { blankValueMessage, firstBlankListParam, toArray } from '../utils/query-helpers.js';
 import { RECOVERY_HINTS } from '../utils/recovery-hints.js';
 
@@ -68,11 +73,6 @@ function text(value: unknown): string | undefined {
   if (value == null) return;
   const s = String(value).trim();
   return s.length > 0 ? s : undefined;
-}
-
-/** Render a section's group count, singular for one group. */
-function groupsLabel(count: unknown): string {
-  return `${count} ${count === 1 ? 'group' : 'groups'}`;
 }
 
 /** The measurement fields both channels render, common to the raw and condensed shapes. */
@@ -256,8 +256,7 @@ function extractTopAnalysis(
     'groupDescription',
     'groupIds',
   ] as const;
-  const out: Record<string, unknown> = {};
-  for (const k of keys) if (a[k] != null) out[k] = a[k];
+  const out: Record<string, unknown> = presentFields(a, keys);
   if (Array.isArray(a.groupIds)) {
     out.groups = (a.groupIds as string[]).map((id) => titles.get(id) ?? id);
   }
@@ -362,11 +361,36 @@ function topAdverseEvents(ae: Record<string, unknown>): TopAdverseEvent[] {
 }
 
 /**
+ * The named fields an upstream record carries, verbatim and in the order named.
+ * A field the record omits stays absent, never filled in as 0 or "".
+ */
+function presentFields(record: Record<string, unknown>, keys: readonly string[]) {
+  return Object.fromEntries(keys.filter((k) => record[k] != null).map((k) => [k, record[k]]));
+}
+
+/** A summary roster entry: the group id every count joins on, and the group's title when it has one. */
+function rosterEntry(group: Record<string, unknown>): { id: string; title?: string } {
+  const title = text(group.title);
+  return { id: group.id as string, ...(title ? { title } : {}) };
+}
+
+/** An event group's whole-study totals — participants affected out of those at risk, per kind. */
+const EVENT_GROUP_TOTALS = [
+  'deathsNumAffected',
+  'deathsNumAtRisk',
+  'seriousNumAffected',
+  'seriousNumAtRisk',
+  'otherNumAffected',
+  'otherNumAtRisk',
+] as const;
+
+/**
  * Condense the adverse events module to counts, the event group roster the
- * top-events rows are keyed against (id and title only), and a ranked
- * top-events view. The reporting threshold rides along verbatim: other events
- * are listed only at or above it, so it is what tells an unlisted event from
- * one reported below it.
+ * top-events rows are keyed against, and a ranked top-events view. Each roster
+ * entry keeps the group's id, title, and its death, serious, and other totals
+ * as upstream sends them; a total the study does not publish stays absent. The
+ * reporting threshold rides along verbatim: other events are listed only at or
+ * above it, so it is what tells an unlisted event from one reported below it.
  */
 function summarizeAdverseEvents(ae: Record<string, unknown>) {
   const groups = ae.eventGroups as Array<Record<string, unknown>> | undefined;
@@ -380,23 +404,62 @@ function summarizeAdverseEvents(ae: Record<string, unknown>) {
     otherEventCount: Array.isArray(ae.otherEvents) ? ae.otherEvents.length : undefined,
     ...(groups?.length
       ? {
-          eventGroups: groups.map((g) => {
-            const title = text(g.title);
-            return { id: g.id as string, ...(title ? { title } : {}) };
-          }),
+          eventGroups: groups.map((g) => ({
+            ...rosterEntry(g),
+            ...presentFields(g, EVENT_GROUP_TOTALS),
+          })),
         }
       : {}),
     ...(topEvents.length > 0 ? { topEvents } : {}),
   };
 }
 
-/** Condense participant flow to period/group counts. */
+/**
+ * One flow period as summary mode carries it: a strict subset of the full-mode
+ * period, in its keys and upstream order, with every milestone kept and each
+ * group's numSubjects verbatim (a string upstream). Milestone and achievement
+ * comments, numUnits, and dropWithdraws stay full-mode only.
+ */
+function summarizePeriod(period: Record<string, unknown>) {
+  const milestones = period.milestones as Array<Record<string, unknown>> | undefined;
+  return {
+    ...presentFields(period, ['title']),
+    ...(milestones
+      ? {
+          milestones: milestones.map((ms) => {
+            const achievements = ms.achievements as Array<Record<string, unknown>> | undefined;
+            return {
+              ...presentFields(ms, ['type']),
+              ...(achievements
+                ? {
+                    achievements: achievements.map((a) =>
+                      presentFields(a, ['groupId', 'numSubjects']),
+                    ),
+                  }
+                : {}),
+            };
+          }),
+        }
+      : {}),
+  };
+}
+
+/**
+ * Condense participant flow to its counts, the group roster the milestone
+ * counts are keyed against, and every period's milestones — how many started,
+ * completed, and did not complete, per group. Every milestone is kept, not only
+ * those three: the rest are free-text types that cost little, and dropping one
+ * would leave a count the caller cannot account for. Not capped: the flow grows
+ * with groups × periods, as the `summary` input description says.
+ */
 function summarizeParticipantFlow(pf: Record<string, unknown>) {
   const groups = pf.groups as Array<Record<string, unknown>> | undefined;
   const periods = pf.periods as Array<Record<string, unknown>> | undefined;
   return {
     groupCount: Array.isArray(groups) ? groups.length : undefined,
     periodCount: Array.isArray(periods) ? periods.length : undefined,
+    ...(groups?.length ? { groups: groups.map(rosterEntry) } : {}),
+    ...(periods?.length ? { periods: periods.map(summarizePeriod) } : {}),
   };
 }
 
@@ -841,7 +904,7 @@ function formatCaps(meta: ResultsFilterMeta, lines: string[]) {
 }
 
 function formatOutcomes(outcomes: RO[], lines: string[]) {
-  lines.push(`\n### Outcomes (${outcomes.length} measures)`);
+  lines.push(`\n### Outcomes (${countLabel(outcomes.length, 'measure')})`);
   for (const o of outcomes) {
     const title = text(o.title) ?? 'Untitled';
     const timeFrame = text(o.timeFrame);
@@ -858,11 +921,9 @@ function formatOutcomes(outcomes: RO[], lines: string[]) {
       text(o.paramType),
       text(o.dispersionType),
       text(o.unitOfMeasure),
-      groupCount != null ? groupsLabel(groupCount) : '',
-      classCount != null ? `${classCount} classes` : '',
-      analysisCount != null
-        ? `${analysisCount} ${analysisCount === 1 ? 'analysis' : 'analyses'}`
-        : '',
+      groupCount != null ? countLabel(groupCount, 'group') : '',
+      classCount != null ? countLabel(classCount, 'class', 'classes') : '',
+      analysisCount != null ? countLabel(analysisCount, 'analysis', 'analyses') : '',
       o.reportingStatus ? `reporting: ${o.reportingStatus as string}` : '',
     ]
       .filter(Boolean)
@@ -949,15 +1010,15 @@ function formatAdverseEvents(ae: RO, lines: string[]) {
   const mortality = oneLine(text(ae.allCauseMortalityComment));
   if (mortality) lines.push(`All-cause mortality: ${mortality}`);
 
-  // Summary shape — counts, the id/title roster, and the ranked top-events view
-  // keyed against it; no raw event arrays. Detected on the summarizer's own
-  // keys, so a full module that happens to publish no events still takes the
-  // full path and renders its event groups.
+  // Summary shape — counts, the roster with each group's totals, and the ranked
+  // top-events view keyed against it; no raw event arrays. Detected on the
+  // summarizer's own keys, so a full module that happens to publish no events
+  // still takes the full path and renders its event groups.
   if ('groupCount' in ae || 'seriousEventCount' in ae || 'otherEventCount' in ae) {
     const parts = [
-      ae.groupCount != null ? groupsLabel(ae.groupCount) : '',
-      ae.seriousEventCount != null ? `${ae.seriousEventCount} serious events` : '',
-      ae.otherEventCount != null ? `${ae.otherEventCount} other events` : '',
+      ae.groupCount != null ? countLabel(ae.groupCount, 'group') : '',
+      ae.seriousEventCount != null ? countLabel(ae.seriousEventCount, 'serious event') : '',
+      ae.otherEventCount != null ? countLabel(ae.otherEventCount, 'other event') : '',
     ].filter(Boolean);
     if (parts.length) lines.push(parts.join(' | '));
     renderGroupRoster(ae, '', lines, 'Event Groups');
@@ -1015,17 +1076,19 @@ function formatAdverseEvents(ae: RO, lines: string[]) {
 function formatParticipantFlow(pf: RO, lines: string[]) {
   lines.push('\n### Participant Flow');
 
-  // Summary shape — only counts.
+  // Summary shape — its counts lead, then its roster and milestones take the
+  // full-mode path below, which renders them as it renders a full module's. The
+  // summary carries none of the prose, comments, units, or drop/withdraw rows,
+  // so those lines are absent rather than branched around.
   if ('groupCount' in pf || 'periodCount' in pf) {
     const parts = [
-      pf.groupCount != null ? groupsLabel(pf.groupCount) : '',
-      pf.periodCount != null ? `${pf.periodCount} periods` : '',
+      pf.groupCount != null ? countLabel(pf.groupCount, 'group') : '',
+      pf.periodCount != null ? countLabel(pf.periodCount, 'period') : '',
     ].filter(Boolean);
     if (parts.length) lines.push(parts.join(' | '));
-    return;
   }
 
-  // Full shape — recruitment context, the arm roster, then per-period milestones.
+  // Recruitment context, the arm roster, then per-period milestones.
   const recruitment = text(pf.recruitmentDetails);
   if (recruitment) lines.push(`Recruitment: ${recruitment}`);
   const preAssignment = text(pf.preAssignmentDetails);
@@ -1066,8 +1129,8 @@ function formatBaseline(bl: RO, lines: string[]) {
   // Summary shape — counts plus each measure's identifying metadata.
   if ('groupCount' in bl || 'measureCount' in bl) {
     const parts = [
-      bl.groupCount != null ? groupsLabel(bl.groupCount) : '',
-      bl.measureCount != null ? `${bl.measureCount} measures` : '',
+      bl.groupCount != null ? countLabel(bl.groupCount, 'group') : '',
+      bl.measureCount != null ? countLabel(bl.measureCount, 'measure') : '',
     ].filter(Boolean);
     if (parts.length) lines.push(parts.join(' | '));
     for (const m of measures ?? []) {
@@ -1127,14 +1190,47 @@ function formatMoreInfo(mi: RO, lines: string[]) {
     if (agr.otherDetails) lines.push(`  ${agr.otherDetails as string}`);
   }
   if (poc) {
-    const phone = poc.phoneExt ? `${poc.phone} ext. ${poc.phoneExt}` : poc.phone;
+    const phone = contactPhone(poc as StudyContact);
     const parts = [poc.title, poc.organization, poc.email, phone].filter(Boolean);
     if (parts.length) lines.push(oneLine(`**Point of Contact:** ${parts.join(' | ')}`));
   }
 }
 
+/** One journal article a study's record lists as reporting its results. */
+interface ResultPublication {
+  citation?: string;
+  pmid?: string;
+  retractions?: Array<{ pmid?: string; source?: string }>;
+}
+
+/**
+ * A study's RESULT references, in upstream order, each with whichever of its
+ * PMID, citation, and retraction notices the record holds — a reference with
+ * no PMID keeps its citation alone. BACKGROUND references are left out, and so
+ * are DERIVED ones, which the registry indexes by NCT number on its own rather
+ * than the study labelling them results. Read from
+ * `protocolSection.referencesModule`, which the batch projection and the whole
+ * single-study record both carry.
+ */
+function resultPublicationsOf(study: RawStudyShape): ResultPublication[] {
+  return (study.protocolSection?.referencesModule?.references ?? [])
+    .filter((ref) => ref.type === 'RESULT')
+    .map(({ citation, pmid, retractions }) => ({
+      ...(pmid ? { pmid } : {}),
+      ...(citation ? { citation } : {}),
+      ...(retractions?.length
+        ? {
+            retractions: retractions.map((r) => ({
+              ...(r.pmid ? { pmid: r.pmid } : {}),
+              ...(r.source ? { source: r.source } : {}),
+            })),
+          }
+        : {}),
+    }));
+}
+
 export const getStudyResults = tool('clinicaltrials_get_study_results', {
-  description: `Fetch clinical trial results data from ClinicalTrials.gov for completed studies — outcome measures with statistics, adverse events, participant flow, baseline characteristics, and results metadata (limitations & caveats, certain-agreement disclosure restrictions, results point of contact). Only available for studies where hasResults is true. Use clinicaltrials_search_studies first to find studies with results. Each call fetches up to ${NCT_IDS_PER_CALL} distinct NCT IDs and returns any further IDs in deferredNctIds for a follow-up call. A results-rich record can exceed 500KB per study in full mode — bound it with summary=true, narrower sections, or the outcomeLimit / adverseEventLimit caps; outcomeLimit / outcomeOffset also page summarized outcomes. A bounded list is resumable: outcomeOffset / seriousEventOffset / otherEventOffset start the next window, and each study's filtersApplied reports what was trimmed and the next offset for every list left short. A previous (alias) NCT ID resolves to its canonical study, named in canonicalNctId.`,
+  description: `Fetch clinical trial results data from ClinicalTrials.gov for completed studies — outcome measures with statistics, adverse events, participant flow, baseline characteristics, and results metadata (limitations & caveats, certain-agreement disclosure restrictions, results point of contact). Posted results exist only for studies where hasResults is true; the entry for a study without them names, in resultPublications, the journal articles its record lists as reporting its results (RESULT references, with PMID and citation), when it lists any. Use clinicaltrials_search_studies first to find studies with results. Each call fetches up to ${NCT_IDS_PER_CALL} distinct NCT IDs and returns any further IDs in deferredNctIds for a follow-up call. A results-rich record can exceed 500KB per study in full mode — bound it with summary=true, narrower sections, or the outcomeLimit / adverseEventLimit caps; outcomeLimit / outcomeOffset also page summarized outcomes. A bounded list is resumable: outcomeOffset / seriousEventOffset / otherEventOffset start the next window, and each study's filtersApplied reports what was trimmed and the next offset for every list left short. A previous (alias) NCT ID resolves to its canonical study, named in canonicalNctId.`,
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -1173,7 +1269,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     {
       reason: 'upstream_timeout',
       code: JsonRpcErrorCode.Timeout,
-      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) or 408 (request timeout), or sent no answer within the per-attempt timeout, on every attempt of the batch request.',
+      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) or 408 (request timeout), or sent no answer within the per-attempt timeout, on every attempt of the batch request or of a per-ID fetch.',
       recovery: RECOVERY_HINTS.upstream_timeout,
       retryable: true,
       thrownBy: 'service',
@@ -1181,7 +1277,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     {
       reason: 'upstream_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'Every attempt of the batch request failed on ClinicalTrials.gov’s side — HTTP 500, 502, or 503, a dropped connection or one the network gave up opening, or a 200 body that is not the JSON the route serves (an HTML page, unparseable text, the wrong shape) — or it answered the batch with another 5xx, such as 505, or the connection was refused or its host name did not resolve, none of which is retried.',
+      when: 'Every attempt of the batch request or of a per-ID fetch failed on ClinicalTrials.gov’s side — HTTP 500, 502, or 503, a dropped connection or one the network gave up opening, or a 200 body that is not the JSON the route serves (an HTML page, unparseable text, the wrong shape) — or it answered that request with another 5xx, such as 505, or the connection was refused or its host name did not resolve, none of which is retried.',
       recovery: RECOVERY_HINTS.upstream_unavailable,
       retryable: true,
       thrownBy: 'service',
@@ -1189,7 +1285,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     {
       reason: 'upstream_rejected',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'ClinicalTrials.gov refused the batch request with a status its API does not use for a bad query — HTTP 501, a 3xx, or a 4xx such as 401, 403, or 410 — or answered it with an HTML error page in place of its own 404.',
+      when: 'ClinicalTrials.gov refused the batch request or a per-ID fetch with a status its API does not use for a bad query — HTTP 501, a 3xx, or a 4xx such as 401, 403, or 410 — or answered it with an HTML error page in place of its own 404.',
       recovery: RECOVERY_HINTS.upstream_rejected,
       retryable: false,
       thrownBy: 'service',
@@ -1227,7 +1323,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
         .boolean()
         .default(false)
         .describe(
-          'Return condensed summaries instead of full data. Full mode renders every row and field on both output channels, so a large results set can exceed 500KB per study; summary mode typically cuts that to a few KB, scaling with the measure count rather than to a fixed ceiling. An outcome summary keeps the title, type, timeframe, paramType, dispersionType, unit, group/class/analysis counts, per-group denominators, a top-line projection of a single class/category cell — labelled with the class and category titles it came from, that class’s own denominators, and a count of the siblings it omits — and the first statistical analysis with its group description and compared groups named by title. The measurements outside that cell and the remaining analyses are dropped; re-run with summary=false to reach them. outcomeLimit / outcomeOffset page the summarized outcome list as they page full mode; the adverse-event bounds do not apply here, since topEvents ranks the whole event list. For a middle ground, keep full mode and cap the two lists that carry the bulk with outcomeLimit / adverseEventLimit.',
+          'Return condensed summaries instead of full data. Full mode renders every row and field on both output channels, so a large results set can exceed 500KB per study; summary mode typically cuts that to a few KB, scaling with the measure count and the participant flow’s groups × periods rather than to a fixed ceiling. An outcome summary keeps the title, type, timeframe, paramType, dispersionType, unit, group/class/analysis counts, per-group denominators, a top-line projection of a single class/category cell — labelled with the class and category titles it came from, that class’s own denominators, and a count of the siblings it omits — and the first statistical analysis with its group description and compared groups named by title. The measurements outside that cell and the remaining analyses are dropped; re-run with summary=false to reach them. An adverse-event summary keeps each event group’s death, serious, and other totals beside the ranked topEvents; a participant-flow summary keeps the group roster and every period’s milestones with per-group counts, leaving milestone comments and drop/withdraw reasons to full mode. outcomeLimit / outcomeOffset page the summarized outcome list as they page full mode; the adverse-event bounds do not apply here, since topEvents ranks the whole event list. For a middle ground, keep full mode and cap the two lists that carry the bulk with outcomeLimit / adverseEventLimit.',
         ),
       outcomeLimit: z
         .number()
@@ -1303,6 +1399,44 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
               ),
             title: z.string().describe('Study title.'),
             hasResults: z.boolean().describe('Whether study has posted results.'),
+            resultPublications: z
+              .array(
+                z
+                  .object({
+                    pmid: z
+                      .string()
+                      .optional()
+                      .describe('PubMed ID of the article — absent when the record lists none.'),
+                    citation: z
+                      .string()
+                      .optional()
+                      .describe('The citation as the record gives it.'),
+                    retractions: z
+                      .array(
+                        z
+                          .object({
+                            pmid: z
+                              .string()
+                              .optional()
+                              .describe('PubMed ID of the retraction notice.'),
+                            source: z
+                              .string()
+                              .optional()
+                              .describe('Where the retraction notice was published.'),
+                          })
+                          .describe('One retraction notice for the article.'),
+                      )
+                      .optional()
+                      .describe(
+                        'Retraction notices the record links to the article — absent when it has none.',
+                      ),
+                  })
+                  .describe('One RESULT reference of the study record.'),
+              )
+              .optional()
+              .describe(
+                'Journal articles the study record lists as reporting its results (its references of type RESULT), in registry order and uncapped — present only when hasResults is false and the record lists at least one. BACKGROUND and DERIVED references are not included; clinicaltrials_get_study_record lists every reference.',
+              ),
             outcomes: z
               .array(z.record(z.string(), z.unknown()))
               .optional()
@@ -1313,13 +1447,13 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
               .record(z.string(), z.unknown())
               .optional()
               .describe(
-                'Adverse events. Summary mode: timeFrame, frequencyThreshold, groupCount, seriousEventCount, otherEventCount, eventGroups (id and title of each event group), plus topEvents — up to 20 events ranked by the most participants affected in any one event group, each with term, organSystem, kind, and byGroup (one { groupId, numAffected, numAtRisk } row per event group; resolve groupId against eventGroups). Counts are never pooled across groups: groups can overlap (a crossover or second-course group re-counts participants of its parent arm), so compare arms row by row. Full mode: frequencyThreshold, eventGroups with descriptions and per-group totals, plus seriousEvents and otherEvents with per-event term and per-group affected/at-risk stats. frequencyThreshold, in either mode, is the reporting threshold as upstream sends it: other (non-serious) events are listed only when their frequency reaches it, so an other event the study does not list may still have occurred below it. Usually a percentage ("5", "0"), occasionally text ("any"); absent when the study publishes none.',
+                'Adverse events. Summary mode: timeFrame, frequencyThreshold, groupCount, seriousEventCount, otherEventCount, eventGroups (each event group’s id, title, and whole-study totals — deathsNumAffected / deathsNumAtRisk, seriousNumAffected / seriousNumAtRisk, otherNumAffected / otherNumAtRisk — as upstream sends them; a total the study does not publish is absent, not 0), plus topEvents — up to 20 events ranked by the most participants affected in any one event group, each with term, organSystem, kind, and byGroup (one { groupId, numAffected, numAtRisk } row per event group; resolve groupId against eventGroups). Counts are never pooled across groups: groups can overlap (a crossover or second-course group re-counts participants of its parent arm), so compare arms row by row. Full mode: frequencyThreshold, eventGroups with descriptions and per-group totals, plus seriousEvents and otherEvents with per-event term and per-group affected/at-risk stats. frequencyThreshold, in either mode, is the reporting threshold as upstream sends it: other (non-serious) events are listed only when their frequency reaches it, so an other event the study does not list may still have occurred below it. Usually a percentage ("5", "0"), occasionally text ("any"); absent when the study publishes none.',
               ),
             participantFlow: z
               .record(z.string(), z.unknown())
               .optional()
               .describe(
-                'Participant flow milestones and drop-outs. Summary mode: groupCount, periodCount. Full mode: adds groups and periods with per-period milestones, achievements, and dropWithdraws.',
+                'Participant flow milestones and drop-outs. Summary mode: groupCount, periodCount, groups (id and title of each flow group), and periods — each with its title and every milestone in upstream order as { type, achievements: [{ groupId, numSubjects }] }, numSubjects verbatim as upstream sends it (a string); resolve groupId against groups. Full mode: the whole module — adds recruitment and pre-assignment details, group descriptions, milestone and achievement comments, numUnits, and each period’s dropWithdraws.',
               ),
             baseline: z
               .record(z.string(), z.unknown())
@@ -1422,7 +1556,9 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     studiesWithoutResults: z
       .array(z.string())
       .optional()
-      .describe('NCT IDs that do not have results data.'),
+      .describe(
+        'NCT IDs of the studies with no results posted to ClinicalTrials.gov. Each still has its entry in results, carrying resultPublications when its record lists any.',
+      ),
     fetchErrors: z
       .array(
         z
@@ -1433,7 +1569,9 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
           .describe('A single fetch error.'),
       )
       .optional()
-      .describe('Studies that could not be fetched.'),
+      .describe(
+        'Requested NCT IDs with no study on ClinicalTrials.gov: absent from the batch answer, or refused as not found when fetched one by one. Any other failure ends the call with its own error and never lands here.',
+      ),
     deferredNctIds: z
       .array(z.string())
       .optional()
@@ -1513,6 +1651,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       nctId: string;
       outcomes?: Record<string, unknown>[];
       participantFlow?: Record<string, unknown>;
+      resultPublications?: ResultPublication[];
       title: string;
     }
 
@@ -1523,25 +1662,17 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     const erroredIds = new Set<string>();
 
     /**
-     * The error a failed fetch ends the whole call with, or undefined when the
-     * failure is one ID's own. A rate limit, the call's spent time budget, and
-     * the caller's cancellation would fail every request still to come the
-     * same way, so answering one with more sequential requests only delays the
-     * same failure. A rate limit leaves as this tool's declared retryable
-     * contract, keyed on the service's typed `data.reason` — the tag it sets
-     * once its retries are spent against a 429 — never on upstream message
-     * text; the other two keep their own code.
+     * The error a failed fetch ends the whole call with — every failure except
+     * the one each catch below keeps as an ID's own. A rate limit leaves as
+     * this tool's declared retryable contract, keyed on the service's typed
+     * `data.reason` — the tag it sets once its retries are spent against a
+     * 429 — never on upstream message text; anything else keeps its own code
+     * and reason.
      */
-    const callEnding = (err: unknown): McpError | undefined => {
-      if (!(err instanceof McpError)) return;
-      if (err.data?.reason === 'rate_limited') {
-        return ctx.fail('rate_limited', err.message, undefined, { cause: err });
-      }
-      const ends =
-        err.data?.reason === 'retry_deadline_exceeded' ||
-        err.code === JsonRpcErrorCode.RequestCancelled;
-      return ends ? err : undefined;
-    };
+    const callEnding = (err: unknown): unknown =>
+      err instanceof McpError && err.data?.reason === 'rate_limited'
+        ? ctx.fail('rate_limited', err.message, undefined, { cause: err })
+        : err;
 
     let fetched: RawStudyShape[];
     try {
@@ -1551,11 +1682,11 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       // malformed — an ordinary nonexistent-but-well-formed ID is answered 200
       // with the record simply absent — and that rejection is the one failure
       // the per-ID fallback can answer: valid IDs still succeed and only the
-      // failing ones land in fetchErrors. Anything else — an outage, the
+      // missing ones land in fetchErrors. Anything else — an outage, the
       // call's spent budget, a rate limit, a cancellation — would fail each
       // per-ID request the same way, so it ends the call.
       if (!(err instanceof McpError && err.data?.reason === 'ids_not_found')) {
-        throw callEnding(err) ?? err;
+        throw callEnding(err);
       }
       ctx.log.warning('Batch fetch rejected; falling back to per-ID fetches', {
         count: nctIds.length,
@@ -1567,10 +1698,16 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
         try {
           fetched.push((await service.getStudy(nctId, ctx)) as RawStudyShape);
         } catch (perIdErr) {
-          const ending = callEnding(perIdErr);
-          if (ending) throw ending;
-          const perIdMessage = perIdErr instanceof Error ? perIdErr.message : String(perIdErr);
-          fetchErrors.push({ nctId, error: perIdMessage });
+          // Only a study that does not exist is this ID's own failure — a 404,
+          // or the 400 the single-study route answers NCT00000000 with. Any
+          // other failure ends the call as it would on the batch: an outage, a
+          // rate limit, or the spent budget meets every remaining ID the same
+          // way, and a 5xx confined to one record already fails any batch that
+          // carries it (#201).
+          if (!(perIdErr instanceof McpError && perIdErr.data?.reason === 'study_not_found')) {
+            throw callEnding(perIdErr);
+          }
+          fetchErrors.push({ nctId, error: perIdErr.message });
           erroredIds.add(nctId);
         }
       }
@@ -1607,7 +1744,14 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
 
       if (!hasResults) {
         studiesWithoutResults.push(nctId);
-        results.push({ ...identity, hasResults: false });
+        // The same in either mode, and only here: posted results are the whole
+        // answer for a study that has them.
+        const resultPublications = resultPublicationsOf(study);
+        results.push({
+          ...identity,
+          hasResults: false,
+          ...(resultPublications.length > 0 ? { resultPublications } : {}),
+        });
         continue;
       }
 
@@ -1695,8 +1839,17 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       // canonical ID named beside it when following an alias landed elsewhere.
       const id = r.canonicalNctId ? `${r.nctId} (canonical ${r.canonicalNctId})` : r.nctId;
       lines.push(`## ${id}: ${oneLine(r.title)}`);
+      // Keyed on presence, not on hasResults: the handler sets it only beside
+      // hasResults false.
+      const publications = r.resultPublications ?? [];
+      if (publications.length > 0) {
+        lines.push(
+          `No results posted to ClinicalTrials.gov. Result publications (${publications.length}):`,
+        );
+        for (const publication of publications) lines.push(...formatReferenceLines(publication));
+      }
       if (!r.hasResults) {
-        lines.push('No results available.\n');
+        lines.push(publications.length > 0 ? '' : 'No results available.\n');
         continue;
       }
 

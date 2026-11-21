@@ -23,7 +23,7 @@ import {
 } from '@/mcp-server/tools/definitions/find-eligible.tool.js';
 import { readMarkdown } from '../../../helpers/commonmark.js';
 import { expectLinearGrowth, LINE_BREAK_SHAPES } from '../../../helpers/cpu-timing.js';
-import { loadStudyFixture } from '../../../helpers/format-parity.js';
+import { loadStudyFixture, missingLeaves } from '../../../helpers/format-parity.js';
 
 /** The once-per-response caveat on the results path (#147), pinned verbatim. */
 const CANDIDATE_NOTICE =
@@ -378,7 +378,7 @@ describe('findEligible', () => {
       expect(call.fields).toContain('MinimumAge');
       expect(call.fields).toContain('LocationCity');
       expect(call.fields).toContain('HealthyVolunteers');
-      expect(call.fields).toContain('CentralContactEMail');
+      expect(call.fields).toContain('CentralContact');
     });
 
     it('echoes search criteria including the reproducible query strings in enrichment (#91)', async () => {
@@ -479,7 +479,7 @@ describe('findEligible', () => {
 
       const enrichment = getEnrichment(ctx);
       expect(enrichment.notice).toContain('Remove city/state to search the whole country');
-      expect(enrichment.notice).toContain('geoFilter');
+      expect(enrichment.notice).toContain('location.near');
     });
 
     // Every step the no-match notice names must widen the stage where the
@@ -530,13 +530,14 @@ describe('findEligible', () => {
             location: { country: 'United States', state: 'Alaska', city: 'Nome' },
           },
         ])(
-          'names removing city/state once for a $shape request, then the geoFilter replay',
+          'names removing city/state once for a $shape request, then location.near (#205)',
           async ({ location }) => {
             const { notice } = await run({ ...baseInput, conditions: ['sickle cell'], location });
 
             expect(notice).toBe(
-              `No studies found for "sickle cell" matching the specified criteria. 1224 studies match the condition, but none are in the specified location. Remove city/state to search the whole country, or ${GEO_STEP}.`,
+              `No studies found for "sickle cell" matching the specified criteria. 1224 studies match the condition, but none are in the specified location. Remove city/state to search the whole country, or replace them with location.near — the patient's coordinates and a radiusMi, default 50 — to match sites by distance.`,
             );
+            expect(notice).not.toContain('geoFilter');
             expect(occurrences(notice, 'city/state')).toBe(1);
             expect(notice).not.toContain('just the country');
           },
@@ -1631,6 +1632,55 @@ describe('findEligible', () => {
       expect((blocks[0] as { text: string }).text).toContain('Dr. Smith');
     });
 
+    it('renders every central contact on one Contact line, comma-joined within a contact', () => {
+      const blocks = findEligible.format!({
+        studies: [
+          {
+            protocolSection: {
+              identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+              contactsLocationsModule: {
+                centralContacts: [
+                  { name: 'Dr. Smith', phone: '555-1234', email: 'smith@test.com' },
+                  { name: 'Coordinator', email: 'coord@test.org' },
+                ],
+              },
+            },
+          },
+        ],
+        totalCount: 1,
+      });
+      const lines = (blocks[0] as { text: string }).text.split('\n');
+      expect(lines).toContain(
+        '  Contact: Dr. Smith, 555-1234, smith@test.com | Coordinator, coord@test.org',
+      );
+    });
+
+    it("renders a central contact's role after its name, as the registry returns it", () => {
+      const blocks = findEligible.format!({
+        studies: [
+          {
+            protocolSection: {
+              identificationModule: { nctId: 'NCT12345678', briefTitle: 'X' },
+              contactsLocationsModule: {
+                centralContacts: [
+                  {
+                    name: 'Dr. Smith',
+                    role: 'CONTACT',
+                    phone: '555-1234',
+                    phoneExt: '9',
+                    email: 'smith@test.com',
+                  },
+                ],
+              },
+            },
+          },
+        ],
+        totalCount: 1,
+      });
+      const lines = (blocks[0] as { text: string }).text.split('\n');
+      expect(lines).toContain('  Contact: Dr. Smith, CONTACT, 555-1234 ext. 9, smith@test.com');
+    });
+
     it('renders all interventions, locations, contacts, and the full summary without caps (#91)', () => {
       // Reproduces the reported NCT07271186 shape: many sites/interventions and a
       // long summary that structuredContent carries in full. content[] must match —
@@ -1731,7 +1781,7 @@ describe('findEligible', () => {
       });
       const text = (blocks[0] as { text: string }).text;
       expect(text).toContain(
-        'Yale, New Haven, Connecticut, United States [RECRUITING] | University of South Florida, Tampa, Florida, United States [NOT_YET_RECRUITING]',
+        '    - Yale, New Haven, Connecticut, United States [RECRUITING]\n    - University of South Florida, Tampa, Florida, United States [NOT_YET_RECRUITING]\n',
       );
       // A site with no published status renders bare — no fabricated status.
       expect(text).toContain('Unstated Site, Boston, Massachusetts, United States');
@@ -1815,6 +1865,209 @@ describe('findEligible', () => {
       expect(seattleIdx).toBeGreaterThan(-1);
       // Seattle Site comes before NY Site 3 (or NY Site 3 is in the +N more bucket)
       if (nySite3Idx > -1) expect(seattleIdx).toBeLessThan(nySite3Idx);
+    });
+  });
+
+  describe('site contacts (#202)', () => {
+    const swedish = {
+      facility: 'Swedish Medical Center-First Hill',
+      city: 'Seattle',
+      state: 'Washington',
+      country: 'United States',
+      status: 'RECRUITING',
+      contacts: [
+        {
+          name: 'Site Public Contact',
+          role: 'CONTACT',
+          phone: '206-215-2343',
+          email: 'PCRC-NCORP@Swedish.org',
+        },
+        { name: 'Charles W. Drescher', role: 'PRINCIPAL_INVESTIGATOR' },
+      ],
+    };
+    const virginiaMason = {
+      facility: 'Virginia Mason',
+      city: 'Seattle',
+      state: 'Washington',
+      country: 'United States',
+      status: 'RECRUITING',
+    };
+
+    /** One candidate carrying `locations` and, when given, central contacts. */
+    const candidate = (locations: unknown[], centralContacts?: unknown[]) => ({
+      protocolSection: {
+        identificationModule: { nctId: 'NCT06058377', briefTitle: 'X' },
+        contactsLocationsModule: { locations, ...(centralContacts ? { centralContacts } : {}) },
+      },
+    });
+    const formattedLines = (study: Record<string, unknown>) =>
+      (findEligible.format!({ studies: [study], totalCount: 1 })[0] as { text: string }).text.split(
+        '\n',
+      );
+    /** A candidate's lines from its Locations header to its end. */
+    const fromLocations = (lines: string[]) => lines.slice(lines.indexOf('  Locations:'));
+    const contentText = (result: { content: unknown }) =>
+      (result.content as { text: string }[]).map((b) => b.text).join('\n');
+    const boundedLocations = (result: { structuredContent?: unknown }) =>
+      (
+        result.structuredContent as {
+          studies: Array<{
+            protocolSection: { contactsLocationsModule: { locations: Record<string, unknown>[] } };
+          }>;
+        }
+      ).studies[0]!.protocolSection.contactsLocationsModule.locations;
+
+    it("requests each site's contacts and the central contacts as groups, in a list no longer than before site contacts", async () => {
+      mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+      const ctx = createMockContext({ errors: findEligible.errors });
+      await findEligible.handler(findEligible.input!.parse(baseInput), ctx);
+
+      const fields = mockService.searchStudies.mock.calls[0]![0].fields as string[];
+      expect(fields).toEqual(expect.arrayContaining(['LocationContact', 'CentralContact']));
+      // No contact leaf beside its group: the leaf names are what outgrew the request.
+      expect(fields.filter((name) => /^(?:Location|Central)Contact./.test(name))).toEqual([]);
+      // The list sent before site contacts joined it, 22 names, was 345 bytes
+      // joined with `|` and percent-encoded. A longer one refuses a long
+      // conditions call that fit ClinicalTrials.gov's 8,177-byte request limit.
+      expect(encodeURIComponent(fields.join('|')).length).toBeLessThanOrEqual(345);
+    });
+
+    it('renders one line per site, each followed by its own contacts', () => {
+      expect(fromLocations(formattedLines(candidate([swedish, virginiaMason])))).toEqual([
+        '  Locations:',
+        '    - Swedish Medical Center-First Hill, Seattle, Washington, United States [RECRUITING]',
+        '      Contact: Site Public Contact | CONTACT | 206-215-2343 | PCRC-NCORP@Swedish.org',
+        '      Contact: Charles W. Drescher | PRINCIPAL_INVESTIGATOR',
+        // A site with no contacts has no Contact line.
+        '    - Virginia Mason, Seattle, Washington, United States [RECRUITING]',
+      ]);
+    });
+
+    it('renders an extension after its phone, and only the keys a sparse contact has', () => {
+      const site = {
+        facility: 'Clinique',
+        country: 'France',
+        contacts: [
+          { name: 'Dana Lee', phone: '555-0100', phoneExt: '42' },
+          { phoneExt: '6405' },
+          { email: 'only@site.org' },
+          {},
+        ],
+      };
+      expect(fromLocations(formattedLines(candidate([site])))).toEqual([
+        '  Locations:',
+        '    - Clinique, France',
+        '      Contact: Dana Lee | 555-0100 ext. 42',
+        '      Contact: ext. 6405',
+        '      Contact: only@site.org',
+      ]);
+    });
+
+    it('renders every contact a site registers, with no per-site bound', () => {
+      const contacts = Array.from({ length: 57 }, (_, i) => ({
+        name: `Investigator ${i + 1}`,
+        role: 'SUB_INVESTIGATOR',
+      }));
+      const site = {
+        facility: 'Hôpitaux Universitaires de Strasbourg',
+        city: 'Strasbourg',
+        country: 'France',
+        status: 'RECRUITING',
+        contacts,
+      };
+      expect(fromLocations(formattedLines(candidate([site])))).toEqual([
+        '  Locations:',
+        '    - Hôpitaux Universitaires de Strasbourg, Strasbourg, France [RECRUITING]',
+        ...contacts.map((c) => `      Contact: ${c.name} | SUB_INVESTIGATOR`),
+      ]);
+    });
+
+    it("renders a central contact's extension after its phone, the line otherwise unchanged", () => {
+      const lines = formattedLines(
+        candidate(
+          [],
+          [
+            { name: 'Dr. Smith', phone: '555-1234', phoneExt: '9', email: 'smith@test.com' },
+            { name: 'Jianping Jia, Doctor', phoneExt: '010-83108650', email: 'jiajp@vip.126.com' },
+          ],
+        ),
+      );
+      expect(lines).toContain(
+        '  Contact: Dr. Smith, 555-1234 ext. 9, smith@test.com | Jianping Jia, Doctor, ext. 010-83108650, jiajp@vip.126.com',
+      );
+    });
+
+    it("returns each bounded site's contacts on both surfaces, and no dropped site's", async () => {
+      const boston = {
+        facility: 'Dana-Farber',
+        city: 'Boston',
+        state: 'Massachusetts',
+        country: 'United States',
+        status: 'RECRUITING',
+        contacts: [{ name: 'Boston Coordinator', role: 'CONTACT' }],
+      };
+      mockService.searchStudies.mockResolvedValue({
+        studies: [candidate([swedish, boston, virginiaMason])],
+        totalCount: 1,
+      });
+      const result = await runToolContract(findEligible, baseInput);
+
+      // Sites gain only contacts; every value is as upstream sent it.
+      const locations = boundedLocations(result);
+      expect(locations).toEqual([swedish, virginiaMason]);
+      expect(locations[1]).not.toHaveProperty('contacts');
+      const text = contentText(result);
+      expect(text).toContain(
+        [
+          '    - Swedish Medical Center-First Hill, Seattle, Washington, United States [RECRUITING]',
+          '      Contact: Site Public Contact | CONTACT | 206-215-2343 | PCRC-NCORP@Swedish.org',
+          '      Contact: Charles W. Drescher | PRINCIPAL_INVESTIGATOR',
+          '    - Virginia Mason, Seattle, Washington, United States [RECRUITING]',
+        ].join('\n'),
+      );
+      expect(text).not.toContain('Boston Coordinator');
+      expect(missingLeaves(locations, text)).toEqual([]);
+      // The field dump skips contactsLocationsModule, so no contact value renders twice.
+      expect(text.split('Site Public Contact')).toHaveLength(2);
+      expect(text.split('PRINCIPAL_INVESTIGATOR')).toHaveLength(2);
+    });
+
+    it("keeps the added recruiting site's contacts, rendered after its distance note", async () => {
+      const closed = {
+        facility: 'Swedish Medical Center',
+        city: 'Seattle',
+        state: 'Washington',
+        country: 'United States',
+        status: 'NOT_YET_RECRUITING',
+        geoPoint: { lat: 47.6062, lon: -122.3321 },
+        contacts: [{ name: 'Closed Site Contact' }],
+      };
+      const renton = {
+        facility: 'UW Medicine Valley Medical Center',
+        city: 'Renton',
+        state: 'Washington',
+        country: 'United States',
+        status: 'RECRUITING',
+        geoPoint: { lat: 47.4829, lon: -122.2171 },
+        contacts: [{ name: 'Renton Coordinator', role: 'CONTACT', phone: '425-228-3440' }],
+      };
+      mockService.searchStudies.mockResolvedValue({
+        studies: [candidate([closed, renton])],
+        totalCount: 1,
+      });
+      const result = await runToolContract(findEligible, baseInput);
+
+      const admitted = boundedLocations(result)[1]!;
+      expect(admitted).toMatchObject({ facility: renton.facility, contacts: renton.contacts });
+      expect(admitted.distanceMi).toEqual(expect.any(Number));
+      expect(contentText(result)).toContain(
+        [
+          '    - Swedish Medical Center, Seattle, Washington, United States [NOT_YET_RECRUITING]',
+          '      Contact: Closed Site Contact',
+          `    - UW Medicine Valley Medical Center, Renton, Washington, United States [RECRUITING] (${admitted.distanceMi} mi from the nearest matched site)`,
+          '      Contact: Renton Coordinator | CONTACT | 425-228-3440',
+        ].join('\n'),
+      );
     });
   });
 
@@ -3146,7 +3399,7 @@ describe('findEligible', () => {
           retrieveFullStudyWith: 'clinicaltrials_get_study_record',
         });
         expect(text).toContain(
-          'none of them is recruiting, so the nearest recruiting site is included',
+          'none of them is recruiting, so the nearest recruiting site in the requested country is included, or the nearest anywhere when none recruits there',
         );
         expect(text).toContain(
           'Huntsman Cancer Institute, Salt Lake City, Utah, United States [RECRUITING] (699.8 mi from the nearest matched site)',
@@ -4099,7 +4352,7 @@ describe('findEligible', () => {
           '  Sites: showing 2 of 14 registered (2 match the requested location). Full site list: clinicaltrials_get_study_record with NCT07864168.',
         );
         expect(text).toContain(
-          '  Locations: Renton, Renton, Washington, United States [RECRUITING] | Seattle, Seattle, Washington, United States [RECRUITING]\n',
+          '  Locations:\n    - Renton, Renton, Washington, United States [RECRUITING]\n    - Seattle, Seattle, Washington, United States [RECRUITING]\n',
         );
         expect(text).not.toContain('Chula Vista');
         const sc = result.structuredContent as { studies: CandidateStudy[] };
@@ -4126,6 +4379,561 @@ describe('findEligible', () => {
           expect.anything(),
         );
         expect((getEnrichment(ctx).searchCriteria as { location: string }).location).toBe(expected);
+      });
+    });
+
+    // A radius around the patient in place of city and state, with
+    // clinicaltrials_get_study_record nearLocation's names, units, and bounds.
+    describe('location.near — distance from the patient (#205)', () => {
+      /** Miles in one degree of latitude on the sphere the distances are measured on. */
+      const MI_PER_DEG_LAT = (3958.7613 * Math.PI) / 180;
+      const SEATTLE = { lat: 47.6062, lon: -122.3321 };
+      /** A point due north of SEATTLE, exactly `miles` away along the meridian. */
+      const northMi = (miles: number) => ({
+        lat: SEATTLE.lat + miles / MI_PER_DEG_LAT,
+        lon: SEATTLE.lon,
+      });
+      const US = 'United States';
+      const at = (facility: string, miles: number, status = 'RECRUITING', country = US) =>
+        site(facility, `${facility} City`, 'Washington', country, status, northMi(miles));
+      const nearInput = (
+        near: Record<string, unknown> = {},
+        extra: Record<string, unknown> = {},
+      ) => ({
+        ...baseInput,
+        location: { country: US, near: { ...SEATTLE, radiusMi: 15, ...near } },
+        ...extra,
+      });
+      const GEO_15 = 'distance(47.6062,-122.3321,15mi)';
+      const COUNTRY_QUERY = 'SEARCH[Location](AREA[LocationCountry]"United States")';
+      const LOCATION_CONFLICT_HINT =
+        'Drop location.city and location.state and keep location.near with location.country to match sites by distance from the patient, or drop location.near to match by city and state.';
+
+      type Site = Record<string, unknown> & { distanceMi?: number; facility?: string };
+      const sitesOf = (candidate: CandidateStudy) =>
+        (candidate.protocolSection.contactsLocationsModule?.locations ?? []) as Site[];
+      const byDistance = (candidate: CandidateStudy) =>
+        sitesOf(candidate).map((l) => [l.facility, l.distanceMi]);
+      const textOf = (result: Awaited<ReturnType<typeof runToolContract>>) =>
+        (result.content as { text: string }[]).map((b) => b.text).join('\n');
+      /** Both surfaces of one call answering `studies`. */
+      const surfaces = async (
+        studies: unknown[],
+        input: z.input<typeof findEligible.input> = nearInput(),
+      ) => {
+        mockService.searchStudies.mockResolvedValue({ studies, totalCount: studies.length });
+        const result = await runToolContract(findEligible, input);
+        expect(result.isError).toBeFalsy();
+        const sc = result.structuredContent as {
+          near?: unknown;
+          searchCriteria: Record<string, unknown>;
+          studies: CandidateStudy[];
+        };
+        return { sc, text: textOf(result) };
+      };
+
+      describe('input', () => {
+        const parse = (near: Record<string, unknown>) =>
+          findEligible.input!.parse({ ...baseInput, location: { country: US, near } }).location
+            .near;
+
+        it('defaults radiusMi to 50, allows decimals, and sets no maximum', () => {
+          expect(parse({ lat: 47.6, lon: -122.3 })).toEqual({
+            lat: 47.6,
+            lon: -122.3,
+            radiusMi: 50,
+          });
+          for (const radiusMi of [1, 1.5, 25, 1_000_000])
+            expect(parse({ ...SEATTLE, radiusMi })?.radiusMi).toBe(radiusMi);
+          for (const corner of [
+            { lat: 90, lon: 180 },
+            { lat: -90, lon: -180 },
+          ])
+            expect(parse(corner)).toEqual({ ...corner, radiusMi: 50 });
+        });
+
+        it.each([
+          { problem: 'lat 91', near: { lat: 91, lon: 0 } },
+          { problem: 'lat -90.5', near: { lat: -90.5, lon: 0 } },
+          { problem: 'lon 181', near: { lat: 0, lon: 181 } },
+          { problem: 'radiusMi 0', near: { ...SEATTLE, radiusMi: 0 } },
+          { problem: 'radiusMi 0.5', near: { ...SEATTLE, radiusMi: 0.5 } },
+          { problem: 'no lon', near: { lat: 47.6 } },
+          { problem: 'an unknown key', near: { ...SEATTLE, radius: 15 } },
+        ])('rejects $problem before any request, never clamping it', async ({ near }) => {
+          // Deliberately schema-invalid, so it cannot carry the input type.
+          const result = await runToolContract(findEligible, {
+            ...baseInput,
+            location: { country: US, near },
+          } as never);
+          expect(result.isError).toBe(true);
+          expect((result.structuredContent as { error: { code: number } }).error.code).toBe(
+            JsonRpcErrorCode.InvalidParams,
+          );
+          expect(mockService.searchStudies).not.toHaveBeenCalled();
+          expect(mockService.countStudies).not.toHaveBeenCalled();
+        });
+      });
+
+      describe('location_conflict', () => {
+        it.each([
+          { given: 'location.city', place: { city: 'Seattle' } },
+          { given: 'location.state', place: { state: 'Washington' } },
+          { given: 'location.city and location.state', place: { city: 'Seattle', state: 'WA' } },
+        ])(
+          'fails with $given beside near, on both surfaces, before any request',
+          async ({ given, place }) => {
+            const result = await runToolContract(findEligible, {
+              ...baseInput,
+              location: { country: US, near: { ...SEATTLE, radiusMi: 15 }, ...place },
+            });
+
+            expect(result.isError).toBe(true);
+            const error = (
+              result.structuredContent as {
+                error: { code: number; data: Record<string, unknown>; message: string };
+              }
+            ).error;
+            expect(error.code).toBe(JsonRpcErrorCode.ValidationError);
+            expect(error.data).toMatchObject({
+              reason: 'location_conflict',
+              recovery: { hint: LOCATION_CONFLICT_HINT },
+            });
+            expect(error.message).toContain(`location.near cannot be combined with ${given}:`);
+            const text = readMarkdown(textOf(result));
+            expect(text).toContain(`location.near cannot be combined with ${given}:`);
+            expect(text).toContain(`Recovery: ${LOCATION_CONFLICT_HINT}`);
+            expect(mockService.searchStudies).not.toHaveBeenCalled();
+            expect(mockService.countStudies).not.toHaveBeenCalled();
+          },
+        );
+
+        // A city or state with no content is unset (#145), so it does not conflict.
+        it.each([{ city: '   ' }, { state: '""' }, { city: '​', state: ' " ' }])(
+          'lets a city or state with no content ride with near: %o',
+          async (place) => {
+            mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+            const result = await runToolContract(findEligible, {
+              ...baseInput,
+              location: { country: US, near: { ...SEATTLE, radiusMi: 15 }, ...place },
+            });
+            expect(result.isError).toBeFalsy();
+            expect(mockService.searchStudies).toHaveBeenCalledWith(
+              expect.objectContaining({ queryLocn: COUNTRY_QUERY, filterGeo: GEO_15 }),
+              expect.anything(),
+            );
+          },
+        );
+      });
+
+      describe('upstream requests and the echo', () => {
+        it('sends filter.geo beside the country on the main search and the location count only', async () => {
+          mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+          const ctx = createMockContext({ errors: findEligible.errors });
+          await findEligible.handler(findEligible.input!.parse(nearInput()), ctx);
+
+          expect(mockService.searchStudies).toHaveBeenCalledWith(
+            expect.objectContaining({ queryLocn: COUNTRY_QUERY, filterGeo: GEO_15 }),
+            ctx,
+          );
+          expect(mockService.countStudies.mock.calls.map(([params]) => params)).toEqual([
+            { queryCond: '"Type 2 Diabetes"', includeUnknownEnrollment: true },
+            {
+              queryCond: '"Type 2 Diabetes"',
+              queryLocn: COUNTRY_QUERY,
+              filterGeo: GEO_15,
+              includeUnknownEnrollment: true,
+            },
+          ]);
+        });
+
+        it('sends the default 50 mi radius when radiusMi is omitted', async () => {
+          mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+          await runToolContract(findEligible, {
+            ...baseInput,
+            location: { country: US, near: SEATTLE },
+          });
+          expect(mockService.searchStudies).toHaveBeenCalledWith(
+            expect.objectContaining({ filterGeo: 'distance(47.6062,-122.3321,50mi)' }),
+            expect.anything(),
+          );
+        });
+
+        it('reaches the upstream URL in plain decimal, never exponent notation', async () => {
+          const { ClinicalTrialsService } = await vi.importActual<
+            typeof import('@/services/clinical-trials/clinical-trials-service.js')
+          >('@/services/clinical-trials/clinical-trials-service.js');
+          const sent: URL[] = [];
+          vi.stubGlobal('fetch', (input: string | URL | Request) => {
+            const url = new URL(input instanceof Request ? input.url : input);
+            sent.push(url);
+            return Promise.resolve(
+              url.searchParams.get('pageSize') === '1'
+                ? Response.json({ studies: [], totalCount: 4 })
+                : Response.json({ studies: [], totalCount: 0 }),
+            );
+          });
+          vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+          try {
+            mockGetService.mockReturnValue(
+              new ClinicalTrialsService(
+                { apiBaseUrl: 'https://test.api/v2', requestTimeoutMs: 30_000, maxPageSize: 100 },
+                { validateFieldsLocally: false },
+              ),
+            );
+            let settled = false;
+            const outcome = runToolContract(
+              findEligible,
+              nearInput({ lat: 0.0000001, lon: -0.0000002, radiusMi: 1.5 }, { conditions: ['x'] }),
+            ).finally(() => {
+              settled = true;
+            });
+            while (!settled) await vi.advanceTimersToNextTimerAsync();
+            expect((await outcome).isError).toBeFalsy();
+          } finally {
+            vi.useRealTimers();
+            vi.unstubAllGlobals();
+          }
+
+          const geo = 'distance(0.0000001,-0.0000002,1.5mi)';
+          // The main search, the condition count, then the location count.
+          expect(sent.map((u) => u.searchParams.get('filter.geo'))).toEqual([geo, null, geo]);
+          for (const url of sent) expect(url.href).not.toMatch(/e-7|e-0/i);
+        });
+
+        it('echoes geoFilter in searchCriteria and the replay line, and counts the radius in the funnel', async () => {
+          mockService.countStudies.mockImplementation(async (params: { filterGeo?: string }) =>
+            params.filterGeo ? 120 : 9000,
+          );
+          mockService.searchStudies.mockResolvedValue({
+            studies: [studyWith('NCT1', [at('Renton', 3)])],
+            totalCount: 78,
+          });
+          const result = await runToolContract(findEligible, nearInput());
+          const sc = result.structuredContent as {
+            funnel: Record<string, number>;
+            searchCriteria: Record<string, unknown>;
+          };
+
+          expect(sc.searchCriteria).toMatchObject({ location: COUNTRY_QUERY, geoFilter: GEO_15 });
+          expect(Object.keys(sc.searchCriteria).slice(-2)).toEqual(['advancedFilter', 'geoFilter']);
+          expect(sc.funnel).toEqual({
+            conditionMatched: 9000,
+            locationMatched: 120,
+            demographicsMatched: 78,
+          });
+          const text = readMarkdown(textOf(result));
+          expect(text).toMatch(
+            /Reproduce via clinicaltrials_search_studies: .*locationQuery=SEARCH\[Location\]\(AREA\[LocationCountry\]"United States"\) \| .*advancedFilter=.* \| geoFilter=distance\(47\.6062,-122\.3321,15mi\) \| includeUnknownEnrollment=true/,
+          );
+        });
+
+        it('leaves a call without near as it was: no filter.geo, no geoFilter echo, no near echo', async () => {
+          mockService.searchStudies.mockResolvedValue({
+            studies: [studyWith('NCT1', [site('Seattle A', 'Seattle', 'Washington')])],
+            totalCount: 1,
+          });
+          const result = await runToolContract(findEligible, baseInput);
+          const sc = result.structuredContent as Record<string, unknown> & {
+            searchCriteria: Record<string, unknown>;
+          };
+
+          expect(mockService.searchStudies.mock.calls[0]![0]).not.toHaveProperty('filterGeo');
+          expect(mockService.countStudies).toHaveBeenCalled();
+          for (const [params] of mockService.countStudies.mock.calls)
+            expect(params).not.toHaveProperty('filterGeo');
+          expect(sc.searchCriteria).not.toHaveProperty('geoFilter');
+          expect(sc.searchCriteria.location).toBe(BASE_LOCATION_QUERY);
+          expect(sc).not.toHaveProperty('near');
+          const text = textOf(result);
+          expect(text).not.toContain('geoFilter');
+          expect(text).not.toContain('location.near');
+        });
+      });
+
+      describe('sites bounded to the radius', () => {
+        it('keeps the sites within the radius, nearest first, each with distanceMi from the patient', async () => {
+          const { sc, text } = await surfaces([
+            studyWith('NCT1', [
+              at('Twelve', 12),
+              site('No Coords', 'Seattle', 'Washington'),
+              at('Three', 3),
+              at('Forty', 40),
+              at('Seven', 7, 'ACTIVE_NOT_RECRUITING'),
+              // A sparse registry site: no city, state, country, or status.
+              { facility: 'Bare', geoPoint: northMi(5) },
+            ]),
+          ]);
+          const [candidate] = sc.studies;
+
+          expect(byDistance(candidate!)).toEqual([
+            ['Three', 3],
+            ['Bare', 5],
+            ['Seven', 7],
+            ['Twelve', 12],
+          ]);
+          expect(sitesOf(candidate!)[1]).toEqual({ facility: 'Bare', distanceMi: 5 });
+          for (const loc of sitesOf(candidate!)) expect(loc).not.toHaveProperty('geoPoint');
+          expect(candidate!.locationSummary).toEqual({
+            totalLocations: 6,
+            matchedLocations: 4,
+            locationsTruncated: false,
+            retrieveFullStudyWith: 'clinicaltrials_get_study_record',
+          });
+          expect(sc.near).toEqual({ ...SEATTLE, radiusMi: 15 });
+
+          expect(text).toContain(
+            "Sites within 15 mi of the patient at 47.6062,-122.3321 (location.near), nearest first, in any country: ClinicalTrials.gov matches location.country on any one site of a study, separately from the radius, so a candidate's sites in range can all lie in another country.",
+          );
+          expect(text).toContain(
+            '  Sites: showing 4 of 6 registered (4 within 15 mi of the patient). Full site list: clinicaltrials_get_study_record with NCT1.',
+          );
+          expect(text).not.toContain('match the requested location');
+          expect(text).toContain(
+            [
+              '  Locations:',
+              '    - Three, Three City, Washington, United States [RECRUITING] (3 mi from the patient)',
+              '    - Bare (5 mi from the patient)',
+              '    - Seven, Seven City, Washington, United States [ACTIVE_NOT_RECRUITING] (7 mi from the patient)',
+              '    - Twelve, Twelve City, Washington, United States [RECRUITING] (12 mi from the patient)',
+            ].join('\n'),
+          );
+          expect(text).not.toContain('Forty');
+          expect(text).not.toContain('No Coords');
+          expect(text).not.toContain('nearest matched site');
+        });
+
+        it('caps at locationLimit and adds the recruiting site nearest the patient, home country first', async () => {
+          const { sc, text } = await surfaces(
+            [
+              studyWith('NCT1', [
+                at('Two', 2, 'COMPLETED'),
+                at('Vancouver', 5, 'RECRUITING', 'Canada'),
+                at('One', 1, 'NOT_YET_RECRUITING'),
+                at('Nine', 9),
+                at('Three', 3, 'COMPLETED'),
+              ]),
+            ],
+            nearInput({}, { locationLimit: 2 }),
+          );
+          const [candidate] = sc.studies;
+
+          // The cap keeps the nearest two, neither recruiting; the recruiting
+          // site at 5 mi is across the border, so the one at 9 mi at home is added.
+          expect(byDistance(candidate!)).toEqual([
+            ['One', 1],
+            ['Two', 2],
+            ['Nine', 9],
+          ]);
+          expect(candidate!.locationSummary).toEqual({
+            totalLocations: 5,
+            matchedLocations: 5,
+            locationsTruncated: true,
+            nearestRecruitingSiteAdded: true,
+            retrieveFullStudyWith: 'clinicaltrials_get_study_record',
+          });
+          // Vancouver, recruiting at 5 mi, is nearer than Nine: the added site is
+          // the nearest in the requested country, and the line says so.
+          expect(text).toContain(
+            '(5 within 15 mi of the patient, list truncated; none of them is recruiting, so the nearest recruiting site in the requested country is included, or the nearest anywhere when none recruits there)',
+          );
+          expect(text).toContain(
+            '    - Nine, Nine City, Washington, United States [RECRUITING] (9 mi from the patient)',
+          );
+        });
+
+        it('adds a recruiting site from past the radius, with its distance from the patient', async () => {
+          const { sc } = await surfaces([
+            studyWith('NCT1', [
+              at('Four', 4, 'COMPLETED'),
+              at('Sixty', 60),
+              at('Victoria', 20, 'RECRUITING', 'Canada'),
+            ]),
+          ]);
+          const [candidate] = sc.studies;
+          expect(byDistance(candidate!)).toEqual([
+            ['Four', 4],
+            ['Sixty', 60],
+          ]);
+          expect(candidate!.locationSummary).toMatchObject({
+            matchedLocations: 1,
+            nearestRecruitingSiteAdded: true,
+          });
+        });
+
+        it('keeps the nearest measured site when none measures inside the radius', async () => {
+          const { sc, text } = await surfaces([
+            studyWith('NCT1', [at('Thirty', 30), at('Sixteen', 16, 'COMPLETED'), at('Fifty', 50)]),
+          ]);
+          const [candidate] = sc.studies;
+
+          expect(byDistance(candidate!)).toEqual([
+            ['Sixteen', 16],
+            ['Thirty', 30],
+          ]);
+          expect(candidate!.locationSummary).toEqual({
+            totalLocations: 3,
+            matchedLocations: 0,
+            locationsTruncated: false,
+            nearestRecruitingSiteAdded: true,
+            retrieveFullStudyWith: 'clinicaltrials_get_study_record',
+          });
+          expect(text).toContain('(16 mi from the patient)');
+          expect(text).toContain(
+            '(0 within 15 mi of the patient, so the nearest measured site is shown; none of them is recruiting',
+          );
+
+          const lone = await surfaces([studyWith('NCT2', [at('Sixteen', 16)])]);
+          expect(byDistance(lone.sc.studies[0]!)).toEqual([['Sixteen', 16]]);
+          expect(lone.sc.studies[0]!.locationSummary).toBeUndefined();
+        });
+
+        it('keeps a site list that publishes no coordinates, capped, and measures nothing', async () => {
+          const { sc, text } = await surfaces(
+            [
+              studyWith('NCT1', [
+                site('A', 'Seattle', 'Washington', US, 'COMPLETED'),
+                site('B', 'Tacoma', 'Washington', US, 'COMPLETED'),
+                site('C', 'Everett', 'Washington', US, 'RECRUITING'),
+              ]),
+            ],
+            nearInput({}, { locationLimit: 2 }),
+          );
+          const [candidate] = sc.studies;
+
+          expect(byDistance(candidate!)).toEqual([
+            ['A', undefined],
+            ['B', undefined],
+            ['C', undefined],
+          ]);
+          for (const loc of sitesOf(candidate!)) expect(loc).not.toHaveProperty('distanceMi');
+          expect(candidate!.locationSummary).toBeUndefined();
+          expect(text).not.toContain(' mi from ');
+        });
+
+        it('says the added site was picked by match order when it publishes no coordinates', async () => {
+          const { sc, text } = await surfaces([
+            studyWith('NCT1', [
+              at('Two', 2, 'COMPLETED'),
+              site('Open', 'Everett', 'Washington', US, 'RECRUITING'),
+              at('Forty', 40, 'COMPLETED'),
+            ]),
+          ]);
+          const [candidate] = sc.studies;
+          expect(byDistance(candidate!)).toEqual([
+            ['Two', 2],
+            ['Open', undefined],
+          ]);
+          expect(text).toContain(
+            'one recruiting site from a wider area is included (picked by match order — coordinates to measure distance are missing)',
+          );
+        });
+
+        // ClinicalTrials.gov matches the country on one site and filter.geo on
+        // another, so a Seattle patient's only site in range can be in Canada
+        // while the US match is a site 2,000 mi away. The count names the
+        // radius, never "the requested location", which the site is not.
+        it('counts the sites in range as within the radius, not as matching the requested country', async () => {
+          const { sc, text } = await surfaces(
+            [
+              studyWith('NCT1', [
+                at('Boston', 2400),
+                at('Vancouver', 12, 'RECRUITING', 'Canada'),
+                at('Denver', 1000),
+              ]),
+            ],
+            nearInput(),
+          );
+          const [candidate] = sc.studies;
+
+          expect(byDistance(candidate!)).toEqual([['Vancouver', 12]]);
+          expect(candidate!.locationSummary).toEqual({
+            totalLocations: 3,
+            matchedLocations: 1,
+            locationsTruncated: false,
+            retrieveFullStudyWith: 'clinicaltrials_get_study_record',
+          });
+          expect(text).toContain(
+            '    - Vancouver, Vancouver City, Washington, Canada [RECRUITING] (12 mi from the patient)',
+          );
+          expect(text).toContain(
+            '  Sites: showing 1 of 3 registered (1 within 15 mi of the patient). Full site list: clinicaltrials_get_study_record with NCT1.',
+          );
+          expect(text).toContain('nearest first, in any country:');
+          expect(text).not.toContain('match the requested location');
+        });
+
+        it('says no site publishes coordinates when the sites are kept unmeasured', async () => {
+          const { sc, text } = await surfaces(
+            [
+              studyWith('NCT1', [
+                site('A', 'Seattle', 'Washington', US, 'COMPLETED'),
+                site('B', 'Tacoma', 'Washington', US, 'COMPLETED'),
+                site('C', 'Everett', 'Washington', US, 'COMPLETED'),
+                site('D', 'Olympia', 'Washington', US, 'RECRUITING'),
+              ]),
+            ],
+            nearInput({}, { locationLimit: 2 }),
+          );
+          const [candidate] = sc.studies;
+
+          expect(byDistance(candidate!)).toEqual([
+            ['A', undefined],
+            ['B', undefined],
+            ['D', undefined],
+          ]);
+          expect(candidate!.locationSummary).toMatchObject({
+            totalLocations: 4,
+            matchedLocations: 0,
+            nearestRecruitingSiteAdded: true,
+          });
+          expect(text).toContain(
+            '(0 within 15 mi of the patient: no site publishes coordinates, so the sites are shown unmeasured; none of them is recruiting, so one recruiting site from a wider area is included (picked by match order — coordinates to measure distance are missing))',
+          );
+        });
+
+        it('leaves candidate order to the condition re-rank, not to distance', async () => {
+          const conditioned = (nctId: string, conditions: string[], miles: number) => ({
+            protocolSection: {
+              identificationModule: { nctId },
+              conditionsModule: { conditions },
+              contactsLocationsModule: { locations: [at(nctId, miles)] },
+            },
+          });
+          // Upstream relevance puts the nearer, tangential match first.
+          const studies = [
+            conditioned('NCT_TANGENTIAL', ['Diabetes Insipidus'], 1),
+            conditioned('NCT_EXACT', ['Type 2 Diabetes'], 14),
+          ];
+          const ids = (r: { sc: { studies: CandidateStudy[] } }) =>
+            r.sc.studies.map((s) => s.protocolSection.identificationModule.nctId);
+
+          const withNear = await surfaces(studies);
+          const withCity = await surfaces(studies, baseInput);
+          expect(ids(withNear)).toEqual(['NCT_EXACT', 'NCT_TANGENTIAL']);
+          expect(ids(withCity)).toEqual(ids(withNear));
+        });
+      });
+
+      describe('no-match notice', () => {
+        beforeEach(() => {
+          mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+          mockService.countStudies.mockImplementation(async (params: { queryLocn?: string }) =>
+            params.queryLocn ? 0 : 1224,
+          );
+        });
+
+        it('names widening radiusMi when the radius collapsed the location stage', async () => {
+          const result = await runToolContract(
+            findEligible,
+            nearInput({ radiusMi: 2.5 }, { conditions: ['sickle cell'] }),
+          );
+          const notice = (result.structuredContent as { notice: string }).notice;
+          expect(notice).toBe(
+            'No studies found for "sickle cell" matching the specified criteria. 1224 studies match the condition, but none are in the specified location. Widen location.near.radiusMi past 2.5 to reach sites farther from the patient.',
+          );
+          expect(textOf(result)).toContain('Widen location.near.radiusMi past 2.5');
+        });
       });
     });
   });

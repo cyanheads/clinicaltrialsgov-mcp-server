@@ -847,6 +847,92 @@ describe('an explicit field_invalid hint outranks the declared one on the wire (
 });
 
 /**
+ * A DISTANCE[] or RANGE[] term inside SEARCH[Location](…) is refused with a Java
+ * exception that names no field, so its field_invalid blames none and carries a
+ * hint of its own (#206). The reading is tabled at the service seam; these
+ * prove each declaring tool puts that hint, not the declared one, on the wire.
+ */
+describe('an explicit field_invalid hint blaming no field reaches the wire (#206)', () => {
+  const BESIDE = 'AREA[LocationGeoPoint]DISTANCE[lat,lon,radius] AND SEARCH[Location](…)';
+  const hint = `Move the DISTANCE[] or RANGE[] term out of SEARCH[Location](…) and join it beside the wrapper with AND: a radius as ${BESIDE} in the advancedFilter of clinicaltrials_search_studies or clinicaltrials_get_study_count, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible. Beside the wrapper the radius and the wrapper's terms can match different sites of one study, so check each in-range site's own status with clinicaltrials_get_study_record and nearLocation.`;
+  const literals = ['SEARCH[Location](…)', 'DISTANCE[]', 'RANGE[]', BESIDE];
+  /** The refusal as the service raises it, for the parameter upstream names as `where`. */
+  const operatorInLocationScope = (where: string) =>
+    validationError(
+      `Error parsing query in ${where}: Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null. SEARCH[Location](…) evaluates no DISTANCE[] or RANGE[] term on any site field, so the term goes beside the wrapper, joined with AND: a radius as ${BESIDE}, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible.`,
+      { reason: 'field_invalid', recovery: { hint } },
+      { literals },
+    );
+  const misplaced = 'SEARCH[Location](AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi])';
+  const cases = [
+    {
+      name: 'search_studies',
+      arrange: () =>
+        mockService.searchStudies.mockRejectedValue(operatorInLocationScope('advanced filter')),
+      run: () => runToolContract(searchStudies, { advancedFilter: misplaced }),
+    },
+    {
+      name: 'get_study_count',
+      arrange: () =>
+        mockService.countStudies.mockRejectedValue(operatorInLocationScope('Location terms')),
+      run: () => runToolContract(getStudyCount, { locationQuery: misplaced }),
+    },
+    {
+      name: 'find_eligible',
+      arrange: () =>
+        mockService.searchStudies.mockRejectedValue(
+          operatorInLocationScope('Conditions or disease'),
+        ),
+      run: () => runToolContract(findEligible, { ...eligibleInput, conditions: [misplaced] }),
+    },
+  ];
+
+  it.each(cases)('$name', async ({ arrange, run }) => {
+    arrange();
+    const result = await run();
+    const raw = (result.content as { text: string }[])[0]!.text;
+    const error = (result.structuredContent as { error: { data: Record<string, unknown> } }).error;
+
+    expect(result.isError).toBe(true);
+    expect(error.data).toMatchObject({ reason: 'field_invalid' });
+    expect(error.data).not.toHaveProperty('invalid');
+    expect(error.data.recovery).toEqual({ hint });
+    expect(readMarkdown(raw)).toContain(`Recovery: ${hint}`);
+    expect(readMarkdown(raw)).not.toContain(RECOVERY_HINTS.field_invalid);
+    expect(readMarkdown(raw)).not.toContain('Free-text');
+    for (const literal of literals) expect(raw).toContain(`\`${literal}\``);
+    expect(raw).not.toContain('\\[');
+  });
+});
+
+/**
+ * A DISTANCE[] operand upstream cannot read is raised as `query_parse_error`
+ * with a hint of its own (#206), so each tool declaring that reason names the
+ * case in its `when` beside the bracket and quote faults.
+ */
+describe('query_parse_error contracts name an unreadable DISTANCE[] operand', () => {
+  const operand =
+    'or carries a DISTANCE[] operand it cannot read: a latitude or longitude that is not a number or is out of range, a radius under 1 or with no mi or km unit, or no radius at all.';
+  const freeText = `A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a \`[\` or \`]\` outside an AREA[…] / RANGE[…] expression, an unmatched \`(\` / \`)\`, or an unterminated quote in a query/conditionQuery/etc. value — ${operand}`;
+
+  it.each([
+    { name: 'search_studies', definition: searchStudies, when: freeText },
+    { name: 'get_study_count', definition: getStudyCount, when: freeText },
+    {
+      name: 'find_eligible',
+      definition: findEligible,
+      when: `A conditions entry uses syntax the upstream Essie parser rejects — typically an unmatched \`(\` or \`)\`, or a \`[\` or \`]\` outside an AREA[…] expression — ${operand}`,
+    },
+  ])('$name', ({ definition, when }) => {
+    const declared = (
+      (definition.errors ?? []) as readonly { reason: string; when: string }[]
+    ).find((e) => e.reason === 'query_parse_error');
+
+    expect(declared?.when).toBe(when);
+  });
+});
+
+/**
  * Every request a call makes runs inside one time budget the service holds per
  * call, and a 504 on every attempt is ClinicalTrials.gov's own timeout. Any
  * tool can end either way, so each declares both reasons with the shared hint;

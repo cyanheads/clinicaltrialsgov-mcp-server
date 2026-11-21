@@ -5,6 +5,7 @@
  */
 
 import { markdown } from '@cyanheads/mcp-ts-core/utils';
+import type { StudyContact } from '@/services/clinical-trials/types.js';
 
 /**
  * Flatten CR/LF in upstream text interpolated into a single line, so a line
@@ -20,6 +21,65 @@ export function oneLine(value: string | undefined): string | undefined {
   // A lone whitespace character needs folding only when it is a break, so the
   // single spaces between words never reach the callback.
   return value?.replace(/\s{2,}|[\r\n]/g, (run) => (/[\r\n]/.test(run) ? ' ' : run));
+}
+
+/**
+ * A contact's phone with its extension — `555-0100 ext. 42` — for a central,
+ * per-site, or results point of contact. The registry can carry an extension
+ * with no phone, which renders as `ext. N` alone; undefined when it has neither.
+ */
+export function contactPhone({
+  phone,
+  phoneExt,
+}: Pick<StudyContact, 'phone' | 'phoneExt'>): string | undefined {
+  if (!phoneExt) return phone;
+  return phone ? `${phone} ext. ${phoneExt}` : `ext. ${phoneExt}`;
+}
+
+/**
+ * Render a central or per-site contact as one segment list: name, role,
+ * phone with its extension (`contactPhone`), email — only the keys it has.
+ * Line breaks are left to the caller's `oneLine`.
+ */
+export function contactLine(contact: StudyContact, separator = ' | '): string {
+  return [contact.name, contact.role, contactPhone(contact), contact.email]
+    .filter(Boolean)
+    .join(separator);
+}
+
+/**
+ * Render a count with its noun, singular for exactly one and plural otherwise
+ * (`0 periods`, `1 period`, `2 periods`). Every count label a tool prints on
+ * the text channel goes through here, so none reads `1 periods`.
+ */
+export function countLabel(count: unknown, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+/** A registry reference, or the parts of one a tool keeps — each as sparse as the record. */
+interface ReferenceParts {
+  citation?: string | undefined;
+  pmid?: string | undefined;
+  retractions?: Array<{ pmid?: string | undefined; source?: string | undefined }> | undefined;
+  type?: string | undefined;
+}
+
+/**
+ * Render one registry reference as `content[]` lines: `- <citation> (PMID: <pmid>) [<type>]`,
+ * then `  Retracted — <source>, PMID: <pmid>` for each retraction notice. A
+ * citation is free text of any length, so every line is folded onto one line.
+ */
+export function formatReferenceLines(ref: ReferenceParts): string[] {
+  const pmid = ref.pmid ? ` (PMID: ${ref.pmid})` : '';
+  const type = ref.type ? ` [${ref.type}]` : '';
+  const lines = [oneLine(`- ${ref.citation ?? 'Citation unavailable'}${pmid}${type}`)];
+  for (const retraction of ref.retractions ?? []) {
+    const parts = [retraction.source, retraction.pmid ? `PMID: ${retraction.pmid}` : ''].filter(
+      Boolean,
+    );
+    lines.push(oneLine(`  Retracted — ${parts.join(', ')}`));
+  }
+  return lines;
 }
 
 /** Truncate a string, appending ellipsis when trimmed. */

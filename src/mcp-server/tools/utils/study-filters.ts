@@ -8,13 +8,13 @@
  */
 
 import { buildDocumentDownloadUrl } from '@/services/clinical-trials/document-url.js';
-import type { RawStudyShape, StudyLocation } from '@/services/clinical-trials/types.js';
-import { haversineMi, type LocationWithDistance, roundMi } from './geo-helpers.js';
+import type { RawStudyShape } from '@/services/clinical-trials/types.js';
+import { type LocationWithDistance, type NearPoint, sitesByDistance } from './geo-helpers.js';
 
 /** Caps and geo filter a caller (or a fixed resource default) can request. */
 export interface FilterInputs {
   locationLimit?: number | undefined;
-  nearLocation?: { lat: number; lon: number; radiusMi: number } | undefined;
+  nearLocation?: NearPoint | undefined;
   outcomeLimit?: number | undefined;
   referenceLimit?: number | undefined;
 }
@@ -23,7 +23,7 @@ export interface FilterInputs {
 export interface FilterMeta {
   locationLimit?: number;
   locationsWithoutGeo?: number;
-  nearLocation?: { lat: number; lon: number; radiusMi: number };
+  nearLocation?: NearPoint;
   outcomeLimit?: number;
   referenceLimit?: number;
   totalLocations?: number;
@@ -92,19 +92,12 @@ export function applyFilters(
     let locations: LocationWithDistance[] = origLocations;
 
     if (input.nearLocation) {
-      const { lat, lon, radiusMi } = input.nearLocation;
-      const withGeo = origLocations.filter(
-        (l): l is StudyLocation & { geoPoint: { lat: number; lon: number } } => l.geoPoint != null,
+      const { measured, withinRadius, withoutGeo } = sitesByDistance(
+        origLocations,
+        input.nearLocation,
       );
-      const withoutGeo = origLocations.length - withGeo.length;
       if (withoutGeo > 0) meta.locationsWithoutGeo = withoutGeo;
-      // The exact distance decides inclusion and order; the site carries it
-      // rounded (roundMi). Rounding first would admit a site just past the radius.
-      locations = withGeo
-        .map((l) => ({ ...l, distanceMi: haversineMi({ lat, lon }, l.geoPoint) }))
-        .filter((l) => l.distanceMi <= radiusMi)
-        .sort((a, b) => a.distanceMi - b.distanceMi)
-        .map((l) => ({ ...l, distanceMi: roundMi(l.distanceMi) }));
+      locations = measured.slice(0, withinRadius);
       // nearLocation always filters → always echo it.
       meta.nearLocation = input.nearLocation;
     }

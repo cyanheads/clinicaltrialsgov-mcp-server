@@ -5,6 +5,9 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  contactLine,
+  contactPhone,
+  countLabel,
   formatEchoValue,
   formatRemainingStudyFields,
   formatSearchCriteria,
@@ -688,4 +691,73 @@ describe('formatSearchCriteria', () => {
       'sentinelFilterActive: true',
     ]);
   });
+});
+
+describe('contactLine', () => {
+  it.each([
+    [
+      'every key, in name, role, phone, email order',
+      {
+        email: 'PCRC-NCORP@Swedish.org',
+        phone: '206-215-2343',
+        role: 'CONTACT',
+        name: 'Site Public Contact',
+      },
+      'Site Public Contact | CONTACT | 206-215-2343 | PCRC-NCORP@Swedish.org',
+    ],
+    [
+      'an extension after its phone',
+      { name: 'Dana Lee', phone: '555-0100', phoneExt: '42' },
+      'Dana Lee | 555-0100 ext. 42',
+    ],
+    // The registry carries extensions with no phone (NCT03653156's central contact).
+    [
+      'an extension with no phone',
+      { name: 'Jianping Jia, Doctor', phoneExt: '010-83108650', email: 'jiajp@vip.126.com' },
+      'Jianping Jia, Doctor | ext. 010-83108650 | jiajp@vip.126.com',
+    ],
+    [
+      'only the keys a sparse contact has',
+      { name: 'Charles W. Drescher', role: 'PRINCIPAL_INVESTIGATOR' },
+      'Charles W. Drescher | PRINCIPAL_INVESTIGATOR',
+    ],
+    ['nothing for a contact with no keys', {}, ''],
+  ])('renders %s', (_name, contact, expected) => {
+    expect(contactLine(contact)).toBe(expected);
+  });
+
+  it('joins with a given separator', () => {
+    const contact = { name: 'Dr. Smith', phone: '555-1234', phoneExt: '9', email: 's@test.com' };
+    expect(contactLine(contact, ', ')).toBe('Dr. Smith, 555-1234 ext. 9, s@test.com');
+  });
+});
+
+describe('contactPhone', () => {
+  it.each([
+    ['a phone with its extension', { phone: '555-0100', phoneExt: '42' }, '555-0100 ext. 42'],
+    ['an extension with no phone', { phoneExt: '83171' }, 'ext. 83171'],
+    ['an extension beside an empty phone', { phone: '', phoneExt: '83171' }, 'ext. 83171'],
+    ['a phone alone', { phone: '555-0100' }, '555-0100'],
+    ['a phone beside an empty extension', { phone: '555-0100', phoneExt: '' }, '555-0100'],
+    ['neither', {}, undefined],
+  ])('renders %s', (_name, contact, expected) => {
+    expect(contactPhone(contact)).toBe(expected);
+  });
+});
+
+describe('countLabel', () => {
+  it.each([
+    [1, 'period', undefined, '1 period'],
+    [0, 'period', undefined, '0 periods'],
+    [2, 'participant flow period', undefined, '2 participant flow periods'],
+    [1, 'class', 'classes', '1 class'],
+    [3, 'class', 'classes', '3 classes'],
+    [1, 'analysis', 'analyses', '1 analysis'],
+    [0, 'analysis', 'analyses', '0 analyses'],
+  ] as Array<[number, string, string | undefined, string]>)(
+    'renders %j %s (plural %s) as %j',
+    (count, singular, plural, expected) => {
+      expect(countLabel(count, singular, plural)).toBe(expected);
+    },
+  );
 });

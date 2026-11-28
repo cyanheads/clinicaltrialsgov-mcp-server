@@ -2,6 +2,10 @@
 
 All notable changes to this project. Each entry links to its full per-version file in [changelog/](changelog/).
 
+## [2.11.5](changelog/2.11.x/2.11.5.md) — 2026-11-27
+
+clinicaltrials_get_study_results re-sends a batch without a refused NCT ID, repeat-only 400s read as field_invalid or query_parse_error, location.near and geoFilter radii cap at 12,451 mi, and find_eligible adds a recruiting site in location.country.
+
 ## [2.11.4](changelog/2.11.x/2.11.4.md) — 2026-11-21
 
 clinicaltrials_find_eligible matches by distance from the patient with location.near and returns each site's own contacts; clinicaltrials_get_study_results adds adverse-event totals and flow milestones to summary mode and names result publications for studies without posted results.

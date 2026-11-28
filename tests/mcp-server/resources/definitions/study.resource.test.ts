@@ -333,19 +333,24 @@ describe('studyResource', () => {
             reason: 'upstream_timeout',
           }),
       ],
-    ] as const)('answers %s with its code, data, and the declared hint', async (reason, error) => {
-      vi.stubEnv('MCP_LOG_LEVEL', 'error');
-      const thrown = error();
-      mockService.getStudy.mockRejectedValue(thrown);
+    ] as const)(
+      'answers %s with its code, data, the declared hint, and retryable',
+      async (reason, error) => {
+        vi.stubEnv('MCP_LOG_LEVEL', 'error');
+        const thrown = error();
+        // The service sets no retryable, so the one on the wire is the contract entry's.
+        expect(thrown.data).not.toHaveProperty('retryable');
+        mockService.getStudy.mockRejectedValue(thrown);
 
-      const wire = await readThroughServer();
+        const wire = await readThroughServer();
 
-      expect(wire).toMatchObject({
-        code: JsonRpcErrorCode.Timeout,
-        message: thrown.message,
-        data: { ...thrown.data, recovery: { hint: RECOVERY_HINTS[reason] } },
-      });
-    });
+        expect(wire).toMatchObject({
+          code: JsonRpcErrorCode.Timeout,
+          message: thrown.message,
+          data: { ...thrown.data, recovery: { hint: RECOVERY_HINTS[reason] }, retryable: true },
+        });
+      },
+    );
   });
 
   /**
@@ -392,6 +397,8 @@ describe('studyResource', () => {
     it.each([
       [
         'upstream_unavailable',
+        // The outage sets none, so this is the contract entry's.
+        true,
         async () =>
           serviceUnavailable(
             'ClinicalTrials.gov API unavailable after retries: /studies/NCT03722472 returned JSON of an unexpected shape.',
@@ -404,6 +411,7 @@ describe('studyResource', () => {
       ],
       [
         'upstream_rejected',
+        false,
         () =>
           httpErrorFromResponse(
             new Response('<html><body><h1>404 Not Found</h1></body></html>', {
@@ -419,8 +427,8 @@ describe('studyResource', () => {
           ),
       ],
     ] as const)(
-      'answers %s as -32000 with its data and the declared hint',
-      async (reason, error) => {
+      'answers %s as -32000 with its data, the declared hint, and retryable',
+      async (reason, retryable, error) => {
         vi.stubEnv('MCP_LOG_LEVEL', 'error');
         const thrown = await error();
         mockService.getStudy.mockRejectedValue(thrown);
@@ -436,7 +444,7 @@ describe('studyResource', () => {
         expect(wire).toMatchObject({
           code: -32000,
           message: thrown.message,
-          data: { ...clientData, reason, recovery: { hint: RECOVERY_HINTS[reason] } },
+          data: { ...clientData, reason, recovery: { hint: RECOVERY_HINTS[reason] }, retryable },
         });
         expect(wire?.data).not.toHaveProperty('body');
         expect(wire?.data).not.toHaveProperty('responseBody');

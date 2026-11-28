@@ -4867,7 +4867,8 @@ describe('findEligible', () => {
         // ClinicalTrials.gov matches the country on one site and filter.geo on
         // another, so a Seattle patient's only site in range can be in Canada
         // while the US match is a site 2,000 mi away. The count names the
-        // radius, never "the requested location", which the site is not.
+        // radius, never "the requested location", which the site is not; the
+        // nearest recruiting US site follows, outside that count (#210).
         it('counts the sites in range as within the radius, not as matching the requested country', async () => {
           const { sc, text } = await surfaces(
             [
@@ -4881,18 +4882,22 @@ describe('findEligible', () => {
           );
           const [candidate] = sc.studies;
 
-          expect(byDistance(candidate!)).toEqual([['Vancouver', 12]]);
+          expect(byDistance(candidate!)).toEqual([
+            ['Vancouver', 12],
+            ['Denver', 1000],
+          ]);
           expect(candidate!.locationSummary).toEqual({
             totalLocations: 3,
             matchedLocations: 1,
             locationsTruncated: false,
+            nearestRecruitingSiteAdded: true,
             retrieveFullStudyWith: 'clinicaltrials_get_study_record',
           });
           expect(text).toContain(
             '    - Vancouver, Vancouver City, Washington, Canada [RECRUITING] (12 mi from the patient)',
           );
           expect(text).toContain(
-            '  Sites: showing 1 of 3 registered (1 within 15 mi of the patient). Full site list: clinicaltrials_get_study_record with NCT1.',
+            '  Sites: showing 2 of 3 registered (1 within 15 mi of the patient; the first site listed is not in the requested country, so the recruiting site there nearest the patient is added last). Full site list: clinicaltrials_get_study_record with NCT1.',
           );
           expect(text).toContain('nearest first, in any country:');
           expect(text).not.toContain('match the requested location');
@@ -4950,6 +4955,329 @@ describe('findEligible', () => {
         });
       });
 
+      /**
+       * ClinicalTrials.gov matches location.country on any one site, apart from
+       * the radius, so every site a candidate lists can lie across a border while
+       * a site at home recruits. One admission, two triggers: no listed site
+       * recruits (#114), or none is in the requested country while a site there
+       * recruits. Both go through the same pick, home country first, so a
+       * candidate never gets two added sites.
+       */
+      describe('#210 the recruiting site in location.country when no listed site is there', () => {
+        const CANADA = 'Canada';
+        const NOT_IN_COUNTRY =
+          'the first site listed is not in the requested country, so the recruiting site there nearest the patient is added last';
+        const sitesLine = (shown: number, total: number, counts: string, nctId = 'NCT1') =>
+          `  Sites: showing ${shown} of ${total} registered (${counts}). Full site list: clinicaltrials_get_study_record with ${nctId}.`;
+        const header = (radiusMi: number) =>
+          `Sites within ${radiusMi} mi of the patient at 47.6062,-122.3321 (location.near), nearest first, in any country: ClinicalTrials.gov matches location.country on any one site of a study, separately from the radius, so a candidate's sites in range can all lie in another country. When none of a candidate's listed sites is in location.country and one of its sites there recruits, one recruiting site there is added last, the nearest the patient when coordinates allow.`;
+        const SUMMARY = { retrieveFullStudyWith: 'clinicaltrials_get_study_record' };
+
+        it('lists a lone Vancouver site, then the nearest recruiting US site, on both surfaces', async () => {
+          // NCT05123482's shape: 67 sites, one within 130 mi (Vancouver, BC),
+          // 14 in the US, 10 of them recruiting, the nearest at 633.6 mi.
+          const sites = [
+            ...Array.from({ length: 26 }, (_, i) =>
+              at(`Madrid ${i}`, 5000 + i, 'RECRUITING', 'Spain'),
+            ),
+            site(
+              'Research Site',
+              'Vancouver',
+              'British Columbia',
+              CANADA,
+              'RECRUITING',
+              northMi(119.1),
+            ),
+            ...Array.from({ length: 4 }, (_, i) => at(`Closed ${i}`, 300 + i, 'COMPLETED')),
+            site('Research Site', 'Santa Rosa', 'California', US, 'RECRUITING', northMi(633.6)),
+            ...Array.from({ length: 9 }, (_, i) => at(`Open ${i}`, 700 + i * 10)),
+            ...Array.from({ length: 26 }, (_, i) =>
+              at(`Tokyo ${i}`, 5100 + i, 'COMPLETED', 'Japan'),
+            ),
+          ];
+          expect(sites).toHaveLength(67);
+          const { sc, text } = await surfaces(
+            [studyWith('NCT05123482', sites)],
+            nearInput({ radiusMi: 130 }),
+          );
+          const [candidate] = sc.studies;
+
+          expect(sitesOf(candidate!)).toEqual([
+            {
+              facility: 'Research Site',
+              city: 'Vancouver',
+              state: 'British Columbia',
+              country: CANADA,
+              status: 'RECRUITING',
+              distanceMi: 119.1,
+            },
+            {
+              facility: 'Research Site',
+              city: 'Santa Rosa',
+              state: 'California',
+              country: US,
+              status: 'RECRUITING',
+              distanceMi: 633.6,
+            },
+          ]);
+          expect(candidate!.locationSummary).toEqual({
+            totalLocations: 67,
+            matchedLocations: 1,
+            locationsTruncated: false,
+            nearestRecruitingSiteAdded: true,
+            ...SUMMARY,
+          });
+          expect(text).toContain(header(130));
+          expect(text).toContain(
+            sitesLine(2, 67, `1 within 130 mi of the patient; ${NOT_IN_COUNTRY}`, 'NCT05123482'),
+          );
+          expect(text).toContain(
+            [
+              '  Locations:',
+              '    - Research Site, Vancouver, British Columbia, Canada [RECRUITING] (119.1 mi from the patient)',
+              '    - Research Site, Santa Rosa, California, United States [RECRUITING] (633.6 mi from the patient)',
+            ].join('\n'),
+          );
+        });
+
+        // The body's boundary: the cap cuts the in-country site inside the
+        // radius, so it was counted in range and the list shows every site there.
+        it('counts an added site the cap cut inside the radius among the sites shown', async () => {
+          const { sc, text } = await surfaces(
+            [
+              studyWith('NCT1', [
+                at('Abroad', 5, 'RECRUITING', CANADA),
+                at('Home', 10),
+                at('Closed', 500, 'COMPLETED'),
+              ]),
+            ],
+            nearInput({}, { locationLimit: 1 }),
+          );
+          const [candidate] = sc.studies;
+
+          expect(byDistance(candidate!)).toEqual([
+            ['Abroad', 5],
+            ['Home', 10],
+          ]);
+          expect(candidate!.locationSummary).toEqual({
+            totalLocations: 3,
+            matchedLocations: 2,
+            locationsTruncated: false,
+            nearestRecruitingSiteAdded: true,
+            ...SUMMARY,
+          });
+          expect(text).toContain(
+            sitesLine(2, 3, `2 within 15 mi of the patient; ${NOT_IN_COUNTRY}`),
+          );
+        });
+
+        it('adds one site past the cap, the nearest recruiting one at home, and names the sites listed', async () => {
+          const { sc, text } = await surfaces(
+            [
+              studyWith('NCT1', [
+                at('Spokane', 230),
+                at('Surrey', 8, 'COMPLETED', CANADA),
+                at('Tacoma', 25, 'COMPLETED'),
+                at('Vancouver', 5, 'RECRUITING', CANADA),
+                at('Portland', 145),
+                // Recruiting within the radius, cut by the cap, and abroad.
+                at('Victoria', 12, 'RECRUITING', CANADA),
+              ]),
+            ],
+            nearInput({}, { locationLimit: 2 }),
+          );
+          const [candidate] = sc.studies;
+
+          expect(byDistance(candidate!)).toEqual([
+            ['Vancouver', 5],
+            ['Surrey', 8],
+            ['Portland', 145],
+          ]);
+          expect(candidate!.locationSummary).toEqual({
+            totalLocations: 6,
+            matchedLocations: 3,
+            locationsTruncated: true,
+            nearestRecruitingSiteAdded: true,
+            ...SUMMARY,
+          });
+          expect(text).toContain(
+            sitesLine(
+              3,
+              6,
+              '3 within 15 mi of the patient, list truncated; none of the first 2 sites listed is in the requested country, so the recruiting site there nearest the patient is added last',
+            ),
+          );
+        });
+
+        it('reads location.country USA as United States, adding the same site', async () => {
+          const study = studyWith('NCT1', [
+            at('Abroad', 5, 'RECRUITING', CANADA),
+            at('Home', 10),
+            at('Closed', 500, 'COMPLETED'),
+          ]);
+          const candidateFor = async (country: string) =>
+            (
+              await surfaces([study], {
+                ...baseInput,
+                location: { country, near: { ...SEATTLE, radiusMi: 15 } },
+                locationLimit: 1,
+              })
+            ).sc.studies[0]!;
+
+          const usa = await candidateFor('USA');
+          expect(byDistance(usa)).toEqual([
+            ['Abroad', 5],
+            ['Home', 10],
+          ]);
+          expect(usa).toEqual(await candidateFor(US));
+        });
+
+        it('prefers a measured recruiting site at home over an unmeasured one', async () => {
+          const { sc, text } = await surfaces([
+            studyWith('NCT1', [
+              at('Vancouver', 5, 'RECRUITING', CANADA),
+              site('Unmeasured', 'Everett', 'Washington', US, 'RECRUITING'),
+              at('Measured', 400),
+              at('Closed', 600, 'COMPLETED', CANADA),
+            ]),
+          ]);
+
+          expect(byDistance(sc.studies[0]!)).toEqual([
+            ['Vancouver', 5],
+            ['Measured', 400],
+          ]);
+          expect(text).toContain(`(1 within 15 mi of the patient; ${NOT_IN_COUNTRY})`);
+        });
+
+        it('adds the first recruiting site at home in registry order, unmeasured, when none there publishes coordinates', async () => {
+          const { sc, text } = await surfaces([
+            studyWith('NCT1', [
+              at('Vancouver', 5, 'RECRUITING', CANADA),
+              site('First', 'Everett', 'Washington', US, 'COMPLETED'),
+              site('Second', 'Olympia', 'Washington', US, 'RECRUITING'),
+              site('Third', 'Tacoma', 'Washington', US, 'RECRUITING'),
+              at('Closed', 600, 'COMPLETED', CANADA),
+            ]),
+          ]);
+          const [candidate] = sc.studies;
+
+          expect(byDistance(candidate!)).toEqual([
+            ['Vancouver', 5],
+            ['Second', undefined],
+          ]);
+          expect(sitesOf(candidate!)[1]).not.toHaveProperty('distanceMi');
+          expect(candidate!.locationSummary).toEqual({
+            totalLocations: 5,
+            matchedLocations: 1,
+            locationsTruncated: false,
+            nearestRecruitingSiteAdded: true,
+            ...SUMMARY,
+          });
+          expect(text).toContain(
+            '(1 within 15 mi of the patient; the first site listed is not in the requested country, so one recruiting site there is added last (picked by match order — coordinates to measure distance are missing))',
+          );
+          expect(text).toContain('    - Second, Olympia, Washington, United States [RECRUITING]');
+          expect(text).not.toContain('Second, Olympia, Washington, United States [RECRUITING] (');
+        });
+
+        // The bound reports nothing when the list holds every registered site,
+        // added one included; the header says why a site at home follows.
+        it('adds the site when it completes the list, leaving no locationSummary', async () => {
+          const { sc, text } = await surfaces([
+            studyWith('NCT1', [at('Vancouver', 5, 'RECRUITING', CANADA), at('Portland', 145)]),
+          ]);
+          const [candidate] = sc.studies;
+
+          expect(byDistance(candidate!)).toEqual([
+            ['Vancouver', 5],
+            ['Portland', 145],
+          ]);
+          expect(candidate!.locationSummary).toBeUndefined();
+          expect(text).not.toContain('  Sites: ');
+          expect(text).toContain(header(15));
+        });
+
+        describe('combinations that stay as they were', () => {
+          // NCT07360314's shape: the first trigger alone already adds the site
+          // at home, so the second adds nothing more, and the clause is today's.
+          it('keeps the one added site and its clause when the listed sites are abroad and none recruits', async () => {
+            const { sc, text } = await surfaces(
+              [
+                studyWith('NCT1', [
+                  at('Vancouver', 119.1, 'NOT_YET_RECRUITING', CANADA),
+                  at('San Antonio', 1785.8),
+                  at('Closed', 600, 'COMPLETED'),
+                ]),
+              ],
+              nearInput({ radiusMi: 130 }),
+            );
+            const [candidate] = sc.studies;
+
+            expect(byDistance(candidate!)).toEqual([
+              ['Vancouver', 119.1],
+              ['San Antonio', 1785.8],
+            ]);
+            expect(candidate!.locationSummary).toEqual({
+              totalLocations: 3,
+              matchedLocations: 1,
+              locationsTruncated: false,
+              nearestRecruitingSiteAdded: true,
+              ...SUMMARY,
+            });
+            expect(text).toContain(
+              sitesLine(
+                2,
+                3,
+                '1 within 130 mi of the patient; the first site listed is not recruiting, so the recruiting site in the requested country nearest the patient is added last, or the nearest anywhere when none recruits there',
+              ),
+            );
+          });
+
+          it('adds nothing when the listed sites are abroad, one recruits, and none at home recruits', async () => {
+            const { sc, text } = await surfaces([
+              studyWith('NCT1', [
+                at('Vancouver', 5, 'RECRUITING', CANADA),
+                at('Boise', 400, 'COMPLETED'),
+                at('Victoria', 300, 'RECRUITING', CANADA),
+              ]),
+            ]);
+            const [candidate] = sc.studies;
+
+            expect(byDistance(candidate!)).toEqual([['Vancouver', 5]]);
+            expect(candidate!.locationSummary).toEqual({
+              totalLocations: 3,
+              matchedLocations: 1,
+              locationsTruncated: false,
+              ...SUMMARY,
+            });
+            expect(text).toContain(sitesLine(1, 3, '1 within 15 mi of the patient'));
+          });
+
+          it('adds nothing when a listed site is in the country, whatever its status', async () => {
+            const { sc, text } = await surfaces([
+              studyWith('NCT1', [
+                at('Vancouver', 5, 'RECRUITING', CANADA),
+                at('Seattle', 8, 'COMPLETED'),
+                at('Spokane', 230),
+              ]),
+            ]);
+            const [candidate] = sc.studies;
+
+            expect(byDistance(candidate!)).toEqual([
+              ['Vancouver', 5],
+              ['Seattle', 8],
+            ]);
+            expect(candidate!.locationSummary).toEqual({
+              totalLocations: 3,
+              matchedLocations: 2,
+              locationsTruncated: false,
+              ...SUMMARY,
+            });
+            expect(text).toContain(sitesLine(2, 3, '2 within 15 mi of the patient'));
+          });
+        });
+      });
+
       describe('no-match notice', () => {
         beforeEach(() => {
           mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
@@ -4968,6 +5296,172 @@ describe('findEligible', () => {
             'No studies found for "sickle cell" matching the specified criteria. 1224 studies match the condition, but none are in the specified location. Widen location.near.radiusMi past 2.5 to reach sites farther from the patient.',
           );
           expect(textOf(result)).toContain('Widen location.near.radiusMi past 2.5');
+        });
+      });
+
+      // No two points on Earth lie farther apart than 12,451 mi, so a larger
+      // radius reaches the same sites and is sent at that cap; past about
+      // 1.117e305 mi ClinicalTrials.gov refuses the radius outright (#211).
+      describe('#211 a radius past every distance on Earth', () => {
+        const GEO_CAP = 'distance(47.6062,-122.3321,12451mi)';
+        /** The notice sentence a capped radius adds, naming the radius as `String()` writes it. */
+        const capSentence = (written: string) =>
+          `location.near.radiusMi ${written} is past 12,451 mi, and no two points on Earth lie farther apart than that, so it was sent as 12451 mi: both reach every site that publishes coordinates.`;
+        /** Seattle's antipode: π × 3958.7613 = 12,436.8 mi away on the mean-radius sphere. */
+        const ANTIPODE = { lat: -47.6062, lon: 57.6679 };
+        const sites = () => [
+          at('Renton', 3),
+          site('No Coords', 'Seattle', 'Washington'),
+          site('Antipode', 'Kerguelen', '', 'France', 'RECRUITING', ANTIPODE),
+        ];
+        /** filter.geo on the main search, then on each funnel count. */
+        const sentGeo = () => [
+          (mockService.searchStudies.mock.calls[0]![0] as { filterGeo?: string }).filterGeo,
+          ...mockService.countStudies.mock.calls.map(
+            ([params]) => (params as { filterGeo?: string }).filterGeo,
+          ),
+        ];
+        const noticeOf = (sc: object) => (sc as { notice?: string }).notice;
+        const occurrences = (text: string, needle: string) => text.split(needle).length - 1;
+
+        it.each([12000, 12451])(
+          'sends, echoes, and renders %s mi as written, with no notice past the caveat',
+          async (radiusMi) => {
+            const { sc, text } = await surfaces(
+              [studyWith('NCT1', sites())],
+              nearInput({ radiusMi }),
+            );
+            const geo = `distance(47.6062,-122.3321,${radiusMi}mi)`;
+
+            expect(sentGeo()).toEqual([geo, undefined, geo]);
+            expect(sc.near).toEqual({ ...SEATTLE, radiusMi });
+            expect(sc.searchCriteria.geoFilter).toBe(geo);
+            expect(noticeOf(sc)).toBe(CANDIDATE_NOTICE);
+            const seen = readMarkdown(text);
+            expect(seen).toContain(
+              `Sites within ${radiusMi} mi of the patient at 47.6062,-122.3321`,
+            );
+            expect(seen).toContain(`geoFilter=${geo}`);
+            expect(seen).not.toContain('12,451');
+          },
+        );
+
+        it.each([
+          [1e306, '1e+306'],
+          [Number.MAX_VALUE, '1.7976931348623157e+308'],
+          [12451.5, '12451.5'],
+        ])(
+          'sends radiusMi %s as 12451 on both requests, the echoes, and every line, and says so after the caveat',
+          async (radiusMi, written) => {
+            const { sc, text } = await surfaces(
+              [studyWith('NCT1', sites())],
+              nearInput({ radiusMi }),
+            );
+
+            expect(sentGeo()).toEqual([GEO_CAP, undefined, GEO_CAP]);
+            expect(sc.near).toEqual({ ...SEATTLE, radiusMi: 12451 });
+            expect(sc.searchCriteria.geoFilter).toBe(GEO_CAP);
+            const notice = `${CANDIDATE_NOTICE} ${capSentence(written)}`;
+            expect(noticeOf(sc)).toBe(notice);
+            const seen = readMarkdown(text);
+            expect(seen).toContain(notice);
+            expect(seen).toContain(
+              'Sites within 12451 mi of the patient at 47.6062,-122.3321 (location.near)',
+            );
+            // The header and the candidate's Sites: line.
+            expect(occurrences(seen, 'within 12451 mi of the patient')).toBe(2);
+            expect(seen).toContain(`geoFilter=${GEO_CAP}`);
+            // No radius in plain decimal past the cap on either surface.
+            expect(`${JSON.stringify(sc)}\n${text}`).not.toMatch(/\d{30,}/);
+          },
+        );
+
+        it('bounds sites, distances, and locationSummary as a 1e305 request does', async () => {
+          const capped = await surfaces(
+            [studyWith('NCT1', sites())],
+            nearInput({ radiusMi: 1e306 }),
+          );
+          const uncapped = await surfaces(
+            [studyWith('NCT1', sites())],
+            nearInput({ radiusMi: 1e305 }),
+          );
+
+          expect(capped.sc.studies).toEqual(uncapped.sc.studies);
+          expect(byDistance(capped.sc.studies[0]!)).toEqual([
+            ['Renton', 3],
+            ['Antipode', 12436.8],
+          ]);
+          expect(capped.sc.studies[0]!.locationSummary).toMatchObject({
+            totalLocations: 3,
+            matchedLocations: 2,
+          });
+        });
+
+        it('follows the candidate caveat and the maxResults cap sentence', async () => {
+          mockService.searchStudies.mockResolvedValue({
+            studies: Array.from({ length: 50 }, (_, i) => studyWith(`NCT${i}`, [at('Renton', 3)])),
+            totalCount: 312,
+          });
+          const result = await runToolContract(
+            findEligible,
+            nearInput({ radiusMi: 1e306 }, { maxResults: 200 }),
+          );
+
+          expect(result.structuredContent).toMatchObject({ truncated: true, shown: 50, cap: 50 });
+          const notice = `${CANDIDATE_NOTICE} Requested maxResults 200 is above this tool's per-call cap of 50, so this response holds 50 of 312 candidates. Replay searchCriteria through clinicaltrials_search_studies with includeUnknownEnrollment=true to page through the rest. ${capSentence('1e+306')}`;
+          expect(noticeOf(result.structuredContent!)).toBe(notice);
+          expect(readMarkdown(textOf(result))).toContain(notice);
+        });
+
+        describe('when nothing matches', () => {
+          const NOTHING = 'No studies found for "breast cancer" matching the specified criteria.';
+          const PAST_THE_COUNTRY =
+            'The radius already reaches every site that publishes coordinates, so to search past the country, replay searchCriteria through clinicaltrials_search_studies with its geoFilter, without locationQuery, and with includeUnknownEnrollment=true.';
+          const run = (radiusMi: number) =>
+            runToolContract(
+              findEligible,
+              nearInput({ radiusMi }, { conditions: ['breast cancer'] }),
+            );
+
+          beforeEach(() => {
+            mockService.searchStudies.mockResolvedValue({ studies: [], totalCount: 0 });
+          });
+
+          it.each([
+            [20000, ` ${capSentence('20000')}`],
+            [12451, ''],
+          ])(
+            'at radiusMi %s, gives the replay past the country in place of widening the radius',
+            async (radiusMi, capped) => {
+              mockService.countStudies.mockImplementation(async (params: { queryLocn?: string }) =>
+                params.queryLocn ? 0 : 16876,
+              );
+              const result = await run(radiusMi);
+
+              const notice = `${NOTHING} 16876 studies match the condition, but none are in the specified location. ${PAST_THE_COUNTRY}${capped}`;
+              expect(noticeOf(result.structuredContent!)).toBe(notice);
+              const seen = readMarkdown(textOf(result));
+              expect(seen).toContain(notice);
+              expect(seen).not.toContain('Widen location.near.radiusMi');
+            },
+          );
+
+          it('still names widening the radius just under the cap', async () => {
+            mockService.countStudies.mockImplementation(async (params: { queryLocn?: string }) =>
+              params.queryLocn ? 0 : 16876,
+            );
+            const result = await run(12450);
+            expect(noticeOf(result.structuredContent!)).toBe(
+              `${NOTHING} 16876 studies match the condition, but none are in the specified location. Widen location.near.radiusMi past 12450 to reach sites farther from the patient.`,
+            );
+          });
+
+          it('ends the notice of another collapsed stage', async () => {
+            const result = await run(1e306);
+            expect(noticeOf(result.structuredContent!)).toBe(
+              `${NOTHING} No study matches the condition alone, before any location, age, sex, healthy-volunteer, or status filter, so relaxing those cannot help. Add a synonym, a broader term, or a MeSH term as another conditions entry (entries are ORed), or use fewer words: an entry with spaces matches as a phrase. ${capSentence('1e+306')}`,
+            );
+          });
         });
       });
     });

@@ -1285,6 +1285,70 @@ describe('searchStudies', () => {
     });
   });
 
+  /**
+   * The service reads which nctIds entry a filter.ids refusal blames; this is
+   * the wiring: the refusal reaches the caller as ids_not_found naming that ID
+   * alone, in data.invalid, while a body naming no item still lists every ID
+   * sent. Run against the real service, with the live API's 400 bodies (#207).
+   */
+  describe('#207 an nctIds refusal names the refused ID', () => {
+    const refusedWith = async (body: string) => {
+      const { ClinicalTrialsService } = await vi.importActual<
+        typeof import('@/services/clinical-trials/clinical-trials-service.js')
+      >('@/services/clinical-trials/clinical-trials-service.js');
+      const sent: string[] = [];
+      vi.stubGlobal('fetch', (url: string | URL) => {
+        sent.push(new URL(String(url)).searchParams.get('filter.ids') ?? '');
+        return Promise.resolve(
+          new Response(body, { status: 400, headers: { 'content-type': 'text/plain' } }),
+        );
+      });
+      try {
+        mockGetService.mockReturnValue(
+          new ClinicalTrialsService(
+            { apiBaseUrl: 'https://test.api/v2', requestTimeoutMs: 30_000, maxPageSize: 100 },
+            { validateFieldsLocally: false },
+          ) as never,
+        );
+        const result = await runToolContract(searchStudies, {
+          nctIds: ['NCT03548935', 'NCT00000000'],
+        });
+        const { error } = result.structuredContent as {
+          error: { code: number; data: Record<string, unknown>; message: string };
+        };
+        return { result, error, sent, text: (result.content as { text: string }[])[0]!.text };
+      } finally {
+        vi.unstubAllGlobals();
+      }
+    };
+
+    it('fails ids_not_found naming only the ID the body names, in data.invalid', async () => {
+      const { result, error, sent, text } = await refusedWith(
+        'Item 2 in parameter `filter.ids` has incorrect format',
+      );
+
+      expect(sent).toEqual(['NCT03548935|NCT00000000']);
+      expect(result.isError).toBe(true);
+      expect(error.code).toBe(JsonRpcErrorCode.NotFound);
+      expect(error.message).toBe(
+        'Study NCT00000000 not found. Verify the NCT ID exists on ClinicalTrials.gov.',
+      );
+      expect(error.data).toMatchObject({ reason: 'ids_not_found', invalid: ['NCT00000000'] });
+      expect(text).toContain('Study NCT00000000 not found.');
+      expect(text).not.toContain('NCT03548935');
+    });
+
+    it('fails ids_not_found listing every sent ID, with no invalid, when the body names no item', async () => {
+      const { error } = await refusedWith('filter.ids has incorrect format for value XYZ');
+
+      expect(error.message).toBe(
+        'Study ID(s) not found or rejected by API: NCT03548935, NCT00000000. Verify the NCT IDs exist on ClinicalTrials.gov.',
+      );
+      expect(error.data).toMatchObject({ reason: 'ids_not_found' });
+      expect(error.data).not.toHaveProperty('invalid');
+    });
+  });
+
   // An ID-targeted lookup that matches nothing is its own kind of empty: the
   // constraint is a list of identifiers, and broadening guidance aimed at
   // queries and filters says nothing about it.
@@ -2090,6 +2154,141 @@ describe('searchStudies', () => {
       expect(shape.geoFilter?.description).toMatch(/rejected/i);
       expect(shape.geoFilter?.description).not.toContain('interpreted as meters');
     });
+  });
+
+  // No two points on Earth lie farther apart than 12,451 mi (20,039 km), so a
+  // larger radius reaches the same sites and is sent at that cap; past about
+  // 1.117e305 mi ClinicalTrials.gov refuses the radius outright (#211).
+  describe('#211 a geoFilter radius past every distance on Earth', () => {
+    /** `1e306` in the plain decimal a caller writes into a geoFilter. */
+    const DIGITS_1E306 = `1${'0'.repeat(306)}`;
+    const SEATTLE_1E306 = `distance(47.6062,-122.3321,${DIGITS_1E306}mi)`;
+    const SEATTLE_CAP = 'distance(47.6062,-122.3321,12451mi)';
+    const MI_SENTENCE =
+      'The geoFilter radius is past 12,451 mi, and no two points on Earth lie farther apart than that, so it was sent as 12451 mi: both reach every site that publishes coordinates.';
+    const KM_SENTENCE =
+      'The geoFilter radius is past 20,039 km, and no two points on Earth lie farther apart than that, so it was sent as 20039 km: both reach every site that publishes coordinates.';
+    const page = (count: number) =>
+      Array.from({ length: count }, (_, i) => ({
+        protocolSection: {
+          identificationModule: { nctId: `NCT${String(i + 1).padStart(8, '0')}` },
+        },
+      }));
+    const run = async (input: Record<string, unknown>, answer: Record<string, unknown>) => {
+      mockService.searchStudies.mockResolvedValue(answer);
+      const result = await runToolContract(searchStudies, input);
+      expect(result.isError).toBeFalsy();
+      const sc = result.structuredContent as Record<string, unknown> & {
+        searchCriteria: Record<string, unknown>;
+      };
+      const text = (result.content as { text: string }[]).map((b) => b.text).join('\n');
+      return { sc, text, seen: readMarkdown(text) };
+    };
+    const sentGeo = () =>
+      (mockService.searchStudies.mock.calls[0]![0] as { filterGeo?: string }).filterGeo;
+
+    it.each([
+      'distance(47.6062,-122.3321,12451mi)',
+      'distance(-40.4168,176.2962,20039km)',
+      // Past the mile cap, but under the kilometre one.
+      'distance(47.6062,-122.3321,12452km)',
+    ])('sends and echoes %s as written, with no notice on a page of results', async (geoFilter) => {
+      const { sc, seen } = await run(
+        { conditionQuery: 'breast cancer', geoFilter },
+        { studies: page(1), totalCount: 1 },
+      );
+
+      expect(sentGeo()).toBe(geoFilter);
+      expect(sc.searchCriteria.geoFilter).toBe(geoFilter);
+      expect(sc).not.toHaveProperty('notice');
+      expect(seen).toContain(`geoFilter: ${geoFilter}`);
+      expect(seen).not.toContain('is past');
+    });
+
+    it.each([
+      {
+        radius: '1e306 mi in digits',
+        geoFilter: SEATTLE_1E306,
+        sent: SEATTLE_CAP,
+        sentence: MI_SENTENCE,
+      },
+      {
+        radius: '12451.5 mi',
+        geoFilter: 'distance(47.6062,-122.3321,12451.5mi)',
+        sent: SEATTLE_CAP,
+        sentence: MI_SENTENCE,
+      },
+      {
+        radius: '20040 km',
+        geoFilter: 'distance(-40.4168,176.2962,20040km)',
+        sent: 'distance(-40.4168,176.2962,20039km)',
+        sentence: KM_SENTENCE,
+      },
+    ])(
+      'sends a radius of $radius as $sent, echoes the value sent, and says so',
+      async ({ geoFilter, sent, sentence }) => {
+        const { sc, text, seen } = await run(
+          { conditionQuery: 'breast cancer', geoFilter, pageSize: 1 },
+          { studies: page(1), totalCount: 546028, nextPageToken: 'tok_page2' },
+        );
+
+        expect(sentGeo()).toBe(sent);
+        expect(sc.searchCriteria.geoFilter).toBe(sent);
+        expect(sc.notice).toBe(sentence);
+        expect(seen).toContain(sentence);
+        expect(seen).toContain(`geoFilter: ${sent}`);
+        expect(`${JSON.stringify(sc)}\n${text}`).not.toMatch(/\d{30,}/);
+      },
+    );
+
+    it.each([
+      [{}, 'Try removing or broadening filters.'],
+      [
+        { conditionQuery: 'breast cancer' },
+        'Try removing filters to broaden results, or use broader search terms.',
+      ],
+    ])('ends the no-match notice (%o)', async (extra, broaden) => {
+      const { sc, seen } = await run(
+        { ...extra, geoFilter: SEATTLE_1E306 },
+        { studies: [], totalCount: 0 },
+      );
+      const notice = `${broaden} ${MI_SENTENCE}`;
+      expect(sc.notice).toBe(notice);
+      expect(seen).toContain(notice);
+    });
+
+    it('follows the page-cap notice', async () => {
+      const { sc, seen } = await run(
+        { conditionQuery: 'breast cancer', geoFilter: SEATTLE_1E306, pageSize: 500 },
+        { studies: page(200), totalCount: 546028, nextPageToken: 'tok_page2' },
+      );
+      expect(sc).toMatchObject({ truncated: true, shown: 200, cap: 200 });
+      const notice = `Requested pageSize 500 is above this server's per-page cap of 200, so this page holds 200 studies. Pass nextPageToken to continue. ${MI_SENTENCE}`;
+      expect(sc.notice).toBe(notice);
+      expect(seen).toContain(notice);
+    });
+
+    it('stands alone on an exhausted continuation page', async () => {
+      const { sc } = await run(
+        { conditionQuery: 'breast cancer', geoFilter: SEATTLE_1E306, pageToken: 'tok_page9' },
+        { studies: [] },
+      );
+      expect(sc).toMatchObject({ pageExhausted: true, notice: MI_SENTENCE });
+    });
+
+    it.each([
+      { problem: 'latitude 147.6', geoFilter: `distance(147.6,-122.3321,${DIGITS_1E306}mi)` },
+      { problem: 'no unit', geoFilter: `distance(47.6062,-122.3321,${DIGITS_1E306})` },
+    ])(
+      'still rejects a 1e306 radius with $problem as geo_invalid before any request',
+      async ({ geoFilter }) => {
+        const ctx = createMockContext({ errors: searchStudies.errors });
+        await expect(
+          searchStudies.handler(searchStudies.input!.parse({ geoFilter }), ctx),
+        ).rejects.toMatchObject({ data: { reason: 'geo_invalid' } });
+        expect(mockService.searchStudies).not.toHaveBeenCalled();
+      },
+    );
   });
 
   describe('format', () => {

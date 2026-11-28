@@ -251,10 +251,12 @@ export type AreaRejection =
   | { kind: 'distance-type'; path: string };
 
 /**
- * Upstream's answer to a DISTANCE[] term inside `SEARCH[Location](…)`, and at
- * times to a RANGE[] term there, on every site field probed (LocationGeoPoint,
- * LocationCity, LocationZip; 2026-11-21): a Java exception naming neither the
- * operator nor the field. Read as this whole sentence, never as generic
+ * Upstream's answer to a DISTANCE[] or RANGE[] term inside `SEARCH[Location](…)`,
+ * on every site field probed (LocationGeoPoint, LocationCity, LocationZip,
+ * LocationStatus, LocationCountryCode; 2026-11-21, 2026-11-27): a Java exception
+ * naming neither the operator nor the field. A RANGE[] term there draws, on
+ * some requests, the body that only repeats the expression instead
+ * (REPEATED_EXPRESSION_LEAD). Read as this whole sentence, never as generic
  * exception text — a DISTANCE[] with no radius outside the wrapper answers with
  * another one, `Cannot read field "exception" because "radius" is null`.
  */
@@ -263,14 +265,44 @@ const LOCATION_OPERATOR_SENTENCE =
 
 /**
  * What a 400 body says after its `Error parsing query in <where>:` label, the
- * place upstream states a refusal. Two bodies also repeat the caller's own
- * text further on — the one that only repeats the expression as sent
- * (`Error parsing query: <expression>`) and an ANTLR error quoting a token
- * (`token recognition error at: '"…'`) — so the DISTANCE[] readings, whose
- * sentences a caller could type into a quoted phrase, count only at this start.
+ * place upstream states a refusal; every refusal on record starts there. Two
+ * bodies also carry the caller's own text further on — the one that only
+ * repeats the expression as sent (repeatedExpression) and an ANTLR error
+ * quoting a token (`token recognition error at: '"…'`) — so every reading of a
+ * refusal counts only at this start, where no caller text stands.
  */
 function refusalSentence(text: string): string {
   return text.replace(/^Error parsing query in [^:]*:\s*/, '');
+}
+
+/**
+ * How upstream opens a refusal that names no cause and only repeats the
+ * expression as sent: `Error parsing query: <expression>`, right after the
+ * label. A RANGE[] term inside `SEARCH[Location](…)` draws it in every query
+ * parameter probed, and in filter.advanced on some requests, where others
+ * draw LOCATION_OPERATOR_SENTENCE; no other expression probed drew it
+ * (2026-11-21, 2026-11-27).
+ */
+const REPEATED_EXPRESSION_LEAD = 'Error parsing query: ';
+
+/**
+ * The expression a 400 body only repeats, naming no cause: its refusal
+ * (refusalSentence) opens with REPEATED_EXPRESSION_LEAD, and the rest is,
+ * trimmed, the value of a parameter the request sent. Upstream repeats a value
+ * as sent, trailing whitespace trimmed — the enrollment sentinel the service
+ * adds and every AREA[] name correction included — so `params` is the
+ * reference, never the caller's input. Undefined for any other body.
+ */
+export function repeatedExpression(
+  text: string,
+  params: Readonly<Record<string, string>>,
+): string | undefined {
+  const refusal = refusalSentence(text);
+  if (!refusal.startsWith(REPEATED_EXPRESSION_LEAD)) return undefined;
+  const expression = refusal.slice(REPEATED_EXPRESSION_LEAD.length).trim();
+  return Object.values(params).some((value) => value.trim() === expression)
+    ? expression
+    : undefined;
 }
 
 /**
@@ -290,35 +322,54 @@ function refusalSentence(text: string): string {
  *
  * Undefined for any other body: `Search scope must be \`Study\` or \`Location\``
  * and `Cannot parse number for \`…\` field` (a RANGE bound, not its field) stay
- * the parse error they are, as does the body that only repeats the expression
- * as sent, `Error parsing query: <expression>`, which upstream sometimes answers
- * a RANGE[] inside the wrapper with instead. The `location-operator` and
- * `distance-type` sentences count only where the refusal starts
- * (refusalSentence), so the same words in caller text upstream repeats never
- * take their reading.
+ * the parse error they are. Each sentence counts only where the refusal starts
+ * (refusalSentence), so the same words in caller text a body repeats or quotes
+ * never take its reading.
  */
 export function parseAreaRejection(text: string): AreaRejection | undefined {
-  const unknown = text.match(/Unknown area name:\s*`([^`]+)`/)?.[1];
-  if (unknown) return { kind: 'unknown', name: unknown };
-  const unsearchable = text.match(/This type of query is not allowed for ([\w-]+)/)?.[1];
-  if (unsearchable) return { kind: 'unsearchable', name: unsearchable };
-  const outside = text.match(/`([^`]+)` is outside Location scope/)?.[1];
-  if (outside) return { kind: 'location-scope', name: outside };
   const refusal = refusalSentence(text);
+  const unknown = refusal.match(/^Unknown area name:\s*`([^`]+)`/)?.[1];
+  if (unknown) return { kind: 'unknown', name: unknown };
+  const unsearchable = refusal.match(/^This type of query is not allowed for ([\w-]+)/)?.[1];
+  if (unsearchable) return { kind: 'unsearchable', name: unsearchable };
+  const outside = refusal.match(/^`([^`]+)` is outside Location scope/)?.[1];
+  if (outside) return { kind: 'location-scope', name: outside };
   if (refusal.startsWith(LOCATION_OPERATOR_SENTENCE)) return { kind: 'location-operator' };
-  if (/RANGE is not supported for multiple \(\d+\) fields/.test(text))
+  if (/^RANGE is not supported for multiple \(\d+\) fields/.test(refusal))
     return { kind: 'range-fields' };
-  const rangePath = text.match(/RANGE is not supported for \S+ field (\S+)/)?.[1];
+  const rangePath = refusal.match(/^RANGE is not supported for \S+ field (\S+)/)?.[1];
   if (rangePath) return { kind: 'range-type', path: rangePath };
   const distancePath = refusal.match(/^DISTANCE is not supported for \S+ field (\S+)/)?.[1];
   return distancePath ? { kind: 'distance-type', path: distancePath } : undefined;
 }
 
 /**
+ * Read upstream's refusal of an enum value in an AREA[] expression, `Allowed
+ * values for enum field \`<path>\` are \`V1\`, \`V2\`, …`, where the refusal
+ * starts (refusalSentence): the field's metadata path, and the text listing its
+ * values. Undefined for any other body.
+ */
+export function parseEnumRejection(text: string): { path: string; values: string } | undefined {
+  const [, path, values] =
+    refusalSentence(text).match(/^Allowed values for enum field\s+`([^`]+)`\s+are\s+(.+)/i) ?? [];
+  return path !== undefined && values !== undefined ? { path, values } : undefined;
+}
+
+/**
+ * Upstream's answer to a DISTANCE[] radius past its ceiling, each unit bounded
+ * on its own: 500mi and 805km answer, 500.1mi and 805.1km draw this, in
+ * advancedFilter and every query parameter probed (2026-11-27). geoFilter and
+ * location.near carry no such ceiling.
+ */
+const RADIUS_CEILING_SENTENCE =
+  'Radius must be set to less than or equal to 500 miles (805 kilometers)';
+
+/**
  * Upstream's answers to a DISTANCE[] operand it cannot read, on LocationGeoPoint
- * outside `SEARCH[Location](…)` (probed 2026-11-21): a latitude or longitude that
- * is not a number or out of range, a radius with no unit or under 1 mile or
- * kilometer, and no radius at all, which reaches the caller as a Java exception.
+ * outside `SEARCH[Location](…)` (probed 2026-11-21; the ceiling 2026-11-27): a
+ * latitude or longitude that is not a number or out of range, a radius with no
+ * unit, under 1 mile or kilometer, or past 500 miles or 805 kilometers, and no
+ * radius at all, which reaches the caller as a Java exception.
  */
 const DISTANCE_OPERAND_SENTENCES = [
   'Latitude must be a number',
@@ -327,6 +378,7 @@ const DISTANCE_OPERAND_SENTENCES = [
   'Longitude must be between -180 and 180',
   'Invalid radius in DISTANCE operator',
   'Radius must be set to at least 1 mile or 1 kilometer',
+  RADIUS_CEILING_SENTENCE,
   'Cannot read field "exception" because "radius" is null',
 ];
 
@@ -458,24 +510,146 @@ const RADIUS_INPUTS =
  */
 const RADIUS_LEVERS = `in the advancedFilter of clinicaltrials_search_studies or clinicaltrials_get_study_count, or ${RADIUS_INPUTS}`;
 
+/** The site scope's keyword, which opens the wrapper before its `(` (whitespace between them allowed). */
+const LOCATION_SCOPE = 'SEARCH[Location]';
+
+/**
+ * Whether an Essie expression holds a RANGE[] term inside `SEARCH[Location](…)`,
+ * at any paren depth below the wrapper. Read only to word a refusal upstream
+ * already made (operatorInLocationScope), never to refuse a request.
+ *
+ * One left-to-right pass, no backtracking, read as areaNames reads: outside a
+ * double-quoted literal the uppercase LOCATION_SCOPE and a `(` after it open the
+ * wrapper, the paren balancing that one closes it, and an uppercase `RANGE[`
+ * inside counts. Inside a literal `\` escapes the next character and `"` closes
+ * it, so literal text never counts, and an unclosed literal leaves the rest
+ * unscanned. Upstream refuses a RANGE[] term after the keyword alike with or
+ * without a paren between (probed 2026-11-27), but what the keyword alone
+ * scopes is upstream's grammar, which this scan does not restate, so it opens
+ * nothing and the refusal keeps the wording for a term the scan places nowhere.
+ */
+export function rangeInLocationScope(expression: string): boolean {
+  let inLiteral = false;
+  let depth = 0;
+  /** The paren depth just inside the outermost open wrapper; undefined outside every wrapper. */
+  let scope: number | undefined;
+  for (let i = 0; i < expression.length; i++) {
+    const c = expression[i];
+    if (inLiteral) {
+      if (c === '\\') i++;
+      else if (c === '"') inLiteral = false;
+    } else if (c === '"') {
+      inLiteral = true;
+    } else if (c === '(') {
+      depth++;
+    } else if (c === ')') {
+      depth--;
+      if (scope !== undefined && depth < scope) scope = undefined;
+    } else if (scope !== undefined) {
+      if (c === 'R' && expression.startsWith('RANGE[', i)) return true;
+    } else if (c === 'S' && expression.startsWith(LOCATION_SCOPE, i)) {
+      let next = i + LOCATION_SCOPE.length;
+      while (/\s/.test(expression[next] ?? '')) next++;
+      if (expression[next] === '(') {
+        depth++;
+        scope = depth;
+        i = next;
+      } else {
+        i = next - 1;
+      }
+    }
+  }
+  return false;
+}
+
+/**
+ * Several values of one site field OR-joined inside the wrapper, which a site
+ * matches by any of them (answered with studies, 2026-11-27).
+ */
+const SITE_VALUES_OR = 'SEARCH[Location](AREA[LocationZip]98101 OR AREA[LocationZip]98102)';
+
 /**
  * A DISTANCE[] or RANGE[] term inside `SEARCH[Location](…)`, which upstream
- * answers with a Java exception naming no field, so nothing is blamed. The
- * explicit hint replaces both the declared `field_invalid` one, which sends the
- * caller to look up a name, and any reading of the exception as syntax, and
- * warns that beside the wrapper the radius and the wrapper's terms can match
- * different sites of one study.
+ * refuses naming no field — with a Java exception (LOCATION_OPERATOR_SENTENCE),
+ * or for a RANGE[] term at times by only repeating the expression
+ * (noCauseNamed) — so nothing is blamed. `lead` states what upstream said,
+ * `range` whether the refused term is a RANGE[] one, and `repeated` holds the
+ * caller expression upstream repeats, if any. The explicit hint replaces both
+ * the declared `field_invalid` one, which sends the caller to look up a name,
+ * and any reading of the refusal as syntax.
+ *
+ * A DISTANCE[] term goes beside the wrapper, where a radius works. A RANGE[]
+ * term does not: beside the wrapper RANGE[] takes no site field but the
+ * index-only count NumLocationContacts, every other one being text, GeoName,
+ * RecruitmentStatus, ContactRole, keyword, or GeoPoint (probed 2026-11-27), so
+ * that hint names the levers that work instead. Either hint warns that beside
+ * the wrapper the radius and the wrapper's terms can match different sites of
+ * one study.
  */
-function operatorInLocationScope(upstream: string): McpError {
+function operatorInLocationScope(
+  lead: string,
+  range: boolean,
+  repeated: readonly string[] = [],
+): McpError {
+  const { tail, hint } = range
+    ? {
+        tail: `and beside the wrapper RANGE[] takes ${RANGE_FIELD_TYPES}, which no site field is but the count NumLocationContacts. Bound the place by a radius beside the wrapper, joined with AND, as ${RADIUS_BESIDE_WRAPPER}, or ${RADIUS_INPUTS}; or match the site field by value, OR-joined inside the wrapper, as in ${SITE_VALUES_OR}.`,
+        hint: `Inside ${LOCATION_WRAPPER} RANGE[] takes no site field, and beside it none but the count NumLocationContacts: bound the place by a radius beside the wrapper, joined with AND, as ${RADIUS_BESIDE_WRAPPER} ${RADIUS_LEVERS}; or match the site field by value, OR-joining the values inside the wrapper, as in ${SITE_VALUES_OR}.`,
+      }
+    : {
+        tail: `so the term goes beside the wrapper, joined with AND: a radius as ${RADIUS_BESIDE_WRAPPER}, or ${RADIUS_INPUTS}.`,
+        hint: `Move the DISTANCE[] or RANGE[] term out of ${LOCATION_WRAPPER} and join it beside the wrapper with AND: a radius as ${RADIUS_BESIDE_WRAPPER} ${RADIUS_LEVERS}.`,
+      };
   return validationError(
-    `${closed(upstream)} ${LOCATION_WRAPPER} evaluates no DISTANCE[] or RANGE[] term on any site field, so the term goes beside the wrapper, joined with AND: a radius as ${RADIUS_BESIDE_WRAPPER}, or ${RADIUS_INPUTS}.`,
+    `${lead} ${LOCATION_WRAPPER} evaluates no DISTANCE[] or RANGE[] term on any site field, ${tail}`,
     {
       reason: 'field_invalid',
       recovery: {
-        hint: `Move the DISTANCE[] or RANGE[] term out of ${LOCATION_WRAPPER} and join it beside the wrapper with AND: a radius as ${RADIUS_BESIDE_WRAPPER} ${RADIUS_LEVERS}. Beside the wrapper the radius and the wrapper's terms can match different sites of one study, so check each in-range site's own status with clinicaltrials_get_study_record and nearLocation.`,
+        hint: `${hint} Beside the wrapper the radius and the wrapper's terms can match different sites of one study, so check each in-range site's own status with clinicaltrials_get_study_record and nearLocation.`,
       },
     },
-    { literals: [LOCATION_WRAPPER, 'DISTANCE[]', 'RANGE[]', RADIUS_BESIDE_WRAPPER] },
+    {
+      literals: [
+        LOCATION_WRAPPER,
+        'DISTANCE[]',
+        'RANGE[]',
+        RADIUS_BESIDE_WRAPPER,
+        ...(range ? [SITE_VALUES_OR] : []),
+        ...repeated,
+      ],
+    },
+  );
+}
+
+/**
+ * A 400 that names no cause and only repeats `expression`, a parameter's value
+ * as sent (repeatedExpression). Upstream answers the same RANGE[] term inside
+ * `SEARCH[Location](…)` this way on some requests and with
+ * LOCATION_OPERATOR_SENTENCE on others, and a reason callers branch on must not
+ * hang on which body it sends, so an expression holding the wrapper ends as
+ * that sentence does. A DISTANCE[] term there draws the sentence, never this
+ * body (probed 2026-11-27), so the refusal names the RANGE[] levers whatever
+ * rangeInLocationScope places, a wrapper with no paren included, whose scope
+ * that scan does not read. One holding no wrapper (never observed) stays a
+ * `query_parse_error`, with a hint of its own in place of the declared one
+ * about brackets and free text, which has nothing here to go on. The
+ * expression is a literal either way: the text a caller edits and sends back.
+ */
+function noCauseNamed(text: string, expression: string): McpError {
+  const label = text.slice(0, text.length - refusalSentence(text).length).trim();
+  const lead = `${label} ClinicalTrials.gov named no cause and only repeated the expression as sent: ${expression}.`;
+  if (expression.includes(LOCATION_SCOPE)) {
+    return operatorInLocationScope(lead, true, [expression]);
+  }
+  return validationError(
+    lead,
+    {
+      reason: 'query_parse_error',
+      recovery: {
+        hint: 'Send the AREA[…], RANGE[…], and DISTANCE[…] terms of the expression one at a time to find the one ClinicalTrials.gov refuses, then look up the field it names with clinicaltrials_get_field_definitions.',
+      },
+    },
+    { literals: [expression, 'AREA[…]', 'RANGE[…]', 'DISTANCE[…]'] },
   );
 }
 
@@ -507,19 +681,20 @@ const RADIUS_EXAMPLE = 'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi]';
 /**
  * A DISTANCE[] operand upstream cannot read (isDistanceOperandRejection). Still
  * a `query_parse_error`, but the explicit hint restates the operand's shape in
- * place of the declared one about brackets and free text.
+ * place of the declared one about brackets and free text. A radius past the
+ * ceiling (RADIUS_CEILING_SENTENCE) fits no DISTANCE[] term, so its hint also
+ * names the two inputs that take a larger one.
  */
 function distanceOperandUnreadable(upstream: string): McpError {
   const bounds =
-    'a latitude from -90 to 90, a longitude from -180 to 180, and a radius of at least 1 carrying a mi or km unit';
+    'a latitude from -90 to 90, a longitude from -180 to 180, and a radius of 1 to 500 mi or 1 to 805 km, written with its unit';
+  const shape = `Write the radius term as ${RADIUS_TERM} with ${bounds}, such as 25mi or 40km.`;
+  const hint = refusalSentence(upstream).startsWith(RADIUS_CEILING_SENTENCE)
+    ? `${shape} Past 500 mi or 805 km, leave the DISTANCE[] term out and pass the radius ${RADIUS_INPUTS}, which take a larger one.`
+    : shape;
   return validationError(
     `${closed(upstream)} DISTANCE[] reads three values, DISTANCE[lat,lon,radius]: ${bounds}, as in ${RADIUS_EXAMPLE}.`,
-    {
-      reason: 'query_parse_error',
-      recovery: {
-        hint: `Write the radius term as ${RADIUS_TERM} with ${bounds}, such as 25mi or 40km.`,
-      },
-    },
+    { reason: 'query_parse_error', recovery: { hint } },
     { literals: ['DISTANCE[]', 'DISTANCE[lat,lon,radius]', RADIUS_TERM, RADIUS_EXAMPLE] },
   );
 }
@@ -1828,13 +2003,16 @@ export class ClinicalTrialsService {
    * the wrong place, which the declared hint (look the name up) misdirects, so
    * each carries a hint of its own. The lookups read the index the caller's
    * AREA[] text already loaded and fail open: this runs on an error path, where
-   * a metadata failure must not replace the real error.
+   * a metadata failure must not replace the real error. A misplaced operator's
+   * refusal repeats no expression, so `params`, the request's, are what its
+   * wording reads.
    *
    * @throws the caller's cancellation.
    */
   private async describeRejectedTerm(
     rejection: AreaRejection,
     text: string,
+    params: Readonly<Record<string, string>>,
     ctx: Context,
   ): Promise<McpError> {
     const upstream = text.trim();
@@ -1842,7 +2020,10 @@ export class ClinicalTrialsService {
       case 'location-scope':
         return outsideLocationScope(rejection.name, upstream);
       case 'location-operator':
-        return operatorInLocationScope(upstream);
+        return operatorInLocationScope(
+          closed(upstream),
+          Object.values(params).some((value) => rangeInLocationScope(value)),
+        );
       case 'range-type':
         return rangeTypeUnsupported(
           rejection.path,
@@ -2322,14 +2503,28 @@ export class ClinicalTrialsService {
                 value: params.sort,
               });
             }
-            // filter.ids rejection — the API may reject IDs that match the
-            // regex but don't exist (e.g. NCT00000000). Surface the actual
-            // IDs so the caller knows which ones failed.
+            // filter.ids rejection — the API refuses an ID that matches the
+            // NCT pattern as malformed (NCT00000000), while a well-formed ID
+            // with no study is answered 200 with the record absent. The body
+            // numbers the list from 1 by position as sent, repeats counted,
+            // and names only the first refused item, so that ID alone is
+            // named, in `invalid`, in the words the single-study route gives
+            // the same ID: the results tool records it as that ID's fetch
+            // error and re-sends the rest. A body that names no item, or one
+            // past the end of the list, names every ID sent.
             const ids = params['filter.ids'];
             if (ids && blamed('filter.ids')) {
-              const idList = ids.split('|').join(', ');
+              const sent = ids.split('|');
+              const item = text.match(/^\s*Item (\d+) in parameter `filter\.ids`/i)?.[1];
+              const refused = item === undefined ? undefined : sent[Number(item) - 1];
+              if (refused !== undefined) {
+                throw notFound(
+                  `Study ${refused} not found. Verify the NCT ID exists on ClinicalTrials.gov.`,
+                  { reason: 'ids_not_found', invalid: [refused] },
+                );
+              }
               throw notFound(
-                `Study ID(s) not found or rejected by API: ${idList}. Verify the NCT IDs exist on ClinicalTrials.gov.`,
+                `Study ID(s) not found or rejected by API: ${sent.join(', ')}. Verify the NCT IDs exist on ClinicalTrials.gov.`,
                 { reason: 'ids_not_found' },
               );
             }
@@ -2355,7 +2550,14 @@ export class ClinicalTrialsService {
           // Essie parser errors share the `Error parsing query in <where>: …` prefix,
           // where <where> names the parameter (`advanced filter`, `Conditions or
           // disease`, `Other terms`) and is the only part that varies with it.
-          // Several shapes show up:
+          // Every refusal starts right after that label (refusalSentence), and
+          // each reading below counts only there: two bodies carry caller text
+          // further on. Several shapes show up:
+          //   0. A body naming no cause that only repeats a parameter's value as
+          //      sent, `Error parsing query: <expression>` (repeatedExpression),
+          //      read first and against `params`: a RANGE[] term inside
+          //      SEARCH[Location](…) at times, ending as the Java sentence in 1
+          //      does (noCauseNamed).
           //   1. A refusal of the field an AREA[] or RANGE[] term names, or of the
           //      term where it stands, read by parseAreaRejection: `Unknown area
           //      name: \`X\``; `This type of query is not allowed for X` (a STRUCT
@@ -2379,12 +2581,13 @@ export class ClinicalTrialsService {
           // send a second-tier read's own failure back into the suggestion path
           // that awaits it.
           if (path === '/studies' && text.startsWith('Error parsing query in')) {
+            const repeated = repeatedExpression(text, params);
+            if (repeated !== undefined) throw noCauseNamed(text, repeated);
             const rejected = parseAreaRejection(text);
-            if (rejected) throw await this.describeRejectedTerm(rejected, text, ctx);
-            const enumMatch = text.match(/Allowed values for enum field\s+`([^`]+)`\s+are\s+(.+)/i);
-            if (enumMatch) {
-              const fieldPath = enumMatch[1] ?? '';
-              const rawValues = enumMatch[2] ?? '';
+            if (rejected) throw await this.describeRejectedTerm(rejected, text, params, ctx);
+            const enumRejection = parseEnumRejection(text);
+            if (enumRejection) {
+              const { path: fieldPath, values: rawValues } = enumRejection;
               // Extract backtick-quoted values: `NA`, `EARLY_PHASE1`, …
               const validValues = [...rawValues.matchAll(/`([^`]+)`/g)].flatMap((m) => m[1] ?? []);
               const piece = (await this.entryAtPath(fieldPath, ctx))?.piece;

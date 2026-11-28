@@ -17,11 +17,14 @@ import {
   oneLine,
 } from '../utils/format-helpers.js';
 import {
+  capRadius,
   haversineMi,
   type LocationWithDistance,
+  MAX_RADIUS,
   type NearPoint,
   nearGeoFilter,
   plainDecimal,
+  radiusCapNotice,
   roundMi,
   sitesByDistance,
 } from '../utils/geo-helpers.js';
@@ -221,7 +224,10 @@ function hasGeoPoint(loc: StudyLocation): loc is GeoLocated {
 
 /**
  * Pick the one recruiting site to admit when none of a candidate's shown sites
- * recruits (#114), or undefined when the study registers no recruiting site.
+ * recruits (#114) or, under location.near, when none of them is in the
+ * requested country while a site there recruits (#210); undefined when the
+ * study registers no recruiting site. The home-country preference below makes
+ * the second case always admit a site at home.
  *
  * Recruiting sites in the requested country (`inCountry`, the gate's word test,
  * so `Korea` keeps them in South Korea) are the candidates when there are any:
@@ -262,9 +268,11 @@ interface LocationSummary {
   /** Sites matching the requested location, before the cap. */
   matchedLocations: number;
   /**
-   * Present when no site the cap kept is recruiting and one recruiting site was
-   * added — the nearest by distance when coordinates allow (it then carries
-   * distanceMi), otherwise the first in match order.
+   * Present when one recruiting site was added because no site the cap kept is
+   * recruiting or, under location.near, none of them is in the requested country
+   * while a site there recruits (#210) — the nearest by distance when
+   * coordinates allow (it then carries distanceMi), otherwise the first in match
+   * order.
    */
   nearestRecruitingSiteAdded?: true;
   /** Tool that returns the study's complete site list. */
@@ -365,6 +373,17 @@ function boundLocations(
  * recruiting order, so a recruiting site within the radius can sit past the
  * cap; the admission rule is the same, measured from the point, and the site it
  * admits can be that one, shown again.
+ *
+ * The sites kept lie in range in any country, while ClinicalTrials.gov matches
+ * location.country on any one site of the study, so every site kept can be
+ * across a border while one at home recruits. That is the second admission
+ * trigger (#210): no site kept passes `inCountry`, the test the home-country
+ * preference uses, and a recruiting site that passes it exists. Both triggers
+ * go through the one admitRecruitingSite call, home country first, so a
+ * candidate meeting both gets the site either alone would pick, never two, and
+ * never a site already kept. Without location.near the matched tier is in the
+ * requested country whenever a site there is (`gatedMatch`), so
+ * `boundLocations` needs no second trigger.
  */
 function boundNearLocations(
   sites: StudyLocation[],
@@ -376,9 +395,10 @@ function boundNearLocations(
   const kept: LocationWithDistance[] =
     measured.length > 0 ? measured.slice(0, Math.max(withinRadius, 1)) : sites;
   const capped = kept.slice(0, limit);
-  const admitted = capped.some(isRecruiting)
-    ? undefined
-    : admitRecruitingSite(sites, inCountry, [near]);
+  const admit =
+    !capped.some(isRecruiting) ||
+    (!capped.some(inCountry) && sites.some((site) => isRecruiting(site) && inCountry(site)));
+  const admitted = admit ? admitRecruitingSite(sites, inCountry, [near]) : undefined;
   // The radius test sitesByDistance applies, on the exact distance.
   const admittedInRange =
     admitted?.geoPoint != null && haversineMi(near, admitted.geoPoint) <= near.radiusMi;
@@ -498,17 +518,35 @@ function siteLine(loc: LocationWithDistance, distanceFrom: string): string {
  * nearer one across a border can beat on distance, so "nearest" carries its
  * country rule (admitRecruitingSite), and is claimed only when `measured`, the
  * added site carrying distanceMi (#138).
+ *
+ * Under location.near a site is also added when none of the sites listed is in
+ * the requested country while a site there recruits (#210). The first trigger
+ * fires only when no listed site recruits, so a recruiting site among
+ * `listedBefore` means the second fired alone, and the clause names the
+ * country. When both fire, the first trigger's clause stands; the site it
+ * describes is the one at home either way.
  */
-function addedSiteClause(underNear: boolean, measured: boolean, listedBefore: number): string {
+function addedSiteClause(
+  underNear: boolean,
+  measured: boolean,
+  listedBefore: StudyLocation[],
+): string {
   if (!underNear) {
     return measured
       ? '; none of them is recruiting, so the nearest recruiting site in the requested country is included, or the nearest anywhere when none recruits there'
       : '; none of them is recruiting, so one recruiting site from a wider area is included (picked by match order — coordinates to measure distance are missing)';
   }
-  const before =
-    listedBefore === 1
-      ? 'the first site listed is not recruiting'
-      : `none of the first ${listedBefore} sites listed is recruiting`;
+  const noneListed = (what: string) =>
+    listedBefore.length === 1
+      ? `the first site listed is not ${what}`
+      : `none of the first ${listedBefore.length} sites listed is ${what}`;
+  if (listedBefore.some(isRecruiting)) {
+    const before = noneListed('in the requested country');
+    return measured
+      ? `; ${before}, so the recruiting site there nearest the patient is added last`
+      : `; ${before}, so one recruiting site there is added last (picked by match order — coordinates to measure distance are missing)`;
+  }
+  const before = noneListed('recruiting');
   return measured
     ? `; ${before}, so the recruiting site in the requested country nearest the patient is added last, or the nearest anywhere when none recruits there`
     : `; ${before}, so one recruiting site is added last (picked by match order — coordinates to measure distance are missing)`;
@@ -564,7 +602,7 @@ const ELIGIBLE_FIELDS = [
 
 export const findEligible = tool('clinicaltrials_find_eligible', {
   description:
-    "Find candidate clinical trials for a patient profile. Provide age, sex, conditions, and location to get studies with their demographic limits, contact information, and recruiting locations. Candidates are matched on age, sex, location, recruitment status, and ClinicalTrials.gov's fuzzy condition search only — inclusion/exclusion criteria are not checked, and a candidate can exclude the requested condition, so review each one's criteria with clinicaltrials_get_study_record before treating it as a match. Results are re-ranked so studies whose own condition matches a requested condition surface above tangential matches from ClinicalTrials.gov's fuzzy condition search. Each candidate returns only the sites matching the requested location (capped by locationLimit), not the study's full registered site list — a large trial can register hundreds of sites worldwide. Give location.near (the patient's lat, lon, and a radiusMi) in place of city and state to match by travel distance: candidates then return their sites within the radius, nearest first, each with distanceMi from the patient. When none of a candidate's matched sites is recruiting, one recruiting site is added so an enrollable site is never hidden behind a closer closed one: the one nearest the matched sites (under location.near, the patient) by their published coordinates, in the requested country whenever a site there recruits, carrying distanceMi, or the first in match order when coordinates are missing. Fetch a study's complete record with clinicaltrials_get_study_record.",
+    "Find candidate clinical trials for a patient profile. Provide age, sex, conditions, and location to get studies with their demographic limits, contact information, and recruiting locations. Candidates are matched on age, sex, location, recruitment status, and ClinicalTrials.gov's fuzzy condition search only — inclusion/exclusion criteria are not checked, and a candidate can exclude the requested condition, so review each one's criteria with clinicaltrials_get_study_record before treating it as a match. Results are re-ranked so studies whose own condition matches a requested condition surface above tangential matches from ClinicalTrials.gov's fuzzy condition search. Each candidate returns only the sites matching the requested location (capped by locationLimit), not the study's full registered site list — a large trial can register hundreds of sites worldwide. Give location.near (the patient's lat, lon, and a radiusMi) in place of city and state to match by travel distance: candidates then return their sites within the radius, nearest first, each with distanceMi from the patient. When none of a candidate's matched sites is recruiting, one recruiting site is added so an enrollable site is never hidden behind a closer closed one: the one nearest the matched sites (under location.near, the patient) by their published coordinates, in the requested country whenever a site there recruits, carrying distanceMi, or the first in match order when coordinates are missing. Under location.near that one site is also added when none of a candidate's listed sites is in location.country and one of its sites there recruits, so a recruiting site in the patient's country is never hidden behind sites across a border. Fetch a study's complete record with clinicaltrials_get_study_record.",
   annotations: {
     readOnlyHint: true,
     idempotentHint: true,
@@ -588,7 +626,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A conditions entry carries an AREA[] expression naming a field ClinicalTrials.gov does not recognize or cannot search by value, or putting a valid field where upstream refuses it: a study-level field or a DISTANCE[] term (at times a RANGE[] term) inside SEARCH[Location](…), RANGE[] on a field that is not a date, number, or age, or DISTANCE[] on any field but LocationGeoPoint.',
+      when: 'A conditions entry carries an AREA[] expression naming a field ClinicalTrials.gov does not recognize or cannot search by value, or putting a valid field where upstream refuses it: a study-level field or a DISTANCE[] or RANGE[] term inside SEARCH[Location](…), RANGE[] on a field that is not a date, number, or age, or DISTANCE[] on any field but LocationGeoPoint.',
       recovery: RECOVERY_HINTS.field_invalid,
       thrownBy: 'service',
     },
@@ -602,7 +640,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     {
       reason: 'query_parse_error',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A conditions entry uses syntax the upstream Essie parser rejects — typically an unmatched `(` or `)`, or a `[` or `]` outside an AREA[…] expression — or carries a DISTANCE[] operand it cannot read: a latitude or longitude that is not a number or is out of range, a radius under 1 or with no mi or km unit, or no radius at all.',
+      when: 'A conditions entry uses syntax the upstream Essie parser rejects — typically an unmatched `(` or `)`, or a `[` or `]` outside an AREA[…] expression — or carries a DISTANCE[] operand it cannot read: a latitude or longitude that is not a number or is out of range, a radius under 1, past 500 mi or 805 km, or with no mi or km unit, or no radius at all. It is also the reason when ClinicalTrials.gov names no cause and only repeats the conditions as sent, with no SEARCH[Location](…) among them.',
       recovery: RECOVERY_HINTS.query_parse_error,
       thrownBy: 'service',
     },
@@ -703,13 +741,13 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
               .min(1)
               .default(50)
               .describe(
-                'Radius in miles around the point, at least 1; decimals are allowed. Default 50; there is no maximum.',
+                'Radius in miles around the point, at least 1; decimals are allowed. Default 50; there is no maximum, but no two points on Earth lie more than 12,451 mi apart, so a larger radius is sent as 12451, which reaches the same sites, and the notice says so.',
               ),
           })
           .strict()
           .optional()
           .describe(
-            "The patient's coordinates and how far they can travel, as `{ lat, lon, radiusMi }`. A study qualifies when one of its sites lies within radiusMi of the point (sent upstream as filter.geo), and each candidate returns its sites within the radius, nearest first, each carrying distanceMi from the point. Replaces city and state: giving either with near fails as location_conflict. Country stays required and is still sent, but ClinicalTrials.gov matches it on any one of the study's sites, separately from the radius, so a candidate's sites within the radius can all lie in another country; each site carries its own country. Nothing here geocodes, so look the coordinates up first. Distances use the registry's site coordinates, typically a city centroid, and a site that publishes none is never within the radius.",
+            "The patient's coordinates and how far they can travel, as `{ lat, lon, radiusMi }`. A study qualifies when one of its sites lies within radiusMi of the point (sent upstream as filter.geo), and each candidate returns its sites within the radius, nearest first, each carrying distanceMi from the point. Replaces city and state: giving either with near fails as location_conflict. Country stays required and is still sent, but ClinicalTrials.gov matches it on any one of the study's sites, separately from the radius, so a candidate's sites within the radius can all lie in another country; each site carries its own country, and when none of the sites listed is in location.country while one of the study's sites there recruits, one recruiting site there is added — the nearest the point, with its distanceMi, when coordinates allow. Nothing here geocodes, so look the coordinates up first. Distances use the registry's site coordinates, typically a city centroid, and a site that publishes none is never within the radius.",
           ),
       })
       .strict()
@@ -737,7 +775,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       .min(1)
       .default(10)
       .describe(
-        "Cap on the sites returned per candidate. Each candidate keeps only the sites matching the requested location at the narrowest level that matched (city, else state, else country), capped at this many; the rest of the study's registered sites are omitted. Under location.near the matched sites are those within radiusMi in any country, nearest first, or the nearest measured site when none measures inside. The cap governs those matched sites — when none of the sites it keeps is recruiting, one recruiting site is added on top of it (the nearest to any matched site, measured before this cap, when coordinates allow — under location.near, the nearest to the point, which can be a site within the radius that the cap cut — in the requested country whenever a site there recruits), so a candidate can carry one site more than this. Raise it to see more nearby sites — there is no upper bound, and a limit past the matched sites returns all of them — or fetch the complete site list with clinicaltrials_get_study_record. Each candidate reports totalLocations / matchedLocations / locationsTruncated / nearestRecruitingSiteAdded in locationSummary only when the bound actually dropped sites.",
+        "Cap on the sites returned per candidate. Each candidate keeps only the sites matching the requested location at the narrowest level that matched (city, else state, else country), capped at this many; the rest of the study's registered sites are omitted. Under location.near the matched sites are those within radiusMi in any country, nearest first, or the nearest measured site when none measures inside. The cap governs those matched sites — when none of the sites it keeps is recruiting, or under location.near none of them is in location.country while a site there recruits, one recruiting site is added on top of it (the nearest to any matched site, measured before this cap, when coordinates allow — under location.near, the nearest to the point, which can be a site within the radius that the cap cut — in the requested country whenever a site there recruits), so a candidate can carry one site more than this. Raise it to see more nearby sites — there is no upper bound, and a limit past the matched sites returns all of them — or fetch the complete site list with clinicaltrials_get_study_record. Each candidate reports totalLocations / matchedLocations / locationsTruncated / nearestRecruitingSiteAdded in locationSummary only when the bound actually dropped sites.",
       ),
   }),
 
@@ -745,7 +783,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     studies: z
       .array(z.record(z.string(), z.unknown()))
       .describe(
-        "Candidate studies with their demographic limits (age, sex, healthy volunteers), contacts, and location fields — matched on age, sex, location, recruitment status, and the fuzzy condition search; inclusion/exclusion criteria are not checked and are not in these records, so review each candidate with clinicaltrials_get_study_record. Each candidate's protocolSection.contactsLocationsModule.locations is BOUNDED to the sites matching the requested location (capped at locationLimit) plus, when none of the sites kept is recruiting, one added recruiting site — not the study's full registered site list. Each returned site keeps every contact it registers in contacts[] (name, role, phone, phoneExt, email — the keys the registry has); a site with no contacts has no contacts key. The added site is the one nearest any matched site by published coordinates, taken from the requested country whenever a site there recruits, and carries distanceMi (miles to that nearest matched site); when the matched or recruiting sites publish no coordinates it is the first in match order and carries no distanceMi. Under location.near, the returned sites are those within radiusMi of the point in any country (location.country is matched on some site of the study, not necessarily these), nearest first, each carrying distanceMi, miles from the point; when none measures inside the radius the nearest measured site stands alone, past it, and when no site publishes coordinates the sites are kept, capped, with no distanceMi. The added recruiting site is then the one nearest the point, taken from the requested country whenever a site there recruits, its distanceMi from the point, so it can lie past the radius, or within it when the cap cut it, and locationSummary.matchedLocations counts the sites within the radius, in any country, so it can be 0. A candidate whose sites were bounded also carries a top-level locationSummary object — { totalLocations, matchedLocations, locationsTruncated, nearestRecruitingSiteAdded?, retrieveFullStudyWith } — absent when nothing was dropped; nearestRecruitingSiteAdded is present only when that extra site was added (the key keeps its name in the match-order fallback). Fetch a study's complete record and site list with clinicaltrials_get_study_record.",
+        "Candidate studies with their demographic limits (age, sex, healthy volunteers), contacts, and location fields — matched on age, sex, location, recruitment status, and the fuzzy condition search; inclusion/exclusion criteria are not checked and are not in these records, so review each candidate with clinicaltrials_get_study_record. Each candidate's protocolSection.contactsLocationsModule.locations is BOUNDED to the sites matching the requested location (capped at locationLimit) plus, when none of the sites kept is recruiting (under location.near, also when none of them is in location.country while a site there recruits), one added recruiting site — not the study's full registered site list. Each returned site keeps every contact it registers in contacts[] (name, role, phone, phoneExt, email — the keys the registry has); a site with no contacts has no contacts key. The added site is the one nearest any matched site by published coordinates, taken from the requested country whenever a site there recruits, and carries distanceMi (miles to that nearest matched site); when the matched or recruiting sites publish no coordinates it is the first in match order and carries no distanceMi. Under location.near, the returned sites are those within radiusMi of the point in any country (location.country is matched on some site of the study, not necessarily these), nearest first, each carrying distanceMi, miles from the point; when none measures inside the radius the nearest measured site stands alone, past it, and when no site publishes coordinates the sites are kept, capped, with no distanceMi. The added recruiting site is then the one nearest the point, taken from the requested country whenever a site there recruits, its distanceMi from the point, so it can lie past the radius, or within it when the cap cut it, and locationSummary.matchedLocations counts the sites within the radius, in any country, so it can be 0. A candidate whose sites were bounded also carries a top-level locationSummary object — { totalLocations, matchedLocations, locationsTruncated, nearestRecruitingSiteAdded?, retrieveFullStudyWith } — absent when nothing was dropped; nearestRecruitingSiteAdded is present only when that extra site was added (the key keeps its name in the match-order fallback). Fetch a study's complete record and site list with clinicaltrials_get_study_record.",
       ),
     totalCount: z.number().optional().describe('Total matching studies from the API.'),
     near: z
@@ -756,7 +794,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       })
       .optional()
       .describe(
-        "Echo of location.near, present only when it was given: each candidate's sites were bounded to radiusMi of this point, apart from the fallbacks and the added recruiting site studies describes, and every site's distanceMi is miles from it.",
+        "Echo of location.near, present only when it was given: each candidate's sites were bounded to radiusMi of this point, apart from the fallbacks and the added recruiting site studies describes, and every site's distanceMi is miles from it. radiusMi is the radius sent: 12451 when the one requested was past it, which the notice names.",
       ),
   }),
 
@@ -829,7 +867,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
       .string()
       .optional()
       .describe(
-        "When no studies matched, recovery guidance that identifies which filter stage collapsed and suggests how to broaden. When studies are returned, one caveat for the whole response: candidates were matched on demographics, location, recruitment status, and a fuzzy condition search, not on inclusion/exclusion criteria. When maxResults was above the tool's per-call cap and more studies match, a sentence follows stating the requested, served, and total counts and pointing at the searchCriteria replay.",
+        "When no studies matched, recovery guidance that identifies which filter stage collapsed and suggests how to broaden. When studies are returned, one caveat for the whole response: candidates were matched on demographics, location, recruitment status, and a fuzzy condition search, not on inclusion/exclusion criteria. When maxResults was above the tool's per-call cap and more studies match, a sentence follows stating the requested, served, and total counts and pointing at the searchCriteria replay. When location.near.radiusMi was past 12,451 mi, a closing sentence names it as requested and says it was sent as 12451.",
       ),
     truncated: z
       .boolean()
@@ -929,8 +967,8 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     // qualifies a study on two different sites — one in the city, another near
     // the point (#159). The radius replaces them. Judged after the #145 unset
     // above, so a city or state with no content does not conflict.
-    const near = input.location.near;
-    if (near && (location.city || location.state)) {
+    const requestedNear = input.location.near;
+    if (requestedNear && (location.city || location.state)) {
       const given = [location.city && 'location.city', location.state && 'location.state']
         .filter(Boolean)
         .join(' and ');
@@ -939,6 +977,21 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         `location.near cannot be combined with ${given}: ClinicalTrials.gov matches the radius and the place name independently, so together they can qualify a study on two different sites. Drop ${given} to search by distance, or drop location.near.`,
       );
     }
+    // A radius past every distance on Earth reaches the same sites as the cap,
+    // and upstream refuses one too large to hold in meters, so it is sent as
+    // the cap (#211). This one applied near feeds filter.geo on both requests,
+    // the site pass, and the echo, so none of them can disagree; only the
+    // notice names the radius as requested.
+    const near = requestedNear && {
+      ...requestedNear,
+      radiusMi: capRadius(requestedNear.radiusMi, 'mi'),
+    };
+    const radiusCap =
+      requestedNear && requestedNear.radiusMi > MAX_RADIUS.mi
+        ? radiusCapNotice(`location.near.radiusMi ${requestedNear.radiusMi}`, 'mi')
+        : undefined;
+    // The cap sentence closes whichever notice the response carries (#153's rule).
+    const withRadiusCap = (notice: string) => (radiusCap ? `${notice} ${radiusCap}` : notice);
     // Sites are scored, bounded, and admitted against the text the query
     // carries, not the raw value: a quoted part finds a study through its bare
     // form, so it must match that study's sites the same way (#155). A country
@@ -1213,7 +1266,13 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         noticeParts.push(
           `${conditionMatched} studies match the condition, but none are in the specified location.`,
         );
-        if (near) {
+        if (near?.radiusMi === MAX_RADIUS.mi) {
+          // At the cap the radius already reaches every site, so only a replay
+          // without the country reaches farther (#211).
+          noticeParts.push(
+            'The radius already reaches every site that publishes coordinates, so to search past the country, replay searchCriteria through clinicaltrials_search_studies with its geoFilter, without locationQuery, and with includeUnknownEnrollment=true.',
+          );
+        } else if (near) {
           noticeParts.push(
             `Widen location.near.radiusMi past ${plainDecimal(near.radiusMi)} to reach sites farther from the patient.`,
           );
@@ -1253,7 +1312,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
             'Many studies do not accept healthy volunteers. Set healthyVolunteer=false if the patient has a relevant condition.',
           );
       }
-      ctx.enrich.notice(noticeParts.join(' '));
+      ctx.enrich.notice(withRadiusCap(noticeParts.join(' ')));
     } else {
       // Once per response, never per study: the caveat applies to every
       // candidate equally and would otherwise scale with the result count (#147).
@@ -1266,10 +1325,12 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
         ctx.enrich.truncated({
           shown,
           cap: MAX_RESULTS_PER_CALL,
-          guidance: `${CANDIDATE_NOTICE} Requested maxResults ${input.maxResults} is above this tool's per-call cap of ${MAX_RESULTS_PER_CALL}, so this response holds ${shown} of ${demographicsMatched} candidates. Replay searchCriteria through clinicaltrials_search_studies with includeUnknownEnrollment=true to page through the rest.`,
+          guidance: withRadiusCap(
+            `${CANDIDATE_NOTICE} Requested maxResults ${input.maxResults} is above this tool's per-call cap of ${MAX_RESULTS_PER_CALL}, so this response holds ${shown} of ${demographicsMatched} candidates. Replay searchCriteria through clinicaltrials_search_studies with includeUnknownEnrollment=true to page through the rest.`,
+          ),
         });
       } else {
-        ctx.enrich.notice(CANDIDATE_NOTICE);
+        ctx.enrich.notice(withRadiusCap(CANDIDATE_NOTICE));
       }
     }
 
@@ -1299,11 +1360,13 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
     // from the nearest matched site (#138, #205). Upstream matches the country
     // and filter.geo on separate sites, so a candidate's sites in range can all
     // be across a border while its in-country site is far away; the header says
-    // so once, and each site line names its country.
+    // so once, and that such a candidate also lists one recruiting site at home
+    // (#210), which carries no locationSummary when it completes the list; each
+    // site line names its country.
     const { near } = result;
     if (near) {
       lines.push(
-        `Sites within ${plainDecimal(near.radiusMi)} mi of the patient at ${plainDecimal(near.lat)},${plainDecimal(near.lon)} (location.near), nearest first, in any country: ClinicalTrials.gov matches location.country on any one site of a study, separately from the radius, so a candidate's sites in range can all lie in another country.`,
+        `Sites within ${plainDecimal(near.radiusMi)} mi of the patient at ${plainDecimal(near.lat)},${plainDecimal(near.lon)} (location.near), nearest first, in any country: ClinicalTrials.gov matches location.country on any one site of a study, separately from the radius, so a candidate's sites in range can all lie in another country. When none of a candidate's listed sites is in location.country and one of its sites there recruits, one recruiting site there is added last, the nearest the patient when coordinates allow.`,
       );
     }
     const distanceFrom = near ? 'the patient' : 'the nearest matched site';
@@ -1372,7 +1435,7 @@ export const findEligible = tool('clinicaltrials_find_eligible', {
           // too, so only the admitted site's own counts (#205).
           const measured = (locs.at(-1) as LocationWithDistance | undefined)?.distanceMi != null;
           const admitted = locationSummary.nearestRecruitingSiteAdded
-            ? addedSiteClause(near !== undefined, measured, locs.length - 1)
+            ? addedSiteClause(near !== undefined, measured, locs.slice(0, -1))
             : '';
           // Under location.near the matched sites are the ones in range, in any
           // country, so the count names the radius, never the requested

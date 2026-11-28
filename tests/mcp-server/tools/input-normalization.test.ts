@@ -1615,3 +1615,183 @@ describe('a valid field upstream refuses where it stands (#183, #187)', () => {
     });
   });
 });
+
+/**
+ * ClinicalTrials.gov answers a RANGE[] term inside SEARCH[Location](…) at times
+ * with a 400 that names no cause and only repeats the parameter's value as sent
+ * (#208). Here `fetch` builds that body from the request it receives, as
+ * upstream does, so each case runs through the tool's AREA[] name pass, the
+ * service's enrollment sentinel, and the real recognition: the call ends as the
+ * Java sentence does (#206), field_invalid blaming no field, the expression as
+ * sent a code span, with the levers that take a RANGE[] term's place (#208
+ * fold-in); one holding no SEARCH[Location](…) stays a query_parse_error with a
+ * hint of its own.
+ */
+describe('#208 a 400 that only repeats the expression as sent', () => {
+  const ZIP_RANGE = 'SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199])';
+  const ZIP_VALUES = 'SEARCH[Location](AREA[LocationZip]98101 OR AREA[LocationZip]98102)';
+  const TOOLS = [
+    ['search_studies', searchStudies],
+    ['get_study_count', getStudyCount],
+  ] as const;
+  type ErrorWire = { error: { data: Record<string, unknown>; message: string } };
+  /** Upstream's label for each parameter a case carries the expression in. */
+  const LABELS = new Map([
+    ['filter.advanced', 'advanced filter'],
+    ['query.locn', 'Location terms'],
+    ['query.cond', 'Conditions or disease'],
+    ['query.term', 'Other terms'],
+  ]);
+  /** Upstream answers the search HTTP 400, repeating `param` as sent, trailing whitespace trimmed. */
+  const repeating = (param: string, validateFieldsLocally = true) => {
+    mockGetService.mockReturnValue(
+      new ClinicalTrialsService(config, { maxRetries: 0, validateFieldsLocally }),
+    );
+    mockFetch.mockImplementation((url: URL | string) => {
+      const { pathname, searchParams } = new URL(String(url));
+      if (pathname === '/v2/studies/metadata') {
+        const indexedOnly = searchParams.get('includeIndexedOnly') === 'true';
+        return Promise.resolve(jsonResponse(indexedOnly ? INDEXED_METADATA : RECORD_METADATA));
+      }
+      if (pathname === '/v2/studies/search-areas')
+        return Promise.resolve(jsonResponse(SEARCH_AREAS));
+      if (pathname === '/v2/studies') {
+        const body = `Error parsing query in ${LABELS.get(param)}: Error parsing query: ${searchParams.get(param)?.trimEnd()}`;
+        return Promise.resolve({
+          ok: false,
+          status: 400,
+          statusText: 'HTTP 400',
+          headers: new Headers({ 'content-type': 'text/plain' }),
+          json: () => Promise.reject(new Error('Not JSON')),
+          text: () => Promise.resolve(body),
+        });
+      }
+      return Promise.reject(new Error('unmocked fetch'));
+    });
+  };
+  /** `param` as the search request carried it. */
+  const sent = (param: string) =>
+    fetchedUrls()
+      .find((u) => u.pathname === '/v2/studies')
+      ?.searchParams.get(param);
+  const call = (definition: (typeof TOOLS)[number][1], input: Record<string, unknown>) =>
+    throttled(() =>
+      runToolContract(definition as typeof searchStudies, input, {
+        context: { errors: definition.errors },
+      }),
+    );
+  const wire = (result: { structuredContent?: unknown }) =>
+    (result.structuredContent as ErrorWire).error;
+  const noCause = (where: string, expression: string) =>
+    `Error parsing query in ${where}: ClinicalTrials.gov named no cause and only repeated the expression as sent: ${expression}.`;
+
+  const quotedRefusal = `(AREA[BriefTitle]"RANGE is not supported for text field Foo") AND ${ZIP_RANGE}`;
+  /** [where the expression goes, the parameter upstream repeats, the tool input, the value it repeats]. */
+  const CASES: readonly (readonly [string, string, Record<string, unknown>, string])[] = [
+    [
+      'advancedFilter',
+      'filter.advanced',
+      { advancedFilter: ZIP_RANGE },
+      `(${ZIP_RANGE}) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])`,
+    ],
+    ['locationQuery', 'query.locn', { locationQuery: ZIP_RANGE }, ZIP_RANGE],
+    ['conditionQuery', 'query.cond', { conditionQuery: ZIP_RANGE }, ZIP_RANGE],
+    ['query', 'query.term', { query: ZIP_RANGE }, ZIP_RANGE],
+    [
+      'a locationQuery whose quoted phrase holds a refusal sentence',
+      'query.locn',
+      { locationQuery: quotedRefusal },
+      quotedRefusal,
+    ],
+  ];
+  it.each(
+    TOOLS.flatMap(([name, definition]) =>
+      CASES.map(
+        ([where, param, input, expression]) =>
+          [name, where, definition, param, input, expression] as const,
+      ),
+    ),
+  )(
+    '%s ends as the Java sentence does for %s, quoting the expression as sent',
+    async (_name, _where, definition, param, input, expression) => {
+      repeating(param);
+      const result = await call(definition, input);
+      const { data, message } = wire(result);
+      const hint = (data.recovery as { hint: string }).hint;
+
+      expect(sent(param)).toBe(expression);
+      expect(result.isError).toBe(true);
+      expect(data).toMatchObject({ reason: 'field_invalid' });
+      expect(data).not.toHaveProperty('invalid');
+      expect(message).toContain(noCause(LABELS.get(param) ?? '', expression));
+      expect(message).toContain('which no site field is but the count NumLocationContacts');
+      expect(message).not.toContain('so the term goes beside the wrapper');
+      expect(hint).toMatch(
+        /^Inside SEARCH\[Location\]\(…\) RANGE\[\] takes no site field, and beside it none but the count NumLocationContacts: /,
+      );
+      expect(hint).toContain(
+        `or match the site field by value, OR-joining the values inside the wrapper, as in ${ZIP_VALUES}.`,
+      );
+      expect(hint).not.toBe(RECOVERY_HINTS.field_invalid);
+      expect(seenText(result)).toContain(`Recovery: ${hint}`);
+      expect(seenText(result)).not.toContain('Free-text');
+      expect(seenText(result)).not.toContain(RECOVERY_HINTS.query_parse_error);
+      expect(text(result)).toContain(`\`${expression}\``);
+      expect(text(result)).toContain(`\`${ZIP_VALUES}\``);
+      expect(text(result)).not.toContain('\\[');
+    },
+  );
+
+  it.each(TOOLS)(
+    '%s keeps a repeated expression holding no SEARCH[Location](…) a query_parse_error, with a hint of its own',
+    async (_name, definition) => {
+      repeating('filter.advanced');
+      const result = await call(definition, { advancedFilter: 'AREA[Phase]PHASE2' });
+      const { data, message } = wire(result);
+      const hint = (data.recovery as { hint: string }).hint;
+      const expression = '(AREA[Phase]PHASE2) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])';
+
+      expect(sent('filter.advanced')).toBe(expression);
+      expect(data).toMatchObject({ reason: 'query_parse_error' });
+      expect(message).toBe(noCause('advanced filter', expression));
+      expect(hint).not.toBe(RECOVERY_HINTS.query_parse_error);
+      expect(hint).toContain('one at a time');
+      expect(seenText(result)).toContain(`Recovery: ${hint}`);
+      expect(seenText(result)).not.toContain('Free-text');
+      expect(text(result)).toContain(`\`${expression}\``);
+      expect(text(result)).toContain('`AREA[…]`, `RANGE[…]`, and `DISTANCE[…]` terms');
+      expect(text(result)).not.toContain('\\[');
+    },
+  );
+
+  it('find_eligible ends the same way for a conditions entry without whitespace, sent as written', async () => {
+    repeating('query.cond', false);
+    const entry = 'SEARCH[Location](AREA[LocationZip]RANGE[98000,98199])';
+    const result = await throttled(() =>
+      runToolContract(
+        findEligible,
+        {
+          age: 40,
+          sex: 'ALL',
+          location: { country: 'United States', state: 'Washington', city: 'Seattle' },
+          conditions: [entry],
+        },
+        { context: { errors: findEligible.errors } },
+      ),
+    );
+    const { data, message } = wire(result);
+
+    expect(sent('query.cond')).toBe(entry);
+    expect(data).toMatchObject({ reason: 'field_invalid' });
+    expect(data).not.toHaveProperty('invalid');
+    expect(message).toContain(noCause('Conditions or disease', entry));
+    expect(seenText(result)).toContain(
+      `in the advancedFilter of clinicaltrials_search_studies or clinicaltrials_get_study_count, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible; or match the site field by value, OR-joining the values inside the wrapper, as in ${ZIP_VALUES}.`,
+    );
+    expect(text(result)).toContain(`\`${ZIP_VALUES}\``);
+    expect(seenText(result)).not.toContain(RECOVERY_HINTS.field_invalid);
+    expect(seenText(result)).not.toContain('Free-text');
+    expect(text(result)).toContain(`\`${entry}\``);
+    expect(text(result)).not.toContain('\\[');
+  });
+});

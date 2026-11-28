@@ -2,7 +2,7 @@
 
 **Server:** clinicaltrialsgov-mcp-server
 **Version:** 2.11.4
-**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.22`
+**Framework:** [@cyanheads/mcp-ts-core](https://www.npmjs.com/package/@cyanheads/mcp-ts-core) `^0.13.24`
 **Engines:** Bun ≥1.4.4, Node ≥24.0.0
 **MCP SDK:** `@modelcontextprotocol/server` ^2.4.0
 **Zod:** ^4.6.7
@@ -222,7 +222,7 @@ export function getServerConfig() {
 }
 ```
 
-`parseEnvConfig` maps Zod schema paths → env var names so validation errors name the actual variable (`CT_API_BASE_URL`) rather than the internal path (`apiBaseUrl`).
+`parseEnvConfig` maps Zod schema paths → env var names so validation errors name the actual variable (`CT_API_BASE_URL`) rather than the internal path (`apiBaseUrl`). Throws `ConfigurationError`, which the framework prints as a clean startup banner when the call runs in `setup()`; a call at import exits on the raw stack instead.
 
 Never call `getServerConfig()` at module scope. Tool definitions import before `createApp()` runs, so a module-scope call parses every `CT_*` variable there and a bad value escapes as an uncaught stack instead of the framework's startup configuration banner. Config is first parsed in `setup()` via `initClinicalTrialsService()`; a handler that needs a config value reads it from the service at request time (as `clinicaltrials_search_studies` reads `service.maxPageSize`), and a schema bound is a static constant.
 
@@ -250,7 +250,7 @@ Note: `ctx.state` is available but unused — this is a stateless read-only serv
 
 Handlers throw — the framework catches, classifies, and formats.
 
-**Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable?, severity?, thrownBy? }]` on `tool()` / `resource()` to receive a typed `ctx.fail(reason, …)` keyed by the declared reason union. TypeScript catches `ctx.fail('typo')` at compile time, `data.reason` is auto-populated for observability, and the linter enforces conformance against the handler body. `recovery` is required (≥ 5 words, lint-validated) — the single source of truth for the agent's next move. The framework puts it on the wire whenever a failure carrying that `reason` arrives without a hint — a bare `ctx.fail('reason')` or a service throw with `data: { reason }` — as `data.recovery.hint`, mirrored into `content[]` text unless the message already contains it verbatim; override with an explicit `{ recovery: { hint: '...' } }` when dynamic runtime context matters. Every error envelope also carries `data.requestId`, the id the server's log records for that call carry, and `content[]` closes with `(reason … · request <id>)`. Most reasons here are raised in `ClinicalTrialsService` (a factory error carrying `data.reason` only — the hint comes from whichever tool or resource contract declares the reason), not by the handler — mark those entries `thrownBy: 'service'` so `error-contract-unthrown`, which reads only the handler body, skips them; it is lint-only metadata. Baseline codes (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`, `SerializationError`, `RequestCancelled`) bubble freely and don't need declaring.
+**Recommended: typed error contract.** Declare `errors: [{ reason, code, when, recovery, retryable?, severity?, thrownBy? }]` on `tool()` / `resource()` to receive a typed `ctx.fail(reason, …)` keyed by the declared reason union. TypeScript catches `ctx.fail('typo')` at compile time, `data.reason` is auto-populated for observability, and the linter enforces conformance against the handler body. `recovery` is required (≥ 5 words, lint-validated) — the single source of truth for the agent's next move. The framework puts it on the wire whenever a failure carrying that `reason` arrives without a hint — a bare `ctx.fail('reason')` or a service throw with `data: { reason }` — as `data.recovery.hint`, mirrored into `content[]` text unless the message already contains it verbatim; override with an explicit `{ recovery: { hint: '...' } }` when dynamic runtime context matters. A declared `retryable` reaches the same failures the same way, as `data.retryable`, unless the throw sets its own. Every error envelope also carries `data.requestId`, the id the server's log records for that call carry, and `content[]` closes with `(reason … · request <id>)`. Most reasons here are raised in `ClinicalTrialsService` (a factory error carrying `data.reason` only — the hint and `retryable` come from whichever tool or resource contract declares the reason), not by the handler — mark those entries `thrownBy: 'service'` so `error-contract-unthrown`, which reads only the handler body, skips them; it is lint-only metadata. Baseline codes (`InternalError`, `ServiceUnavailable`, `Timeout`, `ValidationError`, `SerializationError`, `RequestCancelled`) bubble freely and don't need declaring.
 
 ```ts
 import { JsonRpcErrorCode } from "@cyanheads/mcp-ts-core/errors";
@@ -318,7 +318,7 @@ src/
       query-helpers.ts                  # toArray, buildAdvancedFilter shared helpers
       format-helpers.ts                 # oneLine, formatSearchCriteria, formatEchoValue, formatRemainingStudyFields, contactLine, contactPhone, countLabel, formatReferenceLines
       place-names.ts                    # country / US state synonyms -> registry spelling (find_eligible ranking)
-      geo-helpers.ts                    # haversineMi, sitesByDistance (within-radius site pass), nearGeoFilter, plainDecimal, geoFilter parsing and rejection
+      geo-helpers.ts                    # haversineMi, sitesByDistance (within-radius site pass), nearGeoFilter, plainDecimal, MAX_RADIUS / capGeoFilterRadius (radius cap, 12,451 mi / 20,039 km), geoFilter parsing and rejection
       study-filters.ts                  # applyFilters (location/outcome/reference caps, nearLocation), summarizeResults
       recovery-hints.ts                 # RECOVERY_HINTS shared across tool error contracts
       _schemas.ts                       # nctIdSchema shared by tool inputs and resource params

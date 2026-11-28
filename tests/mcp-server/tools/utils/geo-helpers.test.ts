@@ -6,14 +6,19 @@
 
 import { describe, expect, it } from 'vitest';
 import {
+  capGeoFilterRadius,
+  capRadius,
   describeGeoFilterRejection,
   EARTH_RADIUS_MI,
   haversineMi,
+  MAX_RADIUS,
   nearGeoFilter,
   parseGeoFilterCenter,
   plainDecimal,
+  radiusCapNotice,
   sitesByDistance,
 } from '@/mcp-server/tools/utils/geo-helpers.js';
+import { expectLinearGrowth, LINE_BREAK_SHAPES } from '../../../helpers/cpu-timing.js';
 
 describe('haversineMi', () => {
   const seattle = { lat: 47.6062, lon: -122.3321 };
@@ -354,4 +359,163 @@ describe('describeGeoFilterRejection (#123)', () => {
       expect(describeGeoFilterRejection(geoFilter)).toContain('Invalid value for `geoFilter`');
     },
   );
+});
+
+// No two points on Earth lie farther apart than half the equatorial
+// circumference, so a larger radius reaches the same sites as the cap, and past
+// about 1.117e305 mi ClinicalTrials.gov refuses the radius outright (#211).
+describe('the radius cap (#211)', () => {
+  /** Half the equatorial circumference on the WGS84 ellipsoid, in km. */
+  const HALF_EQUATOR_KM = Math.PI * 6378.137;
+  const KM_PER_MI = 1.609344;
+  /** `1e306` in the plain decimal a caller writes into a geoFilter. */
+  const DIGITS_1E306 = `1${'0'.repeat(306)}`;
+
+  it('caps miles at 12,451 and kilometres at 20,039, both past every distance on Earth', () => {
+    expect(MAX_RADIUS).toEqual({ mi: 12451, km: 20039 });
+    expect(MAX_RADIUS.mi * KM_PER_MI).toBeGreaterThan(HALF_EQUATOR_KM);
+    expect(MAX_RADIUS.km).toBeGreaterThan(HALF_EQUATOR_KM);
+    // The server's own distances peak at an antipode, on the mean-radius sphere.
+    expect(
+      haversineMi({ lat: 47.6062, lon: -122.3321 }, { lat: -47.6062, lon: 57.6679 }),
+    ).toBeLessThan(MAX_RADIUS.mi);
+  });
+
+  it.each([
+    [50, 'mi', 50],
+    [12451, 'mi', 12451],
+    [12451.0001, 'mi', 12451],
+    [1e306, 'mi', 12451],
+    [Number.MAX_VALUE, 'mi', 12451],
+    // Past the mile cap, but under the kilometre one.
+    [12452, 'km', 12452],
+    [20039, 'km', 20039],
+    [20039.5, 'km', 20039],
+    [1.8e305, 'km', 20039],
+  ] as const)('capRadius(%s, %s) is %s', (radius, unit, sent) => {
+    expect(capRadius(radius, unit)).toBe(sent);
+  });
+
+  describe('capGeoFilterRadius', () => {
+    it.each([
+      'distance(47.6062,-122.3321,50mi)',
+      'distance(47.6062,-122.3321,12451mi)',
+      'distance(-40.4168,176.2962,20039km)',
+      'distance(47.6062,-122.3321,12452km)',
+    ])('leaves %s as written', (geoFilter) => {
+      expect(capGeoFilterRadius(geoFilter)).toBeUndefined();
+    });
+
+    it.each([
+      {
+        radius: '1e306 mi in digits',
+        geoFilter: `distance(47.6062,-122.3321,${DIGITS_1E306}mi)`,
+        sent: 'distance(47.6062,-122.3321,12451mi)',
+        unit: 'mi',
+      },
+      {
+        radius: '12451.5 mi',
+        geoFilter: 'distance(47.6062,-122.3321,12451.5mi)',
+        sent: 'distance(47.6062,-122.3321,12451mi)',
+        unit: 'mi',
+      },
+      {
+        radius: '20039.01 km',
+        geoFilter: 'distance(-40.4168,176.2962,20039.01km)',
+        sent: 'distance(-40.4168,176.2962,20039km)',
+        unit: 'km',
+      },
+      // Past the largest double, which Number() reads as Infinity.
+      {
+        radius: '400 nines in km',
+        geoFilter: `distance(0,0,${'9'.repeat(400)}km)`,
+        sent: 'distance(0,0,20039km)',
+        unit: 'km',
+      },
+      // The centre stays as written, trailing zeros included.
+      {
+        radius: '99999 mi beside a centre with trailing zeros',
+        geoFilter: 'distance(47.60620,-122.3321000,99999mi)',
+        sent: 'distance(47.60620,-122.3321000,12451mi)',
+        unit: 'mi',
+      },
+    ])('sends a radius of $radius as $sent', ({ geoFilter, sent, unit }) => {
+      expect(capGeoFilterRadius(geoFilter)).toEqual({ geoFilter: sent, unit });
+    });
+
+    it('leaves a value the geoFilter gate rejects untouched', () => {
+      for (const geoFilter of [
+        `distance(47.6,-122.3,${DIGITS_1E306})`,
+        'distance(47.6,-122.3,1e306mi)',
+        `distance( 47.6,-122.3,${DIGITS_1E306}mi)`,
+      ]) {
+        expect(describeGeoFilterRejection(geoFilter)).toBeDefined();
+        expect(capGeoFilterRadius(geoFilter)).toBeUndefined();
+      }
+    });
+
+    it('sends a value the geoFilter gate accepts', () => {
+      const capped = capGeoFilterRadius(`distance(-90,180,${DIGITS_1E306}mi)`);
+      expect(describeGeoFilterRejection(capped!.geoFilter)).toBeUndefined();
+    });
+  });
+
+  it('words the notice sentence with the cap of the unit sent', () => {
+    expect(radiusCapNotice('location.near.radiusMi 1e+306', 'mi')).toBe(
+      'location.near.radiusMi 1e+306 is past 12,451 mi, and no two points on Earth lie farther apart than that, so it was sent as 12451 mi: both reach every site that publishes coordinates.',
+    );
+    expect(radiusCapNotice('The geoFilter radius', 'km')).toBe(
+      'The geoFilter radius is past 20,039 km, and no two points on Earth lie farther apart than that, so it was sent as 20039 km: both reach every site that publishes coordinates.',
+    );
+  });
+});
+
+// Upstream refuses exponent notation inside filter.geo as a format error at
+// any size (1e3mi as well as 1e306mi), so the message names that rule rather
+// than the bare-radius one.
+describe('exponent notation in a geoFilter', () => {
+  const PLAIN_DIGITS =
+    'Format must be distance(lat,lon,radius) with a `mi` or `km` suffix on the radius and every number in plain decimal digits';
+  const EXPONENT =
+    'Exponent notation such as 1e3 or 1e-7 is rejected at any size: write the number out in digits, as in 1000mi.';
+  const BARE = 'A bare radius is rejected';
+
+  it.each([
+    'distance(47.6062,-122.3321,1e306mi)',
+    'distance(47.6062,-122.3321,1e3mi)',
+    'distance(47.6062,-122.3321,1.5E+3km)',
+    'distance(47.6062,-122.3321,1e3)',
+    'distance(1e-7,-122.3321,50mi)',
+    'distance(47.6062,-1.223321e2,50mi)',
+  ])('names the plain-decimal rule for %s, not a bare radius', (geoFilter) => {
+    const message = describeGeoFilterRejection(geoFilter);
+    expect(message).toContain(`Invalid value for \`geoFilter\`: '${geoFilter}'. ${PLAIN_DIGITS}`);
+    expect(message).toContain(EXPONENT);
+    expect(message).not.toContain(BARE);
+  });
+
+  it.each([
+    'distance(47.6,-122.9,50)',
+    'distance( 47.6 , -122.9 , 50mi )',
+    'distance(47.6,-122.9,50MI)',
+    'Seattle, WA',
+  ])('keeps the bare-radius sentence for %s', (geoFilter) => {
+    const message = describeGeoFilterRejection(geoFilter);
+    expect(message).toContain(PLAIN_DIGITS);
+    expect(message).toContain(BARE);
+    expect(message).not.toContain('Exponent notation');
+  });
+
+  describe('the rejection stays linear on caller-sized text', { timeout: 0 }, () => {
+    it.each([
+      ...LINE_BREAK_SHAPES,
+      ['a long first number, unclosed', (n: number) => `distance(${'1'.repeat(n)}`],
+      ['a long radius, unclosed', (n: number) => `distance(47.6,-122.3,${'1'.repeat(n)}`],
+      ['a long exponent, unclosed', (n: number) => `distance(47.6,-122.3,1e${'1'.repeat(n)}`],
+      ['a long unit run, unclosed', (n: number) => `distance(47.6,-122.3,1${'e'.repeat(n)}`],
+      ['repeated exponents', (n: number) => `distance(${'1e1'.repeat(n / 3)}`],
+    ] as const)('%s', (_name, shape) => {
+      expectLinearGrowth(describeGeoFilterRejection, shape);
+    });
+  });
 });

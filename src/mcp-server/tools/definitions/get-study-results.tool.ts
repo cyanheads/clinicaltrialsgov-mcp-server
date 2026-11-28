@@ -1261,7 +1261,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     {
       reason: 'retry_deadline_exceeded',
       code: JsonRpcErrorCode.Timeout,
-      when: 'ClinicalTrials.gov did not answer within the call’s time budget, which covers every request, retry, and wait the call makes — the batch and any per-ID fetches share it.',
+      when: 'ClinicalTrials.gov did not answer within the call’s time budget, which covers every request, retry, and wait the call makes — the batch, any batch re-sent without a refused ID, and any per-ID fetches share it.',
       recovery: RECOVERY_HINTS.retry_deadline_exceeded,
       retryable: true,
       thrownBy: 'service',
@@ -1269,7 +1269,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     {
       reason: 'upstream_timeout',
       code: JsonRpcErrorCode.Timeout,
-      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) or 408 (request timeout), or sent no answer within the per-attempt timeout, on every attempt of the batch request or of a per-ID fetch.',
+      when: 'ClinicalTrials.gov answered HTTP 504 (gateway timeout) or 408 (request timeout), or sent no answer within the per-attempt timeout, on every attempt of a batch request (the first, or one re-sent without a refused ID) or of a per-ID fetch.',
       recovery: RECOVERY_HINTS.upstream_timeout,
       retryable: true,
       thrownBy: 'service',
@@ -1277,7 +1277,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     {
       reason: 'upstream_unavailable',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'Every attempt of the batch request or of a per-ID fetch failed on ClinicalTrials.gov’s side — HTTP 500, 502, or 503, a dropped connection or one the network gave up opening, or a 200 body that is not the JSON the route serves (an HTML page, unparseable text, the wrong shape) — or it answered that request with another 5xx, such as 505, or the connection was refused or its host name did not resolve, none of which is retried.',
+      when: 'Every attempt of a batch request (the first, or one re-sent without a refused ID) or of a per-ID fetch failed on ClinicalTrials.gov’s side — HTTP 500, 502, or 503, a dropped connection or one the network gave up opening, or a 200 body that is not the JSON the route serves (an HTML page, unparseable text, the wrong shape) — or it answered that request with another 5xx, such as 505, or the connection was refused or its host name did not resolve, none of which is retried.',
       recovery: RECOVERY_HINTS.upstream_unavailable,
       retryable: true,
       thrownBy: 'service',
@@ -1285,7 +1285,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     {
       reason: 'upstream_rejected',
       code: JsonRpcErrorCode.ServiceUnavailable,
-      when: 'ClinicalTrials.gov refused the batch request or a per-ID fetch with a status its API does not use for a bad query — HTTP 501, a 3xx, or a 4xx such as 401, 403, or 410 — or answered it with an HTML error page in place of its own 404.',
+      when: 'ClinicalTrials.gov refused a batch request (the first, or one re-sent without a refused ID) or a per-ID fetch with a status its API does not use for a bad query — HTTP 501, a 3xx, or a 4xx such as 401, 403, or 410 — or answered it with an HTML error page in place of its own 404.',
       recovery: RECOVERY_HINTS.upstream_rejected,
       retryable: false,
       thrownBy: 'service',
@@ -1570,7 +1570,7 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
       )
       .optional()
       .describe(
-        'Requested NCT IDs with no study on ClinicalTrials.gov: absent from the batch answer, or refused as not found when fetched one by one. Any other failure ends the call with its own error and never lands here.',
+        'Requested NCT IDs with no study on ClinicalTrials.gov, in requested order: absent from the batch answer, refused by the batch as malformed (the batch is then re-sent without them), or refused as not found when fetched one by one. Any other failure ends the call with its own error and never lands here.',
       ),
     deferredNctIds: z
       .array(z.string())
@@ -1659,7 +1659,8 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     const results: StudyResult[] = [];
     const studiesWithoutResults: string[] = [];
     const fetchErrors: Array<{ nctId: string; error: string }> = [];
-    const erroredIds = new Set<string>();
+    /** The fetch error of each ID refused on its own, listed in requested order below. */
+    const ownErrors = new Map<string, string>();
 
     /**
      * The error a failed fetch ends the whole call with — every failure except
@@ -1674,42 +1675,69 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
         ? ctx.fail('rate_limited', err.message, undefined, { cause: err })
         : err;
 
-    let fetched: RawStudyShape[];
-    try {
-      fetched = (await service.getStudiesBatch(nctIds, ctx)) as RawStudyShape[];
-    } catch (err) {
-      // The batch endpoint rejects the whole request when a single ID is
-      // malformed — an ordinary nonexistent-but-well-formed ID is answered 200
-      // with the record simply absent — and that rejection is the one failure
-      // the per-ID fallback can answer: valid IDs still succeed and only the
-      // missing ones land in fetchErrors. Anything else — an outage, the
-      // call's spent budget, a rate limit, a cancellation — would fail each
-      // per-ID request the same way, so it ends the call.
-      if (!(err instanceof McpError && err.data?.reason === 'ids_not_found')) {
-        throw callEnding(err);
-      }
-      ctx.log.warning('Batch fetch rejected; falling back to per-ID fetches', {
-        count: nctIds.length,
-        error: err.message,
-      });
-      fetched = [];
-      // Sequential to honor the service's rate limit (~1 req/sec).
-      for (const nctId of nctIds) {
+    /**
+     * One request per ID, in order — sequential to honor the service's rate
+     * limit (~1 req/sec). Only a study that does not exist is an ID's own
+     * failure — a 404, or the 400 the single-study route answers NCT00000000
+     * with. Any other failure ends the call as it would on the batch: an
+     * outage, a rate limit, or the spent budget meets every remaining ID the
+     * same way, and a 5xx confined to one record already fails any batch that
+     * carries it (#201).
+     */
+    const fetchEach = async (ids: string[]): Promise<RawStudyShape[]> => {
+      const studies: RawStudyShape[] = [];
+      for (const nctId of ids) {
         try {
-          fetched.push((await service.getStudy(nctId, ctx)) as RawStudyShape);
+          studies.push((await service.getStudy(nctId, ctx)) as RawStudyShape);
         } catch (perIdErr) {
-          // Only a study that does not exist is this ID's own failure — a 404,
-          // or the 400 the single-study route answers NCT00000000 with. Any
-          // other failure ends the call as it would on the batch: an outage, a
-          // rate limit, or the spent budget meets every remaining ID the same
-          // way, and a 5xx confined to one record already fails any batch that
-          // carries it (#201).
           if (!(perIdErr instanceof McpError && perIdErr.data?.reason === 'study_not_found')) {
             throw callEnding(perIdErr);
           }
-          fetchErrors.push({ nctId, error: perIdErr.message });
-          erroredIds.add(nctId);
+          ownErrors.set(nctId, perIdErr.message);
         }
+      }
+      return studies;
+    };
+
+    // The batch endpoint refuses the whole request over one malformed ID — an
+    // ordinary nonexistent-but-well-formed ID is answered 200 with the record
+    // simply absent. A refusal naming the ID (`invalid`) records it as that
+    // ID's fetch error and re-sends the rest, so a refused ID costs one
+    // request, not one per requested ID. Each re-send drops one ID, so a call
+    // sends at most one batch per requested ID and none once every ID is
+    // refused: an empty filter.ids would widen the lookup to the whole
+    // registry. A refusal naming no ID falls back to one request per ID still
+    // unanswered. Anything else — an outage, the call's spent budget, a rate
+    // limit, a cancellation — would fail the next request the same way, so it
+    // ends the call, on the first batch or a re-sent one.
+    let batch = nctIds;
+    let fetched: RawStudyShape[] = [];
+    while (batch.length > 0) {
+      try {
+        fetched = (await service.getStudiesBatch(batch, ctx)) as RawStudyShape[];
+        break;
+      } catch (err) {
+        if (!(err instanceof McpError && err.data?.reason === 'ids_not_found')) {
+          throw callEnding(err);
+        }
+        const invalid = err.data?.invalid;
+        const refused = Array.isArray(invalid)
+          ? batch.find((id) => invalid.includes(id))
+          : undefined;
+        if (refused === undefined) {
+          ctx.log.warning('Batch fetch rejected; falling back to per-ID fetches', {
+            count: batch.length,
+            error: err.message,
+          });
+          fetched = await fetchEach(batch);
+          break;
+        }
+        ctx.log.warning('Batch refused an NCT ID; re-sending the batch without it', {
+          nctId: refused,
+          error: err.message,
+        });
+        ownErrors.set(refused, err.message);
+        batch = batch.filter((id) => id !== refused);
       }
     }
 
@@ -1727,7 +1755,11 @@ export const getStudyResults = tool('clinicaltrials_get_study_results', {
     }
 
     for (const nctId of nctIds) {
-      if (erroredIds.has(nctId)) continue;
+      const ownError = ownErrors.get(nctId);
+      if (ownError !== undefined) {
+        fetchErrors.push({ nctId, error: ownError });
+        continue;
+      }
       const study = studyMap.get(nctId);
       if (!study) {
         fetchErrors.push({ nctId, error: 'Study not found' });

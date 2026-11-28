@@ -9,8 +9,6 @@ export default mergeConfig(
     },
     test: {
       include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
-      // Vitest's fork pool calls `channel.unref()` on each worker's IPC channel, which Bun lacks; Node keeps forks.
-      ...(process.versions.bun ? { pool: 'threads' as const } : {}),
     },
   }),
 );

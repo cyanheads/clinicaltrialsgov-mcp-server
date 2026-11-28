@@ -19,10 +19,12 @@ import {
   oneLine,
 } from '../utils/format-helpers.js';
 import {
+  capGeoFilterRadius,
   describeGeoFilterRejection,
   haversineMi,
   type LocationWithDistance,
   parseGeoFilterCenter,
+  radiusCapNotice,
   roundMi,
 } from '../utils/geo-helpers.js';
 import {
@@ -404,14 +406,14 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     {
       reason: 'ids_not_found',
       code: JsonRpcErrorCode.NotFound,
-      when: 'One or more NCT IDs in the nctIds filter are not present at ClinicalTrials.gov.',
+      when: 'ClinicalTrials.gov refused an nctIds entry as malformed although it fits the NCT + 8 digits pattern (NCT00000000 is refused this way); data.invalid names the refused ID when upstream names it. A well-formed ID with no study is not this error: it matches no study.',
       recovery: RECOVERY_HINTS.ids_not_found,
       thrownBy: 'service',
     },
     {
       reason: 'field_invalid',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A name in the fields parameter is not a field; an AREA[] expression names a field ClinicalTrials.gov does not recognize or cannot search by value — often a module or group such as LeadSponsor instead of a leaf piece such as LeadSponsorName; or a valid field sits where upstream refuses it: a study-level field, a search area, or a DISTANCE[] term (at times a RANGE[] term) inside SEARCH[Location](…), RANGE[] on a field that is not a date, number, or age, or DISTANCE[] on any field but LocationGeoPoint.',
+      when: 'A name in the fields parameter is not a field; an AREA[] expression names a field ClinicalTrials.gov does not recognize or cannot search by value — often a module or group such as LeadSponsor instead of a leaf piece such as LeadSponsorName; or a valid field sits where upstream refuses it: a study-level field, a search area, or a DISTANCE[] or RANGE[] term inside SEARCH[Location](…), RANGE[] on a field that is not a date, number, or age, or DISTANCE[] on any field but LocationGeoPoint.',
       recovery: RECOVERY_HINTS.field_invalid,
       thrownBy: 'service',
     },
@@ -424,7 +426,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     {
       reason: 'query_parse_error',
       code: JsonRpcErrorCode.ValidationError,
-      when: 'A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a `[` or `]` outside an AREA[…] / RANGE[…] expression, an unmatched `(` / `)`, or an unterminated quote in a query/conditionQuery/etc. value — or carries a DISTANCE[] operand it cannot read: a latitude or longitude that is not a number or is out of range, a radius under 1 or with no mi or km unit, or no radius at all.',
+      when: 'A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a `[` or `]` outside an AREA[…] / RANGE[…] expression, an unmatched `(` / `)`, or an unterminated quote in a query/conditionQuery/etc. value — or carries a DISTANCE[] operand it cannot read: a latitude or longitude that is not a number or is out of range, a radius under 1, past 500 mi or 805 km, or with no mi or km unit, or no radius at all. It is also the reason when ClinicalTrials.gov names no cause and only repeats an expression that holds no SEARCH[Location](…).',
       recovery: RECOVERY_HINTS.query_parse_error,
       thrownBy: 'service',
     },
@@ -603,7 +605,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         .string()
         .optional()
         .describe(
-          `Geographic proximity filter. Format: distance(lat,lon,radius), where radius carries a \`mi\` or \`km\` suffix — e.g. "distance(47.6062,-122.3321,50mi)" for studies within 50 miles of Seattle. The suffix is required: a radius with no unit is rejected, as are a non-positive radius, a latitude outside [-90, 90], and a longitude outside [-180, 180]. When set, each study's locations are re-sorted by proximity to the center so the nearest matched site leads, annotated with its distance in miles; the full location list is preserved.`,
+          `Geographic proximity filter. Format: distance(lat,lon,radius), where radius carries a \`mi\` or \`km\` suffix — e.g. "distance(47.6062,-122.3321,50mi)" for studies within 50 miles of Seattle. The suffix is required: a radius with no unit is rejected, as are a non-positive radius, a latitude outside [-90, 90], and a longitude outside [-180, 180]. No two points on Earth lie more than 12,451 mi (20,039 km) apart, so a larger radius is sent as 12451mi (20039km), which reaches the same sites; searchCriteria.geoFilter shows the value sent and the notice says so. When set, each study's locations are re-sorted by proximity to the center so the nearest matched site leads, annotated with its distance in miles; the full location list is preserved.`,
         ),
       nctIds: z
         .union([
@@ -729,7 +731,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
       .string()
       .optional()
       .describe(
-        'Recovery guidance when no studies matched — echoes the constraint and suggests how to broaden, and names nctIds as part of the unmatched criteria when an ID list was supplied. On a page cut to a per-page cap, states the requested and served page sizes and which cap applied, and points at nextPageToken. Absent on other pages with results, and on an exhausted continuation page, where the cohort already matched and there is nothing to broaden.',
+        'Recovery guidance when no studies matched — echoes the constraint and suggests how to broaden, and names nctIds as part of the unmatched criteria when an ID list was supplied. On a page cut to a per-page cap, states the requested and served page sizes and which cap applied, and points at nextPageToken. When the geoFilter radius was past 12,451 mi (20,039 km), a closing sentence says it was sent at that cap, on every page. Otherwise absent on other pages with results, and on an exhausted continuation page, where the cohort already matched and there is nothing to broaden.',
       ),
     truncated: z
       .boolean()
@@ -831,6 +833,12 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         throw ctx.fail('geo_invalid', geoRejection);
       }
     }
+    // A radius past every distance on Earth reaches the same sites as the cap,
+    // and upstream refuses one too large to hold in meters, so the value sent,
+    // and echoed, carries the cap; the notice says so (#211).
+    const cappedGeo = input.geoFilter ? capGeoFilterRadius(input.geoFilter) : undefined;
+    const geoFilter = cappedGeo?.geoFilter ?? input.geoFilter;
+    const radiusCap = cappedGeo && radiusCapNotice('The geoFilter radius', cappedGeo.unit);
 
     // An ID-targeted lookup must never silently filter the caller's selection,
     // so supplying nctIds lifts the default unknown-enrollment exclusion — the
@@ -882,7 +890,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         queryTitles: essie.titleQuery,
         queryOutc: essie.outcomeQuery,
         filterOverallStatus: statusFilter,
-        filterGeo: input.geoFilter,
+        filterGeo: geoFilter,
         filterIds,
         filterAdvanced: buildAdvancedFilter(phaseFilter, essie.advancedFilter),
         fields,
@@ -905,7 +913,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     // upstream returns locations in registration order, so the first entry is
     // often a far-away site and the filter reads as broken. Re-rank only — the
     // full locations[] set is preserved.
-    const geoCenter = parseGeoFilterCenter(input.geoFilter);
+    const geoCenter = parseGeoFilterCenter(geoFilter);
     if (geoCenter) reRankLocationsByProximity(result.studies as RawStudyShape[], geoCenter);
 
     // Echo the applied search criteria on every response (not only empty ones)
@@ -926,7 +934,7 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     if (statusFilter) criteria.statusFilter = inCallerShape(input.statusFilter, statusFilter);
     if (phaseFilter) criteria.phaseFilter = inCallerShape(input.phaseFilter, phaseFilter);
     if (essie.advancedFilter) criteria.advancedFilter = essie.advancedFilter;
-    if (input.geoFilter) criteria.geoFilter = input.geoFilter;
+    if (geoFilter) criteria.geoFilter = geoFilter;
     // The IDs actually queried — deferred ones are named in deferredNctIds instead.
     if (queriedIds) criteria.nctIds = inCallerShape(input.nctIds, queriedIds);
     // Reports the exclusion that actually ran, so it stays absent on the
@@ -944,7 +952,8 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     // Recovery guidance only when nothing matched. Withheld on an exhausted
     // continuation: that cohort already matched on earlier pages, so telling
     // the caller to broaden the query misreads finished pagination as failure.
-    if (result.studies.length === 0 && !pageExhausted) {
+    const noMatch = result.studies.length === 0 && !pageExhausted;
+    if (noMatch) {
       const hasQuery =
         input.query ||
         input.conditionQuery ||
@@ -986,6 +995,8 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
         );
       }
 
+      // The radius cap closes whichever notice the response carries (#153's rule).
+      if (radiusCap) noticeParts.push(radiusCap);
       if (noticeParts.length > 0) ctx.enrich.notice(noticeParts.join(' '));
     }
 
@@ -1022,11 +1033,15 @@ export const searchStudies = tool('clinicaltrials_search_studies', {
     // notice above never both fire.
     if (input.pageSize > pageCap && servedToken !== undefined) {
       const shown = result.studies.length;
+      const pageCapped = pageCapNotice(input.pageSize, pageCap, shown, capBasis);
       ctx.enrich.truncated({
         shown,
         cap: pageCap,
-        guidance: pageCapNotice(input.pageSize, pageCap, shown, capBasis),
+        guidance: radiusCap ? `${pageCapped} ${radiusCap}` : pageCapped,
       });
+    } else if (radiusCap && !noMatch) {
+      // No other notice applies to this page, so the cap sentence stands alone.
+      ctx.enrich.notice(radiusCap);
     }
 
     return {

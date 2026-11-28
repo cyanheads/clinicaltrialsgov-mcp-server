@@ -1,7 +1,7 @@
 /**
  * @fileoverview Geographic helpers shared by location-aware tools — great-circle
- * distance, the within-radius site pass, building a `filter.geo` value, and
- * parsing of the `geoFilter` center coordinates.
+ * distance, the within-radius site pass, building a `filter.geo` value, the
+ * radius cap, and parsing of the `geoFilter` center coordinates.
  * @module mcp-server/tools/utils/geo-helpers
  */
 
@@ -10,6 +10,33 @@ import type { StudyLocation } from '@/services/clinical-trials/types.js';
 
 /** Mean Earth radius in miles, used by the Haversine formula. */
 export const EARTH_RADIUS_MI = 3958.7613;
+
+/**
+ * The widest radius `filter.geo` is sent with, per unit. No two points on Earth
+ * lie farther apart than half the equatorial circumference (12,450.7 mi,
+ * 20,037.5 km), so a larger radius reaches the same sites as the cap — every
+ * one that publishes coordinates — and is sent as the cap, which a notice
+ * discloses (`radiusCapNotice`). Sent as asked, a radius past about 1.117e305 mi
+ * (where its length in meters overflows a double) fails upstream as a bare
+ * `Search error` that carries nothing to classify on (#211).
+ */
+export const MAX_RADIUS = { mi: 12451, km: 20039 } as const;
+
+/** A radius unit `filter.geo` accepts: lowercase only, since upstream rejects a case variant. */
+export type RadiusUnit = keyof typeof MAX_RADIUS;
+
+const isRadiusUnit = (unit: string): unit is RadiusUnit => Object.hasOwn(MAX_RADIUS, unit);
+
+/** The radius to send in place of `radius`: capped at `MAX_RADIUS` for its unit. */
+export function capRadius(radius: number, unit: RadiusUnit): number {
+  return Math.min(radius, MAX_RADIUS[unit]);
+}
+
+/** The notice sentence for a radius sent at `MAX_RADIUS`; `subject` names the radius as requested. */
+export function radiusCapNotice(subject: string, unit: RadiusUnit): string {
+  const cap = MAX_RADIUS[unit];
+  return `${subject} is past ${cap.toLocaleString('en-US')} ${unit}, and no two points on Earth lie farther apart than that, so it was sent as ${cap} ${unit}: both reach every site that publishes coordinates.`;
+}
 
 /** A study location annotated with its distance from a reference point. */
 export type LocationWithDistance = StudyLocation & { distanceMi?: number };
@@ -125,9 +152,6 @@ export function parseGeoFilterCenter(
 const GEO_FILTER_SHAPE =
   /^distance\((-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?),(\d+(?:\.\d+)?)([A-Za-z]*)\)$/i;
 
-/** Radius units upstream accepts — lowercase only; a case variant is rejected. */
-const GEO_RADIUS_UNITS = new Set(['mi', 'km']);
-
 /**
  * Describe why a `geoFilter` value cannot be sent upstream, or `undefined` when
  * it is well formed.
@@ -155,7 +179,7 @@ export function describeGeoFilterRejection(geoFilter: string): string | undefine
   const shapeGuidance = geoFilterShapeMessage(geoFilter);
 
   const match = geoFilter.match(GEO_FILTER_SHAPE);
-  if (!match || !GEO_RADIUS_UNITS.has(match[4] ?? '')) return shapeGuidance;
+  if (!match || !isRadiusUnit(match[4] ?? '')) return shapeGuidance;
 
   const lat = Number(match[1]);
   const lon = Number(match[2]);
@@ -167,4 +191,20 @@ export function describeGeoFilterRejection(geoFilter: string): string | undefine
   if (radius <= 0) problems.push(`The radius must be greater than 0 (got ${radius}).`);
 
   return problems.length > 0 ? `${shapeGuidance} ${problems.join(' ')}` : undefined;
+}
+
+/**
+ * The `geoFilter` to send in place of one whose radius is past `MAX_RADIUS` for
+ * its unit: the cap in the radius's place, the rest as written. Undefined when
+ * the radius is within the cap, and for a value outside the shape
+ * `describeGeoFilterRejection` accepts, which that gate rejects first.
+ */
+export function capGeoFilterRadius(
+  geoFilter: string,
+): { geoFilter: string; unit: RadiusUnit } | undefined {
+  const [, , , radius = '', unit = ''] = geoFilter.match(GEO_FILTER_SHAPE) ?? [];
+  if (!isRadiusUnit(unit) || Number(radius) <= MAX_RADIUS[unit]) return;
+  // The shape ends `<radius><unit>)`, so everything before the radius is kept.
+  const kept = geoFilter.slice(0, geoFilter.length - radius.length - unit.length - 1);
+  return { geoFilter: `${kept}${MAX_RADIUS[unit]}${unit})`, unit };
 }

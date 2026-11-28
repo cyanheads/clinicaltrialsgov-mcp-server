@@ -908,12 +908,16 @@ describe('an explicit field_invalid hint blaming no field reaches the wire (#206
 /**
  * A DISTANCE[] operand upstream cannot read is raised as `query_parse_error`
  * with a hint of its own (#206), so each tool declaring that reason names the
- * case in its `when` beside the bracket and quote faults.
+ * case in its `when` beside the bracket and quote faults, the radius ceiling
+ * among them.
  */
 describe('query_parse_error contracts name an unreadable DISTANCE[] operand', () => {
   const operand =
-    'or carries a DISTANCE[] operand it cannot read: a latitude or longitude that is not a number or is out of range, a radius under 1 or with no mi or km unit, or no radius at all.';
-  const freeText = `A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a \`[\` or \`]\` outside an AREA[…] / RANGE[…] expression, an unmatched \`(\` / \`)\`, or an unterminated quote in a query/conditionQuery/etc. value — ${operand}`;
+    'or carries a DISTANCE[] operand it cannot read: a latitude or longitude that is not a number or is out of range, a radius under 1, past 500 mi or 805 km, or with no mi or km unit, or no radius at all.';
+  // A 400 naming no cause for an expression holding no SEARCH[Location](…) (#208).
+  const noCause =
+    'It is also the reason when ClinicalTrials.gov names no cause and only repeats an expression that holds no SEARCH[Location](…).';
+  const freeText = `A free-text query or advancedFilter expression uses syntax the upstream Essie parser rejects — typically a \`[\` or \`]\` outside an AREA[…] / RANGE[…] expression, an unmatched \`(\` / \`)\`, or an unterminated quote in a query/conditionQuery/etc. value — ${operand} ${noCause}`;
 
   it.each([
     { name: 'search_studies', definition: searchStudies, when: freeText },
@@ -921,7 +925,7 @@ describe('query_parse_error contracts name an unreadable DISTANCE[] operand', ()
     {
       name: 'find_eligible',
       definition: findEligible,
-      when: `A conditions entry uses syntax the upstream Essie parser rejects — typically an unmatched \`(\` or \`)\`, or a \`[\` or \`]\` outside an AREA[…] expression — ${operand}`,
+      when: `A conditions entry uses syntax the upstream Essie parser rejects — typically an unmatched \`(\` or \`)\`, or a \`[\` or \`]\` outside an AREA[…] expression — ${operand} It is also the reason when ClinicalTrials.gov names no cause and only repeats the conditions as sent, with no SEARCH[Location](…) among them.`,
     },
   ])('$name', ({ definition, when }) => {
     const declared = (
@@ -930,6 +934,139 @@ describe('query_parse_error contracts name an unreadable DISTANCE[] operand', ()
 
     expect(declared?.when).toBe(when);
   });
+
+  /**
+   * The radius ceiling end to end: upstream's live 400 body (2026-11-27)
+   * through the real service, past this file's service mock, to both surfaces.
+   */
+  it('a radius past 500 mi reaches both surfaces with the hint that moves it to geoFilter or location.near', async () => {
+    const { ClinicalTrialsService } = await vi.importActual<
+      typeof import('@/services/clinical-trials/clinical-trials-service.js')
+    >('@/services/clinical-trials/clinical-trials-service.js');
+    const body =
+      'Error parsing query in advanced filter: Radius must be set to less than or equal to 500 miles (805 kilometers)';
+    const message = `${body}. DISTANCE[] reads three values, DISTANCE[lat,lon,radius]: a latitude from -90 to 90, a longitude from -180 to 180, and a radius of 1 to 500 mi or 1 to 805 km, written with its unit, as in AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi].`;
+    const hint =
+      'Write the radius term as AREA[LocationGeoPoint]DISTANCE[lat,lon,radius] with a latitude from -90 to 90, a longitude from -180 to 180, and a radius of 1 to 500 mi or 1 to 805 km, written with its unit, such as 25mi or 40km. Past 500 mi or 805 km, leave the DISTANCE[] term out and pass the radius as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible, which take a larger one.';
+    const literals = [
+      'DISTANCE[]',
+      'DISTANCE[lat,lon,radius]',
+      'AREA[LocationGeoPoint]DISTANCE[lat,lon,radius]',
+      'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi]',
+    ];
+    const advancedFilter = 'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,600mi]';
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        new Response(body, { status: 400, headers: { 'content-type': 'text/plain' } }),
+      ),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    try {
+      mockGetService.mockReturnValue(
+        new ClinicalTrialsService(
+          { apiBaseUrl: 'https://test.api/v2', requestTimeoutMs: 5000, maxPageSize: 200 },
+          { maxRetries: 0, validateFieldsLocally: false },
+        ),
+      );
+      const result = await runToolContract(getStudyCount, {
+        conditionQuery: 'breast cancer',
+        advancedFilter,
+      });
+      const raw = (result.content as { text: string }[])[0]!.text;
+      const error = (
+        result.structuredContent as { error: { message: string; data: Record<string, unknown> } }
+      ).error;
+      const sent = fetchMock.mock.calls.map((call) => new URL(String((call as unknown[])[0])));
+
+      expect(sent.map((url) => url.searchParams.get('filter.advanced'))).toEqual([
+        expect.stringContaining(advancedFilter),
+      ]);
+      expect(result.isError).toBe(true);
+      expect(error.message).toBe(message);
+      expect(error.data).toMatchObject({ reason: 'query_parse_error', recovery: { hint } });
+      expect(readMarkdown(raw)).toContain(`Error: ${message}`);
+      expect(readMarkdown(raw)).toContain(`Recovery: ${hint}`);
+      expect(readMarkdown(raw)).toContain('(reason query_parse_error');
+      expect(readMarkdown(raw)).not.toContain(RECOVERY_HINTS.query_parse_error);
+      expect(readMarkdown(raw)).not.toContain('Free-text');
+      for (const literal of literals) expect(raw).toContain(`\`${literal}\``);
+      expect(raw).not.toContain('\\[');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+/**
+ * A 400 that names no cause and only repeats the expression as sent (#208).
+ * Holding SEARCH[Location](…) it ends as the Java sentence does, so each
+ * declaring tool's `field_invalid` names a DISTANCE[] or RANGE[] term inside
+ * the wrapper with no "at times"; holding none it stays a `query_parse_error`
+ * thrown with a hint of its own, which these prove reaches the wire in place
+ * of the declared bracket hint, each quoted expression a code span. The reading
+ * is tabled at the service seam.
+ */
+describe('#208 a 400 naming no cause on the wire', () => {
+  const expression = '(AREA[Phase]PHASE2) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])';
+  const hint =
+    'Send the AREA[…], RANGE[…], and DISTANCE[…] terms of the expression one at a time to find the one ClinicalTrials.gov refuses, then look up the field it names with clinicaltrials_get_field_definitions.';
+  const literals = [expression, 'AREA[…]', 'RANGE[…]', 'DISTANCE[…]'];
+  /** The refusal as the service raises it, for the parameter upstream names as `where`. */
+  const noCauseNamed = (where: string) =>
+    validationError(
+      `Error parsing query in ${where}: ClinicalTrials.gov named no cause and only repeated the expression as sent: ${expression}.`,
+      { reason: 'query_parse_error', recovery: { hint } },
+      { literals },
+    );
+  const DEFINITIONS = [
+    { name: 'search_studies', definition: searchStudies },
+    { name: 'get_study_count', definition: getStudyCount },
+    { name: 'find_eligible', definition: findEligible },
+  ];
+
+  it.each([
+    {
+      name: 'search_studies',
+      arrange: () => mockService.searchStudies.mockRejectedValue(noCauseNamed('advanced filter')),
+      run: () => runToolContract(searchStudies, { advancedFilter: 'AREA[Phase]PHASE2' }),
+    },
+    {
+      name: 'get_study_count',
+      arrange: () => mockService.countStudies.mockRejectedValue(noCauseNamed('advanced filter')),
+      run: () => runToolContract(getStudyCount, { advancedFilter: 'AREA[Phase]PHASE2' }),
+    },
+    {
+      name: 'find_eligible',
+      arrange: () =>
+        mockService.searchStudies.mockRejectedValue(noCauseNamed('Conditions or disease')),
+      run: () =>
+        runToolContract(findEligible, { ...eligibleInput, conditions: ['AREA[Phase]PHASE2'] }),
+    },
+  ])('$name puts the explicit hint on the wire', async ({ arrange, run }) => {
+    arrange();
+    const result = await run();
+    const raw = (result.content as { text: string }[])[0]!.text;
+    const error = (result.structuredContent as { error: { data: Record<string, unknown> } }).error;
+
+    expect(result.isError).toBe(true);
+    expect(error.data).toMatchObject({ reason: 'query_parse_error', recovery: { hint } });
+    expect(readMarkdown(raw)).toContain(`Recovery: ${hint}`);
+    expect(readMarkdown(raw)).not.toContain(RECOVERY_HINTS.query_parse_error);
+    for (const literal of literals) expect(raw).toContain(`\`${literal}\``);
+    expect(raw).not.toContain('\\[');
+  });
+
+  it.each(DEFINITIONS)(
+    '$name declares a DISTANCE[] or RANGE[] term inside the wrapper as field_invalid',
+    ({ definition }) => {
+      const declared = (
+        (definition.errors ?? []) as readonly { reason: string; when: string }[]
+      ).find((e) => e.reason === 'field_invalid');
+
+      expect(declared?.when).toContain('a DISTANCE[] or RANGE[] term inside SEARCH[Location](…)');
+      expect(declared?.when).not.toContain('at times');
+    },
+  );
 });
 
 /**
@@ -937,7 +1074,7 @@ describe('query_parse_error contracts name an unreadable DISTANCE[] operand', ()
  * call, and a 504 on every attempt is ClinicalTrials.gov's own timeout. Any
  * tool can end either way, so each declares both reasons with the shared hint;
  * the wire cases prove one service throw per reason reaches both surfaces
- * with its code, its data, and that hint (#181).
+ * with its code, its data, that hint, and the entry's `retryable` (#181).
  */
 describe('call budget and upstream timeout contracts (#181)', () => {
   interface Declared {
@@ -1011,8 +1148,10 @@ describe('call budget and upstream timeout contracts (#181)', () => {
       arrange: (err: Error) => mockService.countStudies.mockRejectedValue(err),
       run: () => runToolContract(getStudyCount, { conditionQuery: 'diabetes' }),
     },
-  ])('$name reaches both surfaces with its code, data, and hint', async (c) => {
+  ])('$name reaches both surfaces with its code, data, hint, and retryable', async (c) => {
     const thrown = c.error();
+    // The service sets no retryable, so the one on the wire is the contract entry's.
+    expect(thrown.data).not.toHaveProperty('retryable');
     c.arrange(thrown);
     const result = await c.run();
     const text = readMarkdown((result.content as { text: string }[])[0]!.text);
@@ -1028,10 +1167,11 @@ describe('call budget and upstream timeout contracts (#181)', () => {
     expect(error.data).toMatchObject({
       ...thrown.data,
       recovery: { hint: RECOVERY_HINTS[c.reason] },
+      retryable: true,
     });
     expect(text).toContain(thrown.message);
     expect(text).toContain(`Recovery: ${RECOVERY_HINTS[c.reason]}`);
-    expect(text).toContain(c.reason);
+    expect(text).toContain(`(reason ${c.reason} · retryable)`);
   });
 });
 
@@ -1123,6 +1263,8 @@ describe('upstream failure contracts (#196)', () => {
     {
       name: 'get_field_definitions upstream_unavailable',
       reason: 'upstream_unavailable' as const,
+      // The outage sets none, so this is the contract entry's.
+      retryable: true,
       error: async () => outage(),
       arrange: (err: Error) => mockService.getMetadata.mockRejectedValue(err),
       run: () => runToolContract(getFieldDefinitions, { mode: 'overview' }),
@@ -1130,11 +1272,12 @@ describe('upstream failure contracts (#196)', () => {
     {
       name: 'get_field_values upstream_rejected',
       reason: 'upstream_rejected' as const,
+      retryable: false,
       error: refusal,
       arrange: (err: Error) => mockService.getFieldValues.mockRejectedValue(err),
       run: () => runToolContract(getFieldValues, { fields: 'OverallStatus' }),
     },
-  ])('$name reaches both surfaces with its code, data, and hint', async (c) => {
+  ])('$name reaches both surfaces with its code, data, hint, and retryable', async (c) => {
     const thrown = await c.error();
     c.arrange(thrown);
     const result = await c.run();
@@ -1157,12 +1300,13 @@ describe('upstream failure contracts (#196)', () => {
       ...clientData,
       reason: c.reason,
       recovery: { hint: RECOVERY_HINTS[c.reason] },
+      retryable: c.retryable,
     });
     expect(error.data).not.toHaveProperty('body');
     expect(error.data).not.toHaveProperty('responseBody');
     expect(text).toContain(thrown.message);
     expect(text).toContain(`Recovery: ${RECOVERY_HINTS[c.reason]}`);
-    expect(text).toContain(c.reason);
+    expect(text).toContain(`(reason ${c.reason} · ${c.retryable ? 'retryable' : 'not retryable'})`);
     expect(raw).not.toContain('<h1>');
   });
 

@@ -6,13 +6,14 @@
 import { z } from '@cyanheads/mcp-ts-core';
 import {
   JsonRpcErrorCode,
+  McpError,
   notFound,
   rateLimited,
   requestCancelled,
   serviceUnavailable,
   timeout,
 } from '@cyanheads/mcp-ts-core/errors';
-import { createMockContext } from '@cyanheads/mcp-ts-core/testing';
+import { createMockContext, type MockContextLogger } from '@cyanheads/mcp-ts-core/testing';
 import { runToolContract } from '@cyanheads/mcp-ts-core/testing/vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -2728,9 +2729,11 @@ describe('getStudyResults', () => {
     const MALFORMED_ID = plainText('Parameter `nctId` has incorrect format', 400);
 
     /**
-     * One call through the real service: the batch refused over NCT00000000, as
-     * the live endpoint refuses it, then each /studies/{nctId} answered from
-     * `perId`. Returns the result and every path requested, in order.
+     * One call through the real service: the batch refused by a 400 that names
+     * no item — the one refusal the walk still answers, since a refusal naming
+     * its item re-sends the batch without that ID (#207) — then each
+     * /studies/{nctId} answered from `perId`. Returns the result and every path
+     * requested, in order.
      */
     const runWalk = async (nctIds: string[], perId: Map<string, () => Response>) => {
       const { ClinicalTrialsService } = await vi.importActual<
@@ -2741,9 +2744,8 @@ describe('getStudyResults', () => {
         const { pathname } = new URL(String(url));
         paths.push(pathname);
         if (pathname === '/v2/studies') {
-          const item = nctIds.indexOf('NCT00000000') + 1;
           return Promise.resolve(
-            plainText(`Item ${item} in parameter \`filter.ids\` has incorrect format`, 400)(),
+            plainText('filter.ids has incorrect format for value NCT00000000', 400)(),
           );
         }
         const answer = perId.get(pathname.replace('/v2/studies/', ''));
@@ -2838,6 +2840,376 @@ describe('getStudyResults', () => {
       expect((result.content as { text: string }[])[0]!.text).toContain(
         'Recovery: Retry the same call unchanged',
       );
+    });
+  });
+
+  /**
+   * A batch refused over one malformed ID is re-sent without it, so the call
+   * spends one request per refused ID instead of one per requested ID. Run
+   * against the real service, since the mechanism is its reading of the
+   * refusal meeting the handler's loop. The fake /studies answers as the live
+   * endpoint does: a 400 naming the position of the first refused ID in the
+   * list as sent, else a page of the requested studies that exist (#207).
+   */
+  describe('#207 a batch refused over one ID is re-sent without it', () => {
+    const REFUSED = 'NCT00000000';
+    /** Refused only by this fake, so a call can carry two refused IDs. */
+    const ALSO_REFUSED = 'NCT11111111';
+    const ABSENT = 'NCT99999999';
+    const ALIAS = 'NCT02026375';
+    const CANONICAL = 'NCT02141633';
+    const notFoundText = (nctId: string) =>
+      `Study ${nctId} not found. Verify the NCT ID exists on ClinicalTrials.gov.`;
+    const plainText = (body: string, status: number) =>
+      new Response(body, { status, headers: { 'content-type': 'text/plain; charset=UTF-8' } });
+    const json = (body: unknown) =>
+      new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } });
+    const studyFor = (nctId: string) =>
+      nctId === ALIAS ? makeStudy(CANONICAL, false, undefined, [ALIAS]) : makeStudy(nctId, false);
+    /** Twenty distinct IDs, NCT00000000 eleventh and NCT99999999 seventeenth. */
+    const TWENTY = [
+      'NCT03722472',
+      'NCT05956821',
+      'NCT02130466',
+      'NCT03548935',
+      'NCT02026375',
+      'NCT02141633',
+      'NCT00565435',
+      'NCT00741858',
+      'NCT00008905',
+      'NCT00010478',
+      REFUSED,
+      'NCT03288740',
+      'NCT04280705',
+      'NCT05226598',
+      'NCT05580003',
+      'NCT06760819',
+      ABSENT,
+      'NCT12345678',
+      'NCT00000001',
+      'NCT01234567',
+    ];
+
+    interface SentRequest {
+      fields?: string | null;
+      ids?: string[];
+      pageSize?: string | null;
+      path: string;
+    }
+
+    /**
+     * One call through the real service. /studies refuses the first ID in
+     * `refused` it carries, unless `batchAnswer` answers the n-th batch (from 1)
+     * itself; /studies/{nctId} answers from `perId`. Returns the handler's
+     * outcome, its rendered text, every request sent, and the call's log.
+     */
+    const runCall = async (
+      nctIds: string[],
+      {
+        batchAnswer,
+        perId = new Map<string, () => Response>(),
+        refused = new Set([REFUSED, ALSO_REFUSED]),
+      }: {
+        batchAnswer?: (n: number) => Response | undefined;
+        perId?: Map<string, () => Response>;
+        refused?: Set<string>;
+      } = {},
+    ) => {
+      const { ClinicalTrialsService } = await vi.importActual<
+        typeof import('@/services/clinical-trials/clinical-trials-service.js')
+      >('@/services/clinical-trials/clinical-trials-service.js');
+      const sent: SentRequest[] = [];
+      vi.stubGlobal('fetch', (url: string | URL) => {
+        const { pathname, searchParams } = new URL(String(url));
+        if (pathname !== '/v2/studies') {
+          sent.push({ path: pathname });
+          const answer = perId.get(pathname.replace('/v2/studies/', ''));
+          if (!answer) throw new Error(`Unexpected request: ${pathname}`);
+          return Promise.resolve(answer());
+        }
+        const ids = searchParams.get('filter.ids')?.split('|') ?? [];
+        sent.push({
+          path: pathname,
+          ids,
+          fields: searchParams.get('fields'),
+          pageSize: searchParams.get('pageSize'),
+        });
+        const own = batchAnswer?.(sent.filter((r) => r.path === '/v2/studies').length);
+        if (own) return Promise.resolve(own);
+        const item = ids.findIndex((id) => refused.has(id)) + 1;
+        if (item > 0) {
+          return Promise.resolve(
+            plainText(`Item ${item} in parameter \`filter.ids\` has incorrect format`, 400),
+          );
+        }
+        return Promise.resolve(json({ studies: ids.filter((id) => id !== ABSENT).map(studyFor) }));
+      });
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
+      try {
+        mockGetService.mockReturnValue(
+          new ClinicalTrialsService(
+            { apiBaseUrl: 'https://test.api/v2', requestTimeoutMs: 30_000, maxPageSize: 100 },
+            { maxRetries: 2, validateFieldsLocally: false },
+          ) as never,
+        );
+        const ctx = createMockContext({ errors: getStudyResults.errors });
+        let settled = false;
+        const outcome = Promise.resolve(
+          getStudyResults.handler(getStudyResults.input!.parse({ nctIds }), ctx),
+        )
+          .then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          )
+          .finally(() => {
+            settled = true;
+          });
+        while (!settled) await vi.advanceTimersToNextTimerAsync();
+        const done = await outcome;
+        const log = (ctx.log as MockContextLogger).calls;
+        if ('error' in done) return { error: done.error, sent, log };
+        const text = (getStudyResults.format!(done.value)[0] as { text: string }).text;
+        return { result: done.value, text, sent, log };
+      } finally {
+        vi.useRealTimers();
+        vi.unstubAllGlobals();
+      }
+    };
+
+    it('re-sends the batch without the refused ID: two requests, both on the batch projection', async () => {
+      const { result, text, sent, log } = await runCall(['NCT03548935', REFUSED]);
+
+      expect(sent.map((r) => [r.path, r.ids, r.pageSize])).toEqual([
+        ['/v2/studies', ['NCT03548935', REFUSED], '2'],
+        ['/v2/studies', ['NCT03548935'], '1'],
+      ]);
+      expect(sent[0]!.fields).toContain('ResultsSection');
+      expect(sent[1]!.fields).toBe(sent[0]!.fields);
+      expect(result!.results.map((r) => r.nctId)).toEqual(['NCT03548935']);
+      expect(result!.fetchErrors).toEqual([{ nctId: REFUSED, error: notFoundText(REFUSED) }]);
+      expect(text).toContain(`Fetch errors: ${REFUSED}: ${notFoundText(REFUSED)}`);
+      // The warning a client sees on notifications/message blames the refused ID alone.
+      const warnings = JSON.stringify(log.filter((c) => c.level === 'warning'));
+      expect(warnings).toContain(REFUSED);
+      expect(warnings).not.toContain('NCT03548935');
+    });
+
+    it('sends two requests for twenty IDs with the refused one eleventh, and none per ID', async () => {
+      const { result, sent } = await runCall(TWENTY);
+
+      expect(sent.map((r) => r.path)).toEqual(['/v2/studies', '/v2/studies']);
+      expect(sent[0]!.ids).toEqual(TWENTY);
+      expect(sent[1]!.ids).toEqual(TWENTY.filter((id) => id !== REFUSED));
+      expect(result!.results).toHaveLength(18);
+      // Requested order: the refused ID (11th) ahead of the one absent from the re-sent page (17th).
+      expect(result!.fetchErrors).toEqual([
+        { nctId: REFUSED, error: notFoundText(REFUSED) },
+        { nctId: ABSENT, error: 'Study not found' },
+      ]);
+    });
+
+    it('sends one request for the refused ID alone, and none with an empty filter.ids', async () => {
+      const { result, text, sent } = await runCall([REFUSED]);
+
+      expect(sent.map((r) => [r.path, r.ids])).toEqual([['/v2/studies', [REFUSED]]]);
+      expect(result!.results).toEqual([]);
+      expect(result!.fetchErrors).toEqual([{ nctId: REFUSED, error: notFoundText(REFUSED) }]);
+      expect(text).toContain(`Fetch errors: ${REFUSED}: ${notFoundText(REFUSED)}`);
+    });
+
+    it('re-sends once per refused ID when the re-sent batch is refused too', async () => {
+      const { result, sent } = await runCall([REFUSED, ALSO_REFUSED, 'NCT03548935']);
+
+      // Item 1 of the list sent, then item 1 of the re-sent one.
+      expect(sent.map((r) => r.ids)).toEqual([
+        [REFUSED, ALSO_REFUSED, 'NCT03548935'],
+        [ALSO_REFUSED, 'NCT03548935'],
+        ['NCT03548935'],
+      ]);
+      expect(result!.results.map((r) => r.nctId)).toEqual(['NCT03548935']);
+      expect(result!.fetchErrors).toEqual([
+        { nctId: REFUSED, error: notFoundText(REFUSED) },
+        { nctId: ALSO_REFUSED, error: notFoundText(ALSO_REFUSED) },
+      ]);
+    });
+
+    it('keeps fetchErrors in requested order, refused and absent IDs together', async () => {
+      const { result, text, sent } = await runCall(['NCT03548935', REFUSED, ABSENT, ALSO_REFUSED]);
+
+      // Item 2 of the list sent, then item 3 of the re-sent one.
+      expect(sent.map((r) => r.ids)).toEqual([
+        ['NCT03548935', REFUSED, ABSENT, ALSO_REFUSED],
+        ['NCT03548935', ABSENT, ALSO_REFUSED],
+        ['NCT03548935', ABSENT],
+      ]);
+      expect(result!.fetchErrors).toEqual([
+        { nctId: REFUSED, error: notFoundText(REFUSED) },
+        { nctId: ABSENT, error: 'Study not found' },
+        { nctId: ALSO_REFUSED, error: notFoundText(ALSO_REFUSED) },
+      ]);
+      expect(text).toContain(
+        `Fetch errors: ${REFUSED}: ${notFoundText(REFUSED)}, ${ABSENT}: Study not found, ${ALSO_REFUSED}: ${notFoundText(ALSO_REFUSED)}`,
+      );
+    });
+
+    it('stops once every ID is refused, sending no request with an empty filter.ids', async () => {
+      const both = new Set([REFUSED, ALSO_REFUSED, 'NCT22222222']);
+      const { result, sent } = await runCall([REFUSED, ALSO_REFUSED, 'NCT22222222'], {
+        refused: both,
+      });
+
+      expect(sent.map((r) => r.ids)).toEqual([
+        [REFUSED, ALSO_REFUSED, 'NCT22222222'],
+        [ALSO_REFUSED, 'NCT22222222'],
+        ['NCT22222222'],
+      ]);
+      expect(result!.results).toEqual([]);
+      expect(result!.fetchErrors?.map((e) => e.nctId)).toEqual([
+        REFUSED,
+        ALSO_REFUSED,
+        'NCT22222222',
+      ]);
+    });
+
+    it('resolves an alias batched beside the refused ID after the re-send (#127)', async () => {
+      const { result, sent } = await runCall([ALIAS, REFUSED]);
+
+      expect(sent.map((r) => r.ids)).toEqual([[ALIAS, REFUSED], [ALIAS]]);
+      expect(result!.results).toHaveLength(1);
+      expect(result!.results[0]).toMatchObject({ nctId: ALIAS, canonicalNctId: CANONICAL });
+      expect(result!.fetchErrors).toEqual([{ nctId: REFUSED, error: notFoundText(REFUSED) }]);
+    });
+
+    it('sends the one batch request a call with no refused ID sends', async () => {
+      const { result, sent } = await runCall(['NCT03548935', ABSENT]);
+
+      expect(sent.map((r) => r.ids)).toEqual([['NCT03548935', ABSENT]]);
+      expect(result!.fetchErrors).toEqual([{ nctId: ABSENT, error: 'Study not found' }]);
+    });
+
+    it('never sends a deferred ID, in the first batch or a re-sent one', async () => {
+      const { result, sent } = await runCall([...TWENTY, 'NCT05555555']);
+
+      expect(sent).toHaveLength(2);
+      expect(sent.flatMap((r) => r.ids)).not.toContain('NCT05555555');
+      expect(result!.deferredNctIds).toEqual(['NCT05555555']);
+    });
+
+    it('walks the IDs a re-sent batch carries when its 400 names no item', async () => {
+      const { result, sent } = await runCall(['NCT03548935', REFUSED, 'NCT05956821'], {
+        batchAnswer: (n) =>
+          n === 2 ? plainText('filter.ids has incorrect format for value XYZ', 400) : undefined,
+        perId: new Map([
+          ['NCT03548935', () => json(makeStudy('NCT03548935', false))],
+          ['NCT05956821', () => json(makeStudy('NCT05956821', false))],
+        ]),
+      });
+
+      // The refused ID is never fetched one by one: it is already answered.
+      expect(sent.map((r) => r.path)).toEqual([
+        '/v2/studies',
+        '/v2/studies',
+        '/v2/studies/NCT03548935',
+        '/v2/studies/NCT05956821',
+      ]);
+      expect(result!.results.map((r) => r.nctId)).toEqual(['NCT03548935', 'NCT05956821']);
+      expect(result!.fetchErrors).toEqual([{ nctId: REFUSED, error: notFoundText(REFUSED) }]);
+    });
+
+    it('walks every ID when the 400 names an item past the end of the list sent', async () => {
+      const { result, sent } = await runCall(['NCT03548935', REFUSED], {
+        batchAnswer: () => plainText('Item 9 in parameter `filter.ids` has incorrect format', 400),
+        perId: new Map([
+          ['NCT03548935', () => json(makeStudy('NCT03548935', false))],
+          [REFUSED, () => plainText('Parameter `nctId` has incorrect format', 400)],
+        ]),
+      });
+
+      expect(sent.map((r) => r.path)).toEqual([
+        '/v2/studies',
+        '/v2/studies/NCT03548935',
+        `/v2/studies/${REFUSED}`,
+      ]);
+      expect(result!.results.map((r) => r.nctId)).toEqual(['NCT03548935']);
+      expect(result!.fetchErrors).toEqual([{ nctId: REFUSED, error: notFoundText(REFUSED) }]);
+    });
+
+    it('ends upstream_unavailable when the re-sent batch fails every attempt, fetching no ID alone', async () => {
+      const { error, sent } = await runCall(['NCT03548935', REFUSED, 'NCT05956821'], {
+        batchAnswer: (n) => (n > 1 ? plainText('Service Unavailable', 503) : undefined),
+      });
+
+      // The refused batch, then the re-sent one's three attempts.
+      expect(sent.map((r) => [r.path, r.ids])).toEqual([
+        ['/v2/studies', ['NCT03548935', REFUSED, 'NCT05956821']],
+        ...Array.from({ length: 3 }, () => ['/v2/studies', ['NCT03548935', 'NCT05956821']]),
+      ]);
+      expect(error).toBeInstanceOf(McpError);
+      expect(error).toMatchObject({
+        code: JsonRpcErrorCode.ServiceUnavailable,
+        data: { reason: 'upstream_unavailable', lastStatus: 503 },
+      });
+    });
+
+    /** The first batch refused over NCT00000000 as the service reports it, then `second`. */
+    const THREE = ['NCT03722472', REFUSED, 'NCT02130466'];
+    const refusedBatch = () =>
+      notFound(notFoundText(REFUSED), { reason: 'ids_not_found', invalid: [REFUSED] });
+
+    it.each([
+      [
+        'upstream_unavailable',
+        () => serviceUnavailable('HTTP 503', { reason: 'upstream_unavailable' }),
+      ],
+      ['upstream_timeout', () => timeout('HTTP 504', { reason: 'upstream_timeout' })],
+      ['upstream_rejected', () => serviceUnavailable('HTTP 403', { reason: 'upstream_rejected' })],
+      [
+        'retry_deadline_exceeded',
+        () => timeout('Call budget spent', { reason: 'retry_deadline_exceeded' }),
+      ],
+      ['a cancellation', () => requestCancelled('Request cancelled by caller')],
+    ])(
+      'ends the call on a re-sent batch failing %s, rethrowing it unchanged with no per-ID request',
+      async (_label, error) => {
+        const thrown = error();
+        mockService.getStudiesBatch.mockRejectedValueOnce(refusedBatch()).mockRejectedValue(thrown);
+
+        await expect(
+          getStudyResults.handler(
+            getStudyResults.input!.parse({ nctIds: THREE }),
+            createMockContext({ errors: getStudyResults.errors }),
+          ),
+        ).rejects.toBe(thrown);
+        expect(mockService.getStudiesBatch.mock.calls.map((c) => c[0])).toEqual([
+          THREE,
+          ['NCT03722472', 'NCT02130466'],
+        ]);
+        expect(mockService.getStudy).not.toHaveBeenCalled();
+      },
+    );
+
+    it('ends a re-sent batch’s rate limit through the declared rate_limited contract', async () => {
+      mockService.getStudiesBatch.mockRejectedValueOnce(refusedBatch()).mockRejectedValue(
+        rateLimited('Rate limited by ClinicalTrials.gov after 3 retries', {
+          reason: 'rate_limited',
+        }),
+      );
+
+      const result = await runToolContract(getStudyResults, { nctIds: THREE });
+
+      expect(result.isError).toBe(true);
+      expect(
+        (result.structuredContent as { error: { code: number; data: Record<string, unknown> } })
+          .error,
+      ).toMatchObject({
+        code: JsonRpcErrorCode.RateLimited,
+        data: { reason: 'rate_limited', retryable: true },
+      });
+      expect(wireRecoveryHint(result)).toBe(
+        getStudyResults.errors!.find((e) => e.reason === 'rate_limited')!.recovery,
+      );
+      expect(mockService.getStudiesBatch).toHaveBeenCalledTimes(2);
+      expect(mockService.getStudy).not.toHaveBeenCalled();
     });
   });
 

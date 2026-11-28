@@ -13,7 +13,10 @@ import {
   getClinicalTrialsService,
   isDistanceOperandRejection,
   parseAreaRejection,
+  parseEnumRejection,
   parseUnsupportedFieldType,
+  rangeInLocationScope,
+  repeatedExpression,
 } from '@/services/clinical-trials/clinical-trials-service.js';
 import { normalizeAreaNames } from '@/services/clinical-trials/field-search.js';
 import type { FieldNode } from '@/services/clinical-trials/types.js';
@@ -2374,6 +2377,88 @@ describe('ClinicalTrialsService', () => {
     });
   });
 
+  /**
+   * A /studies 400 refusing a `filter.ids` entry numbers the list from 1 by
+   * position in the value sent, repeats counted, and names only the first
+   * refused entry. The service names the ID at that position alone, in
+   * `data.invalid`; a body that names no item, or one past the end of the
+   * list, names every ID sent and no `invalid`. Bodies are the live API's,
+   * verbatim (#207).
+   */
+  describe('#207 a filter.ids refusal names the refused item', () => {
+    const refusal = (item: number) =>
+      textResponse(`Item ${item} in parameter \`filter.ids\` has incorrect format`);
+    /** Twenty IDs as the results tool sends them, NCT00000000 eleventh. */
+    const TWENTY = [
+      'NCT03722472',
+      'NCT05956821',
+      'NCT02130466',
+      'NCT03548935',
+      'NCT02026375',
+      'NCT02141633',
+      'NCT00565435',
+      'NCT00741858',
+      'NCT00008905',
+      'NCT00010478',
+      'NCT00000000',
+      'NCT03288740',
+      'NCT04280705',
+      'NCT05226598',
+      'NCT05580003',
+      'NCT06760819',
+      'NCT99999999',
+      'NCT12345678',
+      'NCT00000001',
+      'NCT01234567',
+    ];
+    /** The error a search for `filterIds` ends with when /studies answers `response`. */
+    const rejectionOf = async (filterIds: string[], response: unknown) => {
+      mockFetch.mockResolvedValue(response);
+      const outcome = await advanceUntilSettled(
+        service.searchStudies({ filterIds }, createMockContext()),
+      ).then(
+        () => undefined,
+        (err: unknown) => err,
+      );
+      expect(outcome).toBeInstanceOf(McpError);
+      return outcome as McpError;
+    };
+
+    it.each([
+      ['the last of two', ['NCT03548935', 'NCT00000000'], 2],
+      ['the first of two', ['NCT00000000', 'NCT03548935'], 1],
+      ['the eleventh of twenty', TWENTY, 11],
+      ['the third, a repeat counted before it', ['NCT03548935', 'NCT03548935', 'NCT00000000'], 3],
+    ])('names only the ID at the item when the body names %s', async (_label, filterIds, item) => {
+      const err = await rejectionOf(filterIds, refusal(item));
+
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+      expect(err.code).toBe(JsonRpcErrorCode.NotFound);
+      expect(err.message).toBe(
+        'Study NCT00000000 not found. Verify the NCT ID exists on ClinicalTrials.gov.',
+      );
+      expect(err.data).toEqual({ reason: 'ids_not_found', invalid: ['NCT00000000'] });
+    });
+
+    it.each([
+      ['an item past the end of the list', refusal(3)],
+      ['item 0', refusal(0)],
+      ['the parameter and no item', textResponse('Parameter `filter.ids` has incorrect format')],
+      ['no parameter', textResponse('filter.ids has incorrect format for value XYZ')],
+    ])(
+      'names every sent ID and no invalid one when the body names %s',
+      async (_label, response) => {
+        const err = await rejectionOf(['NCT03548935', 'NCT00000000'], response);
+
+        expect(err.code).toBe(JsonRpcErrorCode.NotFound);
+        expect(err.message).toBe(
+          'Study ID(s) not found or rejected by API: NCT03548935, NCT00000000. Verify the NCT IDs exist on ClinicalTrials.gov.',
+        );
+        expect(err.data).toEqual({ reason: 'ids_not_found' });
+      },
+    );
+  });
+
   describe('error data wire shape', () => {
     // The service sets `data.reason` and leaves `data.recovery` to the framework,
     // which fills it from the tool or resource contract declaring that reason.
@@ -4224,6 +4309,40 @@ describe('ClinicalTrialsService', () => {
       throw new Error('expected a rejection');
     };
 
+    /** Requests beside the search: metadata and search-area reads. */
+    const reads = () => mockFetch.mock.calls.filter((c) => !String(c[0]).includes('/v2/studies?'));
+    /** filter.advanced as the service sends a caller's expression, the enrollment sentinel beside it. */
+    const withSentinel = (expression: string) =>
+      `(${expression}) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])`;
+    /** A rejection as one string to compare: its kind, then the name or path it carries. */
+    const summary = (rejection: AreaRejection | undefined) =>
+      rejection &&
+      [
+        rejection.kind,
+        'name' in rejection ? rejection.name : '',
+        'path' in rejection ? rejection.path : '',
+      ]
+        .filter(Boolean)
+        .join(':');
+
+    /** The Java exception upstream answers a DISTANCE[] or RANGE[] term inside SEARCH[Location](…) with. */
+    const NULL_PIECE =
+      'Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null';
+    const BESIDE = 'AREA[LocationGeoPoint]DISTANCE[lat,lon,radius] AND SEARCH[Location](…)';
+    const ZIP_VALUES = 'SEARCH[Location](AREA[LocationZip]98101 OR AREA[LocationZip]98102)';
+    /** What a DISTANCE[] term inside the wrapper gets, and any term the scan places nowhere: move it beside the wrapper. */
+    const MOVE = {
+      tail: `SEARCH[Location](…) evaluates no DISTANCE[] or RANGE[] term on any site field, so the term goes beside the wrapper, joined with AND: a radius as ${BESIDE}, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible.`,
+      hint: `Move the DISTANCE[] or RANGE[] term out of SEARCH[Location](…) and join it beside the wrapper with AND: a radius as ${BESIDE} in the advancedFilter of clinicaltrials_search_studies or clinicaltrials_get_study_count, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible. Beside the wrapper the radius and the wrapper's terms can match different sites of one study, so check each in-range site's own status with clinicaltrials_get_study_record and nearLocation.`,
+      literals: ['SEARCH[Location](…)', 'DISTANCE[]', 'RANGE[]', BESIDE],
+    };
+    /** What a RANGE[] term inside the wrapper gets: the levers that work in its place. */
+    const RANGE = {
+      tail: `SEARCH[Location](…) evaluates no DISTANCE[] or RANGE[] term on any site field, and beside the wrapper RANGE[] takes date, numeric, and age fields (StartDate, EnrollmentCount, MinimumAge), which no site field is but the count NumLocationContacts. Bound the place by a radius beside the wrapper, joined with AND, as ${BESIDE}, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible; or match the site field by value, OR-joined inside the wrapper, as in ${ZIP_VALUES}.`,
+      hint: `Inside SEARCH[Location](…) RANGE[] takes no site field, and beside it none but the count NumLocationContacts: bound the place by a radius beside the wrapper, joined with AND, as ${BESIDE} in the advancedFilter of clinicaltrials_search_studies or clinicaltrials_get_study_count, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible; or match the site field by value, OR-joining the values inside the wrapper, as in ${ZIP_VALUES}. Beside the wrapper the radius and the wrapper's terms can match different sites of one study, so check each in-range site's own status with clinicaltrials_get_study_record and nearLocation.`,
+      literals: ['SEARCH[Location](…)', 'DISTANCE[]', 'RANGE[]', BESIDE, ZIP_VALUES],
+    };
+
     let validating: ClinicalTrialsService;
     beforeEach(() => {
       validating = new ClinicalTrialsService(testConfig, {
@@ -4441,8 +4560,6 @@ describe('ClinicalTrialsService', () => {
           }
           return Promise.resolve(primary);
         });
-      const reads = () =>
-        mockFetch.mock.calls.filter((c) => !String(c[0]).includes('/v2/studies?'));
       const hint = (err: McpError) => (err.data as { recovery?: { hint?: string } }).recovery?.hint;
 
       describe('a field inside SEARCH[Location](…) that no site holds (#183)', () => {
@@ -4848,14 +4965,9 @@ describe('ClinicalTrialsService', () => {
 
       // Upstream evaluates no DISTANCE[] or RANGE[] term inside SEARCH[Location](…),
       // on any site field, and answers with a Java exception that names neither the
-      // operator nor the field, the same sentence in every parameter (#206).
+      // operator nor the field, the same sentence in every parameter (#206). A
+      // RANGE[] term there gets the levers that take its place (#208 fold-in).
       describe('a DISTANCE[] or RANGE[] term inside SEARCH[Location](…) (#206)', () => {
-        const NULL_PIECE =
-          'Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null';
-        const BESIDE = 'AREA[LocationGeoPoint]DISTANCE[lat,lon,radius] AND SEARCH[Location](…)';
-        const MESSAGE_TAIL = `SEARCH[Location](…) evaluates no DISTANCE[] or RANGE[] term on any site field, so the term goes beside the wrapper, joined with AND: a radius as ${BESIDE}, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible.`;
-        const HINT = `Move the DISTANCE[] or RANGE[] term out of SEARCH[Location](…) and join it beside the wrapper with AND: a radius as ${BESIDE} in the advancedFilter of clinicaltrials_search_studies or clinicaltrials_get_study_count, or as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible. Beside the wrapper the radius and the wrapper's terms can match different sites of one study, so check each in-range site's own status with clinicaltrials_get_study_record and nearLocation.`;
-
         it('names the wrapper, both operators, and the radius beside it, blaming no field and reading no index', async () => {
           refusing(parseError(NULL_PIECE));
           const err = await advanceUntilSettled(
@@ -4872,10 +4984,10 @@ describe('ClinicalTrialsService', () => {
           );
 
           expect(err.message).toBe(
-            `Error parsing query in advanced filter: ${NULL_PIECE}. ${MESSAGE_TAIL}`,
+            `Error parsing query in advanced filter: ${NULL_PIECE}. ${MOVE.tail}`,
           );
-          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: HINT } });
-          expect(err.literals).toEqual(['SEARCH[Location](…)', 'DISTANCE[]', 'RANGE[]', BESIDE]);
+          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: MOVE.hint } });
+          expect(err.literals).toEqual(MOVE.literals);
           expect(reads()).toEqual([]);
         });
 
@@ -4886,6 +4998,7 @@ describe('ClinicalTrialsService', () => {
             {
               queryLocn: 'SEARCH[Location](AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi])',
             },
+            MOVE,
           ],
           [
             'DISTANCE[] in a conditions query',
@@ -4893,12 +5006,15 @@ describe('ClinicalTrialsService', () => {
             {
               queryCond: 'SEARCH[Location](AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi])',
             },
+            MOVE,
           ],
-          // RANGE[] on a site field, whenever upstream answers it with the same sentence.
+          // RANGE[] on a site field, whenever upstream answers it with the same
+          // sentence: the same refusal, with the levers that take its place.
           [
             'RANGE[] on LocationZip',
             'advanced filter',
             { filterAdvanced: 'SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199])' },
+            RANGE,
           ],
           [
             'DISTANCE[] on LocationCity after a value',
@@ -4907,18 +5023,19 @@ describe('ClinicalTrialsService', () => {
               filterAdvanced:
                 'SEARCH[Location](AREA[LocationCity]Seattle AND AREA[LocationCity]DISTANCE[47.6062,-122.3321,25mi])',
             },
+            MOVE,
           ],
-        ] as const)('reads the same refusal for %s', async (_label, where, params) => {
+        ] as const)('reads the same refusal for %s', async (_label, where, params, expected) => {
           refusing(parseError(NULL_PIECE, where));
           const err = await advanceUntilSettled(
             rejection(() => validating.searchStudies(params, createMockContext())),
           );
 
           expect(err.message).toBe(
-            `Error parsing query in ${where}: ${NULL_PIECE}. ${MESSAGE_TAIL}`,
+            `Error parsing query in ${where}: ${NULL_PIECE}. ${expected.tail}`,
           );
           expect(err.message).not.toContain('Free-text');
-          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: HINT } });
+          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: expected.hint } });
         });
 
         it('blames no field, and reads no metadata, with local validation disabled', async () => {
@@ -4930,7 +5047,7 @@ describe('ClinicalTrialsService', () => {
             ),
           );
 
-          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: HINT } });
+          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: RANGE.hint } });
           expect(mockFetch).toHaveBeenCalledTimes(1);
         });
 
@@ -4946,16 +5063,14 @@ describe('ClinicalTrialsService', () => {
           );
 
           expect(err.data).toMatchObject({ reason: 'query_parse_error' });
-          expect(err.message).not.toContain(MESSAGE_TAIL);
-          expect(hint(err)).not.toBe(HINT);
+          expect(err.message).not.toContain(MOVE.tail);
+          expect(hint(err)).not.toBe(MOVE.hint);
         });
 
-        it('keeps the body that only repeats the expression as sent the parse error it is today', async () => {
-          refusing(
-            parseError(
-              'Error parsing query: (SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199])) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])',
-            ),
-          );
+        it('reads the body that only repeats the expression as sent as the same refusal, naming no cause (#208)', async () => {
+          const repeated =
+            '(SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199])) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])';
+          refusing(parseError(`Error parsing query: ${repeated}`));
           const err = await advanceUntilSettled(
             rejection(() =>
               validating.countStudies(
@@ -4966,9 +5081,12 @@ describe('ClinicalTrialsService', () => {
           );
 
           expect(err.message).toBe(
-            'Query syntax error: Error parsing query: (SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199])) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX]). Free-text fields take plain words plus AND, OR, NOT.',
+            `Error parsing query in advanced filter: ClinicalTrials.gov named no cause and only repeated the expression as sent: ${repeated}. ${RANGE.tail}`,
           );
-          expect(err.data).toEqual({ reason: 'query_parse_error' });
+          expect(err.message).not.toContain('Free-text');
+          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: RANGE.hint } });
+          expect(err.literals).toEqual([...RANGE.literals, repeated]);
+          expect(reads()).toEqual([]);
         });
       });
 
@@ -5118,12 +5236,25 @@ describe('ClinicalTrialsService', () => {
 
     // A DISTANCE[] operand upstream cannot read is answered with a sentence of
     // its own, a missing radius with a Java exception; each is the one operand
-    // shape to restate, not free-text syntax (fold-in).
+    // shape to restate, not free-text syntax (fold-in). A radius past 500 mi or
+    // 805 km draws a sentence of its own too, whose hint moves a larger radius
+    // to the two inputs that take one.
     describe('a DISTANCE[] operand upstream cannot read (fold-in)', () => {
       const MESSAGE_TAIL =
-        'DISTANCE[] reads three values, DISTANCE[lat,lon,radius]: a latitude from -90 to 90, a longitude from -180 to 180, and a radius of at least 1 carrying a mi or km unit, as in AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi].';
+        'DISTANCE[] reads three values, DISTANCE[lat,lon,radius]: a latitude from -90 to 90, a longitude from -180 to 180, and a radius of 1 to 500 mi or 1 to 805 km, written with its unit, as in AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi].';
       const HINT =
-        'Write the radius term as AREA[LocationGeoPoint]DISTANCE[lat,lon,radius] with a latitude from -90 to 90, a longitude from -180 to 180, and a radius of at least 1 carrying a mi or km unit, such as 25mi or 40km.';
+        'Write the radius term as AREA[LocationGeoPoint]DISTANCE[lat,lon,radius] with a latitude from -90 to 90, a longitude from -180 to 180, and a radius of 1 to 500 mi or 1 to 805 km, written with its unit, such as 25mi or 40km.';
+      // Live bodies (2026-11-27): 500mi and 805km answer; 500.1mi, 600mi,
+      // 805.1km, and 806km draw this, in advancedFilter and every query
+      // parameter probed.
+      const CEILING = 'Radius must be set to less than or equal to 500 miles (805 kilometers)';
+      const CEILING_HINT = `${HINT} Past 500 mi or 805 km, leave the DISTANCE[] term out and pass the radius as geoFilter on clinicaltrials_search_studies or location.near on clinicaltrials_find_eligible, which take a larger one.`;
+      const OPERAND_LITERALS = [
+        'DISTANCE[]',
+        'DISTANCE[lat,lon,radius]',
+        'AREA[LocationGeoPoint]DISTANCE[lat,lon,radius]',
+        'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi]',
+      ];
 
       it.each([
         ['Latitude must be a number', 'DISTANCE[abc,def,25mi]'],
@@ -5151,12 +5282,7 @@ describe('ClinicalTrialsService', () => {
           );
           expect(err.message).not.toContain('Free-text');
           expect(err.data).toEqual({ reason: 'query_parse_error', recovery: { hint: HINT } });
-          expect(err.literals).toEqual([
-            'DISTANCE[]',
-            'DISTANCE[lat,lon,radius]',
-            'AREA[LocationGeoPoint]DISTANCE[lat,lon,radius]',
-            'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi]',
-          ]);
+          expect(err.literals).toEqual(OPERAND_LITERALS);
         },
       );
 
@@ -5177,7 +5303,35 @@ describe('ClinicalTrialsService', () => {
         expect(err.data).toEqual({ reason: 'query_parse_error', recovery: { hint: HINT } });
       });
 
-      it('keeps the parse error when the sentence is the caller’s own text upstream repeats', async () => {
+      it.each([
+        [
+          'advanced filter',
+          { filterAdvanced: 'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,500.1mi]' },
+        ],
+        ['Other terms', { queryTerm: 'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,600mi]' }],
+        [
+          'Conditions or disease',
+          { queryCond: 'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,806km]' },
+        ],
+      ] as const)(
+        'reads a radius past the ceiling in %s as an operand, moving a larger radius to geoFilter or location.near',
+        async (where, params) => {
+          route(parseError(CEILING, where));
+          const err = await advanceUntilSettled(
+            rejection(() => validating.searchStudies(params, createMockContext())),
+          );
+
+          expect(err.message).toBe(`Error parsing query in ${where}: ${CEILING}. ${MESSAGE_TAIL}`);
+          expect(err.message).not.toMatch(/Query syntax error|Free-text/);
+          expect(err.data).toEqual({
+            reason: 'query_parse_error',
+            recovery: { hint: CEILING_HINT },
+          });
+          expect(err.literals).toEqual(OPERAND_LITERALS);
+        },
+      );
+
+      it('reads the repeated expression, not an operand sentence in the caller’s own text it repeats (#208)', async () => {
         const filterAdvanced =
           'SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199]) AND AREA[BriefTitle]"Latitude must be a number"';
         // Live (2026-11-21): the body that only repeats the expression as sent.
@@ -5187,13 +5341,16 @@ describe('ClinicalTrialsService', () => {
           rejection(() => validating.countStudies({ filterAdvanced }, createMockContext())),
         );
 
-        expect(err.message).toBe(
-          `Query syntax error: Error parsing query: ${repeated}. Free-text fields take plain words plus AND, OR, NOT.`,
+        expect(err.message).toMatch(
+          /^Error parsing query in advanced filter: ClinicalTrials\.gov named no cause and only repeated the expression as sent: /,
         );
-        expect(err.data).toEqual({ reason: 'query_parse_error' });
+        expect(err.message).not.toContain(MESSAGE_TAIL);
+        expect(err.data).toMatchObject({ reason: 'field_invalid' });
+        expect(err.data).not.toHaveProperty('invalid');
+        expect((err.data as { recovery: { hint: string } }).recovery.hint).not.toBe(HINT);
       });
 
-      it('keeps the parse error when a DISTANCE[] refusal is the caller’s own text upstream repeats', async () => {
+      it('reads the repeated expression, not a DISTANCE[] refusal in the caller’s own text it repeats (#208)', async () => {
         const filterAdvanced =
           'SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199]) AND AREA[BriefTitle]"DISTANCE is not supported for text field Foo"';
         const repeated = `(${filterAdvanced}) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])`;
@@ -5202,7 +5359,9 @@ describe('ClinicalTrialsService', () => {
           rejection(() => validating.countStudies({ filterAdvanced }, createMockContext())),
         );
 
-        expect(err.data).toEqual({ reason: 'query_parse_error' });
+        expect(err.data).toMatchObject({ reason: 'field_invalid' });
+        expect(err.data).not.toHaveProperty('invalid');
+        expect(err.message).toContain('ClinicalTrials.gov named no cause');
         expect(err.message).not.toContain('takes no DISTANCE[]');
       });
     });
@@ -5377,17 +5536,6 @@ describe('ClinicalTrialsService', () => {
       });
 
       describe('stays linear on caller-sized text', { timeout: 0 }, () => {
-        /** A rejection as one string to compare: its kind, then the name or path it carries. */
-        const summary = (rejection: AreaRejection | undefined) =>
-          rejection &&
-          [
-            rejection.kind,
-            'name' in rejection ? rejection.name : '',
-            'path' in rejection ? rejection.path : '',
-          ]
-            .filter(Boolean)
-            .join(':');
-
         it.each([
           ...LINE_BREAK_SHAPES.map(([name, shape]) => [name, shape, undefined] as const),
           [
@@ -5421,11 +5569,12 @@ describe('ClinicalTrialsService', () => {
             (n: number) => '`x` is outside '.repeat(n / 15),
             undefined,
           ],
-          // Every closing backtick is also the next name's opening one.
+          // Every closing backtick is also the next name's opening one, so no
+          // sentence follows the first name, where the refusal starts (#208).
           [
             'backticked names edge to edge',
             (n: number) => `${'`x`'.repeat(n / 3)} is outside Location scope`,
-            'location-scope:x',
+            undefined,
           ],
           [
             'repeated RANGE prefixes',
@@ -5482,8 +5631,6 @@ describe('ClinicalTrialsService', () => {
           }, shape);
         });
 
-        const NULL_PIECE =
-          'Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.getDataType()" because the return value of "java.util.Map.get(Object)" is null';
         const NULL_PIECE_LEAD = 'Cannot invoke "gov.nih.nlm.ncbi.ctg.common.datadefs.Piece.';
         // The Java exception read as a whole sentence (#206).
         it.each([
@@ -5541,7 +5688,8 @@ describe('ClinicalTrialsService', () => {
       });
     });
 
-    // Live bodies (2026-11-21): DISTANCE[] on LocationGeoPoint, outside the wrapper.
+    // Live bodies (2026-11-21; the radius ceiling 2026-11-27): DISTANCE[] on
+    // LocationGeoPoint, outside the wrapper.
     describe('isDistanceOperandRejection', () => {
       const OPERAND_SENTENCES = [
         'Latitude must be a number',
@@ -5550,6 +5698,7 @@ describe('ClinicalTrialsService', () => {
         'Longitude must be between -180 and 180',
         'Invalid radius in DISTANCE operator',
         'Radius must be set to at least 1 mile or 1 kilometer',
+        'Radius must be set to less than or equal to 500 miles (805 kilometers)',
         'Cannot read field "exception" because "radius" is null',
       ];
 
@@ -5568,6 +5717,7 @@ describe('ClinicalTrialsService', () => {
         'Error parsing query in advanced filter: DISTANCE is not supported for GeoName field protocolSection.contactsLocationsModule.locations.city',
         'Error parsing query in advanced filter: Latitude must be',
         'Error parsing query in advanced filter: Radius must be set to at least 1 mile',
+        'Error parsing query in advanced filter: Radius must be set to less than or equal to 500 miles',
         // Caller text upstream repeats (live, 2026-11-21): the body that repeats
         // the expression as sent, and an unterminated quote's ANTLR error.
         'Error parsing query in advanced filter: Error parsing query: (SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199]) AND AREA[BriefTitle]"Latitude must be a number") AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])',
@@ -5600,6 +5750,614 @@ describe('ClinicalTrialsService', () => {
             if (isDistanceOperandRejection(input) !== expected)
               throw new Error('unexpected reading');
           }, shape);
+        });
+      });
+    });
+
+    // ClinicalTrials.gov answers a RANGE[] term inside SEARCH[Location](…) at
+    // times with a body that names no cause and only repeats the parameter's
+    // value as sent, `Error parsing query: <expression>` after the label: in
+    // filter.advanced on some requests (the Java sentence on others), in every
+    // query parameter probed each time. Read against the parameters the request
+    // sent, ahead of every other reading, it ends as the Java sentence does; and
+    // every reading counts only where the refusal starts, so caller text a body
+    // repeats or quotes is never read as a refused field (#208).
+    describe('#208 a 400 that names no cause and only repeats the expression as sent', () => {
+      const NO_CAUSE_HINT =
+        'Send the AREA[…], RANGE[…], and DISTANCE[…] terms of the expression one at a time to find the one ClinicalTrials.gov refuses, then look up the field it names with clinicaltrials_get_field_definitions.';
+      const ZIP_RANGE = 'SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199])';
+      /** The body that only repeats `expression`, for the parameter upstream names as `where`. */
+      const repeating = (expression: string, where = 'advanced filter') =>
+        parseError(`Error parsing query: ${expression}`, where);
+      /** The lead of the message for that body. */
+      const noCause = (expression: string, where = 'advanced filter') =>
+        `Error parsing query in ${where}: ClinicalTrials.gov named no cause and only repeated the expression as sent: ${expression}.`;
+      const ctx = () => createMockContext();
+
+      it.each([
+        [
+          'advancedFilter on a count, the enrollment sentinel beside it',
+          'advanced filter',
+          withSentinel(ZIP_RANGE),
+          (s: ClinicalTrialsService) => s.countStudies({ filterAdvanced: ZIP_RANGE }, ctx()),
+        ],
+        [
+          'advancedFilter on a search with unknown enrollment included',
+          'advanced filter',
+          ZIP_RANGE,
+          (s: ClinicalTrialsService) =>
+            s.searchStudies({ filterAdvanced: ZIP_RANGE, includeUnknownEnrollment: true }, ctx()),
+        ],
+        [
+          'locationQuery on a search',
+          'Location terms',
+          ZIP_RANGE,
+          (s: ClinicalTrialsService) => s.searchStudies({ queryLocn: ZIP_RANGE }, ctx()),
+        ],
+        // Upstream trims the trailing whitespace of the value it repeats.
+        [
+          'locationQuery on a count, sent with trailing whitespace',
+          'Location terms',
+          ZIP_RANGE,
+          (s: ClinicalTrialsService) => s.countStudies({ queryLocn: `${ZIP_RANGE}  ` }, ctx()),
+        ],
+        [
+          'conditionQuery',
+          'Conditions or disease',
+          ZIP_RANGE,
+          (s: ClinicalTrialsService) => s.countStudies({ queryCond: ZIP_RANGE }, ctx()),
+        ],
+        [
+          'query',
+          'Other terms',
+          ZIP_RANGE,
+          (s: ClinicalTrialsService) => s.searchStudies({ queryTerm: ZIP_RANGE }, ctx()),
+        ],
+      ] as const)(
+        'ends as the Java sentence does for %s, quoting the expression as sent',
+        async (_label, where, sent, call) => {
+          route(repeating(sent, where));
+          const err = await advanceUntilSettled(rejection(() => call(validating)));
+
+          expect(err.message).toBe(`${noCause(sent, where)} ${RANGE.tail}`);
+          expect(err.message).not.toContain('Free-text');
+          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: RANGE.hint } });
+          expect(err.literals).toContain(sent);
+          expect(reads()).toEqual([]);
+        },
+      );
+
+      it('gives the hint and data the Java sentence gets for the same request', async () => {
+        const call = () =>
+          rejection(() => validating.countStudies({ filterAdvanced: ZIP_RANGE }, ctx()));
+        route(parseError(NULL_PIECE));
+        const java = await advanceUntilSettled(call());
+        route(repeating(withSentinel(ZIP_RANGE)));
+        const repeated = await advanceUntilSettled(call());
+
+        expect(java.data).toEqual({ reason: 'field_invalid', recovery: { hint: RANGE.hint } });
+        expect(repeated.data).toEqual(java.data);
+        expect(repeated.code).toBe(java.code);
+        expect(repeated.literals).toEqual([...(java.literals ?? []), withSentinel(ZIP_RANGE)]);
+      });
+
+      // What upstream repeats is the parameter as sent, so the caller's own
+      // input, which lacks the enrollment sentinel, is no match.
+      it.each([
+        ['the caller’s expression without the sentinel the request carried', ZIP_RANGE],
+        ['an expression the request never sent', 'SEARCH[Location](AREA[LocationCity]RANGE[a, z])'],
+      ])(
+        'keeps today’s parse error, upstream sentence and all, for a body repeating %s',
+        async (_label, echoed) => {
+          route(repeating(echoed));
+          const err = await advanceUntilSettled(
+            rejection(() => validating.countStudies({ filterAdvanced: ZIP_RANGE }, ctx())),
+          );
+
+          expect(err.message).toBe(
+            `Query syntax error: Error parsing query: ${echoed}. Free-text fields take plain words plus AND, OR, NOT.`,
+          );
+          expect(err.data).toEqual({ reason: 'query_parse_error' });
+        },
+      );
+
+      it('names no cause, with a hint of its own, for a repeated expression holding no SEARCH[Location](…)', async () => {
+        const sent = withSentinel('AREA[Phase]PHASE2');
+        route(repeating(sent));
+        const err = await advanceUntilSettled(
+          rejection(() => validating.countStudies({ filterAdvanced: 'AREA[Phase]PHASE2' }, ctx())),
+        );
+
+        expect(err.message).toBe(noCause(sent));
+        expect(err.data).toEqual({
+          reason: 'query_parse_error',
+          recovery: { hint: NO_CAUSE_HINT },
+        });
+        expect(err.literals).toEqual([sent, 'AREA[…]', 'RANGE[…]', 'DISTANCE[…]']);
+        expect(reads()).toEqual([]);
+      });
+
+      // Each refusal sentence a reading looks for, as a caller's quoted phrase.
+      const CALLER_PHRASES = [
+        'RANGE is not supported for text field Foo',
+        'Unknown area name: `Foo`',
+        'This type of query is not allowed for Foo',
+        '`Foo` is outside Location scope',
+        'RANGE is not supported for multiple (7) fields',
+        'Allowed values for enum field `protocolSection.designModule.phases` are `NA`, `PHASE1`',
+        'DISTANCE is not supported for text field Foo',
+        'Latitude must be a number',
+        NULL_PIECE,
+      ];
+
+      it.each(CALLER_PHRASES)(
+        'reads the repeated expression, not %j in the caller’s quoted phrase, with no metadata read',
+        async (phrase) => {
+          const queryLocn = `(AREA[BriefTitle]"${phrase}") AND ${ZIP_RANGE}`;
+          route(repeating(queryLocn, 'Location terms'));
+          const err = await advanceUntilSettled(
+            rejection(() => validating.countStudies({ queryLocn }, ctx())),
+          );
+
+          expect(err.message).toBe(`${noCause(queryLocn, 'Location terms')} ${RANGE.tail}`);
+          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: RANGE.hint } });
+          expect(reads()).toEqual([]);
+        },
+      );
+
+      // Live tail (2026-11-27) of the ANTLR error for an unterminated quote.
+      const EOF_TAIL =
+        "\nmismatched input '<EOF>' expecting {'(', ',', 'NOT', 'SEARCH', 'AREA', 'RANGE', 'DISTANCE', Coverage, Expansion, 'TILT', 'ALL', 'MISSING', 'MIN', 'MAX', EscapedKeyword, BooleanLiteral, DecimalLiteral, DateLiteral, TimeLiteral, RadiusLiteral, StringLiteral, Term}";
+
+      it.each(CALLER_PHRASES)(
+        'keeps an unterminated quote around %j the parse error it is, reading no field from the token it quotes',
+        async (phrase) => {
+          const filterAdvanced = `AREA[BriefTitle]"${phrase}`;
+          route(
+            parseError(
+              `token recognition error at: '"${phrase}) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])'${EOF_TAIL}`,
+            ),
+          );
+          const err = await advanceUntilSettled(
+            rejection(() => validating.countStudies({ filterAdvanced }, ctx())),
+          );
+
+          expect(err.message).toBe(
+            "Query syntax error: the query ends mid-expression, leaving a '(' or '[' unclosed. Every '(' needs a matching ')', and an AREA[…] or RANGE[…] expression needs its ']'. Free-text fields otherwise take plain words plus AND, OR, NOT.",
+          );
+          expect(err.data).toEqual({ reason: 'query_parse_error' });
+          expect(reads()).toEqual([]);
+        },
+      );
+
+      describe('repeatedExpression', () => {
+        // Live bodies (2026-11-21, 2026-11-27): filter.advanced as sent, the
+        // sentinel included, and query.locn with its trailing spaces trimmed.
+        it.each([
+          [
+            'Error parsing query in advanced filter: Error parsing query: (SEARCH[Location](AREA[LocationZip]RANGE[98000, 98199])) AND (NOT AREA[EnrollmentCount]RANGE[99999999, MAX])',
+            { 'filter.advanced': withSentinel(ZIP_RANGE), pageSize: '1' },
+            withSentinel(ZIP_RANGE),
+          ],
+          [
+            'Error parsing query in Location terms: Error parsing query: SEARCH[Location](AREA[LocationZip]RANGE[98000,    98199])',
+            {
+              'query.locn': 'SEARCH[Location](AREA[LocationZip]RANGE[98000,    98199])   ',
+              'filter.advanced': 'NOT AREA[EnrollmentCount]RANGE[99999999, MAX]',
+            },
+            'SEARCH[Location](AREA[LocationZip]RANGE[98000,    98199])',
+          ],
+        ])('reads %j', (text, params, expected) => {
+          expect(repeatedExpression(text, params)).toBe(expected);
+        });
+
+        it.each([
+          // The caller's own expression, without the sentinel the request carried.
+          [
+            `Error parsing query in advanced filter: Error parsing query: ${ZIP_RANGE}`,
+            { 'filter.advanced': withSentinel(ZIP_RANGE) },
+          ],
+          // Text inside a parameter, not the whole of it.
+          [
+            'Error parsing query in advanced filter: Error parsing query: AREA[LocationZip]RANGE[98000, 98199]',
+            { 'filter.advanced': withSentinel(ZIP_RANGE) },
+          ],
+          // The lead inside a token an ANTLR error quotes, not where the refusal starts.
+          [
+            `Error parsing query in advanced filter: token recognition error at: '"Error parsing query: ${ZIP_RANGE}'`,
+            { 'filter.advanced': ZIP_RANGE },
+          ],
+          [
+            `Error parsing query in advanced filter: ${NULL_PIECE}`,
+            { 'filter.advanced': ZIP_RANGE },
+          ],
+          ['', { 'filter.advanced': ZIP_RANGE }],
+        ])('reads no repeated expression in %j', (text, params) => {
+          expect(repeatedExpression(text, params)).toBeUndefined();
+        });
+
+        describe('stays linear on caller-sized text', { timeout: 0 }, () => {
+          const BODY_LEAD = 'Error parsing query in advanced filter: Error parsing query: ';
+          /** The sent value a body repeats: everything after its lead. */
+          const sentAs = (input: string) => ({ 'filter.advanced': input.slice(BODY_LEAD.length) });
+
+          it.each([
+            ...LINE_BREAK_SHAPES.map(([name, shape]) => [name, shape] as const),
+            ['repeated leads', (n: number) => BODY_LEAD.repeat(n / BODY_LEAD.length)],
+            ['a long parameter label', (n: number) => `Error parsing query in ${'x'.repeat(n)}: x`],
+            ['a whitespace run after the lead', (n: number) => `${BODY_LEAD}${' '.repeat(n)}x`],
+          ] as const)('%s, matching no parameter', (_name, shape) => {
+            expectLinearGrowth((input) => {
+              if (repeatedExpression(input, { 'filter.advanced': ZIP_RANGE }) !== undefined)
+                throw new Error('unexpected reading');
+            }, shape);
+          });
+
+          it('an expression as long as the request allows, sent as repeated', () => {
+            expectLinearGrowth(
+              (input) => {
+                if (repeatedExpression(input, sentAs(input)) === undefined)
+                  throw new Error('missed reading');
+              },
+              (n) => `${BODY_LEAD}${'AREA[x]y '.repeat(n / 9)}z`,
+            );
+          });
+
+          // Sent and repeated alike but for the last character.
+          it('an expression as long as the request allows, sent otherwise', () => {
+            expectLinearGrowth(
+              (input) => {
+                const params = { 'filter.advanced': `${input.slice(BODY_LEAD.length, -1)}Z` };
+                if (repeatedExpression(input, params) !== undefined)
+                  throw new Error('unexpected reading');
+              },
+              (n) => `${BODY_LEAD}${'AREA[x]y '.repeat(n / 9)}z`,
+            );
+          });
+        });
+      });
+
+      describe('every reading counts only where the refusal starts', () => {
+        /** Each sentence parseAreaRejection reads, with the reading it gets where the refusal starts. */
+        const SENTENCES = [
+          ['Unknown area name: `Foo`', 'unknown:Foo'],
+          ['This type of query is not allowed for Foo', 'unsearchable:Foo'],
+          ['`Foo` is outside Location scope', 'location-scope:Foo'],
+          ['RANGE is not supported for text field Foo', 'range-type:Foo'],
+          ['RANGE is not supported for multiple (7) fields', 'range-fields'],
+          [NULL_PIECE, 'location-operator'],
+          ['DISTANCE is not supported for text field Foo', 'distance-type:Foo'],
+        ] as const;
+        const ENUM_SENTENCE =
+          'Allowed values for enum field `protocolSection.designModule.phases` are `NA`, `PHASE1`';
+        /** The two bodies that carry caller text: one repeating the expression, one quoting a token. */
+        const inCallerText = (sentence: string) => [
+          `Error parsing query in advanced filter: Error parsing query: (AREA[BriefTitle]"${sentence}") AND ${ZIP_RANGE}`,
+          `Error parsing query in advanced filter: token recognition error at: '"${sentence}'${EOF_TAIL}`,
+        ];
+
+        it.each(SENTENCES)('reads %j right after the label', (sentence, expected) => {
+          expect(
+            summary(parseAreaRejection(`Error parsing query in Other terms: ${sentence}`)),
+          ).toBe(expected);
+        });
+
+        it.each(SENTENCES.flatMap(([sentence]) => inCallerText(sentence)))(
+          'reads no refused field in %j',
+          (text) => {
+            expect(parseAreaRejection(text)).toBeUndefined();
+          },
+        );
+
+        it('reads the enum refusal right after the label, and only there', () => {
+          expect(
+            parseEnumRejection(`Error parsing query in advanced filter: ${ENUM_SENTENCE}`),
+          ).toEqual({ path: 'protocolSection.designModule.phases', values: '`NA`, `PHASE1`' });
+          for (const text of inCallerText(ENUM_SENTENCE)) {
+            expect(parseEnumRejection(text)).toBeUndefined();
+          }
+        });
+
+        describe('stays linear on caller-sized text', { timeout: 0 }, () => {
+          it.each(SENTENCES)('%j after caller-sized text reads nothing', (sentence) => {
+            expectLinearGrowth(
+              (input) => {
+                if (parseAreaRejection(input) !== undefined)
+                  throw new Error('unexpected rejection');
+              },
+              (n) =>
+                `Error parsing query in advanced filter: Error parsing query: ${'x '.repeat(n / 2)}${sentence}`,
+            );
+          });
+
+          it.each(SENTENCES)('%j after a long parameter label', (sentence, expected) => {
+            expectLinearGrowth(
+              (input) => {
+                if (summary(parseAreaRejection(input)) !== expected)
+                  throw new Error('unexpected rejection');
+              },
+              (n) => `Error parsing query in ${'x'.repeat(n)}: ${sentence}`,
+            );
+          });
+
+          it.each([
+            ...LINE_BREAK_SHAPES.map(([name, shape]) => [name, shape, false] as const),
+            [
+              'an opening backtick never closed',
+              (n: number) => `Allowed values for enum field \`${'x'.repeat(n)}`,
+              false,
+            ],
+            [
+              'a whitespace run before the path',
+              (n: number) => `Allowed values for enum field${' '.repeat(n)}\`x\` are y`,
+              true,
+            ],
+            [
+              'a whitespace run after the path, never followed by are',
+              (n: number) => `Allowed values for enum field \`x\`${' '.repeat(n)}y`,
+              false,
+            ],
+            [
+              'a values list as long as the request allows',
+              (n: number) => `Allowed values for enum field \`x\` are ${'`V`, '.repeat(n / 5)}`,
+              true,
+            ],
+            [
+              'the enum sentence after caller-sized text',
+              (n: number) =>
+                `Error parsing query in advanced filter: Error parsing query: ${'x '.repeat(n / 2)}${ENUM_SENTENCE}`,
+              false,
+            ],
+          ] as const)('parseEnumRejection on %s', (_name, shape, read) => {
+            expectLinearGrowth((input) => {
+              if ((parseEnumRejection(input) !== undefined) !== read)
+                throw new Error('unexpected reading');
+            }, shape);
+          });
+        });
+      });
+    });
+
+    // Upstream refuses a DISTANCE[] and a RANGE[] term inside SEARCH[Location](…)
+    // alike, naming neither. Beside the wrapper a radius works, but a RANGE[]
+    // there takes no site field but the count NumLocationContacts (probed
+    // 2026-11-27), so once upstream has refused, the expressions the request
+    // sent are scanned for a RANGE[] term inside the wrapper to pick the levers
+    // the refusal names, on both bodies that reach it (#208 fold-in).
+    describe('#208 fold-in: a RANGE[] term inside SEARCH[Location](…)', () => {
+      const RADIUS = 'AREA[LocationGeoPoint]DISTANCE[47.6062,-122.3321,25mi]';
+      const ZIP_RANGE = 'AREA[LocationZip]RANGE[98000, 98199]';
+      const ctx = () => createMockContext();
+
+      /** [case, advancedFilter, what the refusal says]. */
+      const CASES = [
+        // Pinned before the scan existed: each passes on the code without it.
+        ['a DISTANCE[] term alone', `SEARCH[Location](${RADIUS})`, MOVE],
+        [
+          'a DISTANCE[] term inside, a RANGE[] term before the wrapper',
+          `AREA[StartDate]RANGE[2020-01-01, MAX] AND SEARCH[Location](${RADIUS})`,
+          MOVE,
+        ],
+        [
+          'a DISTANCE[] term inside, a RANGE[] term after the wrapper closes',
+          `SEARCH[Location](${RADIUS}) AND AREA[StartDate]RANGE[2020-01-01, MAX]`,
+          MOVE,
+        ],
+        [
+          'a DISTANCE[] term inside, RANGE[ in a quoted phrase inside',
+          `SEARCH[Location](AREA[LocationFacility]"RANGE[1, 2] Clinic" AND ${RADIUS})`,
+          MOVE,
+        ],
+        [
+          'a DISTANCE[] term inside, RANGE[ between escaped quotes in a phrase',
+          `SEARCH[Location](AREA[LocationFacility]"the \\"RANGE[1, 2]\\" clinic" AND ${RADIUS})`,
+          MOVE,
+        ],
+        [
+          'a wrapper with no paren, whose scope the scan does not read',
+          `SEARCH[Location]${ZIP_RANGE}`,
+          MOVE,
+        ],
+        // A RANGE[] term inside the wrapper, at any depth.
+        ['a RANGE[] term on LocationZip', `SEARCH[Location](${ZIP_RANGE})`, RANGE],
+        [
+          'a RANGE[] term two parens below the wrapper',
+          `SEARCH[Location]((${ZIP_RANGE}) OR AREA[LocationCity]Seattle)`,
+          RANGE,
+        ],
+        ['a wrapper inside parens', `((SEARCH[Location](${ZIP_RANGE})))`, RANGE],
+        ['a space before the wrapper’s paren', `SEARCH[Location] (${ZIP_RANGE})`, RANGE],
+        [
+          'the second of two wrappers',
+          `SEARCH[Location](AREA[LocationCity]Seattle) AND SEARCH[Location](${ZIP_RANGE})`,
+          RANGE,
+        ],
+        [
+          'a RANGE[] term after a quoted ) inside the wrapper',
+          `SEARCH[Location](AREA[LocationFacility]"Clinic (East)" AND ${ZIP_RANGE})`,
+          RANGE,
+        ],
+        [
+          'a RANGE[] term beside a DISTANCE[] term inside',
+          `SEARCH[Location](${RADIUS} AND AREA[LocationCity]RANGE[A, C])`,
+          RANGE,
+        ],
+        [
+          'a RANGE[] term on the count NumLocationContacts',
+          'SEARCH[Location](AREA[NumLocationContacts]RANGE[1, MAX])',
+          RANGE,
+        ],
+      ] as const;
+
+      it.each(CASES)(
+        'words the Java sentence for %s, reading no metadata',
+        async (_label, filterAdvanced, expected) => {
+          route(parseError(NULL_PIECE));
+          const err = await advanceUntilSettled(
+            rejection(() => validating.countStudies({ filterAdvanced }, ctx())),
+          );
+
+          expect(err.message).toBe(
+            `Error parsing query in advanced filter: ${NULL_PIECE}. ${expected.tail}`,
+          );
+          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: expected.hint } });
+          expect(err.literals).toEqual(expected.literals);
+          expect(reads()).toEqual([]);
+        },
+      );
+
+      // Upstream sends the body that only repeats the expression for a RANGE[]
+      // term in Location scope alone (a DISTANCE[] term there draws the Java
+      // sentence), so that body takes the RANGE[] levers whatever the scan
+      // places: a wrapper with no paren included, whose scope it does not read.
+      it.each(CASES)(
+        'words the body that only repeats the expression for %s as a RANGE[] term',
+        async (_label, filterAdvanced) => {
+          const sent = withSentinel(filterAdvanced);
+          route(parseError(`Error parsing query: ${sent}`));
+          const err = await advanceUntilSettled(
+            rejection(() => validating.countStudies({ filterAdvanced }, ctx())),
+          );
+
+          expect(err.message).toBe(
+            `Error parsing query in advanced filter: ClinicalTrials.gov named no cause and only repeated the expression as sent: ${sent}. ${RANGE.tail}`,
+          );
+          expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: RANGE.hint } });
+          expect(err.literals).toEqual([...RANGE.literals, sent]);
+          expect(reads()).toEqual([]);
+        },
+      );
+
+      // The Java sentence repeats nothing, so the scan reads every parameter the
+      // request sent: here filter.advanced carries only the sentinel.
+      it('reads the RANGE[] term in locationQuery under the Java sentence', async () => {
+        route(parseError(NULL_PIECE, 'Location terms'));
+        const err = await advanceUntilSettled(
+          rejection(() =>
+            validating.searchStudies({ queryLocn: `SEARCH[Location](${ZIP_RANGE})` }, ctx()),
+          ),
+        );
+
+        expect(err.message).toBe(
+          `Error parsing query in Location terms: ${NULL_PIECE}. ${RANGE.tail}`,
+        );
+        expect(err.data).toEqual({ reason: 'field_invalid', recovery: { hint: RANGE.hint } });
+      });
+
+      describe('rangeInLocationScope', () => {
+        it.each([
+          ['SEARCH[Location](AREA[LocationZip]RANGE[1, 2])', true],
+          ['SEARCH[Location]((AREA[LocationZip]RANGE[1, 2]))', true],
+          ['SEARCH[Location]\r\n\t(AREA[LocationZip]RANGE[1, 2])', true],
+          // Unclosed, as upstream never accepts: the wrapper stays open to the end.
+          ['SEARCH[Location](AREA[LocationZip]RANGE[1, 2]', true],
+          // A wrapper inside the wrapper closes, and the outer scope holds.
+          [
+            'SEARCH[Location](SEARCH[Location](AREA[LocationCity]x) AND AREA[LocationZip]RANGE[1, 2])',
+            true,
+          ],
+          // A phrase ending in an escaped backslash closes at its quote.
+          [
+            'SEARCH[Location](AREA[LocationFacility]"a\\\\" AND AREA[LocationZip]RANGE[1, 2])',
+            true,
+          ],
+          ['', false],
+          ['AREA[LocationZip]RANGE[1, 2]', false],
+          ['SEARCH[Location](AREA[LocationGeoPoint]DISTANCE[1,2,3mi])', false],
+          [
+            'SEARCH[Location](AREA[LocationCity]x) AND AREA[StartDate]RANGE[2020-01-01, MAX]',
+            false,
+          ],
+          [withSentinel('SEARCH[Location](AREA[LocationCity]x)'), false],
+          ['SEARCH[Location](AREA[LocationFacility]"RANGE[1, 2]")', false],
+          ['SEARCH[Location](AREA[LocationFacility]"\\"RANGE[1, 2]")', false],
+          // An unclosed phrase leaves the rest unscanned.
+          ['SEARCH[Location](AREA[LocationFacility]"RANGE[1, 2]', false],
+          // A quoted ( opens nothing, so the wrapper closes before the RANGE[].
+          [
+            'SEARCH[Location](AREA[LocationFacility]"(" AND AREA[LocationCity]x)) AND AREA[StartDate]RANGE[1, 2]',
+            false,
+          ],
+          ['SEARCH[Location]AREA[LocationZip]RANGE[1, 2]', false],
+          // Upstream's keywords are uppercase only.
+          ['SEARCH[location](AREA[LocationZip]RANGE[1, 2])', false],
+          ['SEARCH[Location](AREA[LocationZip]range[1, 2])', false],
+        ])('reads %j as %s', (expression, expected) => {
+          expect(rangeInLocationScope(expression)).toBe(expected);
+        });
+
+        describe('stays linear on caller-sized text', { timeout: 0 }, () => {
+          const ZIP = 'AREA[LocationZip]RANGE[1, 2]';
+          it.each([
+            ...LINE_BREAK_SHAPES.map(([name, shape]) => [name, shape, false] as const),
+            [
+              'one long line ending in a break, inside the wrapper',
+              (n: number) => `SEARCH[Location](${'§1 x'.repeat(n / 4)}\n${ZIP})`,
+              true,
+            ],
+            [
+              'breaks throughout, inside the wrapper',
+              (n: number) => `SEARCH[Location](${'  \r\n'.repeat(n / 4)}${ZIP})`,
+              true,
+            ],
+            [
+              'a long phrase of escaped quotes inside the wrapper',
+              (n: number) =>
+                `SEARCH[Location](AREA[LocationFacility]"${'\\"'.repeat(n / 2)}" AND ${ZIP})`,
+              true,
+            ],
+            [
+              'an unclosed phrase of RANGE[ inside the wrapper',
+              (n: number) => `SEARCH[Location]("${'RANGE[ '.repeat(n / 7)}`,
+              false,
+            ],
+            [
+              'many wrappers',
+              (n: number) => `${'SEARCH[Location](AREA[LocationCity]x) AND '.repeat(n / 42)}y`,
+              false,
+            ],
+            [
+              'many wrappers, the last holding the RANGE[]',
+              (n: number) =>
+                `${'SEARCH[Location](AREA[LocationCity]x) AND '.repeat(n / 42)}SEARCH[Location](${ZIP})`,
+              true,
+            ],
+            [
+              'nested parens inside the wrapper, the RANGE[] at the bottom',
+              (n: number) => `SEARCH[Location](${'('.repeat(n / 2)}${ZIP}${')'.repeat(n / 2)})`,
+              true,
+            ],
+            [
+              'nested parens inside the wrapper, every one closed, no RANGE[]',
+              (n: number) => `SEARCH[Location](${'('.repeat(n / 2)}x${')'.repeat(n / 2)})`,
+              false,
+            ],
+            ['an unclosed wrapper', (n: number) => `SEARCH[Location](${'x '.repeat(n / 2)}`, false],
+            [
+              'wrapper names with no paren, each before a whitespace run',
+              (n: number) => `${'SEARCH[Location]    '.repeat(n / 20)}x`,
+              false,
+            ],
+            [
+              'one wrapper name before a whitespace run',
+              (n: number) => `SEARCH[Location]${' '.repeat(n)}x`,
+              false,
+            ],
+            [
+              'RANGE with no bracket, repeated inside the wrapper',
+              (n: number) => `SEARCH[Location](${'RANGE '.repeat(n / 6)})`,
+              false,
+            ],
+            [
+              'closing parens past the wrapper',
+              (n: number) => `SEARCH[Location](x${')'.repeat(n)} ${ZIP}`,
+              false,
+            ],
+          ] as const)('%s', (_name, shape, expected) => {
+            expectLinearGrowth((input) => {
+              if (rangeInLocationScope(input) !== expected) throw new Error('unexpected reading');
+            }, shape);
+          });
         });
       });
     });
